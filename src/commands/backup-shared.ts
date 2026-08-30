@@ -1,6 +1,4 @@
 // Backup planning helpers for archive naming, payload paths, and deduplicated asset selection.
-import type { Dirent } from "node:fs";
-import { closeSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
@@ -11,13 +9,20 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveActivatedPluginBackupInventory,
   type ActivatedPluginBackupInventory,
 } from "../plugins/manifest-backup-resources.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { loadSingleSkillDirectory } from "../skills/loading/local-loader.js";
+import {
+  discoverSkillCandidates,
+  isSymlinkPath,
+  resolveSkillDiscoveryLimits,
+  type ResolvedSkillDiscoveryLimits,
+} from "../skills/loading/skill-root-discovery.js";
+import { tryRealpath } from "../skills/loading/symlink-targets.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import {
@@ -58,7 +63,7 @@ export function resolveRequiredBackupPath(
   return resolveUserPath(trimmed);
 }
 
-type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent" | "skill-link";
+type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent" | "managed skill";
 type BackupSkipReason = "covered" | "missing" | "regenerable" | "unresolved";
 
 export type BackupAsset = {
@@ -105,7 +110,7 @@ function backupAssetPriority(kind: BackupAssetKind): number {
       return 3;
     case "agent":
       return 4;
-    case "skill-link":
+    case "managed skill":
       return 5;
   }
   throw new Error("Unsupported backup asset kind");
@@ -175,6 +180,7 @@ async function resolveBackupPlanFromPaths(params: {
   onlyConfig?: boolean;
   configInsideState?: boolean;
   oauthInsideState?: boolean;
+  skillDiscoveryLimits?: ResolvedSkillDiscoveryLimits;
   nowMs?: number;
 }): Promise<BackupPlan> {
   const includeWorkspace = params.includeWorkspace ?? true;
@@ -254,10 +260,6 @@ async function resolveBackupPlanFromPaths(params: {
       sourcePath: path.resolve(workspaceDir),
     })),
     ...agentRoots.map((root) => ({ kind: "agent" as const, sourcePath: root.sourcePath })),
-    ...(await resolveManagedSkillSymlinkTargetCandidates(stateDir)).map((sourcePath) => ({
-      kind: "skill-link" as const,
-      sourcePath,
-    })),
   ];
 
   const candidates: BackupAssetCandidate[] = await Promise.all(
@@ -271,6 +273,18 @@ async function resolveBackupPlanFromPaths(params: {
       });
     }),
   );
+  for (const sourcePath of resolveManagedSkillSymlinkTargetCandidates({
+    stateDir,
+    ownerRoots: candidates.map((candidate) => candidate.canonicalPath),
+    limits: params.skillDiscoveryLimits ?? resolveSkillDiscoveryLimits(),
+  })) {
+    candidates.push({
+      kind: "managed skill",
+      sourcePath,
+      canonicalPath: sourcePath,
+      exists: true,
+    });
+  }
 
   const uniqueCandidates: BackupAssetCandidate[] = [];
   const seenCanonicalPaths = new Set<string>();
@@ -386,60 +400,66 @@ function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandida
   return left.canonicalPath.localeCompare(right.canonicalPath);
 }
 
-// Managed skill roots deliberately accept directory symlinks resolving outside
-// the root (the `skills` CLI symlink-mode layout), while the archive guard is
-// fail-closed on any link whose target is not a declared asset. Declare only
-// bounded skill targets: a link to a state ancestor or any broad directory
-// would otherwise promote that whole tree to an archive root.
-async function resolveManagedSkillSymlinkTargetCandidates(stateDir: string): Promise<string[]> {
-  const managedSkillsDir = path.join(stateDir, "skills");
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(managedSkillsDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const canonicalStateDir = await canonicalizePathForContainment(stateDir);
-  const targets: string[] = [];
-  for (const entry of entries) {
-    if (!entry.isSymbolicLink()) {
-      continue;
-    }
-    const linkPath = path.join(managedSkillsDir, entry.name);
-    const targetPath = await canonicalizeExistingPath(linkPath);
-    // Neither side may contain the other: an external target that holds the
-    // state asset would swallow it (and everything else) via covered dedupe.
+// Managed skill roots support operator-created directory links outside the root.
+// The archive guard requires each such target to be a declared asset.
+function resolveManagedSkillSymlinkTargetCandidates(params: {
+  stateDir: string;
+  ownerRoots: readonly string[];
+  limits: ResolvedSkillDiscoveryLimits;
+}): string[] {
+  const managedSkillsDir = path.join(params.stateDir, "skills");
+  const targets = new Set<string>();
+  const discovered = discoverSkillCandidates({
+    dir: managedSkillsDir,
+    source: "openclaw-managed",
+    limits: params.limits,
+    allowedSymlinkTargetRealPaths: [],
+  });
+  for (const candidate of discovered.candidates) {
     if (
-      isPathWithin(targetPath, canonicalStateDir) ||
-      isPathWithin(canonicalStateDir, targetPath)
+      !loadSingleSkillDirectory({
+        skillDir: candidate.skillDir,
+        source: "openclaw-managed",
+        rootRealPath: candidate.skillDirRealPath,
+        maxBytes: params.limits.maxSkillFileBytes,
+      })
     ) {
       continue;
     }
-    try {
-      if (!(await fs.stat(linkPath)).isDirectory()) {
+
+    const relativeSkillDir = path.relative(managedSkillsDir, candidate.skillDir);
+    if (
+      path.isAbsolute(relativeSkillDir) ||
+      relativeSkillDir === ".." ||
+      relativeSkillDir.startsWith(`..${path.sep}`)
+    ) {
+      continue;
+    }
+    // The archive preserves every lexical link component, so each external
+    // ancestor target needs its own asset before the accepted skill can restore.
+    const components = [managedSkillsDir];
+    for (const segment of relativeSkillDir.split(path.sep).filter(Boolean)) {
+      components.push(path.join(components.at(-1) ?? managedSkillsDir, segment));
+    }
+    for (const component of components) {
+      if (!isSymlinkPath(component)) {
         continue;
       }
-    } catch {
-      continue;
+      const targetPath = tryRealpath(component);
+      // A broader target must not swallow another owner root during dedupe.
+      // An inner target is already covered and needs no separate asset.
+      if (
+        !targetPath ||
+        params.ownerRoots.some(
+          (ownerRoot) => isPathWithin(targetPath, ownerRoot) || isPathWithin(ownerRoot, targetPath),
+        )
+      ) {
+        continue;
+      }
+      targets.add(targetPath);
     }
-    // Skill loaders admit a directory only when its metadata opens through the
-    // skill-root boundary; a final SKILL.md symlink that escapes the target
-    // would otherwise satisfy existence and declare a broad external target
-    // whose cross-asset link the archive guard accepts.
-    const opened = openRootFileSync({
-      absolutePath: path.join(targetPath, "SKILL.md"),
-      rootPath: targetPath,
-      rootRealPath: targetPath,
-      boundaryLabel: "skill target",
-      rejectSymlinks: false,
-    });
-    if (!opened.ok) {
-      continue;
-    }
-    closeSync(opened.fd);
-    targets.push(targetPath);
   }
-  return targets;
+  return [...targets];
 }
 
 async function canonicalizeExistingPath(targetPath: string): Promise<string> {
@@ -556,6 +576,7 @@ export async function resolveBackupPlanFromDisk(
     onlyConfig,
     configInsideState: cleanupPlan.configInsideState,
     oauthInsideState: cleanupPlan.oauthInsideState,
+    skillDiscoveryLimits: resolveSkillDiscoveryLimits(discoverySnapshot.config),
     nowMs: params.nowMs,
   });
 }
