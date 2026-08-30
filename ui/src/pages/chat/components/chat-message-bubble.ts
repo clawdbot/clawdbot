@@ -74,19 +74,10 @@ function renderChatIcon(name: string) {
 
 function renderInlineToolCards(
   toolCards: ToolCard[],
-  opts: {
+  opts: Omit<Parameters<typeof renderToolCard>[1], "expanded" | "onToggleExpanded"> & {
     messageKey: string;
-    sessionKey?: string;
-    agentId?: string;
-    onOpenSidebar?: (content: SidebarContent) => void;
-    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
-    runActive?: boolean;
-    canvasPluginSurfaceUrl?: string | null;
-    embedSandboxMode?: EmbedSandboxMode;
-    allowExternalEmbedUrls?: boolean;
-    showApprovalReviews?: boolean;
   },
 ) {
   return html`
@@ -95,19 +86,11 @@ function renderInlineToolCards(
         const disclosureId = `${opts.messageKey}:toolcard:${index}`;
         const expanded = opts.isToolExpanded?.(disclosureId) ?? false;
         return renderToolCard(card, {
+          ...opts,
           expanded,
-          runActive: opts.runActive,
           onToggleExpanded: opts.onToggleToolExpanded
             ? () => opts.onToggleToolExpanded?.(disclosureId, expanded)
             : () => undefined,
-          sessionKey: opts.sessionKey,
-          agentId: opts.agentId,
-          onOpenSidebar: opts.onOpenSidebar,
-          onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
-          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-          embedSandboxMode: opts.embedSandboxMode ?? "scripts",
-          allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
-          showApprovalReviews: opts.showApprovalReviews,
         });
       })}
     </div>
@@ -335,10 +318,9 @@ export function renderGroupedMessage(
     .join(" ");
 
   // Suppress empty bubbles when tool cards are the only content and toggle is off
-  const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
   if (
     !markdown &&
-    !visibleToolCards &&
+    !hasToolCards &&
     !hasImages &&
     !hasPairingQrExpiryNotices &&
     visibleAttachments.length === 0 &&
@@ -499,16 +481,7 @@ export function renderGroupedMessage(
         : nothing}
     ${hasToolCards
       ? isStandaloneToolMessage && expandsSingleToolCard && singleToolCard
-        ? renderExpandedToolCardContent(
-            singleToolCard,
-            opts.sessionKey,
-            onOpenSidebar,
-            opts.canvasPluginSurfaceUrl,
-            opts.embedSandboxMode ?? "scripts",
-            opts.allowExternalEmbedUrls ?? false,
-            opts.runActive,
-            opts.onOpenWorkspaceFile,
-          )
+        ? renderExpandedToolCardContent(singleToolCard, toolRenderOptions)
         : renderInlineToolCards(toolCards, {
             ...toolRenderOptions,
             showApprovalReviews: isStandaloneToolMessage ? false : undefined,

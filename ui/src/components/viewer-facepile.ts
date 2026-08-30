@@ -74,7 +74,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) selfUser?: AuthenticatedUser | null;
   @property({ attribute: false }) selfInstanceId?: string;
   @property({ attribute: false }) sessionKey?: string;
-  @property({ attribute: false }) excludeIdentity?: SessionParticipantIdentity;
+  @property({ attribute: false }) excludeIdentities: readonly SessionParticipantIdentity[] = [];
   @property({ attribute: false }) staticParticipants?: readonly SessionParticipant[];
   /** Prepared live presence for the collapsed Online section. */
   @property({ attribute: false }) staticUsers?: readonly PresenceViewer[];
@@ -93,7 +93,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
       this.selfUser,
       this.selfInstanceId,
       this.sessionKey,
-      this.excludeIdentity,
+      this.excludeIdentities,
     );
     const users = this.staticParticipants
       ? this.staticParticipants.map(({ identity, label, avatarUrl }) => ({

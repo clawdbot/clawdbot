@@ -172,6 +172,8 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
     ["beacon-light", layer(light, blocks.get(':root[data-theme="beacon-light"]'))],
     ["phosphor", layer(blocks.get(':root[data-theme="phosphor"]'))],
     ["phosphor-light", layer(light, blocks.get(':root[data-theme="phosphor-light"]'))],
+    ["crt", layer(blocks.get(':root[data-theme="crt"]'))],
+    ["crt-light", layer(light, blocks.get(':root[data-theme="crt-light"]'))],
   ]);
 }
 

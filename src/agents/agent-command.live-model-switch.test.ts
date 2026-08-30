@@ -1978,6 +1978,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       sessionKey: "agent:main:main",
     });
 
+    expect(state.registerAgentRunContextMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ projectSessionActive: true }),
+    );
     const deliveryParams = requireRecord(
       mockCallArg(state.deliverAgentCommandResultMock),
       "ACP delivery params",
@@ -5319,6 +5323,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionKey: "agent:main:main",
         sessionId: "session-1",
         isControlUiVisible: false,
+        projectSessionActive: false,
       }),
     );
   });

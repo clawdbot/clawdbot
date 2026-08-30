@@ -6,6 +6,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import {
   createQueuedTaskRun,
   createRunningTaskRun,
@@ -206,7 +207,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       this.restoreKillReconciliationSnapshots(registeredKillReconciliationSnapshots);
     };
     const activateRegistrationLifecycle = () => {
-      bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry);
+      bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry, () => {
+        if (this.options.runs.get(entry.runId) === entry) {
+          emitSessionLifecycleEvent({ sessionKey: entry.childSessionKey, reason: "run-capacity" });
+        }
+      });
       subagentRuns.commitOwnership(entry);
       this.options.ensureListener();
       // Session-mode and persistence-recovery runs also need TTL cleanup.

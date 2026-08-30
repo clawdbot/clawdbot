@@ -156,7 +156,16 @@ export type OpenClawConfig = {
      */
     prefs?: {
       /** Control UI theme. */
-      theme?: "claw" | "knot" | "dash" | "absolutely" | "tide" | "beacon" | "phosphor" | "custom";
+      theme?:
+        | "claw"
+        | "knot"
+        | "dash"
+        | "absolutely"
+        | "tide"
+        | "beacon"
+        | "phosphor"
+        | "crt"
+        | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
       /** User-selected Control UI accent color (#RRGGBB). */

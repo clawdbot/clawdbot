@@ -5962,21 +5962,56 @@ server.listen(0, "127.0.0.1", () => {
     );
   });
 
-  it.each([[".github/workflows/plugin-clawhub-release.yml", 3]])(
-    "bounds %s git fetches",
-    (workflowPath, expectedFetchCount) => {
-      const source = readFileSync(workflowPath, "utf8");
-      const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+  it("pins plugin publication owners before selected checkout and preserves Git deadlines", () => {
+    const owner = {
+      name: "Prepare Git owner",
+      uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+    };
+    const clawhub = parse(readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8"));
+    const clawhubSteps = clawhub.jobs.preview_plugins_clawhub.steps as WorkflowStep[];
+    expect(clawhubSteps[0]).toEqual(owner);
+    expect(clawhubSteps[1]?.name).toBe("Checkout");
+    const clawhubBodies = clawhubSteps.map(({ run }) => run ?? "").join("\n");
+    expect(clawhubBodies.match(/timeout=120/gu)).toHaveLength(3);
+    expect(clawhubBodies).not.toMatch(
+      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|checkout)\b/mu,
+    );
+    expect(clawhubBodies).not.toMatch(/backoff\(|for attempt in range/u);
 
-      expect(gitFetchLines, workflowPath).toHaveLength(expectedFetchCount);
-      expect(
-        gitFetchLines.every((line) =>
-          line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
-        ),
-        workflowPath,
-      ).toBe(true);
-    },
-  );
+    const npm = parse(readFileSync(".github/workflows/plugin-npm-release.yml", "utf8"));
+    for (const [jobName, checkoutName] of [
+      ["preview_plugins_npm", "Checkout"],
+      ["verify_plugin_npm_preflight", "Checkout trusted npm preflight tooling"],
+      ["publish_plugins_npm", "Checkout trusted publication tooling"],
+    ] as const) {
+      const steps = npm.jobs[jobName].steps as WorkflowStep[];
+      expect(steps[0], jobName).toEqual(owner);
+      expect(steps[1]?.name, jobName).toBe(checkoutName);
+    }
+    const npmBodies = [
+      ...npm.jobs.preview_plugins_npm.steps,
+      ...npm.jobs.verify_plugin_npm_preflight.steps,
+      ...npm.jobs.publish_plugins_npm.steps,
+    ]
+      .map(({ run }: WorkflowStep) => run ?? "")
+      .join("\n");
+    expect(npmBodies.match(/timeout=120/gu)).toHaveLength(5);
+    expect(npmBodies).not.toMatch(
+      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|show)\b/mu,
+    );
+    expect(npmBodies).not.toMatch(/backoff\(|for attempt in range/u);
+    for (const stepName of [
+      "Read exact npm preflight source package",
+      "Read exact npm publication source package",
+    ]) {
+      const step = [
+        ...npm.jobs.verify_plugin_npm_preflight.steps,
+        ...npm.jobs.publish_plugins_npm.steps,
+      ].find(({ name }: WorkflowStep) => name === stepName) as WorkflowStep;
+      expect(step.run, stepName).toContain("git_output(");
+      expect(step.run, stepName).toContain('errors="surrogateescape"');
+    }
+  });
 
   it("pins the Mantis Git owner and preserves distinct terminal ref-validation contracts", () => {
     const action = parse(

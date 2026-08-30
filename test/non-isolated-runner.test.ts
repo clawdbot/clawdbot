@@ -213,6 +213,42 @@ function fixtureFiles(): Record<string, string> {
       "});",
       "",
     ].join("\n"),
+    "04-c-gateway-admission.test.ts": [
+      `import { beginGatewayRootWorkAdmissionWhenOpen, captureGatewayRootWorkAdmissionContinuationScope, getActiveGatewayRootWorkCount, tryBeginGatewayRootWorkAdmission, tryBeginGatewaySuspendAdmission } from ${workAdmissionPath};`,
+      'import { expect, it } from "vitest";',
+      'it("seeds file-owned gateway admission and a suspended waiter", async () => {',
+      "  const admission = tryBeginGatewayRootWorkAdmission();",
+      '  if (!admission) throw new Error("expected gateway root admission");',
+      "  const continuation = await admission.run(async () => captureGatewayRootWorkAdmissionContinuationScope());",
+      "  expect(continuation).not.toBeNull();",
+      "  const suspension = tryBeginGatewaySuspendAdmission(() => {});",
+      '  if (!suspension?.commit()) throw new Error("expected prepared suspension");',
+      "  const pending = beginGatewayRootWorkAdmissionWhenOpen();",
+      "  void pending.catch(() => {});",
+      '  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("fixture.gatewayAdmission")] = { continuation, pending };',
+      "  expect(getActiveGatewayRootWorkCount()).toBe(1);",
+      "});",
+      "",
+    ].join("\n"),
+    "04-d-gateway-admission.test.ts": [
+      `import { getActiveGatewayRootWorkCount, isGatewayRestartDraining, tryBeginGatewayRootWorkAdmission, type GatewayRootWorkAdmissionContinuationScope } from ${workAdmissionPath};`,
+      'import { expect, it } from "vitest";',
+      'it("retires gateway admission before the next file", async () => {',
+      "  const state = globalThis as Record<PropertyKey, unknown>;",
+      '  const key = Symbol.for("fixture.gatewayAdmission");',
+      "  const prior = state[key] as { continuation: GatewayRootWorkAdmissionContinuationScope; pending: Promise<unknown> } | undefined;",
+      "  delete state[key];",
+      "  expect(getActiveGatewayRootWorkCount()).toBe(0);",
+      "  expect(isGatewayRestartDraining()).toBe(false);",
+      '  if (!prior?.continuation) throw new Error("expected prior gateway continuation");',
+      '  await expect(prior.pending).rejects.toThrow("Gateway is draining");',
+      '  await expect(prior.continuation.run(async () => true)).rejects.toThrow("no longer active");',
+      "  const admission = tryBeginGatewayRootWorkAdmission();",
+      "  expect(admission).not.toBeNull();",
+      "  admission?.release();",
+      "});",
+      "",
+    ].join("\n"),
     "05-a-agent-run.test.ts": [
       `import { getActiveGatewayRootWorkCount, markGatewayRestartDraining, tryBeginGatewayRootWorkAdmission } from ${workAdmissionPath};`,
       `import { getAgentRunContext, registerAgentRunContext } from ${agentRunRegistryPath};`,
@@ -478,7 +514,7 @@ it("cleans every shared runner surface between files", async () => {
     // The collection failure is intentional. Every behavior test after it must
     // pass; any leaked surface turns the summary into a second failure.
     expect(output).toContain("synthetic collect failure");
-    expect(output).toContain("1 failed | 34 passed");
+    expect(output).toContain("1 failed | 36 passed");
     expect(output).not.toContain("first-file");
   } finally {
     await fs.rm(root, { recursive: true, force: true });

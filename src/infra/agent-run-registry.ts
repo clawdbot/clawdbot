@@ -22,6 +22,8 @@ type AgentRunContext = {
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
+  /** Exact scheduler wait leases; absent during ordinary runtime preparation. */
+  capacityWaits?: Set<symbol>;
   /** Whether hidden events may reach exact sessions.messages subscribers.
    * Internal maintenance sharing a foreground key disables this to prevent selected-chat leaks. */
   projectSessionMessages?: boolean;
@@ -148,6 +150,8 @@ export function registerAgentRunContext(
   if (!existing) {
     state.contexts.set(runId, {
       ...context,
+      // Scheduler leases belong to this instance, never copied metadata.
+      capacityWaits: undefined,
       lifecycleGeneration,
       registeredAt: context.registeredAt ?? Date.now(),
     });
@@ -295,6 +299,7 @@ export function claimAgentRunContext(
   }
   state.contexts.set(runId, {
     ...context,
+    capacityWaits: undefined,
     lifecycleGeneration,
     registeredAt: context.registeredAt ?? Date.now(),
   });
@@ -534,11 +539,13 @@ export function listAgentRunsForSession(params: {
   );
 }
 
+type ProjectedAgentRunState = "queued" | "running" | "capacity-wait";
+
 export type ProjectedAgentRunIndex = {
-  sessionKeys: ReadonlySet<string>;
-  sessionIds: ReadonlySet<string>;
-  ownerlessSessionKeys: ReadonlySet<string>;
-  ownerlessSessionIds: ReadonlySet<string>;
+  sessionKeys: ReadonlyMap<string, ProjectedAgentRunState>;
+  sessionIds: ReadonlyMap<string, ProjectedAgentRunState>;
+  ownerlessSessionKeys: ReadonlyMap<string, ProjectedAgentRunState>;
+  ownerlessSessionIds: ReadonlyMap<string, ProjectedAgentRunState>;
 };
 
 function projectedRunIdentity(agentId: string, value: string): string {
@@ -547,60 +554,86 @@ function projectedRunIdentity(agentId: string, value: string): string {
 
 export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
   const state = getAgentRunRegistryState();
-  const sessionKeys = new Set<string>();
-  const sessionIds = new Set<string>();
-  const ownerlessSessionKeys = new Set<string>();
-  const ownerlessSessionIds = new Set<string>();
+  const sessionKeys = new Map<string, ProjectedAgentRunState>();
+  const sessionIds = new Map<string, ProjectedAgentRunState>();
+  const ownerlessSessionKeys = new Map<string, ProjectedAgentRunState>();
+  const ownerlessSessionIds = new Map<string, ProjectedAgentRunState>();
+  const add = (
+    index: Map<string, ProjectedAgentRunState>,
+    key: string,
+    status: ProjectedAgentRunState,
+  ) => {
+    const previous = index.get(key);
+    if (previous !== "running" && !(previous === "queued" && status === "capacity-wait")) {
+      index.set(key, status);
+    }
+  };
   for (const context of state.contexts.values()) {
+    const queued = (context.capacityWaits?.size ?? 0) > 0;
     if (
-      context.projectSessionActive !== true ||
-      context.lifecycleGeneration !== state.lifecycleGeneration
+      context.lifecycleGeneration !== state.lifecycleGeneration ||
+      (context.projectSessionActive !== true &&
+        (!queued ||
+          context.projectSessionActive === false ||
+          context.projectSessionLifecycle === false))
     ) {
       continue;
     }
+    const status = !queued
+      ? "running"
+      : context.projectSessionActive === true
+        ? "queued"
+        : "capacity-wait";
     const agentId = context.agentId ?? parseAgentSessionKey(context.sessionKey)?.agentId;
     if (context.sessionKey !== undefined && agentId) {
-      sessionKeys.add(projectedRunIdentity(agentId, context.sessionKey));
+      add(sessionKeys, projectedRunIdentity(agentId, context.sessionKey), status);
     } else if (context.sessionKey !== undefined) {
-      ownerlessSessionKeys.add(context.sessionKey);
+      add(ownerlessSessionKeys, context.sessionKey, status);
     }
     if (context.sessionId !== undefined && agentId) {
-      sessionIds.add(projectedRunIdentity(agentId, context.sessionId));
+      add(sessionIds, projectedRunIdentity(agentId, context.sessionId), status);
     } else if (context.sessionId !== undefined) {
-      ownerlessSessionIds.add(context.sessionId);
+      add(ownerlessSessionIds, context.sessionId, status);
     }
   }
   return { sessionKeys, sessionIds, ownerlessSessionKeys, ownerlessSessionIds };
 }
 
-export function hasProjectedAgentRunForSession(params: {
+export function resolveProjectedAgentRunProgressState(params: {
   sessionKeys: readonly string[];
   sessionId?: string;
   agentId?: string;
   defaultAgentId?: string;
   index?: ProjectedAgentRunIndex;
-}): boolean {
+}): ProjectedAgentRunState | undefined {
   const index = params.index ?? buildProjectedAgentRunIndex();
   const agentId =
     params.agentId ??
     params.sessionKeys.flatMap((key) => parseAgentSessionKey(key)?.agentId ?? [])[0] ??
     params.defaultAgentId;
   if (!agentId) {
-    return false;
+    return undefined;
   }
   const mayAdoptOwnerless =
     params.defaultAgentId !== undefined &&
     normalizeAgentId(agentId) === normalizeAgentId(params.defaultAgentId);
-  return (
-    params.sessionKeys.some((sessionKey) =>
-      index.sessionKeys.has(projectedRunIdentity(agentId, sessionKey)),
-    ) ||
-    (mayAdoptOwnerless &&
-      params.sessionKeys.some((sessionKey) => index.ownerlessSessionKeys.has(sessionKey))) ||
-    (params.sessionId !== undefined &&
-      (index.sessionIds.has(projectedRunIdentity(agentId, params.sessionId)) ||
-        (mayAdoptOwnerless && index.ownerlessSessionIds.has(params.sessionId))))
-  );
+  const statuses = params.sessionKeys.flatMap((sessionKey) => [
+    index.sessionKeys.get(projectedRunIdentity(agentId, sessionKey)),
+    ...(mayAdoptOwnerless ? [index.ownerlessSessionKeys.get(sessionKey)] : []),
+  ]);
+  if (params.sessionId !== undefined) {
+    statuses.push(index.sessionIds.get(projectedRunIdentity(agentId, params.sessionId)));
+    if (mayAdoptOwnerless) {
+      statuses.push(index.ownerlessSessionIds.get(params.sessionId));
+    }
+  }
+  return statuses.includes("running")
+    ? "running"
+    : statuses.includes("queued")
+      ? "queued"
+      : statuses.includes("capacity-wait")
+        ? "capacity-wait"
+        : undefined;
 }
 
 /** Clears context state for a run that has ended or been discarded. */

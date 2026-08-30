@@ -2139,7 +2139,7 @@ describe("package acceptance workflow", () => {
 
   it("uses the canonical tooling identity verifier for token-bootstrap evidence", () => {
     const publishJob = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm");
-    const evidenceStep = workflowStep(publishJob, "Consume immutable npm publication evidence");
+    const evidenceStep = workflowStep(publishJob, "Resolve immutable npm publication artifact");
 
     expect(evidenceStep.env?.RELEASE_PUBLISH_RUN_ID).toBe("${{ inputs.release_publish_run_id }}");
     expect(evidenceStep.env?.RELEASE_PUBLISH_RUN_ATTEMPT).toBe(

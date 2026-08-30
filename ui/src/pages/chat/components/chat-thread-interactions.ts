@@ -58,7 +58,7 @@ export type ChatThreadState = {
   };
 };
 
-export type ReplyMessageAccess = {
+type ReplyMessageAccess = {
   revision: number;
   navigationId: string | null;
   read: (messageId: string) => unknown;
@@ -84,6 +84,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  /** Browser-local active run identity, retained across transient disconnects. */
   runId?: string | null;
   runOutputTokens?: number | null;
   runStatus?: ChatRunUiStatus | null;
@@ -98,6 +99,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   waitingApproval?: boolean;
   questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
+  /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
   assistantName: string;
   assistantAvatar: string | null;

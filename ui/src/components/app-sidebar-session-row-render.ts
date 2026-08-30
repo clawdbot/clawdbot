@@ -223,7 +223,7 @@ export function renderRecentSession(params: {
         gateway.connection.password.trim()),
     ),
   };
-  const { running, leadingIndicator, trailingIndicator, renderedOwnerIdentity } =
+  const { running, leadingIndicator, trailingIndicator, renderedIdentities } =
     renderSessionLeadingState(
       session,
       leadingOwner,
@@ -371,7 +371,7 @@ export function renderRecentSession(params: {
                 .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
                 .selfInstanceId=${host.sessionData.presenceInstanceId}
                 .sessionKey=${session.key}
-                .excludeIdentity=${renderedOwnerIdentity}
+                .excludeIdentities=${renderedIdentities ?? []}
                 .maxVisible=${3}
                 variant="session"
               ></openclaw-viewer-facepile>
