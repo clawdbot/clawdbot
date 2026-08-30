@@ -98,14 +98,10 @@ export class SettingsManager {
   private static loadScope(storage: SettingsStorage, scope: SettingsScope): SettingsScopeState {
     let content: string | undefined;
     try {
-      if (storage.readSettingsScope) {
-        content = storage.readSettingsScope(scope);
-      } else {
-        storage.withLock(scope, (current) => {
-          content = current;
-          return undefined;
-        });
-      }
+      storage.withLock(scope, (current) => {
+        content = current;
+        return undefined;
+      });
       const settings = content
         ? SettingsManager.migrateSettings(JSON.parse(content) as Record<string, unknown>)
         : {};
