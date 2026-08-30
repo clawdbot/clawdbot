@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
 import { parse } from "yaml";
@@ -89,6 +89,11 @@ export async function runCiGitStep(options: {
   fetchResults: FetchResult[];
   cloneResults?: FetchResult[];
   worktreeResults?: FetchResult[];
+  rebaseResults?: FetchResult[];
+  pushResults?: FetchResult[];
+  revParseResult?: FetchResult;
+  diffResult?: number;
+  publishPath?: "directory" | "file" | "symlink";
   checkoutResults?: number[];
   mergeSnapshots?: { sha: string; head: string }[];
   prepare?: boolean;
@@ -108,6 +113,9 @@ export async function runCiGitStep(options: {
   cancelDuringBackoff?: boolean;
   setupFailure?: "owner" | "python" | "git";
 }) {
+  const docsPublish =
+    typeof options.workflow === "object" &&
+    options.workflow.file === ".github/workflows/docs-sync-publish.yml";
   const externalOwner = options.workflow || options.action === "mantis-validate-trusted-ref";
   const clock = {
     ...options,
@@ -151,6 +159,21 @@ export async function runCiGitStep(options: {
         ...options.env,
       });
       const workspace = path.join(root, "workspace");
+      if (docsPublish) {
+        env.GITHUB_SHA = candidate;
+        // Never let a caller's credential reach fixture command reports.
+        env.OPENCLAW_DOCS_SYNC_TOKEN = "fixture-docs-token";
+        mkdirSync(path.join(workspace, "clawhub-source/.git"), { recursive: true });
+        const publish = path.join(workspace, "publish");
+        if (options.publishPath === "file") {
+          writeFileSync(publish, "previous publish path\n");
+        } else if (options.publishPath === "symlink") {
+          symlinkSync(root, publish, "junction");
+        } else if (options.publishPath === "directory") {
+          mkdirSync(publish);
+          writeFileSync(path.join(publish, ".previous-checkout"), "stale\n");
+        }
+      }
       if (externalOwner) {
         // Workflow bodies follow actions/checkout; selected-source bootstrap must
         // still create its own directory, while later selected steps inherit one.
@@ -213,6 +236,11 @@ export async function runCiGitStep(options: {
           fetchResults: options.fetchResults,
           cloneResults: options.cloneResults,
           worktreeResults: options.worktreeResults,
+          rebaseResults: options.rebaseResults,
+          pushResults: options.pushResults,
+          revParseResult: options.revParseResult,
+          diffResult: options.diffResult,
+          docsPublish,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
           consumers: Boolean(options.prepare || externalOwner),
@@ -326,6 +354,8 @@ ${run}`;
         worktrees: report.commands.filter(
           ({ tool, args }) => tool === "git" && args[0] === "worktree",
         ),
+        rebases: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "rebase"),
+        pushes: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "push"),
         go: report.commands.filter(({ tool }) => tool === "go"),
         crabbox: report.commands.filter(({ tool }) => tool === "crabbox"),
         checkouts: report.commands.filter(

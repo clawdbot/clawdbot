@@ -82,11 +82,15 @@ def run_git(`,
       "deadline is not None and time.monotonic() >= deadline",
       "deadline is not None and fetch_clock() >= deadline",
     )
-    .replace(/\btimeout=30(?=[,)])/gu, "timeout=2")
-    .replace(/retry_at = time\.monotonic\(\) \+ [^\n]+/u, "retry_at = time.monotonic() + 0.05")
+    .replace(/\btimeout=(?:30|120)(?=[,)])/gu, "timeout=2")
+    .replace(
+      /retry_at = time\.monotonic\(\) \+ [^\n]+/u,
+      'print(f"fixture backoff: {seconds}", flush=True)\n    retry_at = time.monotonic() + 0.05',
+    )
     .replace(/--((?:checkout-)?git) 120\b/gu, "--$1 2")
     // Keep pre-fix standalone shell bodies executable for red/green proof.
     .replaceAll("120s git", "2s git")
+    .replaceAll("sleep $((attempt * 2))", 'echo "fixture backoff: $((attempt * 2))"')
     .replaceAll("sleep $((attempt * 5))", "sleep 0.05")
     .replaceAll("sleep 5", "sleep 0.05");
   return options.realDrain

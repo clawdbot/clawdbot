@@ -2121,6 +2121,7 @@ const pluginSdkEntryOwners = [
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
+  [".github/workflows/docs-sync-publish.yml", ["docs-sync-publish"]],
   [
     "test/scripts/fixtures/ci-platform-checkout.mjs",
     ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"],
@@ -2395,7 +2396,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
   [
-    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
+    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|docs-sync-publish|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
     ["ci-git-owner", "ci-linux-git", "ci-platform-checkout"],
   ],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],

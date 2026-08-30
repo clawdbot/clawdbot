@@ -998,3 +998,308 @@ posixIt.each([
   },
   55_000,
 );
+
+const newer = "d".repeat(40);
+const sourceObject = "refs/remotes/origin/main:.openclaw-sync/source.json";
+const fetch = ["fetch", "origin", "main:refs/remotes/origin/main"];
+const show = ["show", sourceObject];
+const rebase = ["rebase", "-X", "theirs", "origin/main"];
+const push = ["push", "origin", "HEAD:main"];
+const abort = ["rebase", "--abort"];
+const diff = ["diff", "--quiet", "--", "docs", ".openclaw-sync"];
+const commit = [
+  ["config", "user.name", "openclaw-docs-sync[bot]"],
+  ["config", "user.email", "openclaw-docs-sync[bot]@users.noreply.github.com"],
+  ["add", "docs", ".openclaw-sync"],
+  ["commit", "-m", `chore(sync): mirror docs from fixture/checkout@${candidate}`],
+];
+
+function runDocs(step: string, options: Partial<Parameters<typeof runCiGitStep>[0]> = {}) {
+  return runCiGitStep({
+    workflow: { file: ".github/workflows/docs-sync-publish.yml", job: "sync-publish-repo", step },
+    fetchResults: [],
+    objects: { [sourceObject]: { text: JSON.stringify({ sha: candidate }) } },
+    poisonPython: true,
+    ...options,
+  });
+}
+
+function gitArgs(report: Awaited<ReturnType<typeof runDocs>>) {
+  return report.commands.filter(({ tool }) => tool === "git").map(({ args }) => args);
+}
+
+function backoffs(report: Awaited<ReturnType<typeof runDocs>>) {
+  return [...report.output.matchAll(/fixture backoff: (\d+)/gu)].map((match) => Number(match[1]));
+}
+
+posixIt.each(["directory", "file", "symlink"] as const)(
+  "docs clone drains an ordinary failure before deleting/retrying (%s)",
+  async (publishPath) => {
+    const report = await runDocs("Clone publish repo", { cloneResults: [23, 0], publishPath });
+    expect(report.code, report.output).toBe(0);
+    expect(report.readyAttempts).toEqual([1, 2]);
+    expect(gitArgs(report)).toEqual(
+      [1, 2].map(() => [
+        "clone",
+        "https://x-access-token:fixture-docs-token@github.com/openclaw/docs.git",
+        path.join(report.workspace, "publish"),
+      ]),
+    );
+    expect(report.boundaries.map(({ name }) => name)).toEqual([
+      "delete",
+      "clone:1",
+      "delete",
+      "clone:2",
+      "exit",
+    ]);
+    expect(backoffs(report)).toEqual([2]);
+    expect(report.output).toContain("Clone attempt 1 failed; retrying.");
+    expect(report.output).not.toContain("fixture-docs-token");
+  },
+  55_000,
+);
+
+posixIt(
+  "docs clone cleanup uncertainty is terminal before another deletion or clone",
+  async () => {
+    const report = await runDocs("Clone publish repo", { cloneResults: ["cleanup-failure"] });
+    expect(report.code, report.output).toBe(125);
+    expect(report.clones).toHaveLength(1);
+    expect(report.boundaries.map(({ name }) => name)).toEqual(["delete", "clone:1", "exit"]);
+    expect(backoffs(report)).toEqual([]);
+    expect(report.output).toContain("Git ownership/setup failed");
+    expect(report.output).not.toContain("fixture-docs-token");
+  },
+  55_000,
+);
+
+posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
+  "docs advisory fetch drains before config/add/commit and still continues (%s)",
+  async (failure) => {
+    const report = await runDocs("Commit publish repo sync", { fetchResults: [failure, 0] });
+    expect(report.code, report.output).toBe(0);
+    expect(gitArgs(report)).toEqual([diff, fetch, ...commit, fetch, show, rebase, push]);
+    expect(backoffs(report)).toEqual([]);
+    expect(report.commands.every(({ cwd }) => cwd === path.join(report.workspace, "publish"))).toBe(
+      true,
+    );
+  },
+  55_000,
+);
+
+posixIt.each([
+  { operation: "rebase", failure: 23 },
+  { operation: "push", failure: 23 },
+  { operation: "rebase", failure: 125 },
+  { operation: "push", failure: 143 },
+])(
+  "docs publication drains failed $operation ($failure) before abort/next fetch and then succeeds",
+  async ({ operation, failure }) => {
+    const report = await runDocs("Commit publish repo sync", {
+      rebaseResults: operation === "rebase" ? [failure, 0] : [],
+      pushResults: operation === "push" ? [failure, 0] : [],
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(gitArgs(report)).toEqual([
+      diff,
+      fetch,
+      show,
+      ...commit,
+      fetch,
+      show,
+      rebase,
+      ...(operation === "push" ? [push] : []),
+      abort,
+      fetch,
+      show,
+      rebase,
+      push,
+    ]);
+    expect(backoffs(report)).toEqual([2]);
+    expect(report.output).toContain("Publish sync attempt 1 failed; retrying.");
+    expect(report.pushes).toHaveLength(operation === "push" ? 2 : 1);
+  },
+  55_000,
+);
+
+posixIt.each(["advisory fetch", "fetch", "rebase", "push"] as const)(
+  "docs publication cleanup uncertainty at %s prevents abort/retry/next Git",
+  async (operation) => {
+    const report = await runDocs("Commit publish repo sync", {
+      fetchResults:
+        operation === "advisory fetch"
+          ? ["cleanup-failure"]
+          : operation === "fetch"
+            ? [0, "cleanup-failure"]
+            : [],
+      rebaseResults: operation === "rebase" ? ["cleanup-failure"] : [],
+      pushResults: operation === "push" ? ["cleanup-failure"] : [],
+    });
+    expect(report.code, report.output).toBe(125);
+    expect(gitArgs(report)).toEqual([
+      diff,
+      fetch,
+      ...(operation === "advisory fetch"
+        ? []
+        : [
+            show,
+            ...commit,
+            fetch,
+            ...(operation === "fetch"
+              ? []
+              : [show, rebase, ...(operation === "push" ? [push] : [])]),
+          ]),
+    ]);
+    expect(report.rebases.some(({ args }) => args.includes("--abort"))).toBe(false);
+    expect(backoffs(report)).toEqual([]);
+    expect(report.output).toContain("Git ownership/setup failed");
+    expect(report.output).not.toContain("retrying");
+  },
+  55_000,
+);
+
+posixIt.each(["Clone publish repo", "Commit publish repo sync"])(
+  "docs %s preserves five attempts and every backoff including the terminal one",
+  async (step) => {
+    const cloning = step === "Clone publish repo";
+    const report = await runDocs(step, {
+      cloneResults: cloning ? Array<FetchResult>(5).fill(23) : [],
+      fetchResults: cloning ? [] : [0, ...Array<FetchResult>(5).fill(23)],
+    });
+    expect(report.code, report.output).toBe(1);
+    expect(backoffs(report)).toEqual([2, 4, 6, 8, 10]);
+    expect(report.clones).toHaveLength(cloning ? 5 : 0);
+    expect(report.fetches).toHaveLength(cloning ? 0 : 6);
+    expect(report.rebases.map(({ args }) => args)).toEqual(cloning ? [] : Array(5).fill(abort));
+    expect(report.pushes).toEqual([]);
+    expect(
+      report.output
+        .trim()
+        .endsWith(
+          cloning
+            ? "Failed to clone publish repo after retries."
+            : "Failed to push publish-repo sync after retries.",
+        ),
+    ).toBe(true);
+  },
+  55_000,
+);
+
+posixIt.each([
+  { label: "no changes", diffResult: 0, stale: false },
+  { label: "stale source", diffResult: 1, stale: true },
+])(
+  "docs publication exits successfully without committing for $label",
+  async ({ diffResult, stale }) => {
+    const report = await runDocs("Commit publish repo sync", {
+      diffResult,
+      objects: { [sourceObject]: { text: JSON.stringify({ sha: newer }) } },
+      mergeBase: { ancestor: true, revision: candidate },
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(gitArgs(report)).toEqual(
+      stale ? [diff, fetch, show, ["merge-base", "--is-ancestor", candidate, newer]] : [diff],
+    );
+    expect(report.output).toContain(
+      stale
+        ? `Skipping stale publish sync for ${candidate}; origin/main already mirrors ${newer}.`
+        : "No publish-repo changes.",
+    );
+    if (stale) {
+      expect(report.commands.at(-1)?.cwd).toBe(report.workspace);
+    }
+  },
+  55_000,
+);
+
+posixIt.each([
+  { label: "missing metadata", text: "", code: 128, ancestor: false },
+  { label: "malformed JSON", text: "{", code: 0, ancestor: false },
+  { label: "non-JSON constant", text: `{"sha":"${newer}","value":NaN}`, code: 0, ancestor: true },
+  { label: "JSON with BOM", text: `\uFEFF{"sha":"${newer}"}`, code: 0, ancestor: true },
+  { label: "empty source", text: '{"sha":""}', code: 0, ancestor: false },
+  { label: "unrelated source", text: JSON.stringify({ sha: newer }), code: 0, ancestor: false },
+])(
+  "docs publication retains the changed path for $label",
+  async ({ text, code, ancestor, label }) => {
+    const report = await runDocs("Commit publish repo sync", {
+      objects: { [sourceObject]: { text, code } },
+      mergeBase: { ancestor, revision: candidate },
+    });
+    expect(report.code, report.output).toBe(0);
+    const staleCheck =
+      label === "unrelated source" ? [["merge-base", "--is-ancestor", candidate, newer]] : [];
+    expect(gitArgs(report)).toEqual([
+      diff,
+      fetch,
+      show,
+      ...staleCheck,
+      ...commit,
+      fetch,
+      show,
+      ...staleCheck,
+      rebase,
+      push,
+    ]);
+  },
+  55_000,
+);
+
+posixIt.each([0, 23, "cleanup-failure"] satisfies FetchResult[])(
+  "docs ClawHub HEAD is owned before Node consumption (%s)",
+  async (revParseResult) => {
+    const report = await runDocs("Sync docs into publish repo", { revParseResult });
+    expect(report.code, report.output).toBe(
+      revParseResult === "cleanup-failure" ? 125 : revParseResult,
+    );
+    expect(gitArgs(report)).toEqual([["rev-parse", "HEAD"]]);
+    expect(report.commands[0]?.cwd).toBe(path.join(report.workspace, "clawhub-source"));
+    expect(report.commands.filter(({ tool }) => tool === "node").map(({ args }) => args)).toEqual(
+      revParseResult === 0
+        ? [
+            [
+              "scripts/docs-sync-publish.mjs",
+              "--target",
+              path.join(report.workspace, "publish"),
+              "--source-repo",
+              "fixture/checkout",
+              "--source-sha",
+              candidate,
+              "--clawhub-repo",
+              path.join(report.workspace, "clawhub-source"),
+              "--clawhub-source-repo",
+              "openclaw/clawhub",
+              "--clawhub-source-sha",
+              candidate,
+            ],
+          ]
+        : [],
+    );
+  },
+  55_000,
+);
+
+posixIt.each(["Clone publish repo", "Commit publish repo sync"])(
+  "docs %s cancellation never reaches retry, abort, or the next Git call",
+  async (step) => {
+    const report = await runDocs(step, {
+      scenario: "cancel-SIGTERM",
+      cloneResults: ["hang"],
+      fetchResults: ["hang"],
+      cooperativeTrees: true,
+      realClock: true,
+    });
+    expect(report.code, report.output).toBe(143);
+    expect(report.readyAttempts).toEqual([1]);
+    expect(report.commands.filter(({ tool }) => tool === "git")).toHaveLength(
+      step === "Clone publish repo" ? 1 : 2,
+    );
+    expect(report.rebases).toEqual([]);
+    expect(report.pushes).toEqual([]);
+    expect(report.output).not.toContain("retrying");
+    expect(report.boundaries.filter(({ name }) => name === "delete")).toHaveLength(
+      step === "Clone publish repo" ? 1 : 0,
+    );
+  },
+  55_000,
+);
