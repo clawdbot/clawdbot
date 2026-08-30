@@ -22,7 +22,6 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
-import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
@@ -44,6 +43,10 @@ import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+// Claude emits no output between tool_use and tool_result. Keep quiet tools alive
+// long enough to finish without importing the newer diagnostic-recovery owner.
+const CLAUDE_LIVE_BLOCKED_TOOL_NO_OUTPUT_FLOOR_MS = 15 * 60_000;
 
 type ProcessSupervisor = ReturnType<
   typeof import("../../process/supervisor/index.js").getProcessSupervisor
@@ -731,7 +734,10 @@ function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, dela
   turn.noOutputTimer = setTimeout(() => {
     const quietSinceMs = turn.lastOutputAtMs ?? turn.startedAtMs;
     if (turn.activeTools.size > 0) {
-      const quietBudgetMs = Math.max(session.noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
+      const quietBudgetMs = Math.max(
+        session.noOutputTimeoutMs,
+        CLAUDE_LIVE_BLOCKED_TOOL_NO_OUTPUT_FLOOR_MS,
+      );
       const remainingMs = quietSinceMs + quietBudgetMs - Date.now();
       if (remainingMs > 0) {
         armNoOutputTimer(session, turn, remainingMs);
