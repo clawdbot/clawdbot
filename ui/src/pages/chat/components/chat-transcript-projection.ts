@@ -31,6 +31,7 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
+import { assistantGroupIsForwardedBoundary } from "../chat-turn-boundary.ts";
 import { getToolTitlesVersion, scheduleToolTitlesForTranscript } from "../tool-titles.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
@@ -261,9 +262,17 @@ export function projectChatTranscript(
   // keeps avatars like "group" and "unknown" do. An identity-resolving gateway
   // (multi-user trusted proxy) also keeps them: several people share these
   // sessions, so the author marker is signal, not decoration.
+  // A forwarded cross-session message is another voice in the room: the thread
+  // stops rendering as a compact direct exchange and identity chrome returns.
+  const hasForwardedGroups = chatItems.some(
+    (item) =>
+      item.kind === "group" &&
+      (Boolean(item.senderSession) || assistantGroupIsForwardedBoundary(item)),
+  );
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
-    !props.userId;
+    !props.userId &&
+    !hasForwardedGroups;
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -357,6 +366,10 @@ export function projectChatTranscript(
       onToggleToolExpanded: toggleToolCardExpanded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
+      agentId: props.currentAgentId ?? props.fullMessageAgentId,
+      agents: props.agents,
+      senderAgentAvatars: props.senderAgentAvatars,
+      mainKey: props.mainKey,
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
@@ -672,6 +685,10 @@ export function projectChatTranscript(
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
+    props.currentAgentId,
+    props.agents,
+    props.senderAgentAvatars,
+    props.mainKey,
     props.userId,
     props.userName,
     props.userAvatar,
