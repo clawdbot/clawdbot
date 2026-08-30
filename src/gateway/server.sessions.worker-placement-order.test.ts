@@ -25,7 +25,7 @@ test.each(["delete", "archive", "recover"] as const)(
     await writeSessionStore({
       entries: {
         [sessionKey]: sessionStoreEntry(sessionId, {
-          worktree: { id: "order-worktree" },
+          worktree: { id: "order-worktree", branch: "order-branch", repoRoot: "/fixture/repo" },
           lifecycleRevision: "original-lifecycle",
           ...(action === "recover"
             ? {
@@ -93,7 +93,7 @@ test.each(["delete", "archive", "recover"] as const)(
       revokeSessionAuthority: () => {},
     });
     const service = coordinateWorkerPlacementDispatch({
-      move: async () =>
+      move: async () => {
         await moveBarrier({
           sessionId,
           sessionKey,
@@ -103,7 +103,9 @@ test.each(["delete", "archive", "recover"] as const)(
             moveAcquired = true;
             throw new Error("move preflight rejected");
           },
-        }),
+        });
+        throw new Error("test Move preflight unexpectedly completed");
+      },
       reclaim: async (_request, authorize, beforeDrain, serialize) => {
         reclaimEntered.resolve();
         serializedReclaim = serialize!(async () => {
