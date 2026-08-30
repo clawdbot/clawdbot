@@ -146,10 +146,7 @@ export function attachInternalToolResultAcknowledgement<T extends object>(
 }
 
 /** Carry private commit ownership through result transforms and message construction. */
-export function copyInternalToolResultAcknowledgement<T extends object>(
-  source: object,
-  target: T,
-): T {
+function copyInternalToolResultAcknowledgement<T extends object>(source: object, target: T): T {
   const acknowledge = toolResultAcknowledgementByValue.get(source);
   if (acknowledge) {
     toolResultAcknowledgementByValue.set(target, acknowledge);
@@ -163,10 +160,6 @@ export function attachInternalToolResultProvenance<T extends object>(
 ): T {
   toolResultProvenanceByValue.set(value, provenance);
   return value;
-}
-
-export function hasInternalToolResultProvenance(value: object, provenance: object): boolean {
-  return toolResultProvenanceByValue.get(value) === provenance;
 }
 
 export function getInternalToolResultProvenance(value: object): object | undefined {

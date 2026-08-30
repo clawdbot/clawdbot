@@ -387,6 +387,7 @@ export function completeEmbeddedAttemptResult(
     heartbeatToolResponse,
     lastToolError,
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
+    toolAutoDeliveryMediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
     hasToolMediaBlockReply: hasToolMediaBlockReplyNow,

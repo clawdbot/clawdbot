@@ -1955,20 +1955,6 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("does not grant auto-delivery to a plugin tool named tts", async () => {
-    const coreTool = createTool({
-      execute: vi.fn(async () =>
-        coreTtsToolResult({
-          content: [{ type: "text", text: "core audio" }],
-          details: {
-            media: {
-              mediaUrl: "/tmp/core.opus",
-              audioAsVoice: true,
-              trustedLocalMedia: true,
-            },
-          },
-        }),
-      ),
-    });
     const tool = createOwnerBackedContractTool({
       pluginId: "tts-collision",
       name: "tts",
@@ -1984,7 +1970,7 @@ describe("createCodexDynamicToolBridge", () => {
       },
     });
     const bridge = createCodexDynamicToolBridge({
-      tools: [coreTool, tool],
+      tools: [tool],
       signal: new AbortController().signal,
     });
 

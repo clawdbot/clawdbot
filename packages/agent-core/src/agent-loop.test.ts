@@ -13,7 +13,7 @@ import {
   attachInternalToolExecutionPreparer,
   attachInternalToolResultAcknowledgement,
   attachInternalToolResultProvenance,
-  hasInternalToolResultProvenance,
+  getInternalToolResultProvenance,
   setInternalBeforeToolBatch,
   takeInternalToolBatchLifecycle,
 } from "./internal-hooks.js";
@@ -2627,14 +2627,17 @@ describe("agentLoop tool termination", () => {
       },
       async (event) => {
         if (event.type === "tool_execution_end") {
-          expect(hasInternalToolResultProvenance(event.result, provenance)).toBe(true);
+          expect(event.result).toBeTypeOf("object");
+          if (typeof event.result === "object" && event.result !== null) {
+            expect(getInternalToolResultProvenance(event.result)).toBe(provenance);
+          }
         }
         if (
           !testCase.failAttachment &&
           event.type === "message_end" &&
           event.message.role === "toolResult"
         ) {
-          expect(hasInternalToolResultProvenance(event.message, provenance)).toBe(true);
+          expect(getInternalToolResultProvenance(event.message)).toBe(provenance);
           acknowledgeInternalToolResult(event.message);
         }
         if (
