@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-lease.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
@@ -215,6 +216,30 @@ function assertTranscriptSessionSourceUnchanged(
   }
 }
 
+function transcriptSessionsNeedMigration(
+  database: DatabaseSync,
+  pathname: string,
+  afterSessionId: string,
+): boolean {
+  let cursor = afterSessionId;
+  while (true) {
+    const sessionIds = listTranscriptSessionBatch(database, cursor);
+    if (sessionIds.length === 0) {
+      return false;
+    }
+    for (const sessionId of sessionIds) {
+      if (
+        planTranscriptSession(database, pathname, sessionId).some(
+          (row) => row.rewrittenEventJson !== row.eventJson,
+        )
+      ) {
+        return true;
+      }
+    }
+    cursor = sessionIds.at(-1) ?? cursor;
+  }
+}
+
 async function yieldToMaintenanceHeartbeat(): Promise<void> {
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
@@ -240,6 +265,7 @@ async function migrateTranscriptSessions(params: {
           phase: "archives",
           sessionId: "",
         });
+        assertAgentDatabaseMaintenanceAuthority();
       });
       return rewrittenSessions;
     }
@@ -263,6 +289,7 @@ async function migrateTranscriptSessions(params: {
             phase: "transcripts",
             sessionId,
           });
+          assertAgentDatabaseMaintenanceAuthority();
         },
         {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -326,6 +353,47 @@ async function migrateAgentDatabase(params: {
   }
 }
 
+function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
+  agentId: string;
+  pathname: string;
+}): boolean {
+  const database = openNodeSqliteDatabase(params.pathname, { readOnly: true });
+  try {
+    const userVersion = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+    if (userVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+      return true;
+    }
+    try {
+      assertOpenClawAgentDatabaseForMaintenance(database, params);
+    } catch {
+      return true;
+    }
+    const cursor = readMigrationCursor(database, params.pathname);
+    if (cursor.phase === "complete") {
+      return false;
+    }
+    if (cursor.phase === "archives") {
+      return true;
+    }
+    if (transcriptSessionsNeedMigration(database, params.pathname, cursor.sessionId)) {
+      return true;
+    }
+    const hasArchiveTable = database
+      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .get("session_transcript_archives");
+    if (!hasArchiveTable) {
+      return false;
+    }
+    return Boolean(database.prepare("SELECT 1 FROM session_transcript_archives LIMIT 1").get());
+  } catch {
+    // The fenced migration owns validation and user-facing diagnostics.
+    return true;
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(database);
+    database.close();
+  }
+}
+
 /** One-time startup migration from inline assistant directives to typed delivery facts. */
 export async function migrateHistoricalTranscriptDirectives(
   params: {
@@ -337,13 +405,21 @@ export async function migrateHistoricalTranscriptDirectives(
   const changes: string[] = [];
   const warnings: string[] = [];
   try {
+    const targets = resolveAgentDatabaseMigrationTargets({
+      changes,
+      configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
+      env,
+      warnings,
+    }).filter((target) =>
+      agentDatabaseNeedsTranscriptDirectiveMigration({
+        agentId: target.agentId,
+        pathname: target.path,
+      }),
+    );
+    if (targets.length === 0) {
+      return { changes, warnings };
+    }
     await withAgentDatabaseMaintenanceLease({ env }, async () => {
-      const targets = resolveAgentDatabaseMigrationTargets({
-        changes,
-        configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
-        env,
-        warnings,
-      });
       for (const target of targets) {
         try {
           const result = await migrateAgentDatabase({
