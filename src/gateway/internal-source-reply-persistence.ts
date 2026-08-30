@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -12,6 +11,7 @@ import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js
 import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
+  attachManagedOutgoingMediaToMessage,
   createManagedOutgoingMediaBlocks,
   prepareOutgoingMediaFromReplyPayload,
   removeManagedOutgoingMediaBlocks,
@@ -90,54 +90,65 @@ export async function persistInternalSourceReply(params: {
     if (await hasPersistedInternalSourceReply(params)) {
       return;
     }
-    const messageId = randomUUID();
     const media = prepareOutgoingMediaFromReplyPayload(params.payload);
+    // Prepared media is transient until commit so maintenance cannot reap it as missing history.
     const mediaBlocks = await createManagedOutgoingMediaBlocks({
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       items: media,
-      messageId,
       localRoots: getAgentScopedMediaLocalRootsForSources({
         cfg: params.cfg,
         agentId: params.agentId,
         mediaSources: media.map((item) => item.url),
       }),
     });
-    const content: Array<Record<string, unknown>> = [
-      ...(params.payload.text ? [{ type: "text", text: params.payload.text }] : []),
-      ...mediaBlocks,
-    ];
-    const writerFence = getOwnedSessionTranscriptWriterFence();
-    const appended = await appendAssistantMessageToSessionTranscript({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-      ...(writerFence?.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
-        : {}),
-      ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
-      content: prepareGatewayInjectedAssistantContent(content),
-      eventId: messageId,
-      idempotencyKey: params.idempotencyKey,
-      runId: params.runId,
-      ...(params.sourceReplyFinal !== undefined
-        ? {
-            deliveryMirror: {
-              kind: "message-tool-source-reply" as const,
-              final: params.sourceReplyFinal,
-              ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-              ...(params.sourceTurnId ? { sourceTurnId: params.sourceTurnId } : {}),
-            },
+    let committed = false;
+    try {
+      const content: Array<Record<string, unknown>> = [
+        ...(params.payload.text ? [{ type: "text", text: params.payload.text }] : []),
+        ...mediaBlocks,
+      ];
+      const writerFence = getOwnedSessionTranscriptWriterFence();
+      const appended = await appendAssistantMessageToSessionTranscript({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+        ...(writerFence?.expectedLifecycleRevision !== undefined
+          ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+          : {}),
+        ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
+        content: prepareGatewayInjectedAssistantContent(content),
+        idempotencyKey: params.idempotencyKey,
+        runId: params.runId,
+        ...(params.sourceReplyFinal !== undefined
+          ? {
+              deliveryMirror: {
+                kind: "message-tool-source-reply" as const,
+                final: params.sourceReplyFinal,
+                ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+                ...(params.sourceTurnId ? { sourceTurnId: params.sourceTurnId } : {}),
+              },
+            }
+          : {}),
+        config: params.cfg,
+        onMessageCommitted: (messageId) => {
+          // Publication can fail after commit; cleanup must never delete owned media.
+          committed = true;
+          if (
+            mediaBlocks.length > 0 &&
+            !attachManagedOutgoingMediaToMessage({ messageId, blocks: mediaBlocks })
+          ) {
+            throw new Error("Internal source reply media ownership could not be persisted");
           }
-        : {}),
-      config: params.cfg,
-    });
-    if (!appended.ok) {
-      await removeManagedOutgoingMediaBlocks({ blocks: mediaBlocks, messageId });
-      throw new Error(`Internal source reply persistence failed: ${appended.reason}`);
-    }
-    if (appended.messageId !== messageId) {
-      await removeManagedOutgoingMediaBlocks({ blocks: mediaBlocks, messageId });
+        },
+      });
+      if (!appended.ok) {
+        throw new Error(`Internal source reply persistence failed: ${appended.reason}`);
+      }
+    } finally {
+      if (!committed) {
+        await removeManagedOutgoingMediaBlocks({ blocks: mediaBlocks, messageId: null });
+      }
     }
   } finally {
     lease?.release();

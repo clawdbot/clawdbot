@@ -419,6 +419,11 @@ export type SessionTranscriptTurnPersistOptions = {
   messages: readonly SessionTranscriptTurnMessageAppend[];
   /** Exact run provenance persisted on output rows and emitted on terminal assistant updates. */
   runId?: string;
+  /**
+   * Complete each new message synchronously after commit, before owner drain or publication.
+   * Throwing stops publication; it cannot roll back the committed transcript.
+   */
+  onMessageCommitted?: (messageId: string) => void;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
   /** Emit file-only updates even when every candidate message was skipped. */
