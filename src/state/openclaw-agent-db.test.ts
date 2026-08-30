@@ -2913,6 +2913,31 @@ describe("openclaw agent database", () => {
     expect(second.db.isOpen).toBe(true);
   });
 
+  it("initializes a fresh schema after explicit close and file recreation", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const original = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = original.path;
+
+    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+    for (const suffix of ["", "-wal", "-shm"]) {
+      fs.rmSync(`${databasePath}${suffix}`, { force: true });
+    }
+
+    const recreated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(recreated.db.isOpen).toBe(true);
+    expect(collectSqliteSchemaShape(recreated.db)).toEqual(
+      createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
+    );
+    expect(
+      recreated.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'session_key_contract'",
+        )
+        .get(),
+    ).toEqual({ name: "session_key_contract" });
+  });
+
   it("retains its durable lease when closing the handle fails", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

@@ -1,7 +1,8 @@
 // OpenClaw agent database stores agent-scoped persisted runtime state.
-import { existsSync } from "node:fs";
+import { existsSync, statSync, type BigIntStats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
@@ -128,8 +129,29 @@ const cachedDatabaseLeases = new Map<
   { leaseId: string; env: NodeJS.ProcessEnv | undefined }
 >();
 // External schema changes under a live process are unsupported: doctor migrations
-// require restart, so successful owner/schema validation is process-stable.
-const validatedAgentDatabasePaths = new Map<string, string>();
+// require restart, so successful owner/schema validation is process-stable. Keep
+// filesystem identity so deletion/recreation revokes trust without making an
+// unchanged explicit close pay the write-capable schema path again.
+type AgentDatabaseFileIdentity = Pick<BigIntStats, "birthtimeNs" | "dev" | "ino">;
+const validatedAgentDatabasePaths = new Map<
+  string,
+  { agentId: string; identity: AgentDatabaseFileIdentity }
+>();
+
+function readAgentDatabaseFileIdentity(pathname: string): AgentDatabaseFileIdentity {
+  const stat = statSync(pathname, { bigint: true });
+  if (!stat.isFile()) {
+    throw new Error(`OpenClaw agent database is not a regular file: ${pathname}`);
+  }
+  return { birthtimeNs: stat.birthtimeNs, dev: stat.dev, ino: stat.ino };
+}
+
+function isSameAgentDatabaseFileIdentity(
+  left: AgentDatabaseFileIdentity,
+  right: AgentDatabaseFileIdentity,
+): boolean {
+  return sameFileIdentity(left, right) && left.birthtimeNs === right.birthtimeNs;
+}
 const terminalOpenLatch = createSqliteTerminalOpenLatch({
   closeByPath: closeOpenClawAgentDatabaseByPath,
 });
@@ -327,7 +349,13 @@ export function openOpenClawAgentDatabase(
     openedDb = db;
     // Eviction churn must avoid migration/convergence and registry busy waits.
     // Version and owner can change while evicted, so their read-only gates run on every open.
-    let isValidatedReopen = validatedAgentDatabasePaths.get(pathname) === agentId;
+    const validatedDatabase = validatedAgentDatabasePaths.get(pathname);
+    let isValidatedReopen =
+      validatedDatabase?.agentId === agentId &&
+      isSameAgentDatabaseFileIdentity(
+        validatedDatabase.identity,
+        readAgentDatabaseFileIdentity(pathname),
+      );
     const walMaintenance = (() => {
       let maintenance: OpenClawAgentDatabase["walMaintenance"] | undefined;
       try {
@@ -381,7 +409,10 @@ export function openOpenClawAgentDatabase(
     openedDatabase = database;
     if (!isValidatedReopen) {
       registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env });
-      validatedAgentDatabasePaths.set(pathname, agentId);
+      validatedAgentDatabasePaths.set(pathname, {
+        agentId,
+        identity: readAgentDatabaseFileIdentity(pathname),
+      });
     }
     terminalOpenLatch.clear(pathname);
     // Safety net for processes that end without an orderly close: agent DBs have
