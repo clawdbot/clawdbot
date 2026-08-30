@@ -2,6 +2,8 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -20,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import ts from "typescript";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   detectChangedScope,
@@ -68,6 +70,8 @@ const AMBIGUOUS_MAIN_PUSH_GUARD = `if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$
   exit 1
 fi`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const publisherTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
+let generatedPublisherTemplate: string | undefined;
 const rootPackageManager = (
   JSON.parse(readFileSync("package.json", "utf8")) as {
     packageManager: string;
@@ -1465,6 +1469,38 @@ function runControlUiI18nSourceFixture(options: {
   }
 }
 
+function copyGeneratedPublisherFixture(root: string) {
+  if (!generatedPublisherTemplate) {
+    const templateRoot = publisherTemplateDirs.make("openclaw-generated-pr-template-");
+    const origin = path.join(templateRoot, "origin.git");
+    const worktree = path.join(templateRoot, "worktree");
+    const generatedDir = path.join(worktree, "generated");
+    const sourceDir = path.join(worktree, "source");
+    mkdirSync(generatedDir, { recursive: true });
+    mkdirSync(sourceDir);
+    runGit(templateRoot, ["init", "--bare", origin]);
+    runGit(templateRoot, ["init", "--initial-branch=main", worktree]);
+    runGit(worktree, ["config", "user.name", "Test Publisher"]);
+    runGit(worktree, ["config", "user.email", "publisher@example.com"]);
+    writeFileSync(path.join(generatedDir, "a.txt"), "old-a\n", "utf8");
+    writeFileSync(path.join(generatedDir, "b.txt"), "old-b\n", "utf8");
+    writeFileSync(path.join(sourceDir, "input.txt"), "old-input\n", "utf8");
+    runGit(worktree, ["add", "generated", "source"]);
+    runGit(worktree, ["commit", "-m", "base"]);
+    runGit(worktree, ["remote", "add", "origin", "../origin.git"]);
+    runGit(worktree, ["push", "-u", "origin", "main"]);
+    runGit(templateRoot, ["--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main"]);
+    generatedPublisherTemplate = templateRoot;
+  }
+  // Relative origin follows each copied repository pair, isolating refs, hooks and config.
+  for (const name of ["origin.git", "worktree"]) {
+    cpSync(path.join(generatedPublisherTemplate, name), path.join(root, name), {
+      recursive: true,
+      mode: fsConstants.COPYFILE_FICLONE,
+    });
+  }
+}
+
 function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: {
@@ -1488,7 +1524,6 @@ function runGeneratedPublisherScenario(
     const updater = path.join(root, "updater");
     const worktree = path.join(root, "worktree");
     const generatedDir = path.join(worktree, "generated");
-    const sourceDir = path.join(worktree, "source");
     const fakeBin = path.join(root, "bin");
     const runnerTemp = path.join(root, "runner-temp");
     const prState = path.join(root, "pr-open");
@@ -1497,8 +1532,7 @@ function runGeneratedPublisherScenario(
     const stalePrViewHeadOnce = path.join(root, "stale-pr-view-head-once");
     const summary = path.join(root, "summary.md");
 
-    mkdirSync(generatedDir, { recursive: true });
-    mkdirSync(sourceDir);
+    copyGeneratedPublisherFixture(root);
     mkdirSync(fakeBin);
     mkdirSync(runnerTemp);
     writeFileSync(summary, "", "utf8");
@@ -1508,18 +1542,6 @@ function runGeneratedPublisherScenario(
     if (options.stalePrViewHeadOnce) {
       writeFileSync(stalePrViewHeadOnce, "", "utf8");
     }
-    runGit(root, ["init", "--bare", origin]);
-    runGit(root, ["init", "--initial-branch=main", worktree]);
-    runGit(worktree, ["config", "user.name", "Test Publisher"]);
-    runGit(worktree, ["config", "user.email", "publisher@example.com"]);
-    writeFileSync(path.join(generatedDir, "a.txt"), "old-a\n", "utf8");
-    writeFileSync(path.join(generatedDir, "b.txt"), "old-b\n", "utf8");
-    writeFileSync(path.join(sourceDir, "input.txt"), "old-input\n", "utf8");
-    runGit(worktree, ["add", "generated", "source"]);
-    runGit(worktree, ["commit", "-m", "base"]);
-    runGit(worktree, ["remote", "add", "origin", origin]);
-    runGit(worktree, ["push", "-u", "origin", "main"]);
-    runGit(root, ["--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main"]);
     if (options.existingPr) {
       runGit(worktree, ["switch", "-c", "automation/locale"]);
       writeFileSync(path.join(generatedDir, "a.txt"), "stale-pr-a\n", "utf8");
