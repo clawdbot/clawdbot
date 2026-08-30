@@ -17,6 +17,7 @@ import {
   buildOutboundSessionContext,
   sendDurableMessageBatch,
   type DurableMessageBatchSendResult,
+  type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -376,9 +377,26 @@ function buildTelegramActionSendPayload(params: {
   };
 }
 
+function projectTelegramReceiptPlacement(
+  receipt: MessageReceipt,
+): { threadId?: string; replyToId?: string } | undefined {
+  // Reconciliation only reads thread/reply placement from the delivered
+  // receipt. Keep the model-visible tool result bounded: durable receipts
+  // also carry unbounded multipart data and raw provider records (#133051).
+  const placement = {
+    ...(receipt.threadId ? { threadId: receipt.threadId } : {}),
+    ...(receipt.replyToId ? { replyToId: receipt.replyToId } : {}),
+  };
+  return Object.keys(placement).length > 0 ? placement : undefined;
+}
+
 function getLastDurableTelegramActionResult(
   result: Extract<DurableMessageBatchSendResult, { status: "sent" }>,
-): { messageId?: string; chatId?: string } {
+): {
+  messageId?: string;
+  chatId?: string;
+  receipt?: { threadId?: string; replyToId?: string };
+} {
   const lastResult = result.results.at(-1);
   const receipt = result.receipt;
   return {
@@ -387,6 +405,10 @@ function getLastDurableTelegramActionResult(
       receipt.primaryPlatformMessageId ??
       receipt.platformMessageIds.at(-1),
     chatId: lastResult?.target?.kind === "chat" ? lastResult.target.id : undefined,
+    // Preserve the durable receipt placement so source-reply reconciliation
+    // can prove terminal delivery (including forum thread placement) instead
+    // of failing closed and marking the completed session as aborted.
+    receipt: projectTelegramReceiptPlacement(receipt),
   };
 }
 
@@ -748,6 +770,7 @@ export async function handleTelegramAction(
       ok: true,
       messageId: result.messageId,
       chatId: result.chatId,
+      ...(result.receipt ? { receipt: result.receipt } : {}),
       ...buildTelegramControlDegradation(droppedControls, Boolean(content.trim())),
     });
   }

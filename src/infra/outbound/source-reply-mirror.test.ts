@@ -76,6 +76,60 @@ describe("reconcileTerminalSourceReplyDelivery", () => {
     expect(receiptMocks.cancel).not.toHaveBeenCalled();
     expect(receiptMocks.complete).not.toHaveBeenCalled();
   });
+
+  const telegramForumMirror = {
+    action: "send",
+    channel: "telegram",
+    actionParams: { to: "-1001234567890", message: "terminal forum reply" },
+    cfg: {},
+    sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+    toolContext: {
+      currentChannelProvider: "telegram",
+      currentChannelId: "-1001234567890",
+      currentThreadTs: "42",
+    },
+  };
+
+  it("keeps terminal delivery fail-closed when the telegram result drops its receipt", async () => {
+    // Pre-fix Telegram sendMessage results carried only ok/messageId/chatId,
+    // so reconciliation could not prove forum-topic placement (#133051).
+    await expect(
+      reconcileTerminalSourceReplyDelivery({
+        deliveredPayload: {
+          result: { ok: true, messageId: "789", chatId: "-1001234567890" },
+        },
+        mirror: telegramForumMirror,
+        receipt: { ...receipt, sessionKey: telegramForumMirror.sessionKey },
+      }),
+    ).resolves.toBe("not-source");
+
+    expect(receiptMocks.complete).not.toHaveBeenCalled();
+    expect(receiptMocks.cancel).not.toHaveBeenCalled();
+  });
+
+  it("completes terminal delivery when the telegram result carries the forum-topic receipt", async () => {
+    const terminalReceipt = { ...receipt, sessionKey: telegramForumMirror.sessionKey };
+
+    await expect(
+      reconcileTerminalSourceReplyDelivery({
+        deliveredPayload: {
+          result: {
+            ok: true,
+            messageId: "789",
+            chatId: "-1001234567890",
+            receipt: {
+              threadId: "42",
+            },
+          },
+        },
+        mirror: telegramForumMirror,
+        receipt: terminalReceipt,
+      }),
+    ).resolves.toBe("delivered");
+
+    expect(receiptMocks.complete).toHaveBeenCalledWith(terminalReceipt);
+    expect(receiptMocks.cancel).not.toHaveBeenCalled();
+  });
 });
 
 describe("isDeliveredCurrentSourceReply", () => {

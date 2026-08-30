@@ -21,6 +21,8 @@ import {
 import type { TelegramRuntime } from "./runtime.types.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
+const TELEGRAM_TEST_SENT_AT = 1_735_689_600_000;
+
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
 
 function handleTelegramAction(
@@ -171,7 +173,8 @@ const sendDurableMessageBatch = vi.fn(
             index: 0,
           },
         ],
-        sentAt: Date.now(),
+        sentAt: TELEGRAM_TEST_SENT_AT,
+        ...(params.threadId == null ? {} : { threadId: String(params.threadId) }),
       },
     } as const;
   },
@@ -1059,6 +1062,43 @@ describe("handleTelegramAction", () => {
       ok: true,
       messageId: "789",
       chatId: "123",
+    });
+  });
+
+  it("preserves the durable receipt in terminal forum-topic sendMessage results", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "-1001234567890",
+        content: "Terminal forum reply",
+        threadId: 42,
+      },
+      telegramConfig(),
+      {
+        gatewayClientScopes: ["operator.write"],
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+      },
+    );
+    const details = result.details as {
+      ok: boolean;
+      messageId?: string;
+      chatId?: string;
+      receipt?: Record<string, unknown>;
+    };
+    expect(details.ok).toBe(true);
+    // Source-reply reconciliation reads `receipt.threadId` from the delivered
+    // payload to prove terminal delivery; dropping it makes the gateway fail
+    // closed and mark the completed session aborted (#133051). The projection
+    // must stay bounded: no multipart ids, parts, timestamps, or raw provider
+    // records may leak into model-visible tool content.
+    expect(details.receipt).toStrictEqual({ threadId: "42" });
+    const content = result.content as Array<{ type: string; text?: string }>;
+    const contentText = content[0]?.type === "text" ? (content[0].text ?? "") : "";
+    expect(JSON.parse(contentText)).toStrictEqual({
+      ok: true,
+      messageId: "789",
+      chatId: "123",
+      receipt: { threadId: "42" },
     });
   });
 
