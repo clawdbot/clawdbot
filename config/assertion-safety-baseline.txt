@@ -234,7 +234,6 @@ extensions/codex/src/app-server/side-question.ts	8
 extensions/codex/src/app-server/startup-binding.ts	2
 extensions/codex/src/app-server/thread-fingerprints.ts	2
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
-extensions/codex/src/app-server/thread-supervision.ts	2
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/tool-progress-normalization.ts	1
 extensions/codex/src/app-server/transcript-history-projection.ts	2
