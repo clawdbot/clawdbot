@@ -359,7 +359,7 @@ describe("memory-core dreaming phases", () => {
     vi.setSystemTime(now);
     try {
       await beforeAgentReply(
-        { cleanedBody: LIGHT_SLEEP_EVENT_TEXT },
+        { cleanedBody: testing.constants.LIGHT_SLEEP_EVENT_TEXT },
         { trigger: "heartbeat", workspaceDir },
       );
     } finally {
