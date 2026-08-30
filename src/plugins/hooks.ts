@@ -9,7 +9,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
+import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   expandToolGroups,
@@ -494,14 +494,10 @@ export function createHookRunner(
     if (normalizedRight.includes("*")) {
       return normalizedLeft;
     }
+    const matchesLeft = createToolPolicyMatcher({ allow: normalizedLeft });
+    const matchesRight = createToolPolicyMatcher({ allow: normalizedRight });
     return [...new Set(normalizeToolList([...normalizedLeft, ...normalizedRight]))].filter(
-      (name) => {
-        const normalized = normalizeToolPolicyName(name);
-        return (
-          isToolAllowedByPolicyName(normalized, { allow: normalizedLeft }) &&
-          isToolAllowedByPolicyName(normalized, { allow: normalizedRight })
-        );
-      },
+      (name) => matchesLeft(name) && matchesRight(name),
     );
   };
 
