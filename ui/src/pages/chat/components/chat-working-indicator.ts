@@ -4,7 +4,6 @@ import "../../../components/working-phrase.ts";
 import { icons } from "../../../components/icons.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
-import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
@@ -39,11 +38,12 @@ function formatTurnRecapDuration(ms: number): string {
   return new Intl.ListFormat(locale, { style: "long", type: "unit" }).format(parts);
 }
 
-// 0 is a valid count (command-only turns); only null/undefined means "unknown".
+// Keep counts exact so small response updates remain visible above 1,000 tokens.
+// 0 is valid; only null/undefined means "unknown".
 function outputTokensLabel(outputTokens: number): string {
   return outputTokens === 1
     ? t("chat.turnRecap.tokensOne")
-    : t("chat.turnRecap.tokens", { count: formatCompactTokenCount(outputTokens) });
+    : t("chat.turnRecap.tokens", { count: outputTokens.toLocaleString(i18n.getLocale()) });
 }
 
 function renderLiveOutputTokens(outputTokens: number | null | undefined) {
@@ -67,8 +67,8 @@ export function renderChatWorkingIndicator(
 ) {
   const waitingApproval = options.waitingApproval === true;
   const continuation = options.presentation === "continuation";
-  // Streaming tokens are the real liveness signal; the whimsical phrase only
-  // covers the stretch before any usage data exists.
+  // Providers report exact usage at response boundaries, not per text delta.
+  // Keep the latest count visible while the run continues through tools.
   const hasTokens = options.outputTokens !== null && options.outputTokens !== undefined;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
@@ -92,7 +92,9 @@ export function renderChatWorkingIndicator(
           `}
       <span class="chat-working-indicator__status">
         ${waitingApproval
-          ? html`<span>${t("chat.waitingForApproval")}</span>`
+          ? html`<span>${t("chat.waitingForApproval")}</span>${renderLiveOutputTokens(
+                options.outputTokens,
+              )}`
           : options.startupLabel
             ? html`
                 <span>${options.startupLabel}</span>
@@ -124,8 +126,8 @@ export function renderChatWorkingIndicator(
 }
 
 /** Post-turn recap row: once the run settles, the parked claw reports how
- * long the turn took (and its output tokens when the terminal patch carried
- * them). Sticky until the next run replaces it. */
+ * long the turn took and its latest known output usage. Sticky until the
+ * next run replaces it. */
 export function renderTurnRecapRow(
   recap: TurnRecap,
   options: { presentation?: "standalone" | "continuation" } = {},

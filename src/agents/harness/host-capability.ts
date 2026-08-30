@@ -1,4 +1,5 @@
 import path from "node:path";
+import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
@@ -19,7 +20,9 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
+import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import {
@@ -171,6 +174,7 @@ export function createAgentHarnessHostCapabilities(params: {
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  const { sessionKey, onAgentEvent } = attempt;
   // Capture the selected harness declaration before plugin code can mutate it.
   // Full must not cover other commands merely because the same plugin owns them.
   const requiredNodeCommands = new Set(params.requiredNodeCommands);
@@ -179,6 +183,8 @@ export function createAgentHarnessHostCapabilities(params: {
   if (!delegatedAuthority) {
     throw new Error("agent harness host capability requires active admitted run authority");
   }
+  const { lifecycleGeneration } = delegatedAuthority;
+  const { runId } = delegatedAuthority.operationalRunInstance;
   let active = true;
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
@@ -339,6 +345,22 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    reportOutputTokens: (outputTokens) => {
+      assertActive();
+      const data = emitAgentRunOutputTokens({
+        runId,
+        lifecycleGeneration,
+        sessionKey,
+        outputTokens,
+      });
+      if (data && onAgentEvent) {
+        runBestEffortCallback({
+          label: "usage agent event",
+          log,
+          callback: () => onAgentEvent({ stream: "usage", data }),
+        });
+      }
+    },
     ...(trajectoryRecorder
       ? {
           trajectory: Object.freeze({

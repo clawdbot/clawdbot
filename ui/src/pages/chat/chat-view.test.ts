@@ -152,6 +152,7 @@ const buildChatItemsMock = vi.fn(
           kind: "group",
           key: "group:assistant:test",
           role: "assistant",
+          runId: (props.messages.at(-1) as { runId?: string } | undefined)?.runId,
           messages: props.messages.map((message, index) => ({
             key: `message:${index}`,
             message,
@@ -2955,7 +2956,9 @@ describe("chat loading skeleton", () => {
   it("routes live and completed status into the existing assistant turn", () => {
     renderChatView({
       canAbort: true,
-      messages: [{ role: "assistant", content: "Finished answer", timestamp: 1 }],
+      messages: [
+        { role: "assistant", content: "Finished answer", timestamp: 1, runId: "run-composed" },
+      ],
       stream: null,
     });
 
@@ -2968,11 +2971,14 @@ describe("chat loading skeleton", () => {
 
     renderMessageGroupMock.mockClear();
     vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runId: "run-composed",
       runtimeMs: 5_000,
       outputTokens: 42,
     });
     const container = renderChatView({
-      messages: [{ role: "assistant", content: "Finished answer", timestamp: 1 }],
+      messages: [
+        { role: "assistant", content: "Finished answer", timestamp: 1, runId: "run-composed" },
+      ],
     });
 
     expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
@@ -3012,6 +3018,7 @@ describe("chat loading skeleton", () => {
       },
     ]);
     vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runId: "run-composed",
       runtimeMs: 5_000,
       outputTokens: 42,
     });
@@ -3087,7 +3094,12 @@ describe("chat loading skeleton", () => {
     // Run usage arrives on its own patches, so the transcript items, the
     // shared render context, and this row's own identity all stay put while
     // the counter ticks.
-    const readingIndicator = { kind: "reading-indicator", key: "reading:test", startedAt: 1 };
+    const readingIndicator = {
+      kind: "reading-indicator",
+      key: "reading:test",
+      startedAt: 1,
+      runId: "usage-run",
+    };
     const reply = {
       kind: "group",
       key: "group:assistant:reply",
@@ -3102,7 +3114,11 @@ describe("chat loading skeleton", () => {
       isStreaming: false,
     };
     const renderWithUsage = (container: HTMLElement, runOutputTokens: number) => {
-      renderChatInto(container, { canAbort: true, runOutputTokens, stream: null });
+      renderChatInto(container, {
+        canAbort: true,
+        runUsageById: new Map([["usage-run", { outputTokens: runOutputTokens, seq: 1 }]]),
+        stream: null,
+      });
     };
 
     const streamGroupSpy = vi.fn(renderStreamGroupMock);
@@ -3191,9 +3207,19 @@ describe("chat loading skeleton", () => {
     const container = document.createElement("div");
     const streamPartsSpy = vi.spyOn(chatMessage, "renderStreamGroupParts");
 
-    renderChatInto(container, { canAbort: true, runId, runOutputTokens: 5_500, stream: null });
+    renderChatInto(container, {
+      canAbort: true,
+      runId,
+      runUsageById: new Map([[runId, { outputTokens: 5_500, seq: 1 }]]),
+      stream: null,
+    });
     streamPartsSpy.mockClear();
-    renderChatInto(container, { canAbort: true, runId, runOutputTokens: 7_200, stream: null });
+    renderChatInto(container, {
+      canAbort: true,
+      runId,
+      runUsageById: new Map([[runId, { outputTokens: 7_200, seq: 2 }]]),
+      stream: null,
+    });
 
     expect(streamPartsSpy.mock.calls.at(-1)?.[1].runOutputTokens).toBe(7_200);
   });
@@ -3263,6 +3289,7 @@ describe("chat loading skeleton", () => {
       },
     ] as ReturnType<typeof chatThread.buildCachedChatItems>);
     vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runId: "run-composed",
       runtimeMs: 5_000,
       outputTokens: 42,
     });
@@ -3276,16 +3303,18 @@ describe("chat loading skeleton", () => {
     expect(frameCall?.[0].messages).toHaveLength(1);
     expect(frameCall?.[1].frameContent).toBeDefined();
     expect(frameCall?.[1].turnRecap).toEqual({
+      runId,
       runtimeMs: 5_000,
       outputTokens: 42,
     });
     expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
-  it("releases the embedded recap when a later reply becomes the settled turn", () => {
+  it("does not move a watched recap onto a later unrelated run", () => {
     const firstReply = {
       kind: "group",
       key: "group:assistant:first",
+      runId: "run-composed",
       role: "assistant",
       messages: [
         {
@@ -3299,6 +3328,7 @@ describe("chat loading skeleton", () => {
     const secondReply = {
       ...firstReply,
       key: "group:assistant:second",
+      runId: "foreign-run",
       messages: [
         {
           key: "message:assistant:second",
@@ -3308,6 +3338,7 @@ describe("chat loading skeleton", () => {
       timestamp: 2,
     };
     vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runId: "run-composed",
       runtimeMs: 5_000,
       outputTokens: 42,
     });
@@ -3335,7 +3366,8 @@ describe("chat loading skeleton", () => {
     expect(
       renderMessageGroupMock.mock.calls.find(([group]) => group.key === secondReply.key)?.[1]
         .turnRecap,
-    ).toBeDefined();
+    ).toBeUndefined();
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
