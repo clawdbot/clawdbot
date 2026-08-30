@@ -445,22 +445,17 @@ export async function appendStatusAllDiagnosis(params: {
   if (logPaths) {
     params.progress.setLabel("Reading logs…");
     const restartLogPath = resolveGatewayRestartLogPath(process.env);
-    const readStderr = process.platform !== "darwin";
     const [stderrTail, stdoutTail, restartTail] = await Promise.all([
-      readStderr ? readFileTailLines(logPaths.stderrPath, 40).catch(() => []) : [],
+      readFileTailLines(logPaths.stderrPath, 40).catch(() => []),
       readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
       readFileTailLines(restartLogPath, 30).catch(() => []),
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
       lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));
-      if (readStderr) {
-        lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
-        for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(
-          redactStatusSecrets,
-        )) {
-          lines.push(`  ${muted(line)}`);
-        }
+      lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
+      for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactStatusSecrets)) {
+        lines.push(`  ${muted(line)}`);
       }
       lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
       for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(redactStatusSecrets)) {
