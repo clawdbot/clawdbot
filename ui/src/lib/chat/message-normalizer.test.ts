@@ -644,12 +644,9 @@ describe("message-normalizer", () => {
       ["FILE:/tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
       ["file://localhost/tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
     ])("keeps local MEDIA references as assistant attachments: %s", (url, label) => {
-      const result = normalizeMessage({
-        role: "assistant",
-        content: `Hello\nMEDIA:${url}\nWorld`,
-      });
-
-      expect(result.content).toEqual([
+      expect(
+        normalizeMessage({ role: "assistant", content: `Hello\nMEDIA:${url}\nWorld` }).content,
+      ).toEqual([
         { type: "text", text: "Hello" },
         {
           type: "attachment",
