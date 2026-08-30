@@ -19,10 +19,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
-import {
-  isPluginMetadataSnapshotCompatible,
-  resolvePluginMetadataSnapshot,
-} from "../../plugins/plugin-metadata-snapshot.js";
+import { isPluginMetadataSnapshotCompatible } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   buildAgentMainSessionKey,
@@ -60,11 +57,16 @@ import {
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import {
+  createModelManifestPluginContext,
+  type ModelManifestPluginContext,
+} from "../model-selection-shared.js";
+import {
   buildModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
   resolveThinkingDefaultWithRuntimeCatalog,
+  type ModelRef,
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
@@ -472,8 +474,8 @@ async function resolveModelOverride(params: {
   sessionEntry?: SessionEntry;
   agentId: string;
   agentDir: string;
-  workspaceDir: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  configDefault: ModelRef;
+  manifestPluginContext: ModelManifestPluginContext;
 }): Promise<
   | { kind: "reset" }
   | {
@@ -488,10 +490,7 @@ async function resolveModelOverride(params: {
     return { kind: "reset" };
   }
 
-  const configDefault = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
+  const { configDefault, manifestPluginContext } = params;
   const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
   const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
 
@@ -499,7 +498,21 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     defaultProvider: currentProvider,
+    manifestPluginContext,
   });
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    raw,
+    defaultProvider: currentProvider,
+    aliasIndex,
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    manifestPluginContext,
+  });
+  if (!resolved) {
+    throw new Error(`Unrecognized model "${raw}".`);
+  }
   const catalog = await loadPublishedPreparedModelCatalog({
     config: params.cfg,
     agentId: params.agentId,
@@ -509,25 +522,6 @@ async function resolveModelOverride(params: {
       ? { workspaceDir: params.sessionEntry.spawnedWorkspaceDir }
       : {}),
   });
-  const workspaceDir = params.sessionEntry?.spawnedWorkspaceDir ?? params.workspaceDir;
-  const manifestMetadataSnapshot =
-    params.metadataSnapshot &&
-    params.metadataSnapshot.pluginIds === undefined &&
-    isPluginMetadataSnapshotCompatible({
-      snapshot: params.metadataSnapshot,
-      config: params.cfg,
-      env: process.env,
-      workspaceDir,
-    })
-      ? params.metadataSnapshot
-      : resolvePluginMetadataSnapshot({
-          config: params.cfg,
-          ...(workspaceDir ? { workspaceDir } : {}),
-          env: process.env,
-        });
-  const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins,
-  };
   const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
@@ -536,24 +530,10 @@ async function resolveModelOverride(params: {
     agentId: params.agentId,
     allowManifestNormalization: true,
     allowPluginNormalization: true,
-    ...modelManifestContext,
+    manifestPluginContext,
   });
-
-  const resolved = resolveModelRefFromString({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    raw,
-    defaultProvider: currentProvider,
-    aliasIndex,
-    allowManifestNormalization: true,
-    allowPluginNormalization: true,
-    ...modelManifestContext,
-  });
-  if (!resolved) {
-    throw new Error(`Unrecognized model "${raw}".`);
-  }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (!policy.allowsKey(key)) {
+  if (!policy.allows(resolved.ref)) {
     throw new Error(`Model "${key}" is not allowed.`);
   }
   const isDefault =
@@ -965,9 +945,28 @@ export function createSessionStatusTool(opts?: {
         expectedSessionId: access.expectedSessionId,
         targetSessionKey: scopedResolved.key,
         run: async () => {
-          const configured = resolveDefaultModelForAgent({ cfg, agentId });
           const selectedAgentDir = resolveAgentDir(cfg, agentId);
-          const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const selectedWorkspaceDir =
+            scopedResolved.entry.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
+          const metadataSnapshot =
+            opts?.metadataSnapshot &&
+            opts.metadataSnapshot.pluginIds === undefined &&
+            isPluginMetadataSnapshotCompatible({
+              snapshot: opts.metadataSnapshot,
+              config: cfg,
+              workspaceDir: selectedWorkspaceDir,
+            })
+              ? opts.metadataSnapshot
+              : undefined;
+          // A requester snapshot must match the target workspace. Selection and
+          // visibility then retain one metadata generation across the catalog read.
+          const manifestPluginContext = createModelManifestPluginContext({
+            cfg,
+            agentId,
+            workspaceDir: metadataSnapshot ? metadataSnapshot.workspaceDir : selectedWorkspaceDir,
+            pluginMetadataSnapshot: metadataSnapshot,
+          });
+          const configured = resolveDefaultModelForAgent({ cfg, agentId, manifestPluginContext });
           const modelRaw = readToolStringParam(params, "model");
           let changedModel = false;
           if (typeof modelRaw === "string") {
@@ -977,8 +976,8 @@ export function createSessionStatusTool(opts?: {
               sessionEntry: scopedResolved.entry,
               agentId,
               agentDir: selectedAgentDir,
-              workspaceDir: selectedWorkspaceDir,
-              metadataSnapshot: opts?.metadataSnapshot,
+              configDefault: configured,
+              manifestPluginContext,
             });
             const modelSelection =
               selection.kind === "reset"
@@ -1088,6 +1087,7 @@ export function createSessionStatusTool(opts?: {
                 scopedResolved.entry,
                 agentId,
                 `${configured.provider}/${configured.model}`,
+                manifestPluginContext.getContext(),
               );
           const hasExplicitModelOverride = Boolean(
             !activeModelIdentity &&
@@ -1155,15 +1155,11 @@ export function createSessionStatusTool(opts?: {
             resolveDefaultThinkingLevel: () =>
               resolveThinkingDefaultWithRuntimeCatalog({
                 cfg,
+                agentId,
+                manifestPluginContext,
                 provider: providerForCard,
                 model: defaultModelForCard,
-                loadRuntimeCatalog: () =>
-                  loadPublishedPreparedModelCatalog({
-                    config: cfg,
-                    agentId,
-                    agentDir: selectedAgentDir,
-                    readOnly: true,
-                  }),
+                loadRuntimeCatalog: () => Promise.resolve(thinkingCatalog),
               }),
             isGroup,
             defaultGroupActivation: () => "mention",

@@ -4,7 +4,7 @@ import {
   normalizeBuiltInProviderModelId,
   stripSelfProviderModelPrefix,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
+import { asFiniteNumber, asNonNegativeFiniteNumber } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef } from "../../agents/model-ref-shared.js";
@@ -211,24 +211,20 @@ function buildMessages(params: {
     );
 }
 
-function readFiniteNonNegativeNumber(value: unknown): number | undefined {
-  return asFiniteNumberInRange(value, { min: 0 });
-}
-
 function readExplicitCostUsd(raw: unknown): number | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return undefined;
   }
   const cost = (raw as { cost?: unknown }).cost;
   if (typeof cost === "number") {
-    return readFiniteNonNegativeNumber(cost);
+    return asNonNegativeFiniteNumber(cost);
   }
   if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
     return undefined;
   }
   return (
-    readFiniteNonNegativeNumber((cost as { total?: unknown; totalUsd?: unknown }).totalUsd) ??
-    readFiniteNonNegativeNumber((cost as { total?: unknown }).total)
+    asNonNegativeFiniteNumber((cost as { total?: unknown; totalUsd?: unknown }).totalUsd) ??
+    asNonNegativeFiniteNumber((cost as { total?: unknown }).total)
   );
 }
 
@@ -236,17 +232,21 @@ function buildUsage(params: {
   rawUsage: unknown;
   normalized: NormalizedUsage | undefined;
   cfg: OpenClawConfig;
+  agentId: string;
   provider: string;
   model: string;
 }): LlmCompleteUsage {
-  const costConfig = resolveModelCostConfig({
-    provider: params.provider,
-    model: params.model,
-    config: params.cfg,
-  });
   const costUsd =
     readExplicitCostUsd(params.rawUsage) ??
-    estimateUsageCost({ usage: params.normalized, cost: costConfig });
+    estimateUsageCost({
+      usage: params.normalized,
+      cost: resolveModelCostConfig({
+        provider: params.provider,
+        model: params.model,
+        config: params.cfg,
+        agentId: params.agentId,
+      }),
+    });
   return {
     ...(params.normalized?.input !== undefined ? { inputTokens: params.normalized.input } : {}),
     ...(params.normalized?.output !== undefined ? { outputTokens: params.normalized.output } : {}),
@@ -274,6 +274,7 @@ function finalizeCompletion(params: {
     rawUsage: params.rawUsage,
     normalized,
     cfg: params.cfg,
+    agentId: params.result.agentId,
     provider: params.result.provider,
     model: params.result.model,
   });

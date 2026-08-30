@@ -165,7 +165,7 @@ describe("runDoctorConfigPreflight", () => {
               snapshot: preflight.snapshot,
               baseConfig: preflight.baseConfig,
               pluginMigrationFingerprint:
-                preflight.pluginMetadataSnapshot?.configFingerprint ?? null,
+                preflight.pluginMetadata?.selectedSnapshot.configFingerprint ?? null,
             }),
           }),
         ).toBe(false);

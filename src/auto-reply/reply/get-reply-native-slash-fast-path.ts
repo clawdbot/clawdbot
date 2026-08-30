@@ -2,7 +2,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
-  resolveModelRefFromString,
+  resolveModelRefWithConfiguredAliases,
+  type ModelManifestPluginContext,
+} from "../../agents/model-selection-shared.js";
+import {
+  resolveModelAliasFromPair,
   resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
@@ -137,8 +141,12 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
+  manifestPluginContext?: ModelManifestPluginContext;
   provider: string;
   model: string;
+  preparedDefaultModel: Parameters<typeof resolveReplyDirectives>[0]["preparedDefaultModel"];
+  preparedInitialModel: Parameters<typeof resolveReplyDirectives>[0]["preparedInitialModel"];
+  preparedPrimaryModel: Parameters<typeof resolveReplyDirectives>[0]["preparedPrimaryModel"];
   workspaceDir: string;
   typing: ReturnType<typeof createTypingController>;
   opts?: GetReplyOptions;
@@ -209,6 +217,10 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       params.provider === params.defaultProvider && params.model === params.defaultModel;
     const storedModelOverride = canApplyStoredModel
       ? resolveStoredModelOverride({
+          config: params.cfg,
+          agentId: params.agentId,
+          workspaceDir: params.workspaceDir,
+          manifestPluginContext: params.manifestPluginContext,
           sessionEntry: targetSessionEntry,
           sessionStore: sessionState.sessionStore,
           sessionKey: sessionState.sessionKey,
@@ -256,29 +268,33 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         })
       : null;
     const resolvedChannelModel = channelModelOverride
-      ? resolveModelRefFromString({
+      ? resolveModelRefWithConfiguredAliases({
+          cfg: params.cfg,
+          agentId: params.agentId,
           raw: channelModelOverride.model,
           defaultProvider: params.defaultProvider,
-          aliasIndex: params.aliasIndex,
+          workspaceDir: params.workspaceDir,
+          manifestPluginContext: params.manifestPluginContext,
         })
       : null;
+    // Stored refs already own normalization; only raw provenance may still name an alias.
     const resolvedInheritedModel =
       storedModelOverride?.source === "parent"
-        ? (resolveModelRefFromString({
-            raw: `${storedModelOverride.provider ?? params.defaultProvider}/${storedModelOverride.model}`,
-            defaultProvider: params.defaultProvider,
-            aliasIndex: params.aliasIndex,
-          })?.ref ?? {
-            provider: storedModelOverride.provider ?? params.defaultProvider,
-            model: storedModelOverride.model,
-          })
+        ? ((storedModelOverride.routeResolution === "raw"
+            ? resolveModelAliasFromPair({
+                provider: storedModelOverride.provider ?? params.defaultProvider,
+                model: storedModelOverride.model,
+                defaultProvider: params.defaultProvider,
+                aliasIndex: params.aliasIndex,
+              })
+            : null) ?? storedModelOverride)
         : null;
     // Native status returns before normal channel routing; select once before
     // preparing model-bound thinking, runtime, auth, context, or fast-mode facts.
     const statusProvider =
-      resolvedInheritedModel?.provider ?? resolvedChannelModel?.ref.provider ?? params.provider;
+      resolvedInheritedModel?.provider ?? resolvedChannelModel?.provider ?? params.provider;
     const statusModel =
-      resolvedInheritedModel?.model ?? resolvedChannelModel?.ref.model ?? params.model;
+      resolvedInheritedModel?.model ?? resolvedChannelModel?.model ?? params.model;
     let resolvedDefaultThinkingLevel: ThinkLevel | undefined;
     const resolveDefaultThinkingLevel = async () => {
       resolvedDefaultThinkingLevel ??= await resolveNativeSlashDefaultThinkingLevel({
@@ -429,6 +445,10 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     aliasIndex: params.aliasIndex,
     provider: params.provider,
     model: params.model,
+    preparedDefaultModel: params.preparedDefaultModel,
+    preparedInitialModel: params.preparedInitialModel,
+    preparedPrimaryModel: params.preparedPrimaryModel,
+    manifestPluginContext: params.manifestPluginContext,
     hasResolvedHeartbeatModelOverride: false,
     typing: params.typing,
     opts: params.opts,
@@ -439,12 +459,13 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return { handled: true, reply: markCommandReplyForDelivery(directiveResult.reply) };
   }
 
+  const { provider, model, modelState } = directiveResult.result;
   const shouldPrepareStatusThinkingCatalog =
     directiveResult.result.inlineStatusRequested ||
     directiveResult.result.directives.hasStatusDirective ||
     directiveResult.result.command.commandBodyNormalized.trim() === "/status";
   const thinkingCatalog = shouldPrepareStatusThinkingCatalog
-    ? await directiveResult.result.modelState.resolveThinkingCatalog()
+    ? await modelState.resolveThinkingCatalog({ provider, model })
     : undefined;
 
   const inlineActionResult = await handleInlineActions({
@@ -485,9 +506,9 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     execOverrides: directiveResult.result.execOverrides,
     blockReplyChunking: directiveResult.result.blockReplyChunking,
     resolvedBlockStreamingBreak: directiveResult.result.resolvedBlockStreamingBreak,
-    resolveDefaultThinkingLevel: directiveResult.result.modelState.resolveDefaultThinkingLevel,
-    provider: directiveResult.result.provider,
-    model: directiveResult.result.model,
+    resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel({ provider, model }),
+    provider,
+    model,
     contextTokens: directiveResult.result.contextTokens,
     directiveAck: directiveResult.result.directiveAck,
     abortedLastRun: sessionState.abortedLastRun,

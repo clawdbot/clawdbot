@@ -1,18 +1,43 @@
 // Smoke-tests the built plugin loader singleton and bundled plugin runtime overlay.
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createState } from "./lib/openclaw-test-state.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { installProcessWarningFilter } from "./process-warning-filter.mts";
-import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
 
 installProcessWarningFilter();
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const smokeEntryPath = path.join(repoRoot, "dist", "plugins", "build-smoke-entry.js");
 assert.ok(fs.existsSync(smokeEntryPath), `missing build output: ${smokeEntryPath}`);
+
+// Registry retirement can open session stores. Isolate before importing the runtime,
+// while keeping source runtime helpers out of this cold built-loader proof.
+const testState = await createState({ label: "build-smoke", scenario: "minimal" });
+Object.assign(process.env, testState.env);
+delete process.env.OPENCLAW_AGENT_DIR;
+delete process.env.PI_CODING_AGENT_DIR;
+const pluginId = "build-smoke-plugin";
+const distPluginDir = path.join(repoRoot, "dist", "extensions", pluginId);
+const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", pluginId);
+
+function cleanup() {
+  fs.rmSync(distPluginDir, { recursive: true, force: true });
+  fs.rmSync(runtimePluginDir, { recursive: true, force: true });
+  fs.rmSync(testState.root, { recursive: true, force: true });
+}
+
+process.on("exit", cleanup);
+process.on("SIGINT", () => {
+  cleanup();
+  process.exit(130);
+});
+process.on("SIGTERM", () => {
+  cleanup();
+  process.exit(143);
+});
 
 const {
   buildPluginRuntimeLoadOptions,
@@ -29,28 +54,6 @@ assert.equal(typeof clearPluginCommands, "function", "clearPluginCommands missin
 assert.equal(typeof getPluginCommandSpecs, "function", "getPluginCommandSpecs missing");
 assert.equal(typeof getPluginModuleLoaderStats, "function", "plugin loader stats missing");
 assert.equal(typeof matchPluginCommand, "function", "matchPluginCommand missing");
-
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-smoke-"));
-const pluginId = "build-smoke-plugin";
-const distPluginDir = path.join(repoRoot, "dist", "extensions", pluginId);
-const runtimePluginDir = path.join(repoRoot, "dist-runtime", "extensions", pluginId);
-
-function cleanup() {
-  clearPluginCommands();
-  fs.rmSync(distPluginDir, { recursive: true, force: true });
-  fs.rmSync(runtimePluginDir, { recursive: true, force: true });
-  fs.rmSync(tempRoot, { recursive: true, force: true });
-}
-
-process.on("exit", cleanup);
-process.on("SIGINT", () => {
-  cleanup();
-  process.exit(130);
-});
-process.on("SIGTERM", () => {
-  cleanup();
-  process.exit(143);
-});
 
 fs.mkdirSync(distPluginDir, { recursive: true });
 fs.writeFileSync(
@@ -73,6 +76,7 @@ fs.writeFileSync(
   JSON.stringify(
     {
       id: pluginId,
+      providers: [pluginId],
       configSchema: {
         type: "object",
         additionalProperties: false,
@@ -93,6 +97,12 @@ fs.writeFileSync(
     `  id: ${JSON.stringify(pluginId)},`,
     "  configSchema: emptyPluginConfigSchema(),",
     "  register(api) {",
+    "    api.registerProvider({",
+    `      id: ${JSON.stringify(pluginId)},`,
+    "      label: 'Build smoke provider',",
+    "      auth: [],",
+    "      normalizeModelId: ({ modelId }) => `normalized-${modelId}`,",
+    "    });",
     "    api.registerCommand({",
     "      name: 'pair',",
     "      description: 'Pair a device',",
@@ -109,7 +119,8 @@ fs.writeFileSync(
   "utf8",
 );
 
-stageBundledPluginRuntime({ repoRoot });
+// The full build owns existing runtime artifacts; copy only this smoke's synthetic plugin.
+fs.cpSync(distPluginDir, runtimePluginDir, { recursive: true });
 
 const runtimeEntryPath = path.join(runtimePluginDir, "index.js");
 assert.ok(fs.existsSync(runtimeEntryPath), "runtime overlay entry missing");
@@ -145,7 +156,7 @@ const smsRegistry = loadOpenClawPlugins(
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
       },
       preferBuiltPluginArtifacts: true,
-      workspaceDir: tempRoot,
+      workspaceDir: testState.workspaceDir,
     }),
     { cache: false, onlyPluginIds: ["sms"] },
   ),
@@ -179,22 +190,23 @@ assert.equal(
 
 clearPluginCommands();
 
+const config = {
+  plugins: {
+    enabled: true,
+    allow: [pluginId],
+    entries: {
+      [pluginId]: { enabled: true },
+    },
+  },
+};
 const registry = loadOpenClawPlugins({
   cache: false,
-  workspaceDir: tempRoot,
+  workspaceDir: testState.workspaceDir,
   env: {
     ...process.env,
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist-runtime", "extensions"),
   },
-  config: {
-    plugins: {
-      enabled: true,
-      allow: [pluginId],
-      entries: {
-        [pluginId]: { enabled: true },
-      },
-    },
-  },
+  config,
 });
 
 const record = registry.plugins.find((entry: { id: string }) => entry.id === pluginId);
@@ -211,6 +223,48 @@ assert.ok(match, "canonical built command registry did not receive the command")
 assert.equal(match.args, "now");
 const result = await match.command.handler({ args: match.args });
 assert.deepEqual(result, { text: "paired:now" });
+
+const { parseModelRef } = await import(
+  pathToFileURL(path.join(repoRoot, "dist", "plugin-sdk", "model-ref-parse.js")).href
+);
+const normalizationOptions = {
+  config,
+  workspaceDir: testState.workspaceDir,
+  allowManifestNormalization: false,
+};
+assert.deepEqual(
+  parseModelRef("first", pluginId, {
+    ...normalizationOptions,
+    allowPluginNormalization: false,
+  }),
+  { provider: pluginId, model: "first" },
+);
+const normalizationStatsBefore = getPluginModuleLoaderStats();
+assert.deepEqual(parseModelRef("first", pluginId, normalizationOptions), {
+  provider: pluginId,
+  model: "normalized-first",
+});
+const normalizationStatsAfter = getPluginModuleLoaderStats();
+for (const counter of [
+  "nativeMisses",
+  "sourceTransformForced",
+  "sourceTransformFallbacks",
+] as const) {
+  assert.equal(
+    normalizationStatsAfter[counter],
+    normalizationStatsBefore[counter],
+    `built model normalization changed ${counter}`,
+  );
+}
+assert.deepEqual(parseModelRef("second", pluginId, normalizationOptions), {
+  provider: pluginId,
+  model: "normalized-second",
+});
+assert.equal(
+  getPluginModuleLoaderStats().calls,
+  normalizationStatsAfter.calls,
+  "warm model normalization reloaded the provider runtime",
+);
 
 // Keep these imports after the cold native checks so they cannot prewarm the loader.
 const { buildBundleMcpToolsFromCatalog } = await import(

@@ -4,11 +4,14 @@
  * candidate seam. This keeps request caching coupled to the actual watcher
  * lifecycle instead of individual config writers.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
+import { clearProviderAuthRuntimeSnapshotActivation } from "../secrets/runtime-provider-auth-activation.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
+import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 
 const hoisted = vi.hoisted(() => ({
   hotReloadStatus: { current: "active" as "active" | "disabled" },
@@ -50,6 +53,8 @@ vi.mock("./config-reload.js", async () => {
     ),
   };
 });
+
+afterEach(clearProviderAuthRuntimeSnapshotActivation);
 
 describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
   it("forwards live status and invalidates config.get on watcher commit", async () => {
@@ -107,14 +112,19 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         invalidate: vi.fn(),
       },
       channelManager: {} as never,
-      activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => ({
-        sourceConfig: config,
-        config,
-        authStores: [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        warnings: [],
-        webTools: {},
-      })) as never,
+      activateRuntimeSecrets: createRuntimeSecretsActivator({
+        logSecrets: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        emitStateEvent: vi.fn(),
+        prepareRuntimeSecretsSnapshot: async ({ config }) => ({
+          sourceConfig: config,
+          config,
+          authStores: [],
+          authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+          warnings: [],
+          webTools: createEmptyRuntimeWebToolsMetadata(),
+        }),
+        activateRuntimeSecretsSnapshot: vi.fn(),
+      }),
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       prepareTerminalConfig: vi.fn(),

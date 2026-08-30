@@ -1,6 +1,6 @@
 // Media-understanding defaults tests keep bundled provider metadata priorities,
 // default models, and native document support aligned with manifests.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 
 const mediaMetadataPlugins = vi.hoisted(() => [
@@ -79,11 +79,12 @@ const mediaMetadataPlugins = vi.hoisted(() => [
   },
 ]);
 
+const mediaMetadata = vi.hoisted(() => ({
+  manifestRegistry: { plugins: mediaMetadataPlugins, diagnostics: [] },
+}));
+
 vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({
-    plugins: mediaMetadataPlugins,
-    diagnostics: [],
-  }),
+  loadPluginManifestRegistryForPluginRegistry: () => mediaMetadata.manifestRegistry,
   loadPluginRegistrySnapshotWithMetadata: () => ({
     source: "derived",
     snapshot: { plugins: [] },
@@ -94,14 +95,16 @@ vi.mock("../plugins/plugin-registry.js", () => ({
 vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
   loadManifestMetadataSnapshot: () => ({
     index: { plugins: [] },
-    plugins: mediaMetadataPlugins,
+    plugins: mediaMetadata.manifestRegistry.plugins,
+    manifestRegistry: mediaMetadata.manifestRegistry,
   }),
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => ({
-    plugins: mediaMetadataPlugins,
+    plugins: mediaMetadata.manifestRegistry.plugins,
+    manifestRegistry: mediaMetadata.manifestRegistry,
   }),
 }));
 
@@ -111,6 +114,10 @@ import {
   resolveDefaultMediaModel,
   resolveDocumentMediaModel,
 } from "./defaults.js";
+
+afterEach(() => {
+  mediaMetadata.manifestRegistry = { plugins: mediaMetadataPlugins, diagnostics: [] };
+});
 
 describe("resolveDefaultMediaModel", () => {
   it.each<MediaUnderstandingCapability>(["image", "audio", "video"])(
@@ -204,6 +211,34 @@ describe("resolveDefaultMediaModel", () => {
       }),
     ).toBe("auto");
   });
+
+  it.each([false, true])(
+    "uses replacement provider metadata with an unchanged config (explicit config: %s)",
+    (explicitConfig) => {
+      const cfg = explicitConfig ? {} : undefined;
+      const params = { providerId: "google", capability: "image" as const, cfg };
+      expect(resolveDefaultMediaModel(params)).toBe("gemini-3-flash-preview");
+      mediaMetadata.manifestRegistry = {
+        diagnostics: [],
+        plugins: mediaMetadataPlugins.map((plugin) =>
+          Object.assign({}, plugin, {
+            mediaUnderstandingProviderMetadata: {
+              ...plugin.mediaUnderstandingProviderMetadata,
+              google: {
+                ...plugin.mediaUnderstandingProviderMetadata.google,
+                defaultModels: {
+                  ...plugin.mediaUnderstandingProviderMetadata.google.defaultModels,
+                  image: "updated-image-model",
+                },
+              },
+            },
+          }),
+        ),
+      };
+
+      expect(resolveDefaultMediaModel(params)).toBe("updated-image-model");
+    },
+  );
 });
 
 describe("resolveAutoMediaKeyProviders", () => {

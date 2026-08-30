@@ -4,6 +4,7 @@ import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE } from "../../packages/agent-core
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
@@ -34,9 +35,9 @@ import type {
   ModelCandidate,
   ModelFallbackAttemptProvenance,
 } from "./model-fallback.types.js";
-import { modelKey } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
 import { isCliProvider } from "./model-selection-cli.js";
+import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 import { isAgentRunDirectAbortReason, isAgentRunRestartAbortReason } from "./run-termination.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 import {
@@ -576,9 +577,8 @@ export function resolveLiveSessionModelSwitchRedirectIndex(params: {
   candidates: ModelCandidate[];
   currentIndex: number;
 }): number | null {
-  const targetKey = modelKey(params.error.provider, params.error.model);
-  const targetIndex = params.candidates.findIndex(
-    (candidate) => modelKey(candidate.provider, candidate.model) === targetKey,
+  const targetIndex = params.candidates.findIndex((candidate) =>
+    sameModelCandidate(candidate, params.error),
   );
   if (targetIndex === -1) {
     throw params.error;
@@ -656,6 +656,8 @@ export function throwFallbackFailureSummary(params: {
 export function resolveFallbackSoonestCooldownExpiry(params: {
   authRuntime: ModelFallbackAuthRuntime | null;
   authStore: AuthProfileStore | null;
+  authAliasLookupParams: ProviderAuthAliasLookupParams;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   agentDir?: string;
   cfg: OpenClawConfig | undefined;
   candidates: ModelCandidate[];
@@ -667,6 +669,8 @@ export function resolveFallbackSoonestCooldownExpiry(params: {
   // cooldowns through a separate store instance while the fallback loop runs.
   const refreshedStore = params.authRuntime.loadAuthProfileStoreForRuntime(params.agentDir, {
     readOnly: true,
+    workspaceDir: params.authAliasLookupParams.workspaceDir,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     externalCli: externalCliDiscoveryForProviders({
       cfg: params.cfg,
       providers: params.candidates.map((candidate) => candidate.provider),
@@ -676,6 +680,7 @@ export function resolveFallbackSoonestCooldownExpiry(params: {
   for (const candidate of params.candidates) {
     const ids = params.authRuntime.resolveAuthProfileOrder({
       cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       store: refreshedStore,
       provider: candidate.provider,
     });

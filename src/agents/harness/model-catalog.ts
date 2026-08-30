@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime.js";
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
@@ -8,6 +9,7 @@ import {
 } from "../agent-scope.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
+import type { ModelRef } from "../model-ref-shared.js";
 import { resolveModelRefFromString } from "../model-selection-shared.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import type { PreparedModelRuntimeInput } from "../prepared-model-runtime.types.js";
@@ -118,23 +120,14 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  defaultProvider: string;
-  defaultModel?: string;
+  modelRef: ModelRef | undefined;
   snapshot: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry | null;
   onError?: (error: unknown) => void;
 }): Promise<ModelCatalogSnapshot> {
-  const rawDefaultModel = params.defaultModel?.trim();
-  if (!rawDefaultModel) {
-    return params.snapshot;
-  }
-  const ref = resolveModelRefFromString({
-    cfg: params.cfg,
-    raw: rawDefaultModel,
-    defaultProvider: params.defaultProvider,
-    allowManifestNormalization: true,
-    allowPluginNormalization: true,
-  })?.ref;
+  // The selection owner normalized this ref against its captured metadata. Replaying
+  // executable normalization here can change the model or escape that generation.
+  const ref = params.modelRef;
   if (!ref) {
     return params.snapshot;
   }
@@ -153,7 +146,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   if (runtime === "auto" || runtime === "openclaw") {
     return params.snapshot;
   }
-  const pluginRegistry = params.pluginRegistry ?? getActivePluginRegistry();
+  const pluginRegistry = params.pluginRegistry ?? getPluginRegistryForContext();
   const harness = pluginRegistry?.agentHarnesses.find(
     (entry) => entry.harness.id === runtime,
   )?.harness;
@@ -167,7 +160,8 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
-    if (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry) {
+    // A retained request owner can differ from the active process registry.
+    if (!params.pluginRegistry && getPluginRegistryForContext() !== pluginRegistry) {
       return params.snapshot;
     }
     if (listedRows.length === 0) {
@@ -188,19 +182,29 @@ export async function augmentModelCatalogWithAgentHarness(params: {
 export function augmentPreparedModelCatalogWithAgentHarness(params: {
   input: PreparedModelRuntimeInput;
   snapshot: ModelCatalogSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
   pluginRegistry?: PluginRegistry;
 }): Promise<ModelCatalogSnapshot> {
   const agentId = params.input.agentId ?? resolveDefaultAgentId(params.input.config);
+  const workspaceDir =
+    params.input.workspaceDir ??
+    resolveAgentWorkspaceDir(params.input.config, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
   return augmentModelCatalogWithAgentHarness({
     cfg: params.input.config,
     agentId,
     agentDir: params.input.agentDir,
-    workspaceDir:
-      params.input.workspaceDir ??
-      resolveAgentWorkspaceDir(params.input.config, agentId) ??
-      resolveDefaultAgentWorkspaceDir(),
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: resolveAgentEffectiveModelPrimary(params.input.config, agentId),
+    workspaceDir,
+    modelRef: resolveModelRefFromString({
+      cfg: params.input.config,
+      agentId,
+      workspaceDir,
+      pluginMetadataSnapshot: params.metadataSnapshot,
+      raw: resolveAgentEffectiveModelPrimary(params.input.config, agentId) ?? "",
+      defaultProvider: DEFAULT_PROVIDER,
+      allowManifestNormalization: true,
+      allowPluginNormalization: true,
+    })?.ref,
     snapshot: params.snapshot,
     pluginRegistry: params.pluginRegistry,
   });

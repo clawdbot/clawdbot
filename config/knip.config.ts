@@ -208,6 +208,8 @@ const rootEntries = [
   "src/mcp/plugin-tools-serve.ts!",
   // Dedicated tsdown entry exercised against built plugin singletons.
   "src/plugins/build-smoke-entry.ts!",
+  // The synchronous model normalizer loads this emitted facade by its stable runtime path.
+  "src/plugins/provider-model-normalization.runtime.ts!",
   // Package-script owners invoke these generated-artifact modules directly.
   "src/config/doc-baseline.ts!",
   "src/plugins/runtime-sidecar-paths-baseline.ts!",
@@ -419,8 +421,6 @@ const config = {
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
-    // Focused startup tests consume this explicit seam; production imports only the bootstrap.
-    "src/gateway/server-startup-bootstrap.ts": ["exports"],
     // Registry facades retain direct registration/reset compatibility seams used by focused
     // tests; the full-tree scan still audits every named export against those consumers.
     "src/agents/harness/registry.ts": ["exports"],
@@ -453,6 +453,12 @@ const config = {
   },
   workspaces: {
     ".": {
+      // tsdown emits this facade under dist/plugins for callers in root-level chunks.
+      paths: {
+        "./plugins/provider-model-normalization.runtime.js": [
+          "./src/plugins/provider-model-normalization.runtime.ts",
+        ],
+      },
       ignoreDependencies: [
         "@openclaw/*",
         // Cloudflare template dependency: declared in scripts/cloudflare/package.json

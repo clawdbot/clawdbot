@@ -20,9 +20,10 @@ import {
   buildTelegramInvalidApprovalTerminalText,
   buildTelegramLegacyApprovalTerminalText,
 } from "./approval-terminal.js";
-import type {
-  TelegramCallbackButton,
-  TelegramCallbackMessageActions,
+import {
+  sendTelegramCallbackTerminalReceipt,
+  type TelegramCallbackButton,
+  type TelegramCallbackMessageActions,
 } from "./bot-handlers.callback-actions.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
@@ -93,7 +94,6 @@ export function createTelegramCallbackApprovalRuntime(params: {
   actions: TelegramCallbackMessageActions;
 }) {
   const { accountId, telegramDeps, runtimeCfg, senderId, actions } = params;
-  const { clearCallbackButtons, editCallbackMessage, replyToCallbackChat } = actions;
 
   const resolveApprovalAuthorizations = () => {
     const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
@@ -109,45 +109,8 @@ export function createTelegramCallbackApprovalRuntime(params: {
     return { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender };
   };
 
-  const clearTerminalApprovalButtons = async () => {
-    try {
-      // First-answer-wins returns applied:false to losing surfaces. Their controls
-      // are stale too, so cleanup follows canonical terminal truth, not local authorship.
-      await clearCallbackButtons();
-    } catch (editErr) {
-      const errStr = String(editErr);
-      if (
-        errStr.includes("message is not modified") ||
-        errStr.includes("there is no text in the message to edit")
-      ) {
-        return;
-      }
-      logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
-    }
-  };
-
-  const terminalizeApprovalMessage = async (text: string) => {
-    try {
-      await editCallbackMessage(text, { reply_markup: { inline_keyboard: [] } });
-      return;
-    } catch (editErr) {
-      const errStr = String(editErr);
-      const alreadyTerminal = errStr.includes("message is not modified");
-      if (!alreadyTerminal) {
-        logVerbose(`telegram: failed to render terminal approval receipt: ${errStr}`);
-      }
-      // Preserve the terminal state even when Telegram no longer permits a text edit.
-      await clearTerminalApprovalButtons();
-      if (alreadyTerminal) {
-        return;
-      }
-    }
-    try {
-      await replyToCallbackChat(text);
-    } catch (sendErr) {
-      logVerbose(`telegram: failed to send terminal approval receipt: ${String(sendErr)}`);
-    }
-  };
+  const terminalizeApprovalMessage = async (text: string) =>
+    await sendTelegramCallbackTerminalReceipt({ actions, text });
   const terminalizeLegacyApproval = async (
     receipt: Parameters<typeof buildTelegramLegacyApprovalTerminalText>[0],
   ) => await terminalizeApprovalMessage(buildTelegramLegacyApprovalTerminalText(receipt));

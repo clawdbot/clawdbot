@@ -14,6 +14,8 @@ export async function reconcileSkillCollectionReviewJobs(params: {
   cfg: OpenClawConfig;
   logger: { warn: (obj: unknown, msg?: string) => void };
   commitGuard?: () => void;
+  schedulerSeed?: string;
+  agentWorkspaceDirs?: ReadonlyMap<string, string>;
 }): Promise<{ ok: boolean }> {
   let ok = true;
   let jobs: CronJob[];
@@ -25,7 +27,7 @@ export async function reconcileSkillCollectionReviewJobs(params: {
   }
   params.commitGuard?.();
 
-  const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg);
+  const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg, params);
   const desired = new Set(specs.map((spec) => spec.agentId));
   for (const spec of specs) {
     try {

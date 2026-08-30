@@ -191,14 +191,22 @@ export async function finalizeCronRun(params: {
       typeof lastCallTotalTokens === "number" && lastCallTotalTokens > 0
         ? lastCallTotalTokens
         : undefined;
-    const costConfig = resolveModelCostConfig({
-      provider: providerUsed,
-      model: modelUsed,
-      config: prepared.cfgWithAgentDefaults,
-    });
-    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
-      estimateUsageCost({ usage, cost: costConfig }),
-    );
+    const recordedCostUsd = asNonNegativeFiniteNumber(finalRunResult.meta?.agentMeta?.costUsd);
+    const diagnosticsEnabled = isDiagnosticsEnabled(prepared.cfgWithAgentDefaults);
+    const costConfig =
+      recordedCostUsd === undefined || (diagnosticsEnabled && diagnosticUsage !== usage)
+        ? resolveModelCostConfig({
+            provider: providerUsed,
+            model: modelUsed,
+            config: prepared.cfgWithAgentDefaults,
+            agentId: prepared.agentId,
+            agentDir: prepared.agentDir,
+            workspaceDir: prepared.workspaceDir,
+            pluginMetadataSnapshot: prepared.preparedModelRuntimeLease.snapshot.metadataSnapshot,
+          })
+        : undefined;
+    const runEstimatedCostUsd =
+      recordedCostUsd ?? asNonNegativeFiniteNumber(estimateUsageCost({ usage, cost: costConfig }));
     prepared.cronSession.sessionEntry.inputTokens = input;
     prepared.cronSession.sessionEntry.outputTokens = output;
     const bucketTotalTokens = input + output + cacheRead + cacheWrite;
@@ -237,7 +245,7 @@ export async function finalizeCronRun(params: {
       provider: providerUsed,
       usage: telemetryUsage,
     };
-    if (isDiagnosticsEnabled(prepared.cfgWithAgentDefaults)) {
+    if (diagnosticsEnabled) {
       const diagnosticInput = diagnosticUsage?.input ?? 0;
       const diagnosticOutput = diagnosticUsage?.output ?? 0;
       const diagnosticCacheRead = diagnosticUsage?.cacheRead ?? 0;
@@ -253,9 +261,12 @@ export async function finalizeCronRun(params: {
         diagnosticUsage?.output !== undefined ||
         diagnosticUsage?.cacheRead !== undefined ||
         diagnosticUsage?.cacheWrite !== undefined;
-      const diagnosticEstimatedCostUsd = asNonNegativeFiniteNumber(
-        estimateUsageCost({ usage: diagnosticUsage, cost: costConfig }),
-      );
+      const diagnosticEstimatedCostUsd =
+        diagnosticUsage === usage
+          ? runEstimatedCostUsd
+          : asNonNegativeFiniteNumber(
+              estimateUsageCost({ usage: diagnosticUsage, cost: costConfig }),
+            );
       const contextUsedTokens = deriveContextPromptTokens({
         lastCallUsage,
         promptTokens,

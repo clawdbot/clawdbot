@@ -15,14 +15,18 @@ import {
   type Mock,
 } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
+import { getPreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
@@ -50,18 +54,38 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
 const SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS = 30_000;
-let cachedSessionsSendTool: SessionSendTool | null = null;
 
-function getSessionsSendTool(): SessionSendTool {
-  if (cachedSessionsSendTool) {
-    return cachedSessionsSendTool;
+function getSessionsSendTool(
+  options?: Pick<
+    NonNullable<Parameters<typeof createOpenClawTools>[0]>,
+    "agentSessionKey" | "agentChannel" | "config"
+  >,
+): SessionSendTool {
+  const config = getRuntimeConfig();
+  const agentId = resolveSessionAgentId({ config, sessionKey: options?.agentSessionKey });
+  const preparedModelRuntime = getPreparedModelRuntimeSnapshot({
+    config,
+    agentId,
+    agentDir: resolveAgentDir(config, agentId),
+  });
+  if (!preparedModelRuntime) {
+    throw new Error(`missing prepared tool runtime for ${agentId}`);
   }
-  const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+  // Real turns construct tools inside their retained plugin generation; partial
+  // session-policy fixtures must not reopen discovery from the test process cwd.
+  const tool = withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
+    createOpenClawTools({
+      ...options,
+      config: options?.config ?? preparedModelRuntime.config,
+      agentDir: preparedModelRuntime.agentDir,
+      workspaceDir: preparedModelRuntime.workspaceDir,
+      preparedModelRuntime,
+    }).find((candidate) => candidate.name === "sessions_send"),
+  );
   if (!tool) {
     throw new Error("missing sessions_send tool");
   }
-  cachedSessionsSendTool = tool;
-  return cachedSessionsSendTool;
+  return tool;
 }
 
 function expectSessionsSendDetails(
@@ -183,13 +207,10 @@ describe("sessions_send gateway loopback", () => {
         },
       });
       spy.mockClear();
-      const tool = createOpenClawTools({
+      const tool = getSessionsSendTool({
         agentSessionKey: "agent:main:main",
         config: { tools: { sessions: { visibility: "all" } } },
-      }).find((candidate) => candidate.name === "sessions_send");
-      if (!tool) {
-        throw new Error("missing sessions_send tool");
-      }
+      });
 
       const result = await tool.execute("call-missing-key", {
         sessionKey: missingKey,
@@ -602,7 +623,7 @@ describe("sessions_send label lookup", () => {
         timeoutMs: 5000,
       });
 
-      const tool = createOpenClawTools({
+      const tool = getSessionsSendTool({
         config: {
           tools: {
             sessions: {
@@ -610,10 +631,7 @@ describe("sessions_send label lookup", () => {
             },
           },
         },
-      }).find((candidate) => candidate.name === "sessions_send");
-      if (!tool) {
-        throw new Error("missing sessions_send tool");
-      }
+      });
 
       // Send using label instead of sessionKey
       const result = await tool.execute("call-by-label", {
@@ -678,13 +696,10 @@ describe("sessions_send agent targeting", () => {
         );
         spy.mockClear();
 
-        const tool = createOpenClawTools({
+        const tool = getSessionsSendTool({
           agentSessionKey: "agent:main:main",
           config,
-        }).find((candidate) => candidate.name === "sessions_send");
-        if (!tool) {
-          throw new Error("missing sessions_send tool");
-        }
+        });
 
         const result = await tool.execute("call-agent-id", {
           agentId: "orion",
@@ -826,14 +841,11 @@ describe("sessions_send direct-message requester routing", () => {
           }),
         );
 
-        const tool = createOpenClawTools({
+        const tool = getSessionsSendTool({
           agentSessionKey: requesterSessionKey,
           agentChannel: "feishu",
           config,
-        }).find((candidate) => candidate.name === "sessions_send");
-        if (!tool) {
-          throw new Error("missing sessions_send tool");
-        }
+        });
 
         const result = await tool.execute("call-dm-scope-routing", {
           sessionKey: targetSessionKey,

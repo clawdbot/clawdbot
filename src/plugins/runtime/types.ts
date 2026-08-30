@@ -205,6 +205,7 @@ export type CreatePluginRuntimeOptions = {
   dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
   gateway?: PluginRuntime["gateway"];
   hooks?: PluginRuntime["hooks"];
+  system?: PluginRuntime["system"];
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;

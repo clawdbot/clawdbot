@@ -321,11 +321,16 @@ export async function generateToolCallTitles(params: {
     );
     return {};
   }
-  // Preparation falls back to the agent primary when a modelRef cannot be
-  // parsed; a malformed explicit utilityModel (e.g. "openai/") must fail
-  // closed instead of billing the primary with tool arguments.
+  // Reject malformed utility refs before preparation can fall back to billing the primary.
+  // This is only a syntax check: preparation owns normalization, and cached
+  // titles must not invoke provider hooks.
   const strippedRef = splitTrailingAuthProfile(resolvedRef).model;
-  if (!parseModelRef(strippedRef, params.sessionPrimaryProvider?.trim() || DEFAULT_PROVIDER)) {
+  if (
+    !parseModelRef(strippedRef, params.sessionPrimaryProvider?.trim() || DEFAULT_PROVIDER, {
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    })
+  ) {
     logVerbose(
       `chat-tool-titles: utility model ref ${JSON.stringify(resolvedRef)} is malformed; skipping titles`,
     );

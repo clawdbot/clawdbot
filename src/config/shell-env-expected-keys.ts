@@ -2,6 +2,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listKnownChannelEnvVarNames } from "../secrets/channel-env-vars.js";
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 const CORE_SHELL_ENV_EXPECTED_KEYS = ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"];
 
@@ -11,10 +12,13 @@ const CORE_SHELL_ENV_EXPECTED_KEYS = ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWA
  * Provider/channel helpers inspect the current environment so optional plugin
  * and auth aliases only trigger shell probing when their configured keys matter.
  */
-export function resolveShellEnvExpectedKeys(env: NodeJS.ProcessEnv): string[] {
+export function resolveShellEnvExpectedKeys(
+  env: NodeJS.ProcessEnv,
+  config?: OpenClawConfig,
+): string[] {
   return uniqueStrings([
-    ...listKnownProviderAuthEnvVarNames({ env }),
-    ...listKnownChannelEnvVarNames({ env }),
+    ...listKnownProviderAuthEnvVarNames({ config, env }),
+    ...listKnownChannelEnvVarNames({ config, env }),
     ...CORE_SHELL_ENV_EXPECTED_KEYS,
   ]);
 }

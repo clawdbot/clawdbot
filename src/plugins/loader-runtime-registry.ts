@@ -1,28 +1,15 @@
-import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
-import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
+import {
+  isPluginRegistryLoadInFlight,
+  resolveCompatibleRuntimePluginRegistry,
+} from "./loader-cache.js";
 import { loadOpenClawPlugins } from "./loader-runtime-load.js";
 import type { PluginLoadOptions } from "./loader-types.js";
-import type { PluginRegistry } from "./registry.js";
-import { getActivePluginRegistry, getActivePluginRegistryKey } from "./runtime.js";
-
-function getExactActivePluginRegistry(options?: PluginLoadOptions): PluginRegistry | undefined {
-  const activeRegistry = getActivePluginRegistry() ?? undefined;
-  if (!activeRegistry || options === undefined) {
-    return activeRegistry;
-  }
-  const activeCacheKey = getActivePluginRegistryKey();
-  if (!activeCacheKey) {
-    return undefined;
-  }
-  return resolvePluginLoadCacheContext(options).cacheKey === activeCacheKey
-    ? activeRegistry
-    : undefined;
-}
+import type { PluginRegistry } from "./registry-types.js";
 
 export function resolveRuntimePluginRegistry(
   options?: PluginLoadOptions,
 ): PluginRegistry | undefined {
-  const activeRegistry = getExactActivePluginRegistry(options);
+  const activeRegistry = resolveCompatibleRuntimePluginRegistry(options);
   if (activeRegistry) {
     return activeRegistry;
   }
@@ -40,11 +27,4 @@ export function getRuntimePluginRegistryForLoadOptions(
   options?: PluginLoadOptions,
 ): PluginRegistry | undefined {
   return resolveRuntimePluginRegistry(options);
-}
-
-/** Return the exact active registry without triggering a fresh load on cache miss. */
-export function resolveCompatibleRuntimePluginRegistry(
-  options?: PluginLoadOptions,
-): PluginRegistry | undefined {
-  return getExactActivePluginRegistry(options);
 }

@@ -1,8 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import * as providerModelNormalizationRuntime from "../../agents/provider-model-normalization.runtime.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import {
@@ -74,42 +79,105 @@ describe("executeAgentTurn: primary probe routing", () => {
     });
   });
 
-  it("drops stale queued primary probes after a user model switch", async () => {
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "google",
-      fallbackModel: "gemini-3-pro",
-    };
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      modelOverride: "openai/gpt-5.4",
-      modelOverrideSource: "user",
-      authProfileOverride: "openai:work",
-      authProfileOverrideSource: "user",
-    };
-    const run = createFollowupRun().run;
-    run.provider = "anthropic";
-    run.model = "claude-sonnet-4-6";
-    run.autoFallbackPrimaryProbe = probe;
+  it.each([
+    {
+      name: "combined ref",
+      providerOverride: undefined,
+      modelOverride: "openai/legacy-selection",
+      normalizedInput: "legacy-selection",
+    },
+    {
+      name: "literal provider prefix",
+      providerOverride: "openai",
+      modelOverride: "openai/openai/literal",
+      normalizedInput: "openai/literal",
+    },
+  ])(
+    "drops stale queued primary probes after a user model switch with $name in the retained generation",
+    ({ providerOverride, modelOverride, normalizedInput }) => {
+      const probe = {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        fallbackProvider: "google",
+        fallbackModel: "gemini-3-pro",
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        providerOverride,
+        modelOverride,
+        modelOverrideSource: "user",
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "user",
+      };
+      const run = createFollowupRun().run;
+      run.provider = "anthropic";
+      run.model = "claude-sonnet-4-6";
+      run.autoFallbackPrimaryProbe = probe;
+      const metadataSnapshot = createPluginMetadataSnapshot({
+        config: run.config,
+        workspaceDir: run.workspaceDir,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
+      const publication = installTemporaryCurrentPluginMetadataSnapshot(
+        createPluginMetadataSnapshot({
+          config: run.config,
+          workspaceDir: "/tmp/replacement-probe-workspace",
+          manifestRegistry: { plugins: [], diagnostics: [] },
+        }),
+        { config: run.config },
+      );
+      const normalizer = vi
+        .spyOn(providerModelNormalizationRuntime, "normalizeProviderModelIdWithRuntime")
+        .mockImplementation((params) => {
+          if (params.provider !== "openai" || params.context.modelId !== normalizedInput) {
+            return undefined;
+          }
+          return params.config === run.config &&
+            params.workspaceDir === run.workspaceDir &&
+            params.pluginMetadataSnapshot === metadataSnapshot
+            ? "gpt-5.4"
+            : "ambient-selection";
+        });
+      onTestFinished(() => {
+        normalizer.mockRestore();
+        publication.release();
+      });
 
-    expect(
-      resolveRunAfterAutoFallbackPrimaryProbeRecheck({
-        run,
-        entry: sessionEntry,
-        sessionKey: "main",
-      }),
-    ).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.4",
-      requestedRouteResolution: "raw",
-      authProfileId: "openai:work",
-      authProfileIdSource: "user",
-      modelOverrideSource: "user",
-      autoFallbackPrimaryProbe: undefined,
-    });
-  });
+      const rechecked = withPreparedModelRuntimePluginGenerationScope(
+        {
+          pluginMetadataSnapshot: metadataSnapshot,
+          configuredCatalogEntries: [],
+          inlineProviderModels: [],
+        },
+        () =>
+          withPluginRuntimeGenerationScope({ config: run.config, metadataSnapshot }, () =>
+            resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+              run,
+              entry: sessionEntry,
+              sessionKey: "main",
+            }),
+          ),
+      );
+      expect({
+        provider: rechecked.provider,
+        model: rechecked.model,
+        requestedRouteResolution: rechecked.requestedRouteResolution,
+        authProfileId: rechecked.authProfileId,
+        authProfileIdSource: rechecked.authProfileIdSource,
+        modelOverrideSource: rechecked.modelOverrideSource,
+        autoFallbackPrimaryProbe: rechecked.autoFallbackPrimaryProbe,
+      }).toEqual({
+        provider: "openai",
+        model: "gpt-5.4",
+        requestedRouteResolution: "raw",
+        authProfileId: "openai:work",
+        authProfileIdSource: "user",
+        modelOverrideSource: "user",
+        autoFallbackPrimaryProbe: undefined,
+      });
+    },
+  );
 
   it.each([
     { name: "legacy user", marker: undefined, expectedSource: "user" as const },

@@ -5,9 +5,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryWorkspaceDir,
+} from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -150,6 +154,7 @@ async function writeInstanceBindingProbePlugin(): Promise<{ bundledRoot: string 
 
 async function prepareInstanceBindingTest(options?: {
   serviceStopFailure?: InstanceBindingProbeCoordinator["serviceStopFailure"];
+  agents?: OpenClawConfig["agents"];
 }) {
   const coordinator = installInstanceBindingProbeCoordinator(options);
   const plugin = await writeInstanceBindingProbePlugin();
@@ -163,7 +168,8 @@ async function prepareInstanceBindingTest(options?: {
   if (!configPath) {
     throw new Error("gateway test hooks did not install OPENCLAW_CONFIG_PATH");
   }
-  const config = {
+  const config: OpenClawConfig = {
+    ...(options?.agents ? { agents: options.agents } : {}),
     plugins: {
       enabled: true,
       allow: ["instance-binding-probe"],
@@ -273,7 +279,15 @@ describe("gateway plugin instance bindings", () => {
     "keeps startup metadata through hot reload and discovers manifest changes after Gateway restart",
     { timeout: 600_000 },
     async () => {
-      const { coordinator, bundledRoot } = await prepareInstanceBindingTest();
+      const workspaceRoot = tempDirs.make("openclaw-plugin-system-workspaces-");
+      const nextWorkspaceRoot = tempDirs.make("openclaw-plugin-next-workspaces-");
+      const { coordinator, bundledRoot } = await prepareInstanceBindingTest({
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: workspaceRoot, systemAgent: { agentId: "ops" } },
+          entries: { main: {}, ops: {} },
+        },
+      });
 
       const port = await getFreePort();
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
@@ -299,6 +313,7 @@ describe("gateway plugin instance bindings", () => {
         "initial",
       );
       const initialProbe = await requestInstanceBindingProbe(initialRuntime);
+      expect(getActivePluginRegistryWorkspaceDir()).toBe(path.join(workspaceRoot, "ops"));
 
       const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       sockets.push(socket);
@@ -307,6 +322,7 @@ describe("gateway plugin instance bindings", () => {
       expect(typeof currentConfig.payload?.hash).toBe("string");
       const reload = await rpcReq(socket, "config.patch", {
         raw: JSON.stringify({
+          agents: { defaults: { workspace: nextWorkspaceRoot } },
           plugins: {
             entries: {
               "instance-binding-probe": {
@@ -326,6 +342,7 @@ describe("gateway plugin instance bindings", () => {
         "hot-reloaded",
       );
       const reloadedProbe = await requestInstanceBindingProbe(reloadedRuntime);
+      expect(getActivePluginRegistryWorkspaceDir()).toBe(path.join(nextWorkspaceRoot, "ops"));
 
       expect(reloadedProbe.registryId).not.toBe(initialProbe.registryId);
       expect(reloadedProbe.sessionsId).toBe(initialProbe.sessionsId);

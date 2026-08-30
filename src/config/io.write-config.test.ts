@@ -9,6 +9,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js"
 import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -56,9 +57,15 @@ const mockMaintainConfigBackups = vi.hoisted(() =>
   vi.fn<typeof import("./backup-rotation.js").maintainConfigBackups>(async () => {}),
 );
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistryCore: mockLoadPluginManifestRegistry,
-}));
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryCore: mockLoadPluginManifestRegistry,
+    // Every synthetic schema in this suite belongs to its bundled fixture inventory.
+    loadBundledPluginManifestRegistry: mockLoadPluginManifestRegistry,
+  };
+});
 
 vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
@@ -139,6 +146,8 @@ describe("config io write", () => {
   afterAll(async () => {
     closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
+    // The process owner retains this suite's mocked manifest loader across module resets.
+    clearPluginMetadataLifecycleCaches();
     await suiteRootTracker.cleanup();
   });
 

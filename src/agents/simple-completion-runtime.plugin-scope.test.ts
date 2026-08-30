@@ -159,4 +159,148 @@ module.exports = {
       ]);
     },
   );
+
+  it.each([
+    {
+      name: "another competing provider",
+      keepOtherAlias: true,
+      expectedProvider: "other-provider",
+    },
+    {
+      name: "the raw fallback provider",
+      keepOtherAlias: false,
+      expectedProvider: "fallback-provider",
+    },
+  ])(
+    "prepares $name before runtime alias collisions choose it",
+    async ({ keepOtherAlias, expectedProvider }) => {
+      const tempRoot = tempRoots.makeTempDir();
+      const fixtures = [
+        "alias-provider",
+        "other-provider",
+        "fallback-provider",
+        "unrelated-provider",
+      ].map((providerId) => {
+        const rootDir = path.join(tempRoot, providerId);
+        fs.mkdirSync(rootDir, { recursive: true });
+        return createColdPluginFixture({
+          rootDir,
+          pluginId: `${providerId}-plugin`,
+          providerId,
+        });
+      });
+      for (const fixture of fixtures.slice(0, 3)) {
+        fs.writeFileSync(
+          fixture.runtimeSource,
+          `const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(fixture.runtimeMarker)}, "loaded", "utf8");
+module.exports = {
+  id: ${JSON.stringify(fixture.pluginId)},
+  register(api) {
+    api.registerProvider({
+      id: ${JSON.stringify(fixture.providerId)}, label: "Alias collision provider", auth: [],
+      normalizeModelId({ modelId }) {
+        fs.appendFileSync(${JSON.stringify(`${fixture.runtimeMarker}.hooks`)}, modelId + "\\n", "utf8");
+        if (${JSON.stringify(fixture.providerId)} === "alias-provider" && modelId === "legacy") {
+          return "current";
+        }
+        if (${JSON.stringify(fixture.providerId)} === "other-provider" && modelId === "legacy-other") {
+          return "runtime-other";
+        }
+        if (${JSON.stringify(fixture.providerId)} === "fallback-provider" && modelId === "fast") {
+          return "runtime-fast";
+        }
+        return undefined;
+      },
+    });
+  },
+};
+`,
+          "utf8",
+        );
+      }
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "fallback-provider/primary",
+            models: {
+              "alias-provider/older": { alias: "fast" },
+              "other-provider/legacy-other": { alias: keepOtherAlias ? "fast" : "unused-other" },
+              "alias-provider/legacy": { alias: "fast" },
+              "unrelated-provider/unused": { alias: "unused" },
+            },
+          },
+          entries: {
+            main: {
+              workspace: path.join(tempRoot, "workspace"),
+              models: {
+                "alias-provider/current": { alias: "" },
+                ...(!keepOtherAlias ? { "alias-provider/older": { alias: "slow" } } : {}),
+              },
+            },
+          },
+        },
+        plugins: {
+          load: { paths: fixtures.map((fixture) => fixture.rootDir) },
+          slots: { memory: "none" },
+          entries: Object.fromEntries(
+            fixtures.map((fixture) => [fixture.pluginId, { enabled: true }]),
+          ),
+        },
+      };
+      let preparedRuntime: PreparedModelRuntimeSnapshot | undefined;
+      const modelResolver: typeof resolveModelAsync = vi.fn(
+        async (provider, modelId, _agentDir, _cfg, options) => {
+          preparedRuntime = options?.preparedModelRuntime;
+          return {
+            error: `selected ${provider}/${modelId}`,
+            authStorage: options?.authStorage ?? AuthStorage.inMemory({}),
+            modelRegistry:
+              options?.modelRegistry ?? ModelRegistry.inMemory(AuthStorage.inMemory({})),
+          };
+        },
+      );
+      const env = {
+        ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: tempRoots.makeTempDir() }),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+      };
+
+      const result = await withEnvAsync(env, () =>
+        prepareSimpleCompletionModelForAgent({
+          cfg: config,
+          agentId: "main",
+          modelRef: "fast@work",
+          modelResolver,
+        }),
+      );
+
+      const modelId = keepOtherAlias ? "runtime-other" : "runtime-fast";
+      expect(result).toMatchObject({
+        error: `selected ${expectedProvider}/${modelId}`,
+        selection: { provider: expectedProvider, modelId, profileId: "work" },
+      });
+      const expectedProviders = [
+        "alias-provider",
+        "fallback-provider",
+        ...(keepOtherAlias ? ["other-provider"] : []),
+      ].toSorted();
+      expect(
+        preparedRuntime?.pluginRegistry?.providers.map(({ provider }) => provider.id).toSorted(),
+      ).toEqual(expectedProviders);
+      expect(preparedRuntime?.metadataSnapshot.pluginIds).toEqual(
+        expectedProviders.map((provider) => `${provider}-plugin`),
+      );
+      for (const fixture of fixtures) {
+        expect(isColdPluginRuntimeLoaded(fixture)).toBe(
+          expectedProviders.includes(fixture.providerId),
+        );
+      }
+      const fallbackHooks = path.join(tempRoot, "fallback-provider", "runtime-loaded.txt.hooks");
+      const fallbackModelIds = fs.existsSync(fallbackHooks)
+        ? fs.readFileSync(fallbackHooks, "utf8").trim().split("\n")
+        : [];
+      expect(fallbackModelIds).toEqual(keepOtherAlias ? [] : ["fast"]);
+    },
+  );
 });

@@ -1,4 +1,5 @@
 // Handles model directives and persists provider/model selections.
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -9,16 +10,15 @@ import { resolveConfiguredModelEntries } from "../../agents/configured-model-ent
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   isModelKeyAllowedBySet,
+  type ModelManifestPluginContext,
   parseConfiguredModelVisibilityEntries,
 } from "../../agents/model-selection-shared.js";
 import {
   type ModelAliasIndex,
   buildConfiguredModelCatalog,
-  modelKey,
   normalizeProviderId,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../../agents/runtime-plan/auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -42,6 +42,10 @@ import {
 } from "./directive-handling.model-picker.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ThinkLevel } from "./directives.js";
+import {
+  resolveRuntimeNormalization,
+  type RuntimeModelNormalization,
+} from "./model-runtime-normalization.js";
 
 function isMissingAuthLabel(auth: { label: string; source: string }): boolean {
   return auth.label === "missing" && auth.source === "missing";
@@ -83,6 +87,7 @@ async function resolveStatusAuthLabel(params: {
   activeAgentId: string;
   authMode: ModelAuthDetailMode;
   workspaceDir?: string;
+  manifestPluginContext?: ModelManifestPluginContext;
   sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
 }): Promise<string> {
   const provider = normalizeProviderId(params.provider);
@@ -106,6 +111,7 @@ async function resolveStatusAuthLabel(params: {
     params.authMode,
     params.workspaceDir,
     {
+      manifestPluginContext: params.manifestPluginContext,
       acceptedProfileTypes: resolveStatusAcceptedProfileTypes({
         provider,
         harnessRuntime,
@@ -134,6 +140,7 @@ async function resolveStatusAuthLabel(params: {
     params.agentDir,
     params.authMode,
     params.workspaceDir,
+    { manifestPluginContext: params.manifestPluginContext },
   );
   if (isMissingAuthLabel(runtimeAuth)) {
     return formatAuthLabel(auth);
@@ -154,7 +161,7 @@ function pushUniqueCatalogEntry(params: {
   if (!provider || !id) {
     return;
   }
-  const key = modelKey(provider, id);
+  const key = buildModelCatalogRef(provider, id);
   if (params.keys.has(key)) {
     return;
   }
@@ -166,24 +173,19 @@ function pushUniqueCatalogEntry(params: {
   });
 }
 
-function buildModelPickerCatalog(params: {
-  cfg: OpenClawConfig;
-  defaultProvider: string;
-  defaultModel: string;
-  agentId: string;
-  aliasIndex: ModelAliasIndex;
-  policyAliasIndex: ModelAliasIndex;
-  allowedModelKeys: ReadonlySet<string>;
-  allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
-}): ModelPickerCatalogEntry[] {
-  const configuredProjection = resolveConfiguredModelEntries({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    aliasIndex: params.aliasIndex,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-  });
+function buildModelPickerCatalog(
+  params: {
+    cfg: OpenClawConfig;
+    defaultProvider: string;
+    defaultModel: string;
+    agentId: string;
+    aliasIndex: ModelAliasIndex;
+    policyAliasIndex: ModelAliasIndex;
+    allowedModelKeys: ReadonlySet<string>;
+    allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
+  } & RuntimeModelNormalization,
+): ModelPickerCatalogEntry[] {
+  const configuredProjection = resolveConfiguredModelEntries(params);
   const resolvedDefault = configuredProjection.defaultRef;
   const configuredCatalog = configuredProjection.entries.map((entry) => ({
     provider: entry.ref.provider,
@@ -228,7 +230,7 @@ function buildModelPickerCatalog(params: {
   for (const entry of params.allowedModelCatalog.filter((candidate) =>
     isModelKeyAllowedBySet(
       params.allowedModelKeys,
-      modelKey(candidate.provider, candidate.id ?? ""),
+      buildModelCatalogRef(candidate.provider, candidate.id ?? ""),
     ),
   )) {
     push({
@@ -241,20 +243,17 @@ function buildModelPickerCatalog(params: {
   // Merge exact policy refs that the catalog doesn't know about.
   for (const raw of visibility.exactModelRefs) {
     const resolved = resolveModelRefFromString({
-      cfg: params.cfg,
-      agentId: params.agentId,
+      ...params,
       raw,
-      defaultProvider: params.defaultProvider,
       aliasIndex: params.policyAliasIndex,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     });
     if (!resolved) {
       continue;
     }
     const catalogEntry = params.allowedModelCatalog.find(
       (entry) =>
-        modelKey(entry.provider, entry.id ?? "") ===
-        modelKey(resolved.ref.provider, resolved.ref.model),
+        buildModelCatalogRef(entry.provider, entry.id ?? "") ===
+        buildModelCatalogRef(resolved.ref.provider, resolved.ref.model),
     );
     push(
       catalogEntry
@@ -272,7 +271,7 @@ function buildModelPickerCatalog(params: {
     resolvedDefault.model &&
     isModelKeyAllowedBySet(
       params.allowedModelKeys,
-      modelKey(resolvedDefault.provider, resolvedDefault.model),
+      buildModelCatalogRef(resolvedDefault.provider, resolvedDefault.model),
     )
   ) {
     push({
@@ -285,14 +284,16 @@ function buildModelPickerCatalog(params: {
   return out;
 }
 
-function filterMissingAuthNestedProviderDuplicates(params: {
-  cfg: OpenClawConfig;
-  entries: ModelPickerCatalogEntry[];
-  authByProvider: Map<string, string>;
-}): ModelPickerCatalogEntry[] {
+function filterMissingAuthNestedProviderDuplicates(
+  params: {
+    cfg: OpenClawConfig;
+    entries: ModelPickerCatalogEntry[];
+    authByProvider: Map<string, string>;
+  } & RuntimeModelNormalization,
+): ModelPickerCatalogEntry[] {
   const configuredKeys = new Set(
-    buildConfiguredModelCatalog({ cfg: params.cfg }).map((entry) =>
-      modelKey(entry.provider, entry.id),
+    buildConfiguredModelCatalog(params).map((entry) =>
+      buildModelCatalogRef(entry.provider, entry.id),
     ),
   );
   const wrapperKeys = new Set<string>();
@@ -308,7 +309,7 @@ function filterMissingAuthNestedProviderDuplicates(params: {
     if (!nestedProvider || !nestedModel || nestedProvider === wrapperProvider) {
       continue;
     }
-    wrapperKeys.add(modelKey(nestedProvider, nestedModel));
+    wrapperKeys.add(buildModelCatalogRef(nestedProvider, nestedModel));
   }
   if (wrapperKeys.size === 0) {
     return params.entries;
@@ -317,7 +318,7 @@ function filterMissingAuthNestedProviderDuplicates(params: {
   return params.entries.filter((entry) => {
     const provider = normalizeProviderId(entry.provider);
     const id = normalizeOptionalString(entry.id) ?? "";
-    const key = modelKey(provider, id);
+    const key = buildModelCatalogRef(provider, id);
     if (configuredKeys.has(key)) {
       return true;
     }
@@ -343,6 +344,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   runtimePolicySessionKey?: string;
   resetModelOverride: boolean;
   workspaceDir?: string;
+  manifestPluginContext?: ModelManifestPluginContext;
   surface?: string;
   sessionEntry?: Pick<SessionEntry, "modelProvider" | "model"> &
     Partial<Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">>;
@@ -460,7 +462,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
     };
   }
 
+  const normalization = resolveRuntimeNormalization(params.cfg, params.activeAgentId, params);
   const pickerCatalog = buildModelPickerCatalog({
+    ...normalization,
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
@@ -491,7 +495,8 @@ export async function maybeHandleModelDirectiveInfo(params: {
       agentDir: params.agentDir,
       activeAgentId: params.activeAgentId,
       authMode,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: normalization.workspaceDir,
+      manifestPluginContext: normalization.manifestPluginContext,
       sessionEntry: params.sessionEntry,
     });
     authByProvider.set(provider, authLabel);
@@ -517,6 +522,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
 
   const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
   const statusCatalog = filterMissingAuthNestedProviderDuplicates({
+    ...normalization,
     cfg: params.cfg,
     entries: pickerCatalog,
     authByProvider,

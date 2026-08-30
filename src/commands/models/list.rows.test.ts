@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { formatModelRefForConfig } from "../../agents/model-selection-shared.js";
 import type { ModelRow } from "./list.types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -58,6 +59,11 @@ function createRowContext(
 ): RowBuilderContext {
   return {
     cfg: {},
+    formatModelRef: (ref) =>
+      formatModelRefForConfig(ref, {
+        cfg: overrides.cfg ?? {},
+        manifestPlugins: overrides.metadataSnapshot?.plugins ?? [],
+      }),
     agentDir: "/tmp/openclaw-agent",
     canonicalizeProvider: normalizeProviderId,
     configuredByKey: new Map(),

@@ -16,7 +16,7 @@ import { loadOfficialExternalChannelSecretContractApi } from "./official-externa
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
-type BundledChannelContractApi = {
+type ChannelSecretContractApi = {
   collectRuntimeConfigAssignments?: (params: {
     config: OpenClawConfig;
     defaults: SecretDefaults | undefined;
@@ -31,17 +31,12 @@ const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
-type BundledChannelSecretContractApi = Pick<
-  BundledChannelContractApi,
-  "collectRuntimeConfigAssignments" | "secretTargetRegistryEntries"
->;
-
-/** Loads a bundled channel secret contract from its public artifact bundle. */
+/** Loads only the dedicated secret surface; broad channel APIs may activate runtime code. */
 function loadBundledChannelSecretContractApi(
   channelId: string,
-): BundledChannelSecretContractApi | undefined {
+): ChannelSecretContractApi | undefined {
   return (
-    loadBundledPluginPublicArtifactModuleFromCandidatesSync<BundledChannelSecretContractApi>({
+    loadBundledPluginPublicArtifactModuleFromCandidatesSync<ChannelSecretContractApi>({
       dirName: channelId,
       artifactCandidates: ["secret-contract-api.js"],
     }) ?? undefined
@@ -83,19 +78,19 @@ function resolvePluginContractApiPath(rootDir: string): string | null {
   return null;
 }
 
-function loadPluginContractModule(modulePath: string, rootDir: string): BundledChannelContractApi {
+function loadPluginContractModule(modulePath: string, rootDir: string): ChannelSecretContractApi {
   return getCachedPluginModuleLoader({
     modulePath,
     rootDir,
     importerUrl: import.meta.url,
-  })(modulePath) as BundledChannelContractApi;
+  })(modulePath) as ChannelSecretContractApi;
 }
 
 function loadExternalChannelSecretContractFromRecord(
   record: PluginManifestRecord,
   env: NodeJS.ProcessEnv = process.env,
   throwOnLoadError = false,
-): BundledChannelSecretContractApi | undefined {
+): ChannelSecretContractApi | undefined {
   const contractPath = resolvePluginContractApiPath(record.rootDir);
   if (!contractPath) {
     return undefined;
@@ -160,7 +155,7 @@ function recordOwnsChannel(record: PluginManifestRecord, channelId: string): boo
 
 function listChannelSecretContractRecords(params: {
   channelId: string;
-  config: OpenClawConfig;
+  config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): PluginManifestRecord[] {
@@ -185,15 +180,14 @@ function listChannelSecretContractRecords(params: {
     });
 }
 
-/** Loads the first channel secret contract for a channel, preferring bundled metadata. */
 /** Loads a channel secret contract API for a channel id and current plugin origin policy. */
 export function loadChannelSecretContractApi(params: {
   channelId: string;
-  config: OpenClawConfig;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
   bundledOnly?: boolean;
-}): BundledChannelSecretContractApi | undefined {
+}): ChannelSecretContractApi | undefined {
   const bundled = loadBundledChannelSecretContractApi(params.channelId);
   if (bundled || params.bundledOnly) {
     return bundled;
@@ -230,7 +224,7 @@ export function loadChannelSecretContractApi(params: {
 export function loadChannelSecretContractApiForRecord(
   record: PluginManifestRecord,
   options?: { throwOnLoadError?: boolean },
-): BundledChannelSecretContractApi | undefined {
+): ChannelSecretContractApi | undefined {
   if (record.origin === "bundled") {
     return loadBundledChannelSecretContractApi(record.id);
   }

@@ -1,9 +1,15 @@
 // Simple completion runtime tests cover model resolution, provider auth, and
 // one-shot completion wiring before requests reach the shared LLM stream path.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
@@ -23,18 +29,11 @@ const hoisted = vi.hoisted(() => ({
   setRuntimeApiKeyMock: vi.fn(),
   prepareProviderRuntimeAuthMock: vi.fn(),
   ensureAuthProfileStoreMock: vi.fn(),
-  getCurrentPluginMetadataSnapshotMock:
-    vi.fn<
-      typeof import("../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
-    >(),
+  resolvePluginMetadataSnapshotMock: vi.fn(),
 }));
 
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: hoisted.acquireRuntimeLeaseMock,
-}));
-
-vi.mock("../plugins/runtime/generation-scope.js", () => ({
-  withPluginRuntimeGenerationScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
 vi.mock("./sessions/model-registry-runtime.js", () => ({
@@ -60,9 +59,9 @@ vi.mock("./auth-profiles/store.js", () => ({
   ensureAuthProfileStore: hoisted.ensureAuthProfileStoreMock,
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  resolvePluginMetadataSnapshot: hoisted.resolvePluginMetadataSnapshotMock,
 }));
 
 vi.mock("./model-auth.js", () => ({
@@ -95,26 +94,38 @@ beforeEach(() => {
   hoisted.setRuntimeApiKeyMock.mockReset();
   hoisted.prepareProviderRuntimeAuthMock.mockReset();
   hoisted.ensureAuthProfileStoreMock.mockReset();
-  hoisted.getCurrentPluginMetadataSnapshotMock.mockReset();
-  hoisted.acquireRuntimeLeaseMock.mockResolvedValue({
-    snapshot: {
-      agentDir: "/tmp/openclaw-agent",
-      workspaceDir: "/tmp/runtime-workspace",
-      config: {},
-      authModes: {},
-      metadataSnapshot: createPluginMetadataSnapshotFixture(),
-      allowGatewaySubagentBinding: false,
-      modelCatalog: { entries: [] },
-      configuredRuntimeModels: [],
-      inlineProviderModels: [],
-      activeProjectKeys: [],
-      createStores: () => ({
-        authStorage: { setRuntimeApiKey: hoisted.setRuntimeApiKeyMock },
-        modelRegistry: {},
-      }),
-    },
-    release: vi.fn(),
-  });
+  hoisted.resolvePluginMetadataSnapshotMock.mockReset();
+  hoisted.acquireRuntimeLeaseMock.mockImplementation(
+    async (
+      { config }: { config: OpenClawConfig },
+      options?: { pluginMetadataSnapshot?: PluginMetadataSnapshot },
+    ) => ({
+      snapshot: {
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/runtime-workspace",
+        config,
+        authModes: {},
+        metadataSnapshot:
+          options?.pluginMetadataSnapshot ??
+          createPluginMetadataSnapshot({
+            config,
+            workspaceDir: "/tmp/runtime-workspace",
+            manifestRegistry: { plugins: [], diagnostics: [] },
+          }),
+        pluginRegistry: createEmptyPluginRegistry(),
+        allowGatewaySubagentBinding: false,
+        modelCatalog: { entries: [] },
+        configuredRuntimeModels: [],
+        inlineProviderModels: [],
+        activeProjectKeys: [],
+        createStores: () => ({
+          authStorage: { setRuntimeApiKey: hoisted.setRuntimeApiKeyMock },
+          modelRegistry: {},
+        }),
+      },
+      release: vi.fn(),
+    }),
+  );
 
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
 
@@ -147,23 +158,29 @@ beforeEach(() => {
     },
   );
   hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-  hoisted.getCurrentPluginMetadataSnapshotMock.mockReturnValue(
-    createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "openai",
-          modelCatalog: {
-            providers: {
-              openai: {
-                defaultUtilityModel: "gpt-5.5",
-                models: [{ id: "gpt-5.5" }],
-              },
-            },
-          },
-        },
-      ],
+  const manifestRegistry = makeRegistry([
+    { id: "openai", channels: [], providers: ["openai"], origin: "bundled" },
+  ]);
+  manifestRegistry.plugins[0]!.modelCatalog = {
+    providers: {
+      openai: {
+        defaultUtilityModel: "gpt-5.5",
+        models: [{ id: "gpt-5.5" }],
+      },
+    },
+  };
+  setCurrentPluginMetadataSnapshot(createPluginMetadataSnapshot({ manifestRegistry }));
+  hoisted.resolvePluginMetadataSnapshotMock.mockImplementation((params) =>
+    createPluginMetadataSnapshot({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      manifestRegistry,
     }),
   );
+});
+
+afterEach(() => {
+  setCurrentPluginMetadataSnapshot(undefined);
 });
 
 function expectPreparedModelResult(

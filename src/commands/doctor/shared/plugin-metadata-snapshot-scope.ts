@@ -1,24 +1,13 @@
-import { resolveConfigWidePluginManifestRegistry } from "../../../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import {
-  withPluginMetadataSnapshotScope,
-  type PluginMetadataSnapshotScopeRunner,
-} from "../../../plugins/current-plugin-metadata-snapshot.js";
-import {
-  createPluginCache,
-  getPluginMetadataSnapshotCache,
-  withPluginCache,
-} from "../../../plugins/plugin-cache.js";
-import {
-  completePluginMetadataSnapshot,
-  isPluginMetadataSnapshotCompatible,
-  loadPluginMetadataSnapshot,
-  rebasePluginMetadataSnapshotManifestRegistry,
-  type PluginMetadataSnapshot,
-} from "../../../plugins/plugin-metadata-snapshot.js";
+  createPluginMetadataOwner,
+  withPluginMetadataCollectionScope,
+  type PreparedPluginMetadata,
+} from "../../../plugins/plugin-metadata-collection.js";
 
-export type DoctorPluginMetadataSnapshotState = {
-  current?: PluginMetadataSnapshot;
+export type DoctorPluginMetadataState = {
+  current?: PreparedPluginMetadata;
 };
 
 type DoctorPluginMetadataSnapshotScope = {
@@ -26,124 +15,45 @@ type DoctorPluginMetadataSnapshotScope = {
   invalidate: () => void;
 };
 
-const configWideDoctorSnapshots = new WeakSet<PluginMetadataSnapshot>();
-
-/** Aligns Doctor's immutable snapshot view with config-wide agent workspace discovery. */
-export function resolveConfigWideDoctorPluginMetadataSnapshot(params: {
-  snapshot: PluginMetadataSnapshot;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): PluginMetadataSnapshot {
-  if (configWideDoctorSnapshots.has(params.snapshot)) {
-    return params.snapshot;
-  }
-  const manifestRegistry = resolveConfigWidePluginManifestRegistry({
-    config: params.config,
-    env: params.env,
-    // Doctor calls this after filesystem repairs; the process-current snapshot
-    // may describe the pre-repair manifest and must not restore stale owners.
-    allowCurrent: false,
-  });
-  const snapshot = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
-  configWideDoctorSnapshots.add(snapshot);
-  return snapshot;
-}
-
-/** Promotes validation-scoped metadata to a complete immutable Doctor snapshot. */
-export function completeDoctorPluginMetadataSnapshot(params: {
-  snapshot?: PluginMetadataSnapshot;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): PluginMetadataSnapshot | undefined {
-  const snapshot = completePluginMetadataSnapshot(params);
-  return snapshot
-    ? resolveConfigWideDoctorPluginMetadataSnapshot({
-        snapshot,
-        config: params.config,
-        env: params.env,
-      })
-    : undefined;
-}
-
-/** Reuses one exact immutable plugin metadata generation per Doctor workspace. */
+/** Owns fresh Doctor inventories without publishing over the running Gateway. */
 export function createDoctorPluginMetadataSnapshotScope(params: {
-  baseSnapshot?: PluginMetadataSnapshot;
-  getBaseSnapshot?: () => PluginMetadataSnapshot | undefined;
+  getBaseMetadata: () => PreparedPluginMetadata | undefined;
   env?: NodeJS.ProcessEnv;
 }): DoctorPluginMetadataSnapshotScope {
   const env = params.env ?? process.env;
-  const snapshotsByWorkspace = new Map<string | undefined, PluginMetadataSnapshot>();
-  const readBaseSnapshot = () => params.getBaseSnapshot?.() ?? params.baseSnapshot;
-  let currentBaseSnapshot: PluginMetadataSnapshot | undefined;
-  let cache = createPluginCache();
+  const owner = createPluginMetadataOwner();
+  const readBaseMetadata = params.getBaseMetadata;
+  let currentBaseMetadata = readBaseMetadata();
+  let seed = currentBaseMetadata;
+  let forceFresh = false;
 
-  const refreshBaseSnapshot = () => {
-    const nextBaseSnapshot = readBaseSnapshot();
-    if (nextBaseSnapshot === currentBaseSnapshot) {
-      return;
+  const prepare = (config: OpenClawConfig, workspaceDir: string | undefined) => {
+    const nextBaseMetadata = readBaseMetadata();
+    if (nextBaseMetadata !== currentBaseMetadata) {
+      owner.invalidatePreparation();
+      currentBaseMetadata = nextBaseMetadata;
+      seed = nextBaseMetadata;
     }
-    currentBaseSnapshot = nextBaseSnapshot;
-    cache = nextBaseSnapshot
-      ? getPluginMetadataSnapshotCache(nextBaseSnapshot)
-      : createPluginCache();
-    snapshotsByWorkspace.clear();
-    if (nextBaseSnapshot && nextBaseSnapshot.pluginIds === undefined) {
-      snapshotsByWorkspace.set(nextBaseSnapshot.workspaceDir, nextBaseSnapshot);
-    }
+    const metadata = owner.prepare({ config, env, workspaceDir, seed, allowCurrent: !forceFresh });
+    forceFresh = false;
+    return metadata;
   };
-
-  const resolveSnapshot = (config: OpenClawConfig, workspaceDir: string | undefined) => {
-    const current = snapshotsByWorkspace.get(workspaceDir);
-    if (
-      current &&
-      isPluginMetadataSnapshotCompatible({
-        snapshot: current,
-        config,
-        env,
-        workspaceDir,
-      })
-    ) {
-      const snapshot = resolveConfigWideDoctorPluginMetadataSnapshot({
-        snapshot: current,
-        config,
-        env,
-      });
-      snapshotsByWorkspace.set(workspaceDir, snapshot);
-      return snapshot;
-    }
-    const snapshot = resolveConfigWideDoctorPluginMetadataSnapshot({
-      snapshot: loadPluginMetadataSnapshot({
-        config,
-        env,
-        ...(workspaceDir ? { workspaceDir } : {}),
-      }),
-      config,
+  const run: PluginMetadataSnapshotScopeRunner = (scope, operation) =>
+    withPluginMetadataCollectionScope(prepare(scope.config, scope.workspaceDir), operation, {
+      config: scope.config,
       env,
+      ...(scope.workspaceDir !== undefined ? { workspaceDir: scope.workspaceDir } : {}),
     });
-    snapshotsByWorkspace.set(workspaceDir, snapshot);
-    return snapshot;
-  };
-
-  const run: PluginMetadataSnapshotScopeRunner = (scope, operation) => {
-    refreshBaseSnapshot();
-    return withPluginCache(cache, () => {
-      const snapshot = resolveSnapshot(scope.config, scope.workspaceDir);
-      return withPluginMetadataSnapshotScope(snapshot, operation, {
-        config: scope.config,
-        env,
-        ...(scope.workspaceDir ? { workspaceDir: scope.workspaceDir } : {}),
-      });
-    });
-  };
 
   return {
     run,
     invalidate: () => {
-      // Inventory repairs invalidate every derived workspace generation even
-      // when updater preflight intentionally left the base snapshot absent.
-      currentBaseSnapshot = undefined;
-      snapshotsByWorkspace.clear();
-      cache = createPluginCache();
+      // Ignore the old seed until its owner supplies a replacement. Filesystem
+      // repairs must not reconstruct a fresh generation from pre-repair records.
+      owner.invalidatePreparation();
+      currentBaseMetadata = readBaseMetadata();
+      seed = undefined;
+      forceFresh = true;
     },
   };
 }

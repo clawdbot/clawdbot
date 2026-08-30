@@ -389,12 +389,14 @@ async function withPartialCopilotResponse(run: (port: number) => Promise<void>):
 
 type FallbackStoreCaseResult = {
   profileIds: string[];
+  oauthLoadedForReadiness: boolean;
   resolvedKey: string | undefined;
   resolveApiKeyCalls: unknown[][];
 };
 
 async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
   vi.resetModules();
+  let oauthLoaded = false;
 
   const primaryStore: AuthProfileStore = {
     version: 1,
@@ -427,9 +429,10 @@ async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
   vi.doMock("../agents/agent-scope-config.js", () => ({
     resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
   }));
-  vi.doMock("../agents/auth-profiles/oauth.js", () => ({
-    resolveApiKeyForProfile,
-  }));
+  vi.doMock("../agents/auth-profiles/oauth.js", () => {
+    oauthLoaded = true;
+    return { resolveApiKeyForProfile };
+  });
   vi.doMock("../agents/auth-profiles/order.js", () => ({
     resolveAuthProfileOrder: ({ provider, store }: { provider: string; store: AuthProfileStore }) =>
       Object.entries(store.profiles)
@@ -447,8 +450,10 @@ async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
   const { listUsableProviderAuthProfileIds, resolveProviderAuthProfileApiKey } =
     await import("./provider-auth.js");
 
+  const profileIds = listUsableProviderAuthProfileIds({ provider: "openai" }).profileIds;
   return {
-    profileIds: listUsableProviderAuthProfileIds({ provider: "openai" }).profileIds,
+    profileIds,
+    oauthLoadedForReadiness: oauthLoaded,
     resolvedKey: await resolveProviderAuthProfileApiKey({ provider: "openai" }),
     resolveApiKeyCalls: resolveApiKeyForProfile.mock.calls,
   };
@@ -824,8 +829,9 @@ describe("provider auth profile helpers", () => {
     vi.resetModules();
   });
 
-  it("resolves API keys from the fallback store that supplied usable profile ids", () => {
+  it("defers OAuth until resolving API keys from the store that supplied profile readiness", () => {
     expect(fallbackStoreCase.profileIds).toEqual(["openai:default"]);
+    expect(fallbackStoreCase.oauthLoadedForReadiness).toBe(false);
     expect(fallbackStoreCase.resolvedKey).toBe("fallback-key");
     expect(fallbackStoreCase.resolveApiKeyCalls).toContainEqual([
       expect.objectContaining({

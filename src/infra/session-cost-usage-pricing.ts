@@ -2,7 +2,10 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveModelPricingContext,
+  type ModelPricingLookupContext,
+} from "../model-catalog/pricing.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import type {
@@ -205,10 +208,12 @@ export type UsageCostResolver = (params: {
   model?: string;
 }) => ReturnType<typeof resolveModelCostConfig>;
 
-export function createUsageCostResolver(params?: {
-  config?: OpenClawConfig;
-  agentDir?: string;
-}): UsageCostResolver {
+export function createUsageCostResolver(
+  params?: ModelPricingLookupContext & {
+    agentDir?: string;
+  },
+): UsageCostResolver {
+  const { normalization } = resolveModelPricingContext(params);
   const cache = new Map<string, ReturnType<typeof resolveModelCostConfig>>();
   return ({ provider, model }) => {
     const key = `${provider ?? ""}\0${model ?? ""}`;
@@ -216,9 +221,10 @@ export function createUsageCostResolver(params?: {
       return cache.get(key);
     }
     const cost = resolveModelCostConfig({
+      ...normalization,
       provider,
       model,
-      config: params?.config,
+      agentId: params?.agentId,
       agentDir: params?.agentDir,
     });
     cache.set(key, cost);

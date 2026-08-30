@@ -1,9 +1,20 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import * as providerModelNormalization from "../../agents/provider-model-normalization.runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import {
+  createPluginMetadataOwner,
+  withPluginMetadataCollectionScope,
+} from "../../plugins/plugin-metadata-collection.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
   modelsAliasesAddCommand,
   modelsAliasesListCommand,
@@ -45,6 +56,89 @@ function snapshot(sourceConfig: OpenClawConfig) {
     config: sourceConfig,
     runtimeConfig: sourceConfig,
   };
+}
+
+async function withAliasProviderFixture(
+  sourceConfig: OpenClawConfig,
+  run: (fixture: {
+    config: OpenClawConfig;
+    workspaceDir: string;
+    normalize: MockInstance<typeof providerModelNormalization.normalizeProviderModelIdWithRuntime>;
+  }) => Promise<void>,
+) {
+  await withTempDir("openclaw-model-aliases-", async (tempDir) => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "alias-fixture");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "alias-fixture",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "alias-fixture",
+        providers: ["fixture-a", "fixture-b"],
+        configSchema: { type: "object" },
+      }),
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = {
+  id: "alias-fixture",
+  register(api) {
+    for (const id of ["fixture-a", "fixture-b"]) {
+      api.registerProvider({
+        id,
+        label: id,
+        auth: [],
+        normalizeModelId({ modelId }) {
+          return modelId === "legacy" ? "current" : modelId;
+        },
+      });
+    }
+  },
+};`,
+    );
+    await withEnvAsync(
+      {
+        HOME: tempDir,
+        USERPROFILE: tempDir,
+        OPENCLAW_HOME: tempDir,
+        OPENCLAW_STATE_DIR: path.join(tempDir, "state"),
+      },
+      async () => {
+        const config: OpenClawConfig = {
+          ...sourceConfig,
+          plugins: { allow: ["alias-fixture"], entries: { "alias-fixture": { enabled: true } } },
+          agents: {
+            ...sourceConfig.agents,
+            entries: { main: { workspace: workspaceDir } },
+          },
+        };
+        const owner = createPluginMetadataOwner();
+        // Observe the real hook boundary; no provider runtime or parser implementation is replaced.
+        const normalize = vi.spyOn(
+          providerModelNormalization,
+          "normalizeProviderModelIdWithRuntime",
+        );
+        try {
+          await withPluginMetadataCollectionScope(
+            owner.prepare({ config }),
+            () => run({ config, workspaceDir, normalize }),
+            { config },
+          );
+        } finally {
+          normalize.mockRestore();
+          owner.dispose();
+        }
+      },
+    );
+  });
 }
 
 describe("modelsAliasesListCommand", () => {
@@ -330,108 +424,182 @@ describe("modelsAliasesAddCommand", () => {
     mocks.loadModelsConfig.mockReset();
   });
 
+  it.each(["new-alias", "router"])(
+    "preserves equivalent short-ref settings while assigning alias %s",
+    async (alias) => {
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/auto": { alias: "router", params: { thinking: "high" } },
+            },
+          },
+        },
+      };
+      mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+      const metadata = createPluginMetadataSnapshot({
+        config: cfg,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
+
+      await withPluginMetadataSnapshotScope(
+        metadata,
+        () => modelsAliasesAddCommand(alias, "openrouter/auto", makeRuntime()),
+        { config: cfg },
+      );
+
+      expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+      const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+      expect(replaceParams?.nextConfig.agents?.defaults?.models).toEqual({
+        "openrouter/auto": { alias: "router", params: { thinking: "high" } },
+        "openrouter/openrouter/auto": { alias, params: { thinking: "high" } },
+      });
+    },
+  );
+
   it("does not make an unlisted model override invalid on a fresh config", async () => {
-    const cfg = {} as OpenClawConfig;
-    mocks.loadModelsConfig.mockResolvedValue(cfg);
-    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
+    await withAliasProviderFixture({}, async ({ config: cfg, workspaceDir, normalize }) => {
+      mocks.loadModelsConfig.mockResolvedValue(cfg);
+      mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+      mocks.replaceConfigFile.mockResolvedValue(undefined);
 
-    await modelsAliasesAddCommand("zippy", "clawrouter/deepseek/deepseek-v4-flash", makeRuntime());
+      await modelsAliasesAddCommand("zippy", "fixture-a/legacy", makeRuntime());
 
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.nextConfig as OpenClawConfig;
-    const persisted = stampConfigWriteMetadata(written, "2026-07-18T00:00:00.000Z", "test", cfg);
-    const policy = createModelVisibilityPolicy({
-      cfg: persisted,
-      catalog: [],
-      defaultProvider: "clawrouter",
-      defaultModel: "deepseek/deepseek-v4-flash",
+      const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+      const written = replaceParams?.nextConfig as OpenClawConfig;
+      const persisted = stampConfigWriteMetadata(written, "2026-07-18T00:00:00.000Z", "test", cfg);
+      const policy = createModelVisibilityPolicy({
+        cfg: persisted,
+        catalog: [],
+        defaultProvider: "fixture-a",
+        defaultModel: "current",
+      });
+      expect(written.agents?.defaults?.models).toEqual({ "fixture-a/current": { alias: "zippy" } });
+      expect(written.agents?.defaults?.modelPolicy).toBeUndefined();
+      expect(persisted.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+      expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
+      expect(normalize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: cfg,
+          workspaceDir,
+          context: { provider: "fixture-a", modelId: "legacy" },
+        }),
+      );
+      expect(normalize).toHaveReturnedWith("current");
     });
-    expect(written.agents?.defaults?.modelPolicy).toBeUndefined();
-    expect(persisted.meta?.migrations?.modelPolicyAllowlist).toBe(true);
-    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
   });
 
   it("rejects aliases differing from another model's alias only by letter casing", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { models: { "openai/gpt-5.4-mini": { alias: "Fast" } } } },
-    } as OpenClawConfig;
-    mocks.loadModelsConfig.mockResolvedValue(cfg);
-    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+    await withAliasProviderFixture(
+      { agents: { defaults: { models: { "fixture-a/small": { alias: "Fast" } } } } },
+      async ({ config: cfg }) => {
+        mocks.loadModelsConfig.mockResolvedValue(cfg);
+        mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
 
-    await expect(
-      modelsAliasesAddCommand("FAST", "openai/gpt-5.6-sol", makeRuntime()),
-    ).rejects.toThrow(/already points to openai\/gpt-5\.4-mini/);
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+        await expect(
+          modelsAliasesAddCommand("FAST", "fixture-a/large", makeRuntime()),
+        ).rejects.toThrow(/already points to fixture-a\/small/);
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it("allows changing the casing of an existing alias on the same model", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { models: { "openai/gpt-5.4-mini": { alias: "Fast" } } } },
-    } as OpenClawConfig;
-    mocks.loadModelsConfig.mockResolvedValue(cfg);
-    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
+    await withAliasProviderFixture(
+      { agents: { defaults: { models: { "fixture-a/small": { alias: "Fast" } } } } },
+      async ({ config: cfg }) => {
+        mocks.loadModelsConfig.mockResolvedValue(cfg);
+        mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+        mocks.replaceConfigFile.mockResolvedValue(undefined);
 
-    await modelsAliasesAddCommand("fast", "openai/gpt-5.4-mini", makeRuntime());
+        await modelsAliasesAddCommand("fast", "fixture-a/small", makeRuntime());
 
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    const written = replaceParams?.nextConfig as OpenClawConfig;
-    expect(written.agents?.defaults?.models?.["openai/gpt-5.4-mini"]?.alias).toBe("fast");
+        const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+        const written = replaceParams?.nextConfig as OpenClawConfig;
+        expect(written.agents?.defaults?.models?.["fixture-a/small"]?.alias).toBe("fast");
+      },
+    );
   });
 
   it("resolves alias targets from the CAS-fenced snapshot", async () => {
-    const staleCfg = {
-      agents: { defaults: { models: { "openai/gpt-5.6-sol": { alias: "old-alias" } } } },
-    } as unknown as OpenClawConfig;
-    const currentCfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.6-sol": { params: { temperature: 0.2 } },
-            "anthropic/claude-opus-5": { alias: "old-alias" },
+    const staleCfg: OpenClawConfig = {
+      agents: { defaults: { models: { "fixture-a/previous": { alias: "old-alias" } } } },
+    };
+    await withAliasProviderFixture(
+      {
+        agents: {
+          defaults: {
+            models: {
+              "fixture-a/previous": { params: { temperature: 0.2 } },
+              "fixture-b/current": { alias: "old-alias" },
+            },
           },
         },
       },
-    } as unknown as OpenClawConfig;
-    mocks.loadModelsConfig.mockResolvedValue(staleCfg);
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      ...snapshot(currentCfg),
-      hash: "current-hash",
-    });
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
-    const runtime = makeRuntime();
+      async ({ config: currentCfg, workspaceDir, normalize }) => {
+        mocks.loadModelsConfig.mockResolvedValue(staleCfg);
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          ...snapshot(currentCfg),
+          hash: "current-hash",
+        });
+        mocks.replaceConfigFile.mockResolvedValue(undefined);
+        const runtime = makeRuntime();
 
-    await modelsAliasesAddCommand("new-alias", "old-alias", runtime);
+        await modelsAliasesAddCommand("new-alias", "old-alias", runtime);
 
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.baseHash).toBe("current-hash");
-    expect(replaceParams?.nextConfig.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.6-sol": { params: { temperature: 0.2 } },
-      "anthropic/claude-opus-5": { alias: "new-alias" },
-    });
-    expect(runtime.logs).toContain("Alias new-alias -> anthropic/claude-opus-5");
+        const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+        expect(replaceParams?.baseHash).toBe("current-hash");
+        expect(replaceParams?.nextConfig.agents?.defaults?.models).toEqual({
+          "fixture-a/previous": { params: { temperature: 0.2 } },
+          "fixture-b/current": { alias: "new-alias" },
+        });
+        expect(runtime.logs).toContain("Alias new-alias -> fixture-b/current");
+        expect(normalize).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: currentCfg,
+            workspaceDir,
+            context: { provider: "fixture-b", modelId: "current" },
+          }),
+        );
+        expect(normalize).toHaveReturnedWith("current");
+      },
+    );
   });
 
   it("resolves a runtime-only alias while persisting only source config", async () => {
-    const sourceConfig = {
-      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
-    };
-    const runtimeConfig = {
-      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } } } },
-    };
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      ...snapshot(sourceConfig as unknown as OpenClawConfig),
-      runtimeConfig,
-    });
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
+    await withAliasProviderFixture(
+      { agents: { defaults: { models: { "fixture-b/current": {} } } } },
+      async ({ config: sourceConfig, workspaceDir, normalize }) => {
+        const runtimeConfig: OpenClawConfig = {
+          ...sourceConfig,
+          agents: {
+            ...sourceConfig.agents,
+            defaults: { models: { "fixture-b/current": { alias: "sonnet" } } },
+          },
+        };
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          ...snapshot(sourceConfig),
+          runtimeConfig,
+        });
+        mocks.replaceConfigFile.mockResolvedValue(undefined);
 
-    await modelsAliasesAddCommand("fast", "sonnet", makeRuntime());
+        await modelsAliasesAddCommand("fast", "sonnet", makeRuntime());
 
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.nextConfig.agents?.defaults?.models).toEqual({
-      "anthropic/claude-sonnet-4-6": { alias: "fast" },
-    });
+        const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+        expect(replaceParams?.nextConfig.agents?.defaults?.models).toEqual({
+          "fixture-b/current": { alias: "fast" },
+        });
+        expect(normalize).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: runtimeConfig,
+            workspaceDir,
+            context: { provider: "fixture-b", modelId: "current" },
+          }),
+        );
+        expect(normalize).toHaveReturnedWith("current");
+      },
+    );
   });
 });
 

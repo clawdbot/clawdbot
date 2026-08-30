@@ -4,6 +4,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   listAgentEntries,
   resolveAmbientOwnerAgentId,
+  resolveAgentWorkspaceDir,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import {
@@ -34,11 +35,11 @@ export type SystemAgentConfiguredRoute = {
 export type SystemAgentConfiguredRouteDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store.js").loadAuthProfileStoreForRuntime;
-  pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 type SystemAgentRouteProjectionDeps = Pick<
   SystemAgentConfiguredRouteDeps,
-  "loadAuthProfileStoreForRuntime" | "pluginMetadataPlugins"
+  "loadAuthProfileStoreForRuntime" | "pluginMetadataSnapshot"
 >;
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -102,14 +103,16 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
   const selection = simpleCompletion.resolveSimpleCompletionSelectionForAgent({
     cfg: runConfig,
     agentId: modelOwnerAgentId,
-    manifestPlugins: deps.pluginMetadataPlugins,
+    manifestPlugins: deps.pluginMetadataSnapshot?.plugins,
   });
   if (!selection) {
     return null;
   }
-  const metadataSnapshot = deps.pluginMetadataPlugins
-    ? { plugins: deps.pluginMetadataPlugins }
-    : undefined;
+  const metadataSnapshot = deps.pluginMetadataSnapshot;
+  // A captured shared-root snapshot owns undefined, not the selected agent workspace.
+  const workspaceDir = metadataSnapshot
+    ? metadataSnapshot.workspaceDir
+    : resolveAgentWorkspaceDir(runConfig, modelOwnerAgentId);
   const cliExecutionProvider = modelRuntimeAliases.resolveCliRuntimeExecutionProvider({
     provider: selection.provider,
     cfg: runConfig,
@@ -133,6 +136,8 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
         authProfileProvider: selection.provider,
         config: runConfig,
         agentDir: selection.agentDir,
+        workspaceDir,
+        metadataSnapshot,
         ...(selection.profileId
           ? {
               selected: {
@@ -224,12 +229,13 @@ export async function projectInferenceRoute(
   const providerIds = new Set(
     [logicalProvider, normalizeProviderId(route?.provider ?? "")].filter(Boolean),
   );
-  const metadataSnapshot = deps.pluginMetadataPlugins
-    ? { plugins: deps.pluginMetadataPlugins }
-    : undefined;
+  const metadataSnapshot = deps.pluginMetadataSnapshot;
   const authAliasParams = {
     config,
-    ...(metadataSnapshot ? { metadataSnapshot } : {}),
+    metadataSnapshot,
+    workspaceDir: metadataSnapshot
+      ? metadataSnapshot.workspaceDir
+      : resolveAgentWorkspaceDir(config, routeAgentId),
   };
   const authProviderIds = new Set(
     [...providerIds].map((provider) => resolveProviderIdForAuth(provider, authAliasParams)),

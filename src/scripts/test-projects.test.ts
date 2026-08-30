@@ -122,9 +122,9 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.plugin-sdk.config.ts",
     },
     {
-      title: "routes unit-fast light targets to the cache-friendly unit-fast config",
+      title: "routes module-mocking provider tests to the plugin-sdk light config",
       target: "src/plugin-sdk/provider-entry.test.ts",
-      config: "test/vitest/vitest.unit-fast.config.ts",
+      config: "test/vitest/vitest.plugin-sdk-light.config.ts",
     },
     {
       title: "routes fake-timer unit-fast targets to the serial fake-timer config",

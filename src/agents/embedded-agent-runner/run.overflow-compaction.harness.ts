@@ -76,21 +76,19 @@ type MockResolvedModel = {
   reasoning?: boolean;
 };
 
-const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
-  version: 1,
-  hostContractVersion: "test",
-  compatRegistryVersion: "test",
-  migrationVersion: 1,
-  policyHash: "",
-  generatedAtMs: 1,
-  installRecords: {},
-  plugins: [],
-  diagnostics: [],
-};
 const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "",
-  index: emptyPluginIndex,
-  registryIndex: emptyPluginIndex,
+  index: {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "",
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  },
   registryDiagnostics: [],
   manifestRegistry: { plugins: [], diagnostics: [] },
   plugins: [],

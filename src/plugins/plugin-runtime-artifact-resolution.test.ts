@@ -5,10 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
-import {
-  clearPluginRuntimeArtifactResolutionMemo,
-  resolvePluginRuntimeArtifact,
-} from "./plugin-runtime-artifact-resolution.js";
+import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import { getActivePluginChannelRegistry } from "./runtime.js";
 
 const tempDirs: string[] = [];
@@ -200,23 +197,6 @@ describe("resolvePluginRuntimeArtifact", () => {
     expect(setup.source).toBe(fs.realpathSync(setupSource));
   });
 
-  it("re-resolves after the active registry memo is cleared", () => {
-    const fixture = createBundledPluginFixture();
-    const sourceResolution = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: false,
-    });
-
-    clearPluginRuntimeArtifactResolutionMemo();
-
-    const builtResolution = resolveFixture({
-      ...fixture,
-      preferBuiltPluginArtifacts: true,
-    });
-    expect(sourceResolution.source).toBe(fixture.source);
-    expect(builtResolution.source).toBe(fixture.builtSource);
-  });
-
   it("re-resolves after the registry load cache is cleared", () => {
     const fixture = createBundledPluginFixture();
     const sourceResolution = resolveFixture({
@@ -292,7 +272,7 @@ describe("resolvePluginRuntimeArtifact", () => {
       source: canonicalSource,
       preferBuiltPluginArtifacts: false,
     });
-    clearPluginRuntimeArtifactResolutionMemo();
+    clearPluginRegistryLoadCache();
     const builtPreferred = resolveFixture({
       rootDir: canonicalRootDir,
       source: canonicalSource,

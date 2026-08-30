@@ -29,7 +29,6 @@ import {
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import {
@@ -2284,9 +2283,7 @@ describe("gateway server chat", () => {
 
   test("chat.history persists assistant image data URLs as managed image blocks", async () => {
     await withMainSessionStore(
-      async (dir) => {
-        const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-        setTestEnvValue("OPENCLAW_STATE_DIR", dir);
+      async () => {
         const pngB64 =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
         dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -2312,64 +2309,60 @@ describe("gateway server chat", () => {
           };
         });
 
-        try {
-          const finalPromise = onceMessage(
-            ws,
-            (o) =>
-              o.type === "event" &&
-              o.event === "chat" &&
-              o.payload?.state === "final" &&
-              o.payload?.runId === "idem-managed-image-history",
-            8000,
-          );
-          const res = await rpcReq(ws, "chat.send", {
-            sessionKey: "main",
-            message: "show me an image",
-            idempotencyKey: "idem-managed-image-history",
-          });
+        const finalPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.state === "final" &&
+            o.payload?.runId === "idem-managed-image-history",
+          8000,
+        );
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "show me an image",
+          idempotencyKey: "idem-managed-image-history",
+        });
 
-          expect(res.ok).toBe(true);
-          expect(res.payload?.runId).toBe("idem-managed-image-history");
-          await finalPromise;
+        expect(res.ok).toBe(true);
+        expect(res.payload?.runId).toBe("idem-managed-image-history");
+        await finalPromise;
 
-          let assistantMessage: Record<string, unknown> | undefined;
-          await waitForFast(
-            async () => {
-              const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-                sessionKey: "main",
-              });
-              expect(historyRes.ok).toBe(true);
-              const messages = historyRes.payload?.messages ?? [];
-              assistantMessage = messages.find(
-                (message): message is Record<string, unknown> =>
-                  typeof message === "object" &&
-                  message !== null &&
-                  (message as { role?: unknown }).role === "assistant",
-              );
-              if (!assistantMessage) {
-                throw new Error("Expected assistant history message");
-              }
-            },
-            { timeout: CHAT_RESPONSE_TIMEOUT_MS },
-          );
-          const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
-          expect(assistantContent).toHaveLength(2);
-          expect(assistantContent[0]).toEqual({ type: "text", text: "Image reply" });
-          const imageBlock = expectRecordFields(assistantContent[1], {
-            type: "image",
-            alt: "Generated image 1",
-            mimeType: "image/png",
-            width: 1,
-            height: 1,
-          });
-          expect(String(imageBlock.url)).toContain("/api/chat/media/outgoing/");
-          expect(String(imageBlock.openUrl)).toContain("/full");
-          const serializedAssistant = JSON.stringify(assistantMessage);
-          expect(serializedAssistant).not.toContain("data:image/png;base64");
-          expect(serializedAssistant).not.toContain(pngB64);
-        } finally {
-          envSnapshot.restore();
-        }
+        let assistantMessage: Record<string, unknown> | undefined;
+        await waitForFast(
+          async () => {
+            const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+              sessionKey: "main",
+            });
+            expect(historyRes.ok).toBe(true);
+            const messages = historyRes.payload?.messages ?? [];
+            assistantMessage = messages.find(
+              (message): message is Record<string, unknown> =>
+                typeof message === "object" &&
+                message !== null &&
+                (message as { role?: unknown }).role === "assistant",
+            );
+            if (!assistantMessage) {
+              throw new Error("Expected assistant history message");
+            }
+          },
+          { timeout: CHAT_RESPONSE_TIMEOUT_MS },
+        );
+        const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
+        expect(assistantContent).toHaveLength(2);
+        expect(assistantContent[0]).toEqual({ type: "text", text: "Image reply" });
+        const imageBlock = expectRecordFields(assistantContent[1], {
+          type: "image",
+          alt: "Generated image 1",
+          mimeType: "image/png",
+          width: 1,
+          height: 1,
+        });
+        expect(String(imageBlock.url)).toContain("/api/chat/media/outgoing/");
+        expect(String(imageBlock.openUrl)).toContain("/full");
+        const serializedAssistant = JSON.stringify(assistantMessage);
+        expect(serializedAssistant).not.toContain("data:image/png;base64");
+        expect(serializedAssistant).not.toContain(pngB64);
       },
       { sessionId: "sess-managed-image-history" },
     );

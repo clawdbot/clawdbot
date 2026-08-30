@@ -180,6 +180,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const replyUsageState = buildReplyUsageState({
     config: cfg,
     agentDir: followupRun.run.agentDir,
+    workspaceDir: followupRun.run.workspaceDir,
+    costUsd: runResult.meta?.agentMeta?.costUsd,
     provider: providerUsed,
     model: modelUsed,
     fallbackExhausted,
@@ -312,7 +314,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     authorize,
     cfg,
     agentDir: followupRun.run.agentDir,
+    workspaceDir: followupRun.run.workspaceDir,
     usage,
+    costUsd: runResult.meta?.agentMeta?.costUsd,
     lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
     currentContextSnapshot,
     promptTokens,

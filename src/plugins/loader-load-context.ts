@@ -17,7 +17,7 @@ import {
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type {
   ChannelPluginLoadIntent,
   PluginLoadOptions,

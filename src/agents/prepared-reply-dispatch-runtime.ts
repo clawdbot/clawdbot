@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import type {
@@ -140,11 +140,7 @@ export class PreparedReplyDispatchPublicationOwner {
     abortSignal?: AbortSignal;
   }): Promise<PreparedReplyDispatchRuntime | undefined> => {
     for (;;) {
-      if (abortSignal?.aborted) {
-        throw createAbortError("Prepared reply dispatch admission aborted", {
-          cause: abortSignal.reason,
-        });
-      }
+      abortSignal?.throwIfAborted();
       if (!this.host.isGatewayLifecycleActive()) {
         return undefined;
       }

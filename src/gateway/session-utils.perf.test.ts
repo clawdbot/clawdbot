@@ -8,6 +8,7 @@ import {
   readAcpSessionMetaForEntry,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import * as sessionModelRef from "../agents/session-model-ref.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -284,6 +285,13 @@ describe("session list resolver cache", () => {
         store[sessionKey] = entry;
       }
 
+      // A forbidden call fails immediately instead of spending the test timeout
+      // rediscovering metadata once per row with no persisted model identity.
+      const historicalModelSpy = vi
+        .spyOn(sessionModelRef, "resolveSessionModelIdentityRef")
+        .mockImplementation(() => {
+          throw new Error("Session summaries must not resolve historical usage model identity");
+        });
       const titleBatchSpy = vi
         .spyOn(titleReader, "readSessionTitleFieldsFromTranscriptBatch")
         .mockImplementation((scopes) =>
@@ -324,7 +332,9 @@ describe("session list resolver cache", () => {
         });
         expect(titleBatchSpy).toHaveBeenCalledOnce();
         expect(titleBatchSpy).toHaveBeenCalledWith([]);
+        expect(historicalModelSpy).not.toHaveBeenCalled();
       } finally {
+        historicalModelSpy.mockRestore();
         titleBatchSpy.mockRestore();
       }
     });

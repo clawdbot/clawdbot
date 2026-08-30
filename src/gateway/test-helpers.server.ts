@@ -50,12 +50,14 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
@@ -431,6 +433,9 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetTaskFlowRegistryForTests({ persist: false });
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (stateDir) {
+    // Full fixture resets recreate paths, so retire handles and prior schema validation.
+    await cleanupSessionStateForTest({ stateDir });
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(stateDir, {
       recursive: true,
       force: true,
@@ -495,6 +500,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   if (options.restoreEnv) {
+    await cleanupSessionStateForTest({ stateDir: process.env.OPENCLAW_STATE_DIR });
     gatewayEnvSnapshot?.restore();
     gatewayEnvSnapshot = undefined;
   }

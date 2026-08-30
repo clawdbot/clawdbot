@@ -16,7 +16,7 @@ import type { VideoDescriptionRequest, VideoDescriptionResult } from "./types.js
 export * from "../../packages/media-understanding-common/src/openai-compatible-video.js";
 
 /** Describe a video through an OpenAI-compatible chat-completions endpoint. */
-export async function describeOpenAiCompatibleVideo(
+export async function describeOpenAiCompatibleVideoCore(
   params: VideoDescriptionRequest & {
     defaultBaseUrl: string;
     defaultModel: string;

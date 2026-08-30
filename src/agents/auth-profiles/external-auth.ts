@@ -4,6 +4,7 @@
  * and decides which runtime profiles may be persisted back to the store.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataRegistryView } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
@@ -24,9 +25,11 @@ import type { AuthProfileStore } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
-type ExternalCliOverlayOptions = {
+export type ExternalAuthProfileOptions = {
   allowKeychainPrompt?: boolean;
   config?: OpenClawConfig;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   externalCliProviderIds?: Iterable<string>;
   externalCliProfileIds?: Iterable<string>;
 };
@@ -69,7 +72,7 @@ function resolveExplicitProfileIds(values: Iterable<string> | undefined): Set<st
 function isExternalAuthProfileAllowed(
   profile: ProviderExternalAuthProfile,
   store: AuthProfileStore,
-  config: OpenClawConfig | undefined,
+  options: ExternalAuthProfileOptions | undefined,
   explicitProfileIds: ReadonlySet<string> | undefined,
   env: NodeJS.ProcessEnv,
 ): boolean {
@@ -79,8 +82,14 @@ function isExternalAuthProfileAllowed(
     return true;
   }
   return isAmbientCredentialAllowedByProviderAuthPin({
-    config,
-    authAliasLookupParams: { env },
+    config: options?.config,
+    authAliasLookupParams: {
+      env,
+      workspaceDir: options?.workspaceDir,
+      ...(options?.pluginMetadataSnapshot
+        ? { metadataSnapshot: { plugins: options.pluginMetadataSnapshot.manifestRegistry.plugins } }
+        : {}),
+    },
     provider: profile.credential.provider,
     type: profile.credential.type,
   });
@@ -90,7 +99,7 @@ function resolveExternalAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
-  externalCli?: ExternalCliOverlayOptions;
+  externalCli?: ExternalAuthProfileOptions;
 }): {
   profiles: ExternalAuthProfileMap;
   pluginProfileIds: ReadonlySet<string>;
@@ -102,10 +111,12 @@ function resolveExternalAuthProfiles(params: {
   const profiles = resolveProfiles({
     env,
     config: params.externalCli?.config,
+    workspaceDir: params.externalCli?.workspaceDir,
+    pluginMetadataSnapshot: params.externalCli?.pluginMetadataSnapshot,
     context: {
       config: params.externalCli?.config,
       agentDir: params.agentDir,
-      workspaceDir: undefined,
+      workspaceDir: params.externalCli?.workspaceDir,
       env,
       store: params.store,
     },
@@ -128,7 +139,7 @@ function resolveExternalAuthProfiles(params: {
       !isExternalAuthProfileAllowed(
         profile,
         params.store,
-        params.externalCli?.config,
+        params.externalCli,
         explicitProfileIds,
         env,
       )
@@ -145,7 +156,7 @@ function resolveExternalAuthProfiles(params: {
 function resolveAllowedExternalCliAuthProfiles(params: {
   store: AuthProfileStore;
   env?: NodeJS.ProcessEnv;
-  externalCli?: ExternalCliOverlayOptions;
+  externalCli?: ExternalAuthProfileOptions;
 }): ProviderExternalAuthProfile[] {
   const env = params.env ?? process.env;
   const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
@@ -156,13 +167,7 @@ function resolveAllowedExternalCliAuthProfiles(params: {
       profileIds: explicitProfileIds,
     }) ?? [];
   return cliProfiles.flatMap((profile) =>
-    isExternalAuthProfileAllowed(
-      profile,
-      params.store,
-      params.externalCli?.config,
-      explicitProfileIds,
-      env,
-    )
+    isExternalAuthProfileAllowed(profile, params.store, params.externalCli, explicitProfileIds, env)
       ? [
           {
             profileId: profile.profileId,
@@ -177,7 +182,7 @@ function resolveAllowedExternalCliAuthProfiles(params: {
 function resolveExternalCliAuthProfileMap(params: {
   store: AuthProfileStore;
   env?: NodeJS.ProcessEnv;
-  externalCli?: ExternalCliOverlayOptions;
+  externalCli?: ExternalAuthProfileOptions;
 }): ExternalAuthProfileMap {
   return new Map(
     resolveAllowedExternalCliAuthProfiles(params).map((profile) => [profile.profileId, profile]),
@@ -189,7 +194,7 @@ export function listRuntimeExternalAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
-  externalCli?: ExternalCliOverlayOptions;
+  externalCli?: ExternalAuthProfileOptions;
 }): RuntimeExternalOAuthProfile[] {
   return Array.from(
     resolveExternalAuthProfiles({
@@ -203,7 +208,7 @@ export function listRuntimeExternalAuthProfiles(params: {
 
 function hasPersistableExternalCliSyncCandidate(
   store: AuthProfileStore,
-  params?: ExternalCliOverlayOptions,
+  params?: ExternalAuthProfileOptions,
 ): boolean {
   if (params?.externalCliProviderIds || params?.externalCliProfileIds) {
     return true;
@@ -218,14 +223,14 @@ function hasPersistableExternalCliSyncCandidate(
   return false;
 }
 
-function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolean {
+function hasScopedExternalCliOverlay(params?: ExternalAuthProfileOptions): boolean {
   return Boolean(params?.externalCliProviderIds || params?.externalCliProfileIds);
 }
 
 /** Overlay external auth profiles onto a cloned auth store for runtime use. */
 export function overlayExternalAuthProfiles(
   store: AuthProfileStore,
-  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
+  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalAuthProfileOptions,
 ): AuthProfileStore {
   const scoped = hasScopedExternalCliOverlay(params);
   const runtimeExternalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
@@ -272,7 +277,7 @@ export function overlayExternalAuthProfiles(
 /** Persist safe external CLI OAuth profiles that own their local profile slot. */
 export function syncPersistedExternalCliAuthProfiles(
   store: AuthProfileStore,
-  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
+  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalAuthProfileOptions,
 ): AuthProfileStore {
   if (!hasPersistableExternalCliSyncCandidate(store, params)) {
     return store;

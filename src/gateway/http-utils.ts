@@ -11,12 +11,11 @@ import {
   listAgentIds,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { createModelManifestPluginContext } from "../agents/model-selection-shared.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -176,21 +175,19 @@ export async function resolveOpenAiCompatModelOverride(params: {
   }
 
   const cfg = getRuntimeConfig();
-  const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
-  const defaultProvider = defaultModelRef.provider;
-  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
-  const manifestMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-    config: cfg,
-    env: process.env,
-    ...(workspaceDir ? { workspaceDir } : {}),
+  // Parsing and visibility must share the agent's metadata generation across
+  // the catalog read, even when a config reload publishes another generation.
+  const manifestPluginContext = createModelManifestPluginContext({ cfg, agentId: params.agentId });
+  const defaultModelRef = resolveDefaultModelForAgent({
+    cfg,
+    agentId: params.agentId,
+    manifestPluginContext,
   });
-  const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins,
-  };
+  const defaultProvider = defaultModelRef.provider;
   const parsed = parseModelRef(raw, defaultProvider, {
     allowManifestNormalization: true,
     allowPluginNormalization: true,
-    ...modelManifestContext,
+    ...manifestPluginContext.getContext(),
   });
   if (!parsed) {
     return { errorMessage: "Invalid `x-openclaw-model`." };
@@ -206,10 +203,10 @@ export async function resolveOpenAiCompatModelOverride(params: {
     agentId: params.agentId,
     allowManifestNormalization: true,
     allowPluginNormalization: true,
-    ...modelManifestContext,
+    manifestPluginContext,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
-  if (!policy.allowsKey(normalized)) {
+  if (!policy.allows(parsed)) {
     return {
       errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
     };

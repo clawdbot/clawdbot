@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findLegacyConfigIssues } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   listPluginDoctorLegacyConfigRules,
@@ -12,6 +13,10 @@ import {
   listPluginDoctorStateMigrationEntries,
 } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
+import {
+  createPluginMetadataOwner,
+  withPluginMetadataCollectionScope,
+} from "./plugin-metadata-collection.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -392,6 +397,61 @@ afterEach(() => {
 });
 
 describe("doctor contract registry load-path plugins", () => {
+  it("keeps config-wide Doctor rules separate from exact workspace contracts until repair refresh", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-doctor-contract-workspaces-"));
+    const workspaceDirs = [path.join(stateDir, "ops"), path.join(stateDir, "research")];
+    const pluginIds = ["ops-doctor", "research-doctor"];
+    const pluginRoots = workspaceDirs.map((workspaceDir, index) => {
+      const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", pluginIds[index]!);
+      writeDoctorPlugin(pluginRoot, pluginIds[index]!);
+      return pluginRoot;
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          ops: { workspace: workspaceDirs[0] },
+          research: { workspace: workspaceDirs[1] },
+        },
+      },
+      plugins: {
+        entries: Object.fromEntries(pluginIds.map((id) => [id, { enabled: true }])),
+      },
+    };
+    const env = makeHermeticDoctorEnv(stateDir);
+    const owner = createPluginMetadataOwner();
+    const before = getCurrentPluginMetadataSnapshot();
+    const prepared = owner.prepare({ config, env, allowCurrent: false });
+    const readRules = (metadata: typeof prepared, workspaceDir?: string) =>
+      withPluginMetadataCollectionScope(
+        metadata,
+        () =>
+          listPluginDoctorLegacyConfigRules({ config, env, workspaceDir }).map(
+            (rule) => rule.path[2],
+          ),
+        { config, env, workspaceDir: workspaceDirs[0] },
+      );
+
+    expect(readRules(prepared)).toEqual(pluginIds);
+    expect(readRules(prepared, workspaceDirs[0])).toEqual([pluginIds[0]]);
+    const manifestPath = path.join(pluginRoots[1]!, "openclaw.plugin.json");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        ...JSON.parse(fs.readFileSync(manifestPath, "utf8")),
+        doctorContract: { configRepair: false },
+      }),
+    );
+    expect(readRules(prepared)).toEqual(pluginIds);
+    expect(readRules(prepared, workspaceDirs[1])).toEqual([pluginIds[1]]);
+
+    owner.invalidatePreparation();
+    const refreshed = owner.prepare({ config, env, allowCurrent: false });
+    expect(readRules(refreshed)).toEqual([pluginIds[0]]);
+    expect(getCurrentPluginMetadataSnapshot()).toBe(before);
+    owner.dispose();
+  });
+
   it.each([
     {
       pluginId: "telegram",

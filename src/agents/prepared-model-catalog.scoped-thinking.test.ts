@@ -1,5 +1,15 @@
 // Turn-path thinking reuses published facts before manifest/scoped discovery fallback.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import * as providerModelNormalizationRuntime from "./provider-model-normalization.runtime.js";
 
 const manifestCatalogMock = vi.fn((..._args: unknown[]): Array<Record<string, unknown>> => []);
 const scopedStaticMock = vi.fn(
@@ -92,6 +102,91 @@ describe("loadProviderScopedThinkingCatalog", () => {
     expect(manifestCatalogMock).not.toHaveBeenCalled();
     expect(scopedStaticMock).not.toHaveBeenCalled();
     expect(scopedLiveMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the selected model tuple when augmenting thinking from its harness", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          main: {
+            models: {
+              "thinking-provider/selected-model": {
+                agentRuntime: { id: "thinking-catalog" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    const entry = {
+      provider: "thinking-provider",
+      id: "selected-model",
+      name: "Selected model",
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["low"] },
+    };
+    publishedSnapshotMock.mockReturnValue({
+      config,
+      metadataSnapshot,
+      modelCatalog: { entries: [entry], routeVariants: [] },
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "thinking-catalog",
+      source: "test",
+      harness: {
+        id: "thinking-catalog",
+        label: "Thinking catalog",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("catalog fixture must not execute a turn");
+        },
+        loadModelCatalog: async () => [
+          {
+            ...entry,
+            name: "Selected harness model",
+            compat: { supportedReasoningEfforts: ["high"] },
+          },
+        ],
+      },
+    });
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    const normalize = vi
+      .spyOn(providerModelNormalizationRuntime, "normalizeProviderModelIdWithRuntime")
+      .mockImplementation(({ provider, context }) =>
+        provider === entry.provider ? `${context.modelId}-renormalized` : undefined,
+      );
+    try {
+      stageActivePluginRegistry(registry, null, "default");
+      const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+      const catalog = await withPluginRuntimeGenerationScope(
+        { config, metadataSnapshot, pluginRegistry: registry },
+        () =>
+          loadProviderScopedThinkingCatalog({
+            config,
+            agentId: "main",
+            agentDir: "/tmp/thinking-catalog-agent",
+            workspaceDir: "/tmp/thinking-catalog-workspace",
+            provider: entry.provider,
+            model: entry.id,
+          }),
+      );
+      expect(catalog).toContainEqual(
+        expect.objectContaining({
+          provider: entry.provider,
+          id: entry.id,
+          name: "Selected harness model",
+          compat: expect.objectContaining({ supportedReasoningEfforts: ["low", "high"] }),
+        }),
+      );
+    } finally {
+      normalize.mockRestore();
+      rollbackStagedPluginRegistry(previousRegistry);
+    }
   });
 
   it("resolves manifest-backed models without any scoped catalog build", async () => {

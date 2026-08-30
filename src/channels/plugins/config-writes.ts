@@ -5,6 +5,7 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ChannelId } from "./channel-id.types.js";
 import {
   authorizeConfigWriteShared,
   canBypassConfigWritePolicyShared,
@@ -15,7 +16,6 @@ import {
   type ConfigWriteScopeLike,
   type ConfigWriteTargetLike,
 } from "./config-write-policy-shared.js";
-import type { ChannelId } from "./types.core.js";
 
 /**
  * Channel/account scope used by channel config write checks.

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createNamespacedModelConfig } from "../../test-utils/model-namespace-fixture.js";
 import {
   catalogEntry,
   listModels,
@@ -173,6 +174,32 @@ describe("models.list configured static entries", () => {
           tags: ["fallback#1", "configured"],
         },
       });
+    });
+  });
+
+  it("keeps exact model namespaces distinct in configured aliases and role tags", async () => {
+    const ids = ["model", "custom/model"];
+    const namespaceConfig = createNamespacedModelConfig();
+    const cfg: OpenClawConfig = {
+      ...namespaceConfig,
+      agents: {
+        defaults: {
+          ...namespaceConfig.agents?.defaults,
+          model: { primary: "custom/model", fallbacks: ["custom/custom/model"] },
+        },
+      },
+    };
+    const result = await listModels({
+      cfg,
+      view: "configured",
+      catalog: ids.map((id) => providerCatalogEntry("custom", id)),
+    });
+
+    expect(
+      Object.fromEntries(result.models.map(({ id, alias, tags }) => [id, { alias, tags }])),
+    ).toEqual({
+      model: { alias: "plain", tags: ["default", "configured"] },
+      "custom/model": { alias: "nested", tags: ["fallback#1", "configured"] },
     });
   });
 });

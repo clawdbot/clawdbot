@@ -25,7 +25,7 @@ import type { SystemAgentOperation } from "../../system-agent/operation-types.js
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import type { InternalAgentTurnFacadeFactory } from "../agent-turn/internal-facade.types.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";

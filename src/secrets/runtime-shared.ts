@@ -2,7 +2,7 @@
 import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
 import type { SecretAssignmentDisposition, SecretOwnerKind } from "./runtime-degraded-state.js";

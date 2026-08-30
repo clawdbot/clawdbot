@@ -4,13 +4,28 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { createModelManifestPluginContext } from "../../agents/model-selection-shared.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import {
+  preparePluginMetadata,
+  withPluginMetadataCollectionScope,
+} from "../../plugins/plugin-metadata-collection.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "../../plugins/provider-thinking.types.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
+import {
+  createColdPluginFixture,
+  isColdPluginRuntimeLoaded,
+} from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const authProfilesStoreMock = vi.hoisted(() => ({
   profiles: {} as Record<
@@ -341,6 +356,27 @@ let parseInlineSessionDirectives: typeof import("./directive-handling.parse.js")
 let applyInlineDirectiveOverrides: typeof import("./get-reply-directives-apply.js").applyInlineDirectiveOverrides;
 let createFastTestModelSelectionState: typeof import("./model-selection.js").createFastTestModelSelectionState;
 
+function withDirectiveFixtureGeneration<
+  Params extends { cfg: OpenClawConfig; workspaceDir?: string },
+  Result,
+>(run: (params: Params) => Result) {
+  return (params: Params): Result => {
+    if (getPluginRuntimeGenerationRegistry()) {
+      return run(params);
+    }
+    // These fixtures own auth/thinking separately from executable providers.
+    // Retain real manifest policy without activating unrelated provider runtimes.
+    const metadataSnapshot = loadManifestMetadataSnapshot({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    });
+    return withPluginRuntimeGenerationScope(
+      { config: params.cfg, metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
+      () => run(params),
+    );
+  };
+}
+
 beforeAll(async () => {
   ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
   ({ maybeHandleModelDirectiveInfo } = await import("./directive-handling.model.js"));
@@ -351,6 +387,14 @@ beforeAll(async () => {
   ({ parseInlineSessionDirectives } = await import("./directive-handling.parse.js"));
   ({ applyInlineDirectiveOverrides } = await import("./get-reply-directives-apply.js"));
   ({ createFastTestModelSelectionState } = await import("./model-selection.js"));
+  handleDirectiveOnly = withDirectiveFixtureGeneration(handleDirectiveOnly);
+  maybeHandleModelDirectiveInfo = withDirectiveFixtureGeneration(maybeHandleModelDirectiveInfo);
+  createModelVisibilityPolicy = withDirectiveFixtureGeneration(createModelVisibilityPolicy);
+  buildModelAliasIndex = withDirectiveFixtureGeneration(buildModelAliasIndex);
+  resolveModelSelectionFromDirective = withDirectiveFixtureGeneration(
+    resolveModelSelectionFromDirective,
+  );
+  applyInlineDirectiveOverrides = withDirectiveFixtureGeneration(applyInlineDirectiveOverrides);
 });
 const queueMocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
@@ -743,7 +787,7 @@ function expectExecDefaults(sessionEntry: SessionEntry, persisted: boolean) {
 async function resolveModelInfoReply(
   overrides: Partial<Parameters<typeof maybeHandleModelDirectiveInfo>[0]> = {},
 ) {
-  return maybeHandleModelDirectiveInfo({
+  const params: Parameters<typeof maybeHandleModelDirectiveInfo>[0] = {
     directives: parseInlineSessionDirectives("/model"),
     cfg: baseConfig(),
     agentDir: TEST_AGENT_DIR,
@@ -759,7 +803,8 @@ async function resolveModelInfoReply(
     runtimePolicySessionKey: "agent:main:main",
     resetModelOverride: false,
     ...overrides,
-  });
+  };
+  return maybeHandleModelDirectiveInfo(params);
 }
 
 type WorkspaceAuthFixture = {
@@ -862,6 +907,179 @@ function nestedOpenRouterStatusFixture(configureDirectProvider: boolean) {
 }
 
 describe("/model chat UX", () => {
+  it.each(["status", "configured projection"])(
+    "keeps captured workspace policy for %s under a foreign metadata owner",
+    async (surface) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const directories = { owned: state.path("owned"), foreign: state.path("foreign") };
+        const fixtures = Object.entries(directories).map(([name, workspaceDir]) => {
+          const rootDir = path.join(
+            workspaceDir,
+            ".openclaw",
+            "extensions",
+            "model-info-normalizer",
+          );
+          fs.mkdirSync(rootDir, { recursive: true });
+          return createColdPluginFixture({
+            rootDir,
+            pluginId: "model-info-normalizer",
+            manifest: {
+              providers: ["workspace-custom"],
+              channels: [],
+              channelConfigs: {},
+              providerAuthChoices: [],
+              modelIdNormalization: {
+                providers: { "workspace-custom": { aliases: { legacy: `${name}-model` } } },
+              },
+            },
+          });
+        });
+        const cfg: OpenClawConfig = {
+          plugins: {
+            allow: ["model-info-normalizer"],
+            entries: { "model-info-normalizer": { enabled: true } },
+          },
+          agents: {
+            defaults: {
+              workspace: directories.foreign,
+              model: { primary: "workspace-custom/legacy" },
+              modelPolicy: { allow: [] },
+              models: { "owned-model": {} },
+            },
+          },
+          models: {
+            providers: {
+              "workspace-custom": {
+                api: "openai-completions",
+                baseUrl: "https://custom.invalid",
+                models: [modelDefinition("legacy", "Owned")],
+              },
+              anthropic: {
+                api: "openai-completions",
+                baseUrl: "https://fallback.invalid",
+                models: [modelDefinition("safe", "Fallback")],
+              },
+              proxy: {
+                api: "openai-completions",
+                baseUrl: "https://proxy.invalid",
+                models: [modelDefinition("workspace-custom/owned-model", "Wrapped")],
+              },
+            },
+          },
+        };
+        const metadataSnapshot = loadManifestMetadataSnapshot({
+          config: cfg,
+          workspaceDir: directories.owned,
+        });
+        const manifestPluginContext = createModelManifestPluginContext({
+          cfg,
+          workspaceDir: directories.owned,
+          pluginMetadataSnapshot: metadataSnapshot,
+        });
+        manifestPluginContext.getContext();
+        const foreignMetadata = preparePluginMetadata({
+          config: cfg,
+          workspaceDir: directories.foreign,
+          allowCurrent: false,
+        });
+
+        // A real, non-identity hook proves the fixture retains executable policy.
+        const pluginRegistry = createEmptyPluginRegistry();
+        const manifest = expectDefined(
+          metadataSnapshot.byPluginId.get("model-info-normalizer"),
+          "normalizer manifest",
+        );
+        const normalizedIds: string[] = [];
+        pluginRegistry.providers.push({
+          pluginId: manifest.id,
+          source: manifest.source,
+          rootDir: manifest.rootDir,
+          provider: {
+            id: "workspace-custom",
+            label: "Workspace custom",
+            auth: [],
+            normalizeModelId: ({ modelId }) => {
+              normalizedIds.push(modelId);
+              return `hook-${modelId}`;
+            },
+          },
+        });
+        const hookCfg: OpenClawConfig = {
+          ...cfg,
+          agents: {
+            defaults: {
+              model: { primary: "workspace-custom/legacy" },
+              modelPolicy: { allow: [] },
+              models: { "workspace-custom/legacy": {} },
+            },
+          },
+          models: { providers: {} },
+        };
+        const retainedReply = await withPluginRuntimeGenerationScope(
+          { config: hookCfg, metadataSnapshot, pluginRegistry },
+          () =>
+            resolveModelInfoReply({
+              cfg: hookCfg,
+              workspaceDir: directories.owned,
+              directives: parseInlineSessionDirectives("/model status"),
+            }),
+        );
+        expect(retainedReply?.text).toContain("workspace-custom/hook-owned-model");
+        expect(normalizedIds).toContain("owned-model");
+
+        await withPluginMetadataCollectionScope(
+          foreignMetadata,
+          async () => {
+            if (surface === "configured projection") {
+              const projection = resolveConfiguredModelEntries({
+                cfg,
+                workspaceDir: directories.owned,
+                manifestPluginContext,
+                defaultProvider: "anthropic",
+                defaultModel: "safe",
+                aliasIndex: baseAliasIndex(),
+              });
+              expect(projection.byKey.get("workspace-custom/owned-model")?.tags).toContain(
+                "configured",
+              );
+              expect(projection.byKey.has("anthropic/owned-model")).toBe(false);
+              return;
+            }
+            // Call the real owner outside the fixture wrapper: a retained generation
+            // here would conceal a consumer dropping its explicit captured context.
+            const { maybeHandleModelDirectiveInfo: renderModelInfo } =
+              await import("./directive-handling.model.js");
+            const reply = await renderModelInfo({
+              cfg,
+              workspaceDir: directories.owned,
+              manifestPluginContext,
+              directives: parseInlineSessionDirectives("/model status"),
+              agentDir: TEST_AGENT_DIR,
+              activeAgentId: "main",
+              provider: "anthropic",
+              model: "safe",
+              defaultProvider: "anthropic",
+              defaultModel: "safe",
+              aliasIndex: baseAliasIndex(),
+              allowedModelKeys: new Set(),
+              allowedModelCatalog: [
+                { provider: "workspace-custom", id: "owned-model", name: "Owned" },
+                { provider: "proxy", id: "workspace-custom/owned-model", name: "Wrapped" },
+              ],
+              currentThinkLevel: "medium",
+              resetModelOverride: false,
+            });
+            expect(reply?.text).toContain("  • workspace-custom/owned-model");
+            expect(reply?.text).toContain("  • proxy/workspace-custom/owned-model");
+            expect(reply?.text).not.toContain("workspace-custom/foreign-model");
+            expect(reply?.text).not.toContain("anthropic/owned-model");
+          },
+          { config: cfg, workspaceDir: directories.foreign },
+        );
+        expect(fixtures.some(isColdPluginRuntimeLoaded)).toBe(false);
+      });
+    },
+  );
   it("shows summary for /model with no args", async () => {
     const reply = await resolveModelInfoReply();
 
@@ -1962,18 +2180,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       createHandleParams({ ...overrides, directives: parseInlineSessionDirectives(command) }),
     );
   }
-
-  beforeAll(async () => {
-    const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
-    await runHandleCommand("/model opencode/claude-opus-4-7", {
-      allowedModelKeys: new Set([...allowedModelKeys, "opencode/claude-opus-4-7"]),
-      allowedModelCatalog: [
-        ...allowedModelCatalog,
-        { provider: "opencode", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
-      ],
-      sessionEntry,
-    });
-  });
 
   it("preserves an authorized unscoped effective-default selection", async () => {
     const sessionEntry = createSessionEntry();

@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createAssistantMessageEventStream,
   type SimpleStreamOptions,
@@ -6,12 +7,87 @@ import {
 // Groq tests cover index plugin behavior.
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveGroqReasoningCompatPatch } from "./api.js";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 describe("groq provider compat", () => {
+  it("keeps registration cold and observes stream failures while the SDK loads", async () => {
+    const sdkReady = createDeferred<void>();
+    const defaultStream = createAssistantMessageEventStream();
+    defaultStream.end();
+    const streamSimple = vi.fn<StreamFn>(() => defaultStream);
+    let streamingStarted = false;
+    vi.doMock("openclaw/plugin-sdk/llm", async () => {
+      if (!streamingStarted) {
+        throw new Error("Groq registration loaded the streaming runtime");
+      }
+      await sdkReady.promise;
+      return { createAssistantMessageEventStream, streamSimple };
+    });
+    vi.resetModules();
+    try {
+      const { default: coldPlugin } = await import("./index.js");
+      const [provider] = capturePluginRegistration(coldPlugin).providers;
+      if (!provider?.wrapStreamFn) {
+        throw new Error("Expected Groq stream wrapper registration");
+      }
+      const failure = new Error("failure before streaming SDK is ready");
+      const baseStreamFn = vi.fn<StreamFn>(() => Promise.reject(failure));
+      const model = {
+        api: "openai-completions",
+        provider: "groq",
+        id: "llama-3.3-70b-versatile",
+      } as never;
+      const streamFn = provider.wrapStreamFn({
+        provider: "groq",
+        modelId: "llama-3.3-70b-versatile",
+        model: { maxTokensSource: "discovered" },
+        streamFn: baseStreamFn,
+      } as never);
+      if (!streamFn) {
+        throw new Error("Expected Groq recovery stream");
+      }
+      streamingStarted = true;
+      const pendingStream = streamFn(model, { messages: [] }, {});
+      expect(baseStreamFn).toHaveBeenCalledOnce();
+      // An unobserved rejection becomes a Vitest error before the SDK gate opens.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      sdkReady.resolve();
+      const stream = await pendingStream;
+      const events = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+      expect(events).toEqual([
+        {
+          type: "error",
+          reason: "error",
+          error: expect.objectContaining({
+            api: "openai-completions",
+            provider: "groq",
+            model: "llama-3.3-70b-versatile",
+            stopReason: "error",
+            errorMessage: failure.message,
+          }),
+        },
+      ]);
+      const defaultStreamFn = provider.wrapStreamFn({
+        provider: "groq",
+        modelId: "openai/gpt-oss-120b",
+      } as never);
+      await expect(defaultStreamFn?.(model, { messages: [] }, {})).resolves.toBe(defaultStream);
+      expect(streamSimple).toHaveBeenCalledWith(model, { messages: [] }, {});
+    } finally {
+      sdkReady.resolve();
+      vi.doUnmock("openclaw/plugin-sdk/llm");
+      vi.resetModules();
+    }
+  });
+
   it("recovers only matching implicit-budget rejections without changing normal tools", async () => {
     const [provider] = capturePluginRegistration(plugin).providers;
 

@@ -6,7 +6,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
+import { abortChatRunById } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { abortQueuedChatTurnById, type QueuedChatTurnEntry } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";

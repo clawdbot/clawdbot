@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import * as providerModelNormalization from "../agents/provider-model-normalization.runtime.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { checkTouchedTextModelRefs as checkTouchedTextModelRefsRaw } from "./config-model-validation.js";
@@ -27,6 +28,19 @@ type ResolverInput = {
 };
 
 describe("config model validation", () => {
+  let normalize: MockInstance<
+    typeof providerModelNormalization.normalizeProviderModelIdWithRuntime
+  >;
+  beforeEach(() => {
+    // These collector/syntax cases inject the final resolver and a deterministic execution port.
+    normalize = vi
+      .spyOn(providerModelNormalization, "normalizeProviderModelIdWithRuntime")
+      .mockImplementation(({ context }) => context.modelId);
+  });
+  afterEach(() => {
+    normalize.mockRestore();
+  });
+
   it("rejects an unresolved default primary with an actionable error", async () => {
     const resolveModelRef = vi.fn(async () => "Unknown model: missing/nope");
 
@@ -60,6 +74,23 @@ describe("config model validation", () => {
 
     expect(resolveModelRef).toHaveBeenCalledOnce();
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+  });
+
+  it("keeps syntax validation off executable provider hooks", async () => {
+    normalize.mockImplementation(() => {
+      throw new Error("Syntax validation must not execute provider hooks");
+    });
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        plugins: { enabled: false },
+        agents: { defaults: { model: "fixture/legacy" } },
+      },
+      touchedPaths: [["agents", "defaults", "model"]],
+      resolveModelRef: async () => undefined,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(normalize).not.toHaveBeenCalled();
   });
 
   it("accepts a primary that resembles the old validation sentinel", async () => {
@@ -521,17 +552,27 @@ describe("config model validation", () => {
 
   it("revalidates default and per-agent fallbacks when the default provider changes", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    normalize.mockImplementation(({ config, context }) => {
+      if (context.modelId !== "runtime-backup") {
+        return context.modelId;
+      }
+      const model = config?.agents?.defaults?.model;
+      return typeof model === "object" && model.primary === "provider-b/main"
+        ? "next-backup"
+        : "current-backup";
+    });
     const config: OpenClawConfig = {
       agents: {
         defaults: {
           model: {
             primary: "provider-b/main",
-            fallbacks: ["backup", "provider-a/qualified-backup"],
+            fallbacks: ["backup", "provider-a/qualified-backup", "provider-a/runtime-backup"],
           },
         },
         entries: {
           main: {},
           ops: {
+            workspace: "/tmp/config-validation-ops",
             model: {
               primary: "provider-c/main",
               fallbacks: ["agent-backup", "provider-c/qualified-agent-backup"],
@@ -551,7 +592,7 @@ describe("config model validation", () => {
             ...config.agents?.defaults,
             model: {
               primary: "provider-a/main",
-              fallbacks: ["backup", "provider-a/qualified-backup"],
+              fallbacks: ["backup", "provider-a/qualified-backup", "provider-a/runtime-backup"],
             },
           },
         },
@@ -560,12 +601,20 @@ describe("config model validation", () => {
       resolveModelRef,
     });
 
-    expect(result.refsChecked).toBe(3);
+    expect(result.refsChecked).toBe(4);
     expect(resolveModelRef.mock.calls.map(([call]) => call.ref.path)).toEqual([
       "agents.defaults.model.primary",
       "agents.defaults.model.fallbacks.0",
+      "agents.defaults.model.fallbacks.2",
       "agents.entries.ops.model.fallbacks.0",
     ]);
+    expect(normalize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        workspaceDir: "/tmp/config-validation-ops",
+        context: { provider: "provider-b", modelId: "agent-backup" },
+      }),
+    );
   });
 
   it("revalidates a slash-shaped alias whose bare target changes provider", async () => {

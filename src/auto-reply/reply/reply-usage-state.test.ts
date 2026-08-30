@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as usageFormat from "../../utils/usage-format.js";
 import {
   buildReplyUsageState,
   consumeReplyUsageState,
@@ -11,41 +12,62 @@ afterEach(() => {
 });
 
 describe("reply usage state handoff", () => {
-  it("prices the selected agent in an explicit fleet", () => {
-    const snapshot = buildReplyUsageState({
-      config: {
-        agents: {
-          ownership: "explicit",
-          entries: { main: {}, other: {} },
-        },
-        models: {
-          providers: {
-            fixture: {
-              baseUrl: "https://fixture.invalid",
-              models: [
-                {
-                  id: "priced",
-                  name: "Priced",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1,
-                  maxTokens: 1,
-                },
-              ],
+  it.each([
+    { name: "unrecorded cost", costUsd: undefined, expectedCost: 1 },
+    { name: "recorded cost", costUsd: 0.125, expectedCost: 0.125 },
+    { name: "recorded zero cost", costUsd: 0, expectedCost: 0 },
+  ])("prices the selected agent in an explicit fleet: $name", ({ costUsd, expectedCost }) => {
+    const costLookup = vi.spyOn(usageFormat, "resolveModelCostConfig");
+    try {
+      const snapshot = buildReplyUsageState({
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: { main: {}, other: {} },
+          },
+          models: {
+            providers: {
+              fixture: {
+                baseUrl: "https://fixture.invalid",
+                models: [
+                  {
+                    id: "priced",
+                    name: "Priced",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1,
+                    maxTokens: 1,
+                  },
+                ],
+              },
             },
           },
-        },
-      } as OpenClawConfig,
-      agentDir: "/tmp/openclaw-main-agent",
-      provider: "fixture",
-      model: "priced",
-      agentId: "main",
-      sessionId: "session-priced",
-      usage: { input: 1_000_000, output: 0 },
-    });
+        } as OpenClawConfig,
+        agentDir: "/tmp/openclaw-main-agent",
+        workspaceDir: "/tmp/openclaw-main-workspace",
+        provider: "fixture",
+        model: "priced",
+        agentId: "main",
+        sessionId: "session-priced",
+        costUsd,
+        usage: { input: 1_000_000, output: 0 },
+      });
 
-    expect(snapshot.turnUsd).toBe(1);
+      expect(snapshot.turnUsd).toBe(expectedCost);
+      if (costUsd !== undefined) {
+        expect(costLookup).not.toHaveBeenCalled();
+      } else {
+        expect(costLookup).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentId: "main",
+            workspaceDir: "/tmp/openclaw-main-workspace",
+          }),
+        );
+      }
+    } finally {
+      costLookup.mockRestore();
+    }
   });
 
   it("requires exact run correlation", () => {

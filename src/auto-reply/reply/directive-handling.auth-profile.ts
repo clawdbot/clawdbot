@@ -4,6 +4,7 @@ import {
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
 } from "../../agents/auth-profiles/store.js";
+import type { ModelManifestPluginContext } from "../../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /** Resolves a user-selected auth profile override for the requested provider. */
@@ -12,6 +13,8 @@ export function resolveProfileOverride(params: {
   provider: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
+  manifestPluginContext?: ModelManifestPluginContext;
 }): { profileId?: string; error?: string } {
   const raw = normalizeOptionalString(params.rawProfile);
   if (!raw) {
@@ -31,8 +34,12 @@ export function resolveProfileOverride(params: {
     return { profileId: raw };
   }
 
+  const context = params.manifestPluginContext?.getContext();
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
+    config: params.cfg,
+    workspaceDir: context?.pluginMetadataSnapshot ? context.workspaceDir : params.workspaceDir,
+    pluginMetadataSnapshot: context?.pluginMetadataSnapshot,
   });
   const profile = store.profiles[raw];
   if (!profile) {

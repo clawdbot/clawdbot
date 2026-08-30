@@ -735,7 +735,8 @@ function createCronPromptExecutor(params: {
           currentChannelId,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
-          config: params.cfgWithAgentDefaults,
+          // Nested admission must match the leased owner; cron policy uses derived defaults above.
+          config: params.cfg,
           skillsSnapshot: params.skillsSnapshot,
           prompt: promptText,
           finalizePromptForResolvedTools,

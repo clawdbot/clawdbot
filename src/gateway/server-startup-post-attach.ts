@@ -1,5 +1,6 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { PreparedModelRuntimeRefreshCandidate } from "../agents/prepared-model-runtime.js";
 import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -17,7 +18,7 @@ import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PreparedPluginMetadata } from "../plugins/plugin-metadata-collection.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -62,6 +63,7 @@ const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 type Awaitable<T> = T | Promise<T>;
+type ModelRuntimeConfigRead = () => Awaitable<PreparedModelRuntimeRefreshCandidate>;
 
 const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
   () => import("../agents/main-session-recovery/main-session-restart-recovery.js"),
@@ -440,9 +442,9 @@ async function waitForAcpRuntimeBackendReady(params: {
 
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
-  getConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
+  getConfig?: ModelRuntimeConfigRead;
   isCurrent?: () => boolean;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  pluginMetadata?: PreparedPluginMetadata;
   workspaceDir?: string;
   log: { warn: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
@@ -512,9 +514,9 @@ async function hydrateConfiguredExternalCliAuth(params: {
 
 async function publishConfiguredModelRuntimeSnapshots(params: {
   cfg: OpenClawConfig;
-  getConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
+  getConfig?: ModelRuntimeConfigRead;
   isCurrent?: () => boolean;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  pluginMetadata?: PreparedPluginMetadata;
   workspaceDir?: string;
   log: { warn: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
@@ -529,9 +531,7 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
     catalogMode: "static",
     allowGatewaySubagentBinding: true,
     ...(params.isCurrent ? { isPublicationCurrent: params.isCurrent } : {}),
-    ...(params.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-      : {}),
+    ...(params.pluginMetadata ? { pluginMetadata: params.pluginMetadata } : {}),
     ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
     ...(params.startupTrace
       ? {
@@ -567,9 +567,9 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
 async function publishStartupModelRuntime(
   params: {
     cfg: OpenClawConfig;
-    getConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
+    getConfig?: ModelRuntimeConfigRead;
     isCurrent?: () => boolean;
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
+    pluginMetadata?: PreparedPluginMetadata;
     workspaceDir?: string;
     log: { warn: (msg: string) => void };
     startupTrace?: GatewayStartupTrace;
@@ -586,7 +586,8 @@ async function publishStartupModelRuntime(
 export async function startGatewaySidecars(params: {
   cfg: OpenClawConfig;
   getModelRuntimeConfig?: () => OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  getModelRuntimePluginMetadata?: () => PreparedPluginMetadata | undefined;
+  pluginMetadata?: PreparedPluginMetadata;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
@@ -683,17 +684,25 @@ export async function startGatewaySidecars(params: {
         publishStartupModelRuntime(
           {
             cfg: params.cfg,
-            getConfig: async () =>
+            getConfig: async () => {
               await measureStartup(params.startupTrace, "sidecars.model-auth", () =>
                 hydrateConfiguredExternalCliAuth({
                   getConfig: getModelRuntimeConfig,
                   log: params.log,
                 }),
-              ),
+              );
+              // Hydration can yield across a config commit. Capture both
+              // accepted inputs together after it settles, never old config
+              // paired with the successor's metadata.
+              return {
+                config: getModelRuntimeConfig(),
+                pluginMetadata: params.getModelRuntimePluginMetadata
+                  ? params.getModelRuntimePluginMetadata()
+                  : params.pluginMetadata,
+              };
+            },
             isCurrent: params.pluginRuntimeClaim?.isCurrent,
-            ...(params.pluginMetadataSnapshot
-              ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-              : {}),
+            ...(params.pluginMetadata ? { pluginMetadata: params.pluginMetadata } : {}),
             workspaceDir: params.defaultWorkspaceDir,
             log: params.log,
             startupTrace: params.startupTrace,
@@ -1172,7 +1181,7 @@ export async function startGatewayPostAttachRuntime(
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
     pluginManifestRecords: readonly PluginManifestRecord[];
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
+    pluginMetadata?: PreparedPluginMetadata;
     ambientEnvTriggers?: AmbientEnvTriggerPolicy;
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
@@ -1201,7 +1210,7 @@ export async function startGatewayPostAttachRuntime(
     }) => Awaitable<void>;
     pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
     getCurrentPluginRegistry?: () => PluginRegistry;
-    getCurrentPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
+    getCurrentPluginMetadata?: () => PreparedPluginMetadata | undefined;
     getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onChannelsStarted?: () => Awaitable<void>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
@@ -1414,16 +1423,17 @@ export async function startGatewayPostAttachRuntime(
           const result = await (async () => {
             try {
               const startupRuntimeCurrent = params.pluginRuntimeClaim?.isCurrent() !== false;
-              const pluginMetadataSnapshot = startupRuntimeCurrent
-                ? params.pluginMetadataSnapshot
-                : params.getCurrentPluginMetadataSnapshot?.();
+              const pluginMetadata = startupRuntimeCurrent
+                ? params.pluginMetadata
+                : params.getCurrentPluginMetadata?.();
               return await measureStartup(params.startupTrace, "sidecars.total", () =>
                 runtimeDeps.startGatewaySidecars({
                   cfg: startupRuntimeCurrent
                     ? params.gatewayPluginConfigAtStart
                     : params.getConfig(),
                   getModelRuntimeConfig: params.getConfig,
-                  ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+                  getModelRuntimePluginMetadata: params.getCurrentPluginMetadata,
+                  ...(pluginMetadata ? { pluginMetadata } : {}),
                   pluginRegistry,
                   defaultWorkspaceDir: params.defaultWorkspaceDir,
                   deps: params.deps,

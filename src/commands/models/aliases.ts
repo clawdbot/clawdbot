@@ -2,7 +2,10 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import { DEFAULT_MODEL_ALIASES } from "../../config/defaults.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import { normalizeAgentModelMapForConfig } from "../../config/model-input.js";
+import {
+  normalizeAgentModelMapForConfig,
+  resolveAgentModelConfigEntry,
+} from "../../config/model-input.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { normalizeAlias } from "./alias-name.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -59,18 +62,29 @@ export async function modelsAliasesAddCommand(
   await updateConfig((cfgLocal, context) => {
     // Alias resolution must share the snapshot whose hash fences this write.
     const resolved = resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig });
-    const modelKey = `${resolved.provider}/${resolved.model}`;
-    target = modelKey;
     const nextModels = { ...cfgLocal.agents?.defaults?.models };
+    const {
+      key: modelKey,
+      equivalentKey,
+      entry,
+    } = resolveAgentModelConfigEntry({
+      models: nextModels,
+      ...resolved,
+    });
+    target = modelKey;
     // Model selection folds alias case, so case variants must not collide.
-    for (const [key, entry] of Object.entries(nextModels)) {
-      const existing = entry?.alias?.trim();
-      if (existing && existing.toLowerCase() === normalizedAlias && key !== modelKey) {
+    for (const [key, candidate] of Object.entries(nextModels)) {
+      const existing = candidate?.alias?.trim();
+      if (
+        existing &&
+        existing.toLowerCase() === normalizedAlias &&
+        key !== modelKey &&
+        key !== equivalentKey
+      ) {
         throw new Error(`Alias ${alias} already points to ${key}.`);
       }
     }
-    const existing = nextModels[modelKey] ?? {};
-    nextModels[modelKey] = { ...existing, alias };
+    nextModels[modelKey] = { ...entry, alias };
     return {
       ...cfgLocal,
       agents: {

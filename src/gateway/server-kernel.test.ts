@@ -380,12 +380,20 @@ describe("createGatewayKernel", () => {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>);
-      const measureNames = timeline
-        .filter((event) => event.type === "span.start" && event.phase === "startup")
-        .map((event) => {
-          const attributes = event.attributes as { traceName?: string } | undefined;
-          return attributes?.traceName ?? event.name;
-        });
+      const startupMeasures = timeline.filter(
+        (event) => event.type === "span.start" && event.phase === "startup",
+      );
+      const measureNames = startupMeasures.map((event) => {
+        const attributes = event.attributes as { traceName?: string } | undefined;
+        return attributes?.traceName ?? event.name;
+      });
+      // Shared roots and the selected workspace are distinct boot graphs.
+      expect(
+        startupMeasures
+          .filter((event) => event.name === "plugins.metadata.scan")
+          .map((event) => (event.attributes as { hasWorkspaceDir?: boolean }).hasWorkspaceDir)
+          .toSorted((left, right) => Number(left) - Number(right)),
+      ).toEqual([false, true]);
       expect(measureNames).toEqual([
         "config.snapshot",
         "config.snapshot.read",
@@ -395,6 +403,8 @@ describe("createGatewayKernel", () => {
         "config.snapshot.read.includes",
         "config.snapshot.read.env",
         "config.snapshot.read.validate",
+        "plugins.metadata.scan",
+        "plugins.metadata.freeze",
         "plugins.metadata.scan",
         "plugins.metadata.freeze",
         "config.snapshot.read.materialize",

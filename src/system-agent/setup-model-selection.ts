@@ -1,11 +1,12 @@
 import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 
 type SystemAgentModelSelectionParams = {
   config: OpenClawConfig;
-  model: string;
+  model: ModelRef;
   /** Write the model onto this configured agent instead of the default route. */
   targetAgentId?: string;
   agentRuntimeId?: string;
@@ -44,7 +45,8 @@ function applySystemAgentModelSelectionWithModules(
   nextConfig.agents ??= {};
   nextConfig.agents.defaults ??= {};
   const agentDefaults = nextConfig.agents.defaults;
-  const target = modelConfig.resolveModelTarget({ raw: params.model, cfg: nextConfig });
+  // Selection owns normalization; committing its prepared identity must not reload providers.
+  const target = params.model;
   const key = modelConfig.upsertCanonicalModelConfigEntry({}, target);
 
   const configuredVisibleModels = agentDefaults.models;
@@ -123,20 +125,21 @@ function applySystemAgentModelSelectionWithModules(
 }
 
 export async function createSystemAgentModelSelectionUpdater(
-  params: Omit<SystemAgentModelSelectionParams, "config">,
-): Promise<(config: OpenClawConfig) => OpenClawConfig> {
+  params: Omit<SystemAgentModelSelectionParams, "config" | "model">,
+): Promise<(config: OpenClawConfig, model: ModelRef) => OpenClawConfig> {
   const [agentScope, modelConfig, runtimePolicy] = await Promise.all([
     import("../agents/agent-scope.js"),
     import("../commands/models/shared.js"),
     import("../agents/model-runtime-policy.js"),
   ]);
   const modules = { agentScope, modelConfig, runtimePolicy };
-  return (config) => applySystemAgentModelSelectionWithModules({ ...params, config }, modules);
+  return (config, model) =>
+    applySystemAgentModelSelectionWithModules({ ...params, config, model }, modules);
 }
 
 export async function applySystemAgentModelSelection(
   params: SystemAgentModelSelectionParams,
 ): Promise<OpenClawConfig> {
   const update = await createSystemAgentModelSelectionUpdater(params);
-  return update(params.config);
+  return update(params.config, params.model);
 }

@@ -8,6 +8,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
@@ -133,7 +134,6 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn((): ModelCatalogSnapshot["entries"] => []),
-  manifestMetadataSnapshot: { plugins: [] },
   resolvePluginMetadataSnapshotMock: vi.fn(),
   listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown) => []),
   loadProviderScopedThinkingCatalogMock: vi.fn(
@@ -164,6 +164,11 @@ const state = vi.hoisted(() => ({
   trajectoryRecorderParamsMock: vi.fn(),
   enqueueExecutionIdentityContextAtAdmissionMock: vi.fn(),
 }));
+
+const manifestMetadataSnapshot = createPluginMetadataSnapshot({
+  workspaceDir: "/tmp/workspace",
+  manifestRegistry: { plugins: [], diagnostics: [] },
+});
 
 vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../sessions/session-diff-baseline.js")>();
@@ -770,12 +775,14 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
 let agentCommandFromSystem: typeof import("./agent-command.js").agentCommandFromSystem;
+let agentCommandFromGatewayIngress: typeof import("./agent-command.js").agentCommandFromGatewayIngress;
 let prepareAgentCommandExecution: typeof import("./command/prepare.js").prepareAgentCommandExecution;
 
 beforeAll(async () => {
   const mod = await import("./agent-command.js");
   agentCommand ??= mod.agentCommand;
   agentCommandFromSystem ??= mod.agentCommandFromSystem;
+  agentCommandFromGatewayIngress ??= mod.agentCommandFromGatewayIngress;
   ({ prepareAgentCommandExecution } = await import("./command/prepare.js"));
 });
 
@@ -941,6 +948,36 @@ async function runBasicAgentCommand() {
   });
 }
 
+function runGatewayInitialModelCommand(expectedInitialModel?: { provider: string; model: string }) {
+  const config = state.defaultRuntimeConfig;
+  const runtimeContext = {
+    config,
+    pluginGeneration: {
+      pluginMetadataSnapshot: createPluginMetadataSnapshot({
+        config,
+        workspaceDir: "/tmp/workspace",
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }),
+      inlineProviderModels: [],
+      configuredCatalogEntries: [],
+    },
+    ...(expectedInitialModel ? { expectedInitialModel } : {}),
+  };
+  return agentCommandFromGatewayIngress(
+    {
+      message: "keep the authorized initial model",
+      sessionKey: "agent:main:main",
+      provider: "anthropic",
+      model: "claude",
+      allowModelOverride: true,
+    },
+    { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    undefined,
+    {},
+    runtimeContext,
+  );
+}
+
 async function runSystemAgentCommand() {
   await agentCommandFromSystem(
     {
@@ -1025,7 +1062,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
-    state.resolvePluginMetadataSnapshotMock.mockReturnValue(state.manifestMetadataSnapshot);
+    state.resolvePluginMetadataSnapshotMock.mockReturnValue(manifestMetadataSnapshot);
     state.loadProviderScopedThinkingCatalogMock.mockReset().mockResolvedValue(undefined);
     state.loadFullModelCatalogMock.mockClear();
     state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
@@ -1210,7 +1247,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("uses Gateway command metadata without resolving the agent workspace", async () => {
     const pluginGeneration = {
-      pluginMetadataSnapshot: state.manifestMetadataSnapshot,
+      pluginMetadataSnapshot: manifestMetadataSnapshot,
     } as never;
 
     const prepared = await prepareAgentCommandExecution(
@@ -1219,10 +1256,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       { config: {}, pluginGeneration },
     );
 
-    expect(prepared.manifestMetadataSnapshot).toBe(state.manifestMetadataSnapshot);
+    expect(prepared.manifestMetadataSnapshot).toBe(manifestMetadataSnapshot);
     expect(prepared.commandRuntimeContext?.pluginGeneration).toBe(pluginGeneration);
     expect(state.listSkillCommandsForWorkspaceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginMetadataSnapshot: state.manifestMetadataSnapshot }),
+      expect.objectContaining({ pluginMetadataSnapshot: manifestMetadataSnapshot }),
     );
     expect(state.resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
@@ -1570,6 +1607,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
     expect(fallbackParams.fallbacksOverride).toEqual(fallbacks);
     expect(state.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the initial model constraint off automatic fallback attempts", async () => {
+    const expectedInitialModel = { provider: "anthropic", model: "claude" };
+    state.runAgentAttemptMock
+      .mockRejectedValueOnce(new Error("fixture primary unavailable"))
+      .mockResolvedValueOnce(makeSuccessResult("openai", "gpt-5.4"));
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await expect(runInitialFallbackAttempt(params)).rejects.toThrow(
+        "fixture primary unavailable",
+      );
+      const result = await runSubsequentFallbackAttempt(params, "openai", "gpt-5.4", "rate_limit");
+      return { result, provider: "openai", model: "gpt-5.4", attempts: [] };
+    });
+
+    await runGatewayInitialModelCommand(expectedInitialModel);
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
+      expectedInitialModel,
+      providerOverride: "anthropic",
+      modelOverride: "claude",
+    });
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
+      expectedInitialModel: undefined,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+    });
   });
 
   it("skips legacy override repair when continuing an ordinary locked harness session", async () => {
@@ -4185,7 +4249,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     if (allowlisted) {
       expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
       expect(state.loadManifestModelCatalogMock).toHaveBeenCalledWith(
-        expect.objectContaining({ metadataSnapshot: state.manifestMetadataSnapshot }),
+        expect.objectContaining({ metadataSnapshot: manifestMetadataSnapshot }),
       );
     }
     const thinkingArgs = requireRecord(
@@ -5275,6 +5339,25 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(onExecutionStarted).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "checks an ACP initial model constraint when present: %s",
+    async (constrained) => {
+      setupAcpSession();
+      const run = runGatewayInitialModelCommand(
+        constrained ? { provider: "anthropic", model: "claude" } : undefined,
+      );
+
+      if (constrained) {
+        await expect(run).rejects.toThrow(/initial model.*ACP|ACP.*initial model/i);
+        expect(state.acpRunTurnMock).not.toHaveBeenCalled();
+        expect(state.persistAcpTurnTranscriptMock).not.toHaveBeenCalled();
+      } else {
+        await run;
+        expect(state.acpRunTurnMock).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("rejects an ACP prompt before execution when its accepted input cannot enter the transcript", async () => {
     setupAcpSession();

@@ -10,6 +10,7 @@ import {
 } from "../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.full-catalog.js";
+import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";
@@ -22,6 +23,8 @@ export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatal
 export type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
+type GatewayModelCatalogOwnerCandidate = PublishedModelCatalogOwnerCandidate &
+  Pick<PreparedModelRuntimeSnapshot, "pluginRegistry">;
 type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   agentId?: string;
   agentDir?: string;
@@ -29,7 +32,7 @@ type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {
   readOnly?: boolean;
   refreshFullCatalog?: boolean;
   workspaceDir?: string;
-}) => Promise<PublishedModelCatalogOwnerCandidate>;
+}) => Promise<GatewayModelCatalogOwnerCandidate>;
 type LoadGatewayModelCatalogParams = {
   agentId?: string;
   agentDir?: string;
@@ -69,7 +72,7 @@ export async function resetPreparedModelCatalogStateForTest(): Promise<void> {
 async function loadGatewayModelCatalogOwnerSnapshot(
   params?: LoadPreparedGatewayModelCatalogParams,
 ): Promise<{
-  candidate: PublishedModelCatalogOwnerCandidate;
+  candidate: GatewayModelCatalogOwnerCandidate;
   owner: ResolvedPublishedModelCatalogOwner & {
     authMaterializations: PreparedGatewayModelCatalogSnapshot["authMaterializations"];
   };
@@ -146,6 +149,7 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
       authModes: refreshedAuth?.authModes ?? owner.authModes,
       authStore: refreshedAuth?.authStore ?? owner.authStore,
       metadataSnapshot: owner.metadataSnapshot,
+      pluginRegistry: candidate.pluginRegistry,
       authMaterializations: owner.authMaterializations,
     };
   }
@@ -158,6 +162,7 @@ export async function loadGatewayModelCatalogSnapshot(
     authModes: _authModes,
     authStore: _authStore,
     metadataSnapshot: _metadataSnapshot,
+    pluginRegistry: _pluginRegistry,
     authMaterializations: _authMaterializations,
     ...snapshot
   } = await loadPreparedGatewayModelCatalogSnapshot(params);
@@ -215,6 +220,7 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
     authModes: owner.authModes,
     authStore: owner.authStore,
     metadataSnapshot: owner.metadataSnapshot,
+    pluginRegistry: candidate.pluginRegistry,
     authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
   };
 }

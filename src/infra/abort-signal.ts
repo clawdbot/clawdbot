@@ -23,13 +23,15 @@ export function racePromiseWithAbortSignal<T>(
   if (!signal) {
     return promise;
   }
-  const abortError = () => createAbortError("Operation aborted", { cause: signal.reason });
+  // AbortSignal reasons may be non-Errors; both paths preserve the caller's exact value.
   if (signal.aborted) {
-    return Promise.reject(abortError());
+    // oxlint-disable-next-line typescript/prefer-promise-reject-errors
+    return Promise.reject(signal.reason);
   }
   let onAbort!: () => void;
   const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => reject(abortError());
+    // oxlint-disable-next-line typescript/prefer-promise-reject-errors
+    onAbort = () => reject(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) {
       onAbort();

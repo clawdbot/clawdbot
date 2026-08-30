@@ -1,13 +1,21 @@
 /**
  * Tests command status runtime lazy loading and direct status reply behavior.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as modelSelectionConfig from "../agents/model-selection-config.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 
 const buildStatusReply = vi.fn(async (params: unknown) => params);
 const loadSessionEntry = vi.fn();
 const resolveSessionAgentId = vi.fn();
 const listAgentEntries = vi.fn();
-const resolveDefaultModelForAgent = vi.fn();
+const resolveDefaultModelForAgent = vi.spyOn(modelSelectionConfig, "resolveDefaultModelForAgent");
+let statusConfig: OpenClawConfig = {};
 const resolveDefaultModel = vi.fn();
 const createModelSelectionState = vi.fn();
 const resolveCurrentDirectiveLevels = vi.fn();
@@ -25,10 +33,6 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveSessionAgentId,
 }));
 
-vi.mock("../agents/model-selection.js", () => ({
-  resolveDefaultModelForAgent,
-}));
-
 vi.mock("../auto-reply/reply/directive-handling.defaults.js", () => ({
   resolveDefaultModel,
 }));
@@ -42,6 +46,21 @@ vi.mock("../auto-reply/reply/directive-handling.levels.js", () => ({
 }));
 
 const { resolveDirectStatusReplyForSessionCore } = await import("./command-status.runtime.js");
+
+afterAll(() => resolveDefaultModelForAgent.mockRestore());
+
+function resolveStatus(
+  params: Parameters<typeof resolveDirectStatusReplyForSessionCore>[0],
+  metadataSnapshot = createPluginMetadataSnapshot({
+    config: statusConfig,
+    manifestRegistry: { plugins: [], diagnostics: [] },
+  }),
+) {
+  // The mocked Gateway read still belongs to one complete metadata generation.
+  return withPluginRuntimeGenerationScope({ config: statusConfig, metadataSnapshot }, () =>
+    resolveDirectStatusReplyForSessionCore(params),
+  );
+}
 
 function expectResolvedReasoningLevel(value: unknown, expected: string) {
   expect((value as { resolvedReasoningLevel?: unknown }).resolvedReasoningLevel).toBe(expected);
@@ -67,14 +86,11 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
     resolveCurrentDirectiveLevels.mockReset();
 
     buildStatusReply.mockImplementation(async (params: unknown) => params);
+    statusConfig = {
+      agents: { defaults: { reasoningDefault: "off" } },
+    };
     loadSessionEntry.mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: {
-            reasoningDefault: "off",
-          },
-        },
-      },
+      cfg: statusConfig,
       canonicalKey: "main",
       entry: {
         sessionId: "sess-main",
@@ -100,8 +116,58 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
     });
   });
 
+  it("prepares the canonical persisted override ahead of runtime and default status models", async () => {
+    const registry = makeRegistry([
+      { id: "status-models", channels: [], providers: ["fixture-provider"] },
+    ]);
+    for (const plugin of registry.plugins) {
+      plugin.modelIdNormalization = {
+        providers: { "fixture-provider": { aliases: { "legacy-status": "selected-status" } } },
+      };
+    }
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config: statusConfig,
+      manifestRegistry: registry,
+    });
+    loadSessionEntry.mockReturnValue({
+      cfg: statusConfig,
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        providerOverride: "fixture-provider",
+        modelOverride: "legacy-status",
+        modelProvider: "previous-provider",
+        model: "previous-model",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+
+    const result = await resolveStatus(
+      {
+        cfg: {},
+        sessionKey: "main",
+        channel: "cli",
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        isGroup: false,
+        defaultGroupActivation: () => "always",
+      },
+      metadataSnapshot,
+    );
+
+    expect(result).toMatchObject({ provider: "fixture-provider", model: "selected-status" });
+    expect(createModelSelectionState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preparedInitialModel: { provider: "fixture-provider", model: "selected-status" },
+        preparedPrimaryModel: { provider: "openai", model: "gpt-5.4" },
+      }),
+    );
+  });
+
   it("treats agentCfg reasoningDefault as explicit for direct /status", async () => {
-    const result = await resolveDirectStatusReplyForSessionCore({
+    const result = await resolveStatus({
       cfg: {},
       sessionKey: "main",
       channel: "cli",
@@ -117,14 +183,11 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
   });
 
   it("allows configured reasoning defaults for authorized direct /status senders", async () => {
+    statusConfig = {
+      agents: { defaults: { reasoningDefault: "stream" } },
+    };
     loadSessionEntry.mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: {
-            reasoningDefault: "stream",
-          },
-        },
-      },
+      cfg: statusConfig,
       canonicalKey: "main",
       entry: {
         sessionId: "sess-main",
@@ -140,7 +203,7 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
       currentElevatedLevel: "off",
     });
 
-    const result = await resolveDirectStatusReplyForSessionCore({
+    const result = await resolveStatus({
       cfg: {},
       sessionKey: "main",
       channel: "cli",
@@ -154,14 +217,11 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
   });
 
   it("hides configured reasoning defaults from unauthorized direct /status senders", async () => {
+    statusConfig = {
+      agents: { defaults: { reasoningDefault: "stream" } },
+    };
     loadSessionEntry.mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: {
-            reasoningDefault: "stream",
-          },
-        },
-      },
+      cfg: statusConfig,
       canonicalKey: "main",
       entry: {
         sessionId: "sess-main",
@@ -177,7 +237,7 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
       currentElevatedLevel: "off",
     });
 
-    const result = await resolveDirectStatusReplyForSessionCore({
+    const result = await resolveStatus({
       cfg: {},
       sessionKey: "main",
       channel: "cli",
@@ -191,8 +251,9 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
   });
 
   it("hides session reasoning state from unauthorized direct /status senders", async () => {
+    statusConfig = {};
     loadSessionEntry.mockReturnValue({
-      cfg: {},
+      cfg: statusConfig,
       canonicalKey: "main",
       entry: {
         sessionId: "sess-main",
@@ -209,7 +270,7 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
       currentElevatedLevel: "off",
     });
 
-    const result = await resolveDirectStatusReplyForSessionCore({
+    const result = await resolveStatus({
       cfg: {},
       sessionKey: "main",
       channel: "cli",
@@ -223,8 +284,9 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
   });
 
   it("allows session reasoning state for authorized direct /status senders", async () => {
+    statusConfig = {};
     loadSessionEntry.mockReturnValue({
-      cfg: {},
+      cfg: statusConfig,
       canonicalKey: "main",
       entry: {
         sessionId: "sess-main",
@@ -241,7 +303,7 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
       currentElevatedLevel: "off",
     });
 
-    const result = await resolveDirectStatusReplyForSessionCore({
+    const result = await resolveStatus({
       cfg: {},
       sessionKey: "main",
       channel: "cli",

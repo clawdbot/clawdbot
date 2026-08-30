@@ -701,7 +701,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       });
     }
 
-    const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
+    const defaults = getSessionDefaults(cfg);
     const sessionInfo = buildGatewaySessionInfo({
       cfg,
       storePath,

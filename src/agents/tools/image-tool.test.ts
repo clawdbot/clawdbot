@@ -3218,6 +3218,11 @@ describe("image compression policy", () => {
             },
           ],
         },
+        unknown: {
+          baseUrl: "https://example.test/v1",
+          // The injected model exists, but declares no compression limits.
+          models: [makeModelDefinition("custom-image", ["text", "image"])],
+        },
       },
     },
   } satisfies OpenClawConfig;

@@ -9,21 +9,18 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { registerConfigCli } from "./config-cli.js";
 
 // Config mutation owns these assertions; plugin discovery suites own registry breadth.
-// Keep the real schemas this suite exercises, but build their metadata only once.
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
-  let snapshot: ReturnType<typeof actual.loadPluginMetadataSnapshot> | undefined;
+// Narrow the inventory while keeping each config's real complete metadata graph.
+vi.mock("../plugins/discovery.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/discovery.js")>();
+  const pluginIds = new Set(["codex", "discord", "openclaw-mem0"]);
   return {
     ...actual,
-    resolvePluginMetadataSnapshot: (
-      params: Parameters<typeof actual.resolvePluginMetadataSnapshot>[0],
-    ) => {
-      snapshot ??= actual.loadPluginMetadataSnapshot({
-        ...params,
-        pluginIds: ["codex", "discord", "openclaw-mem0"],
-        pluginIdScope: undefined,
-      });
-      return snapshot;
+    discoverOpenClawPlugins: (params: Parameters<typeof actual.discoverOpenClawPlugins>[0]) => {
+      const discovery = actual.discoverOpenClawPlugins(params);
+      return {
+        ...discovery,
+        candidates: discovery.candidates.filter((candidate) => pluginIds.has(candidate.idHint)),
+      };
     },
   };
 });

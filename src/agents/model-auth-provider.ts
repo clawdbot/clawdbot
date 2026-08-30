@@ -5,6 +5,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
   resolveProviderDeprecatedAuthProfileIds,
@@ -76,12 +77,16 @@ function shouldDeferSyntheticProfileAuth(params: {
 export function resolveScopedAuthProfileStore(params: {
   agentDir?: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   provider: string;
   profileId?: string;
   preferredProfile?: string;
 }): AuthProfileStore {
   return ensureAuthProfileStore(params.agentDir, {
     externalCli: externalCliDiscoveryForProviderAuth(params),
+    workspaceDir: params.workspaceDir,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
   });
 }
 
@@ -94,6 +99,7 @@ export async function resolveApiKeyForProviderCore(params: {
   store?: AuthProfileStore;
   agentDir?: string;
   workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   /** When true, treat profileId as a user-locked selection that must not be
    *  silently overridden by env/config credentials. */
   lockedProfile?: boolean;
@@ -126,6 +132,8 @@ export async function resolveApiKeyForProviderCore(params: {
     (scopedStore ??= resolveScopedAuthProfileStore({
       agentDir,
       cfg,
+      workspaceDir: params.workspaceDir,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       provider,
       profileId: requestedProfileId,
       preferredProfile,

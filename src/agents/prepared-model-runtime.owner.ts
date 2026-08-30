@@ -3,6 +3,11 @@ import { toStringifiedError } from "@openclaw/normalization-core/error-coercion"
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getPluginMetadataWorkspaceSnapshot,
+  getScopedPluginMetadata,
+  type PreparedPluginMetadata,
+} from "../plugins/plugin-metadata-collection.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   listAgentIds,
@@ -19,6 +24,7 @@ import {
   resolveSubagentConfiguredModelSelection,
 } from "./model-selection-config.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
+import { createModelManifestPluginContext } from "./model-selection-shared.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
@@ -391,25 +397,36 @@ export function listConfiguredOwnerInputs(
   config: OpenClawConfig,
   defaultWorkspaceDir?: string,
   allowGatewaySubagentBinding?: boolean,
+  preservedWorkspaceByAgentDir?: ReadonlyMap<string, ReadonlyMap<string, string>>,
 ): PreparedModelRuntimeInput[] {
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
   return listAgentIds(config).map((agentId) => {
-    const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
+    const agentDir = path.resolve(resolveAgentDir(config, agentId));
+    // The retained startup workspace owns model aliases too. Select it before
+    // route planning so selections and their registry use the same workspace.
+    const ownedWorkspaceDir = normalizeOptionalDir(
+      preservedWorkspaceByAgentDir?.get(agentId)?.get(agentDir) ??
+        (agentId === compatibilityAgentId ? defaultWorkspaceDir : undefined),
+    );
+    const workspaceDir =
+      ownedWorkspaceDir ?? normalizeOptionalDir(resolveAgentWorkspaceDir(config, agentId));
     const input: PreparedModelRuntimeInput = {
       agentId,
-      agentDir: resolveAgentDir(config, agentId),
+      agentDir,
       config,
       inheritedAuthDir,
-      workspaceDir: preserveWorkspaceDirOnRefresh
-        ? defaultWorkspaceDir
-        : resolveAgentWorkspaceDir(config, agentId),
-      runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
+      workspaceDir,
+      runtimePluginSelections: resolveConfiguredRuntimePluginSelections(
+        config,
+        agentId,
+        workspaceDir,
+      ),
     };
     if (allowGatewaySubagentBinding === true) {
       input.allowGatewaySubagentBinding = true;
     }
-    if (preserveWorkspaceDirOnRefresh) {
+    if (ownedWorkspaceDir) {
       input.preserveWorkspaceDirOnRefresh = true;
     }
     return input;
@@ -419,8 +436,32 @@ export function listConfiguredOwnerInputs(
 function resolveConfiguredRuntimePluginSelections(
   config: OpenClawConfig,
   agentId: string,
+  workspaceDir: string | undefined,
 ): PreparedModelRuntimeInput["runtimePluginSelections"] {
-  const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
+  const metadata = getScopedPluginMetadata();
+  const metadataSnapshot = metadata
+    ? getPluginMetadataWorkspaceSnapshot(metadata, { workspaceDir })
+    : undefined;
+  const manifestPluginContext = createModelManifestPluginContext({
+    cfg: config,
+    agentId,
+    workspaceDir,
+    manifestPlugins: metadataSnapshot?.plugins,
+    pluginMetadataSnapshot: metadataSnapshot,
+  });
+  // This plan chooses which provider plugins to load; executable normalization
+  // belongs to the resulting registry, not the inputs that select it.
+  const configured = resolveDefaultModelForAgent({
+    cfg: config,
+    agentId,
+    manifestPluginContext,
+    allowPluginNormalization: false,
+  });
+  // Default-only selection leaves manifest metadata unresolved; captured empty scopes stay bound.
+  const normalization =
+    manifestPluginContext.peek() === undefined
+      ? { config, workspaceDir, manifestPlugins: [] }
+      : manifestPluginContext.getContext();
   const subagentModel = resolveSubagentConfiguredModelSelection({
     cfg: config,
     agentId,
@@ -429,7 +470,8 @@ function resolveConfiguredRuntimePluginSelections(
   return resolveModelCandidateChain({
     cfg: config,
     agentId,
-    manifestPlugins: [],
+    ...normalization,
+    allowPluginNormalization: false,
     provider: configured.provider || DEFAULT_PROVIDER,
     model: configured.model || DEFAULT_MODEL,
     requestedRouteResolution: "resolved",
@@ -460,8 +502,9 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   registerEntriesAfterBuildStart?: boolean;
   reusePluginGenerations?: boolean;
-  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
+  pluginMetadata?: PreparedPluginMetadata;
 }): Promise<void> {
+  const pluginMetadata = params.pluginMetadata;
   const candidates = params.entries.map(({ owner }) => {
     const input = owner.input;
     owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
@@ -538,7 +581,12 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
               params.buildTimeoutMs,
               catalogMode,
               params.onBuildStats,
-              params.pluginMetadataSnapshot,
+              pluginMetadata
+                ? (input) =>
+                    getPluginMetadataWorkspaceSnapshot(pluginMetadata, {
+                      workspaceDir: input.workspaceDir,
+                    })
+                : undefined,
             );
             for (const candidate of currentGroup) {
               if (params.registerEntriesAfterBuildStart === true) {

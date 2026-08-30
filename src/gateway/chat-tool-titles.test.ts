@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
 const prepareSimpleCompletionModelForAgent = vi.hoisted(() => vi.fn());
 const resolveUtilityModelRefForAgent = vi.hoisted(() => vi.fn());
+const normalizeProviderModelIdWithRuntime = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   completeWithPreparedSimpleCompletionModel,
@@ -15,6 +16,10 @@ vi.mock("../agents/simple-completion-runtime.js", () => ({
 
 vi.mock("../agents/utility-model.js", () => ({
   resolveUtilityModelRefForAgent,
+}));
+
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime,
 }));
 
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -47,6 +52,7 @@ describe("generateToolCallTitles", () => {
     completeWithPreparedSimpleCompletionModel.mockReset();
     prepareSimpleCompletionModelForAgent.mockReset();
     resolveUtilityModelRefForAgent.mockReset();
+    normalizeProviderModelIdWithRuntime.mockReset();
     // Default: canonical utility routing resolves a cheap same-provider model.
     resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-test");
     // realpath: macOS tmpdir is a /var -> /private/var symlink and DB paths resolve canonically.
@@ -155,6 +161,9 @@ describe("generateToolCallTitles", () => {
   it("serves repeated items from the SQLite cache without a second completion", async () => {
     mockPreparedModel();
     mockCompletionTitles({ "0": "Checked repo status" });
+    normalizeProviderModelIdWithRuntime.mockImplementation(() => {
+      throw new Error("Title syntax validation must not invoke executable provider hooks");
+    });
     const params = {
       cfg: {} satisfies OpenClawConfig,
       agentId: AGENT_ID,

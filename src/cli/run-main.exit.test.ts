@@ -1017,7 +1017,9 @@ describe("runCli exit behavior", () => {
   it("configures the gateway foreground fast path with the standard CLI bootstrap", async () => {
     await runCli(["node", "openclaw", "gateway", "--force"]);
 
-    expect(readConfigFileSnapshotMock.mock.calls).toEqual([[{ isolateEnv: true, observe: false }]]);
+    expect(readConfigFileSnapshotMock.mock.calls).toEqual([
+      [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+    ]);
     const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
       | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
       | undefined;
@@ -1032,6 +1034,7 @@ describe("runCli exit behavior", () => {
     );
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
       isolateEnv: true,
+      pluginValidation: "core-only",
       recoverSuspicious: true,
       allowSuspiciousRecovery: expect.any(Function),
     });
@@ -1214,7 +1217,7 @@ describe("runCli exit behavior", () => {
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(params.expectedAction));
       expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
       expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-        [{ isolateEnv: true, observe: false }],
+        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
       ]);
       if (params.marker) {
         expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
@@ -1884,8 +1887,8 @@ describe("runCli exit behavior", () => {
 
       expect(process.env.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
       expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-        [{ isolateEnv: true, observe: false }],
-        [{ isolateEnv: true, observe: false }],
+        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
       ]);
       expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
     });
@@ -2278,7 +2281,11 @@ describe("runCli exit behavior", () => {
       | undefined;
     await hooks?.beforeRun?.({ reset: true });
 
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ isolateEnv: true, observe: false });
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
+      isolateEnv: true,
+      observe: false,
+      pluginValidation: "core-only",
+    });
     expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
   });
 

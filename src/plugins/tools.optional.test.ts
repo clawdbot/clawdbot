@@ -33,10 +33,14 @@ const loadContextMocks = vi.hoisted(() => ({
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
   loadPluginRegistryHandle: (params: unknown) => loadOpenClawPluginsMock(params),
-  resolveCompatibleRuntimePluginRegistry: (params: unknown) =>
-    resolveCompatibleRuntimePluginRegistryMock(params),
   resolvePluginRegistryLoadCacheKey: (params: unknown) => JSON.stringify(params),
   resolveRuntimePluginRegistry: (params: unknown) =>
+    resolveCompatibleRuntimePluginRegistryMock(params),
+}));
+
+vi.mock("./loader-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./loader-cache.js")>()),
+  resolveCompatibleRuntimePluginRegistry: (params: unknown) =>
     resolveCompatibleRuntimePluginRegistryMock(params),
 }));
 

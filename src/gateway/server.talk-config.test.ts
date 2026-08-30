@@ -17,6 +17,7 @@ import {
   connectOk,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
+  onceMessage,
   readConnectChallengeNonce,
   rpcReq,
 } from "./test-helpers.js";
@@ -434,13 +435,15 @@ describe("gateway talk.config", () => {
     });
   });
 
-  it("does not pollute Object.prototype when tts.providers contains a __proto__ key", async () => {
-    // Hardening regression: stripUnresolvedSecretApiKeysFromBaseTtsProviders
-    // rebuilds the providers map with dynamic keys from operator config. Using
-    // a plain `{}` would let `cleaned['__proto__'] = {...}` mutate
-    // Object.prototype. The helper uses `Object.create(null)` to make that
-    // assignment a normal property write on the local map instead.
-    const { writeConfigFile } = await import("../config/config.js");
+  it("keeps a source TTS __proto__ provider as data when stripping unresolved secrets", async () => {
+    const { readConfigFileSnapshot, setRuntimeConfigSnapshot, writeConfigFile } =
+      await import("../config/config.js");
+    // Object-literal __proto__ sets a prototype instead of creating the own key
+    // an operator-authored JSON document supplies.
+    const providers = JSON.parse(
+      `{"__proto__":${JSON.stringify({ apiKey: talkApiSecretRef(), polluted: "yes" })}}`,
+    ) as Record<string, { apiKey: ReturnType<typeof talkApiSecretRef>; polluted?: string }>;
+    providers[GENERIC_TALK_PROVIDER_ID] = { apiKey: talkApiSecretRef() };
     await writeConfigFile({
       talk: {
         provider: GENERIC_TALK_PROVIDER_ID,
@@ -452,22 +455,12 @@ describe("gateway talk.config", () => {
       },
       tts: {
         provider: GENERIC_TALK_PROVIDER_ID,
-        providers: {
-          [GENERIC_TALK_PROVIDER_ID]: {
-            apiKey: talkApiSecretRef(),
-          },
-          // Hostile operator-config payload — not a real provider id, just
-          // a value-shaped key with a SecretRef-shaped apiKey to force the
-          // strip path.
-          __proto__: {
-            apiKey: talkApiSecretRef(),
-            polluted: "yes",
-          },
-        },
+        providers,
       },
     });
-
-    const sentinelKeyBefore = ({} as Record<string, unknown>).polluted;
+    const source = await readConfigFileSnapshot();
+    expect(Object.hasOwn(source.config.tts?.providers ?? {}, "__proto__")).toBe(true);
+    const observedProviders: Array<Record<string, unknown>> = [];
 
     await withEnvAsync({ [GENERIC_TALK_API_ENV]: "env-acme-key" }, async () => {
       await withSpeechProviders(
@@ -475,24 +468,49 @@ describe("gateway talk.config", () => {
           speechProviderFixture({
             pluginId: "acme-strict-tts-proto-test",
             label: "Acme Strict Speech (proto guard)",
+            resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
+              observedProviders.push(baseTtsConfig.providers as Record<string, unknown>);
+              return talkProviderConfig;
+            },
           }),
         ],
         async () => {
           await withTalkConfigConnection(["operator.read"], async (ws) => {
-            const res = await fetchOkTalkConfig(ws);
-            // The active provider's voice still comes through cleanly.
-            expect(res.payload?.config?.talk?.provider).toBe(GENERIC_TALK_PROVIDER_ID);
+            // rpcReq deliberately clears runtime state; this request must retain
+            // accepted runtime config distinct from the source-only TTS edit.
+            setRuntimeConfigSnapshot({ ...source.config, tts: undefined });
+            const response = onceMessage<{
+              type: string;
+              id: string;
+              ok: boolean;
+              payload?: TalkConfigPayload;
+            }>(ws, (message) => message.type === "res" && message.id === "talk-source-tts");
+            ws.send(
+              JSON.stringify({
+                type: "req",
+                id: "talk-source-tts",
+                method: "talk.config",
+                params: {},
+              }),
+            );
+            const res = await response;
+            expect(res.ok).toBe(true);
+            expectTalkConfig(res.payload?.config?.talk, {
+              provider: GENERIC_TALK_PROVIDER_ID,
+              voiceId: "voice-proto-pollution-guard",
+              apiKey: undefined,
+            });
           });
         },
       );
     });
 
-    // The strip helper must not have leaked the hostile `polluted` field onto
-    // Object.prototype: a fresh empty object should not gain a `.polluted`
-    // property as a side effect of processing the request.
-    const sentinelKeyAfter = ({} as Record<string, unknown>).polluted;
-    expect(sentinelKeyAfter).toBe(sentinelKeyBefore);
-    expect(sentinelKeyAfter).toBeUndefined();
+    expect(observedProviders).toEqual([
+      { ["__proto__"]: { polluted: "yes" }, [GENERIC_TALK_PROVIDER_ID]: {} },
+    ]);
+    expect(Object.hasOwn(observedProviders[0] ?? {}, "__proto__")).toBe(true);
+    expect(observedProviders[0]?.polluted).toBeUndefined();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it("returns canonical provider talk payloads", async () => {

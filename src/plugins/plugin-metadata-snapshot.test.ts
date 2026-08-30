@@ -7,15 +7,16 @@ import {
   withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
 import { getCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
+import {
+  makePluginMetadataIndex as makeIndex,
+  makePluginMetadataManifestRegistry as makeManifestRegistry,
+  setCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
-import {
-  loadPluginManifestRegistryCore,
-  type PluginManifestRecord,
-  type PluginManifestRegistry,
-} from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   createPluginCache,
   getPluginCache,
@@ -29,6 +30,7 @@ import {
   resolvePluginMetadataSnapshot,
   restorePluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 
 const { loadPluginRegistrySnapshotWithMetadata, loadPluginManifestRegistryForInstalledIndex } =
   vi.hoisted(() => {
@@ -58,52 +60,15 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
   };
 });
 
-function makeIndex(pluginId = "demo"): InstalledPluginIndex {
-  const rootDir = `/plugins/${pluginId}`;
-  return {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 1,
-    installRecords: {},
+function setRegistrySnapshot(
+  index: InstalledPluginIndex,
+  source: PluginRegistrySnapshotSource = "provided",
+): void {
+  loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+    source,
+    snapshot: index,
     diagnostics: [],
-    plugins: [
-      {
-        pluginId,
-        manifestPath: `${rootDir}/openclaw.plugin.json`,
-        manifestHash: `${pluginId}-manifest`,
-        rootDir,
-        origin: "global",
-        enabled: true,
-        startup: {
-          sidecar: false,
-          memory: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      },
-    ],
-  };
-}
-
-function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
-  const plugin: PluginManifestRecord = {
-    id: pluginId,
-    name: pluginId,
-    channels: [],
-    providers: [pluginId],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    commandAliases: [{ name: `${pluginId}-command` }],
-    rootDir: `/plugins/${pluginId}`,
-    source: `/plugins/${pluginId}/index.js`,
-    manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
-    origin: "global",
-  };
-  return { plugins: [plugin], diagnostics: [] };
+  });
 }
 
 describe("plugin metadata snapshot", () => {
@@ -115,15 +80,12 @@ describe("plugin metadata snapshot", () => {
 
   afterEach(() => {
     clearPluginMetadataLifecycleCaches();
+    clearLoadInstalledPluginIndexInstallRecordsCache();
   });
 
   it("progressively reuses first-access metadata and scopes fresh control-plane loads", () => {
     const index = makeIndex();
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index);
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     const second = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
@@ -154,11 +116,7 @@ describe("plugin metadata snapshot", () => {
 
   it("keeps direct manifest readers on the Gateway inventory", () => {
     const config = {};
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: makeIndex(),
-      diagnostics: [],
-    });
+    setRegistrySnapshot(makeIndex());
     const snapshot = loadPluginMetadataSnapshot({ config, env: {} });
     setGatewayPluginMetadataSnapshot(snapshot, { config, env: {} });
 
@@ -172,11 +130,7 @@ describe("plugin metadata snapshot", () => {
   it("publishes the complete prepared cache and keeps fresh operations outside boot scopes", () => {
     const config = {};
     const preparedCache = createPluginCache();
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: makeIndex(),
-      diagnostics: [],
-    });
+    setRegistrySnapshot(makeIndex());
     const snapshot = withPluginCache(preparedCache, () =>
       loadPluginMetadataSnapshot({ config, env: {} }),
     );
@@ -206,11 +160,7 @@ describe("plugin metadata snapshot", () => {
       const config = {};
       const index = makeIndex();
       index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-        source: "provided",
-        snapshot: index,
-        diagnostics: [],
-      });
+      setRegistrySnapshot(index);
       const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
       loadPluginRegistrySnapshotWithMetadata.mockClear();
       loadPluginManifestRegistryForInstalledIndex.mockClear();
@@ -238,11 +188,7 @@ describe("plugin metadata snapshot", () => {
     const workspaceDir = "/workspace";
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index);
     const scoped = loadPluginMetadataSnapshot({
       config,
       env: {},
@@ -282,11 +228,7 @@ describe("plugin metadata snapshot", () => {
     const staleIndex = makeIndex("stale");
     staleIndex.policyHash = resolveInstalledPluginIndexPolicyHash(config);
     staleIndex.workspaceDir = sourceWorkspace;
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: staleIndex,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(staleIndex);
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("stale"));
     const stale = loadPluginMetadataSnapshot({
       config,
@@ -300,11 +242,7 @@ describe("plugin metadata snapshot", () => {
     const freshIndex = makeIndex("fresh");
     freshIndex.policyHash = resolveInstalledPluginIndexPolicyHash(config);
     freshIndex.workspaceDir = targetWorkspace;
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: freshIndex,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(freshIndex);
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry("fresh"));
 
     const resolved = resolvePluginMetadataSnapshot({
@@ -335,11 +273,7 @@ describe("plugin metadata snapshot", () => {
       type: "object",
       properties: { sharedMap, sharedSet },
     };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index);
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
@@ -396,11 +330,7 @@ describe("plugin metadata snapshot", () => {
       type: "object",
       properties: { accessor },
     };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index);
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
@@ -466,11 +396,7 @@ describe("plugin metadata snapshot", () => {
       type: "object",
       properties: { proxy },
     };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index);
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
@@ -524,11 +450,7 @@ describe("plugin metadata snapshot", () => {
   it("keeps an empty installed index authoritative without rediscovering plugins", () => {
     const index = makeIndex();
     index.plugins = [];
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "persisted",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index, "persisted");
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -575,11 +497,7 @@ describe("plugin metadata snapshot", () => {
     const config = { plugins: { entries: { demo: { enabled: true } } } };
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index);
     const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
     adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, { config, env: {} });
     const ignored = { ...snapshot, registrySource: "persisted" as const };
@@ -610,13 +528,16 @@ describe("plugin metadata snapshot", () => {
     };
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index, "derived");
+
+    const operationSnapshot = withPluginCache(createPluginCache(), () =>
+      resolvePluginMetadataSnapshot({ config, env: {} }),
+    );
+    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
 
     const snapshot = resolvePluginMetadataSnapshot({ config, env: {} });
+    expect(snapshot).not.toBe(operationSnapshot);
+    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(snapshot);
 
     expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(
       snapshot,
@@ -631,8 +552,8 @@ describe("plugin metadata snapshot", () => {
         env: {},
       }),
     ).toBe(snapshot);
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -647,16 +568,16 @@ describe("plugin metadata snapshot", () => {
     const config = {};
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index, "derived");
 
     const first = resolvePluginMetadataSnapshot({ config, env: {}, ...options });
     const second = resolvePluginMetadataSnapshot({ config, env: {}, ...options });
 
-    if (options.allowCurrent === false) {
+    if (
+      options.allowCurrent === false ||
+      options.preferPersisted === false ||
+      options.stateDir !== undefined
+    ) {
       expect(second).not.toBe(first);
       expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
     } else {
@@ -670,19 +591,11 @@ describe("plugin metadata snapshot", () => {
     const config = {};
     const index = makeIndex();
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index, "derived");
     const current = loadPluginMetadataSnapshot({ config, env: {}, index });
     setCurrentPluginMetadataSnapshot(current, { config, env: {} });
     loadPluginRegistrySnapshotWithMetadata.mockClear();
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "persisted",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index, "persisted");
 
     const resolved = resolvePluginMetadataSnapshot({
       config,
@@ -699,11 +612,7 @@ describe("plugin metadata snapshot", () => {
 
   it("projects scopes from one complete first-access inventory", () => {
     const index = makeIndex();
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index);
 
     const scoped = loadPluginMetadataSnapshot({
       config: {},
@@ -731,11 +640,7 @@ describe("plugin metadata snapshot", () => {
       const config = {};
       const index = makeIndex();
       index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-        source: "provided",
-        snapshot: index,
-        diagnostics: [],
-      });
+      setRegistrySnapshot(index);
       const unscoped = loadPluginMetadataSnapshot({ config, env: {}, index });
       setCurrentPluginMetadataSnapshot(unscoped, { config, env: {} });
       loadPluginManifestRegistryForInstalledIndex.mockClear();
@@ -755,6 +660,7 @@ describe("plugin metadata snapshot", () => {
       expect(scoped.plugins.map((plugin) => plugin.id)).toEqual(expectedPluginIds);
       expect(scoped.index).toBe(unscoped.index);
       expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+      expect(resolvePluginMetadataSnapshot({ config, env: {}, pluginIds })).toBe(scoped);
     },
   );
 
@@ -781,11 +687,7 @@ describe("plugin metadata snapshot", () => {
         },
       },
     };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
+    setRegistrySnapshot(index);
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
 
     const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
@@ -807,11 +709,7 @@ describe("plugin metadata snapshot", () => {
     "freezes a cloned index instead of caller-owned records (worker: %s)",
     (worker) => {
       const index = makeIndex();
-      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-        source: "provided",
-        snapshot: index,
-        diagnostics: [],
-      });
+      setRegistrySnapshot(index);
 
       const loaded = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
       const { normalizePluginId: _normalizePluginId, ...transfer } = loaded;

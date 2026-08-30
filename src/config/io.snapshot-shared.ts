@@ -1,5 +1,10 @@
 import { observeConfigSnapshot } from "./io.observe.js";
-import type { NormalizedConfigIoDeps, ReadConfigFileSnapshotInternalResult } from "./io.types.js";
+import type {
+  ConfigIoFactoryOptions,
+  NormalizedConfigIoDeps,
+  ReadConfigFileSnapshotInternalResult,
+} from "./io.types.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "./materialize.js";
 import { setConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
@@ -83,9 +88,13 @@ export async function finalizeReadConfigSnapshotInternalResult(
 export async function collectInvalidConfigLegacyIssues(
   raw: unknown,
   sourceRaw: unknown,
+  pluginValidation: ConfigIoFactoryOptions["pluginValidation"],
 ): Promise<LegacyConfigIssue[]> {
   if (!raw || typeof raw !== "object") {
     return [];
+  }
+  if (pluginValidation === "core-only") {
+    return findLegacyConfigIssues(raw, sourceRaw);
   }
   const { findDoctorLegacyConfigIssues } =
     await import("../commands/doctor/shared/legacy-config-issues.js");

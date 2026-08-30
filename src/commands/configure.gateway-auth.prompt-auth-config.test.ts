@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   applyAuthChoice: vi.fn(),
   promptModelAllowlist: vi.fn(),
   promptDefaultModel: vi.fn(),
+  runtimeProviders: [] as ProviderPlugin[],
   resolvePluginProvidersCore: vi.fn(() => []),
   resolveProviderPluginChoiceCore: vi.fn<() => unknown>(() => null),
   loadStaticManifestCatalogRowsForList: vi.fn<() => readonly NormalizedModelCatalogRow[]>(() => []),
@@ -52,6 +53,24 @@ vi.mock("./model-picker.js", async () => {
   };
 });
 
+// Setup supplies explicit provider fixtures; keep their runtime hooks and manifest fallback real.
+vi.mock("../agents/provider-model-normalization.runtime.js", async () => {
+  const { normalizeProviderModelIdWithResolvedPlugin } =
+    await import("../plugins/provider-model-normalization.js");
+  const { matchesProviderPluginRef } = await import("../plugins/provider-registry-shared.js");
+  return {
+    normalizeProviderModelIdWithRuntime: (
+      params: Parameters<typeof normalizeProviderModelIdWithResolvedPlugin>[0],
+    ) =>
+      normalizeProviderModelIdWithResolvedPlugin(
+        params,
+        mocks.runtimeProviders.find((provider) =>
+          matchesProviderPluginRef(provider, params.provider),
+        ),
+      ),
+  };
+});
+
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
@@ -67,6 +86,7 @@ vi.mock("./models/list.manifest-catalog.js", () => ({
 import { promptAuthConfig } from "./configure.gateway-auth.js";
 
 beforeEach(() => {
+  mocks.runtimeProviders.length = 0;
   // These provider fixtures expose no CLI backends; policy checks need no plugin discovery.
   cliBackendsTesting.setDepsForTest({
     resolveRuntimeCliBackends: () => [],
@@ -82,6 +102,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  mocks.runtimeProviders.length = 0;
   cliBackendsTesting.resetDepsForTest();
 });
 
@@ -793,6 +814,7 @@ describe("promptAuthConfig", () => {
         label: "Configure provider",
         auth: [method],
       };
+      mocks.runtimeProviders.push(provider);
       mocks.promptAuthChoiceGrouped.mockResolvedValue("provider-plugin:configure-provider:api-key");
       mocks.applyAuthChoice.mockImplementationOnce(applyProviderAuthChoice);
       mocks.resolveProviderPluginChoiceCore.mockReturnValue({ provider, method });

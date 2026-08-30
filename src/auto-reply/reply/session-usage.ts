@@ -22,6 +22,7 @@ import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import type { PluginMetadataRegistryView } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 function applyCliSessionIdToSessionPatch(
@@ -78,19 +79,30 @@ function resolveNonNegativeTokenCount(value: number | undefined): number | undef
 
 function estimateSessionRunCostUsd(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   usage?: NormalizedUsage;
+  costUsd?: number;
   providerUsed?: string;
   modelUsed?: string;
 }): number | undefined {
   if (!hasNonzeroUsage(params.usage)) {
     return undefined;
   }
+  const recordedCostUsd = asNonNegativeFiniteNumber(params.costUsd);
+  if (recordedCostUsd !== undefined) {
+    return recordedCostUsd;
+  }
   const cost = resolveModelCostConfig({
     provider: params.providerUsed,
     model: params.modelUsed,
     config: params.cfg,
     agentDir: params.agentDir,
+    agentId: params.agentId,
+    workspaceDir: params.workspaceDir,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
   });
   return asNonNegativeFiniteNumber(estimateUsageCost({ usage: params.usage, cost }));
 }
@@ -108,7 +120,10 @@ export async function persistSessionUsageUpdate(params: {
   authorize?: () => boolean;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   usage?: NormalizedUsage;
+  costUsd?: number;
   /**
    * Usage from the last individual API call (not accumulated). Supplies context
    * only when no chronology-qualified currentContextSnapshot was observed.
@@ -201,7 +216,11 @@ export async function persistSessionUsageUpdate(params: {
             : estimateSessionRunCostUsd({
                 cfg,
                 agentDir: params.agentDir,
+                agentId: params.agentId,
+                workspaceDir: params.workspaceDir,
+                pluginMetadataSnapshot: params.pluginMetadataSnapshot,
                 usage: params.usage,
+                costUsd: params.costUsd,
                 providerUsed: params.providerUsed ?? entry.modelProvider,
                 modelUsed: params.modelUsed ?? entry.model,
               });

@@ -1,7 +1,8 @@
 // agents_list tests cover subagent discovery, runtime metadata, and legacy
 // runtime override handling.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as providerModelNormalizationRuntime from "../provider-model-normalization.runtime.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createAgentsListTool } from "./agents-list-tool.js";
 
@@ -83,48 +84,69 @@ describe("agents_list tool", () => {
     });
   });
 
-  it("resolves configured model aliases to the canonical model identity", async () => {
-    // Routing aliases are transport-level names; the tool must publish the
-    // resolved model that will actually run so spawn decisions see one identity.
-    loadConfigMock.mockReturnValue({
-      agents: {
-        defaults: {
-          model: {
-            primary: "clawrouter/openai/gpt-5.6",
-            fallbacks: ["openai/gpt-5.6-luna"],
-          },
-          models: {
-            "openai/gpt-5.6-sol": {
-              alias: "clawrouter/openai/gpt-5.6",
-              agentRuntime: { id: "codex" },
+  it.each([
+    {
+      name: "default-provider",
+      modelRef: "openai/gpt-5.6-sol",
+      alias: "clawrouter/openai/gpt-5.6",
+      runtimeId: "codex",
+    },
+    {
+      name: "custom-provider",
+      modelRef: "fixture-inventory/canonical-model",
+      alias: "inventory-alias",
+      runtimeId: "openclaw",
+    },
+  ] as const)(
+    "resolves $name aliases without executing provider model normalizers",
+    async ({ modelRef, alias, runtimeId }) => {
+      const normalizeModel = vi
+        .spyOn(providerModelNormalizationRuntime, "normalizeProviderModelIdWithRuntime")
+        .mockReturnValue("runtime-only-model");
+      onTestFinished(() => normalizeModel.mockRestore());
+      // Routing aliases are transport-level names; the tool must publish the
+      // resolved model that will actually run so spawn decisions see one identity.
+      loadConfigMock.mockReturnValue({
+        agents: {
+          defaults: {
+            model: {
+              primary: alias,
+              fallbacks: ["openai/gpt-5.6-luna"],
             },
+            models: {
+              [modelRef]: {
+                alias,
+                agentRuntime: { id: runtimeId },
+              },
+            },
+            subagents: { allowAgents: ["main"] },
           },
-          subagents: { allowAgents: ["main"] },
+          list: [{ id: "main", default: true }],
         },
-        list: [{ id: "main", default: true }],
-      },
-    } as unknown as OpenClawConfig);
+      } satisfies OpenClawConfig);
 
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
-    );
-    const details = result.details as AgentListDetails;
+      const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+        "call",
+        {},
+      );
+      const details = result.details as AgentListDetails;
 
-    expect(details).toStrictEqual({
-      requester: "main",
-      allowAny: false,
-      agents: [
-        {
-          id: "main",
-          name: undefined,
-          configured: true,
-          model: "openai/gpt-5.6-sol",
-          agentRuntime: { id: "codex", source: "model" },
-        },
-      ],
-    });
-  });
+      expect(details).toStrictEqual({
+        requester: "main",
+        allowAny: false,
+        agents: [
+          {
+            id: "main",
+            name: undefined,
+            configured: true,
+            model: modelRef,
+            agentRuntime: { id: runtimeId, source: "model" },
+          },
+        ],
+      });
+      expect(normalizeModel).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not advertise stale allowlist-only targets as spawnable agents", async () => {
     // Allowlist entries are permissions, not agent definitions; stale ids should

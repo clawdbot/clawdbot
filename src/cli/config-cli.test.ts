@@ -8,6 +8,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import {
+  createPluginMetadataOwner,
+  type PreparedPluginMetadata,
+} from "../plugins/plugin-metadata-collection.js";
+import {
   createPluginManifestRecordFixture as createPluginManifestRecord,
   createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
 } from "../plugins/plugin-metadata.test-support.js";
@@ -41,6 +45,7 @@ const mockWriteConfigFile = vi.fn<
     },
   ) => Promise<void>
 >(async () => {});
+let preparedWriteMetadata: PreparedPluginMetadata | undefined;
 const mockResolveSecretRefValue = vi.fn();
 const mockCheckTouchedTextModelRefs = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
@@ -96,14 +101,20 @@ vi.mock("../config/config.js", () => ({
     mockReadConfigFileSnapshot(...args),
   readConfigFileSnapshotWithPluginMetadata: async (
     ...args: Parameters<typeof mockReadConfigFileSnapshot>
-  ) => ({
-    snapshot: await mockReadConfigFileSnapshot(...args),
-    pluginMetadataSnapshot: createPluginMetadataSnapshot(),
-  }),
-  readConfigFileSnapshotForWrite: async () => ({
-    snapshot: await mockReadConfigFileSnapshot(),
-    writeOptions: {},
-  }),
+  ) => {
+    const snapshot = await mockReadConfigFileSnapshot(...args);
+    return {
+      snapshot,
+      pluginMetadata: createPluginMetadataOwner().prepare({ config: snapshot.sourceConfig }),
+    };
+  },
+  readConfigFileSnapshotForWrite: async () => {
+    const snapshot = await mockReadConfigFileSnapshot();
+    preparedWriteMetadata = snapshot.valid
+      ? createPluginMetadataOwner().prepare({ config: snapshot.sourceConfig })
+      : undefined;
+    return { snapshot, writeOptions: { basePluginMetadata: preparedWriteMetadata } };
+  },
   writeConfigFile: (
     cfg: OpenClawConfig,
     options?: {
@@ -533,6 +544,7 @@ describe("config cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    preparedWriteMetadata = undefined;
     mockReadConfigFileSnapshot.mockReset();
     mockReadConfigFileSnapshot.mockResolvedValue(buildSnapshot({ resolved: {}, config: {} }));
     resetRuntimeCapture();
@@ -4399,6 +4411,7 @@ describe("config cli", () => {
       expect(written.channels?.discord?.guilds?.["prod]guild"]).not.toHaveProperty("channels");
       expect(written.channels?.discord?.guilds?.staging?.channels).toEqual(["chat"]);
       expect(firstWriteConfigOptions()).toEqual({
+        basePluginMetadata: preparedWriteMetadata,
         auditOrigin: "cli",
         unsetPaths: [["channels", "discord", "guilds", "prod]guild", "channels"]],
       });
@@ -4501,6 +4514,7 @@ describe("config cli", () => {
       expect(written.tools?.profile).toBe("coding");
       expect(written.logging).toEqual(resolved.logging);
       expect(firstWriteConfigOptions()).toEqual({
+        basePluginMetadata: preparedWriteMetadata,
         auditOrigin: "cli",
         unsetPaths: [["tools", "alsoAllow"]],
       });
@@ -4523,7 +4537,10 @@ describe("config cli", () => {
       const written = firstWrittenConfig();
       // The real writer's roster-loss guard is exercised by config-cli.integration.test.ts.
       expect(written.agents?.entries).toEqual({ "agent-a": {}, "agent-c": {} });
-      expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli" });
+      expect(firstWriteConfigOptions()).toEqual({
+        basePluginMetadata: preparedWriteMetadata,
+        auditOrigin: "cli",
+      });
     });
 
     it("preserves write-level unset handling for numeric object keys", async () => {
@@ -4549,6 +4566,7 @@ describe("config cli", () => {
         "456": { channels: ["alerts"] },
       });
       expect(firstWriteConfigOptions()).toEqual({
+        basePluginMetadata: preparedWriteMetadata,
         auditOrigin: "cli",
         unsetPaths: [["channels", "discord", "guilds", "123"]],
       });

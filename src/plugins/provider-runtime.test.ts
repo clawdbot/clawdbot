@@ -514,7 +514,7 @@ describe("provider-runtime", () => {
     });
   });
 
-  it("passes model refs for cli-backend runtime hook lookup", () => {
+  it("keeps cli-backend runtime hook lookup provider-scoped", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {
         id: "anthropic",
@@ -532,11 +532,11 @@ describe("provider-runtime", () => {
     expect(plugin?.id).toBe("anthropic");
     expectRecordFields(getLastResolvePluginProvidersParams(), {
       providerRefs: ["claude-cli"],
-      modelRefs: ["claude-cli/claude-sonnet-4-6", "claude-sonnet-4-6"],
+      modelRefs: undefined,
     });
   });
 
-  it("derives model refs from runtime hook contexts", () => {
+  it("keeps context model ids out of provider ownership inference", () => {
     const createStreamFn = vi.fn();
     resolvePluginProvidersMock.mockReturnValue([
       {
@@ -561,11 +561,11 @@ describe("provider-runtime", () => {
     expect(createStreamFn).toHaveBeenCalledOnce();
     expectRecordFields(getLastResolvePluginProvidersParams(), {
       providerRefs: ["claude-cli"],
-      modelRefs: ["claude-cli/claude-sonnet-4-6", "claude-sonnet-4-6"],
+      modelRefs: undefined,
     });
   });
 
-  it("retries empty runtime handles with context model refs", () => {
+  it("retries empty runtime handles without model ownership inference", () => {
     const resolveSystemPromptContribution = vi.fn(() => ({
       stablePrefix: "anthropic cli prompt",
     }));
@@ -596,7 +596,7 @@ describe("provider-runtime", () => {
     expect(resolveSystemPromptContribution).toHaveBeenCalledOnce();
     expectRecordFields(getLastResolvePluginProvidersParams(), {
       providerRefs: ["claude-cli"],
-      modelRefs: ["claude-cli/claude-sonnet-4-6", "claude-sonnet-4-6"],
+      modelRefs: undefined,
     });
   });
 
@@ -2060,7 +2060,7 @@ describe("provider-runtime", () => {
       }),
     ).toBeUndefined();
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["tui-pty-mock"]);
-    expect(getLastResolvePluginProvidersParams().modelRefs).toEqual(["tui-pty-mock/gpt-5.5"]);
+    expect(getLastResolvePluginProvidersParams().modelRefs).toBeUndefined();
   });
 
   it("invalidates cached runtime providers when config mutates in place", () => {
@@ -2656,7 +2656,7 @@ describe("provider-runtime", () => {
 
     expect(plugin).toBeUndefined();
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["tui-pty-mock"]);
-    expect(getLastResolvePluginProvidersParams().modelRefs).toEqual(["tui-pty-mock/gpt-5.5"]);
+    expect(getLastResolvePluginProvidersParams().modelRefs).toBeUndefined();
   });
 
   it("does not match alias hooks when an exact custom provider declares a foreign api owner", () => {

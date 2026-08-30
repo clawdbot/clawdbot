@@ -255,10 +255,10 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     expect(usageEvents).toHaveLength(1);
     expect(usageEvents[0]).toMatchObject({
       type: "model.usage",
-      sessionKey: "agent:default:cron:diag-events:run:test-session-id",
+      sessionKey: "agent:main:cron:diag-events:run:test-session-id",
       sessionId: "cron-usage-session",
       channel: "cron",
-      agentId: "default",
+      agentId: "main",
       provider: "test-provider",
       model: "test-model",
       usage: {

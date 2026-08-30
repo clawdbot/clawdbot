@@ -66,6 +66,7 @@ export function resolveModelAuthMode(
     resolveScopedAuthProfileStore({
       cfg,
       provider: resolved,
+      workspaceDir: options?.workspaceDir,
     });
   const profiles = listProfilesForProvider(authStore, resolved);
   if (profiles.length > 0) {
@@ -134,6 +135,7 @@ export async function hasAvailableAuthForProvider(params: {
       cfg,
       provider,
       preferredProfile,
+      workspaceDir: params.workspaceDir,
     });
   // An inline provider key inside its billing/auth cooldown is not available
   // auth: the resolver refuses to hand it back, so reporting it as available

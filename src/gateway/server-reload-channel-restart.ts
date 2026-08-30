@@ -76,9 +76,7 @@ export async function restartGatewayChannels(options: {
   shouldSkipChannelRestart: boolean;
   skipChannelRestartLogMessage: string;
   isLifecycleReloadAborted: () => boolean;
-  getChannelAutostartSuppression: () => unknown;
   channelReloadTargets: () => Set<ChannelKind>;
-  logSuppressedChannelRestart: (channels: ReadonlySet<ChannelKind>, action: string) => void;
   scheduleRecoveryRestart: (surface: string, err?: unknown) => void;
 }): Promise<void> {
   const {
@@ -93,9 +91,7 @@ export async function restartGatewayChannels(options: {
     shouldSkipChannelRestart,
     skipChannelRestartLogMessage,
     isLifecycleReloadAborted,
-    getChannelAutostartSuppression,
     channelReloadTargets,
-    logSuppressedChannelRestart,
     scheduleRecoveryRestart,
   } = options;
   const wasStoppedBeforePluginReload = (channel: ChannelKind, accountId: string) =>
@@ -148,7 +144,7 @@ export async function restartGatewayChannels(options: {
     params.logChannels.info(skipChannelRestartLogMessage);
     return;
   }
-  const suppressed = Boolean(getChannelAutostartSuppression());
+  const suppressed = Boolean(params.getChannelAutostartSuppression?.());
   const operation = suppressed ? "stop" : "restart";
   const phase = suppressed ? "suppressed hot reload" : "hot reload";
   const accountTargets = collectChannelAccountTargets();
@@ -205,7 +201,10 @@ export async function restartGatewayChannels(options: {
   if (failures.length > 0) {
     scheduleRecoveryRestart(`channel ${operation} (${failures.join(", ")})`);
   }
-  if (suppressed) {
-    logSuppressedChannelRestart(channelReloadTargets(), "channel restart during hot reload");
+  // Suppression can clear while the channel stops are awaiting completion.
+  if (suppressed && params.getChannelAutostartSuppression?.()) {
+    params.logChannels.info(
+      `channel restart during hot reload suppressed by crash-loop breaker for channels: ${[...channelReloadTargets()].join(", ")}`,
+    );
   }
 }

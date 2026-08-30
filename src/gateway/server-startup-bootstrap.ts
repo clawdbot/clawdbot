@@ -37,9 +37,10 @@ import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  type PluginMetadataOwner,
+  withPluginMetadataCollectionScope,
+} from "../plugins/plugin-metadata-collection.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -65,13 +66,6 @@ type WorkerEnvironmentStartupLoader = () => Promise<
   typeof import("./server-worker-environment-startup.js")
 >;
 
-function publishGatewayPluginRuntimeConfigAtStartup(params: {
-  runtimeConfig: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-}): void {
-  setAppliedRuntimeConfigSnapshot(params.runtimeConfig, params.sourceConfig);
-}
-
 export async function prepareGatewayServerBootstrap(input: {
   port: number;
   opts: GatewayServerOptions;
@@ -79,8 +73,10 @@ export async function prepareGatewayServerBootstrap(input: {
   logSecrets: GatewayLogger;
   loadWorkerEnvironmentStartupModule: WorkerEnvironmentStartupLoader;
   formatRuntimeGatewayAuthTokenWarning: () => string;
+  pluginMetadataOwner: PluginMetadataOwner;
 }) {
-  const { port, opts, log, logSecrets, loadWorkerEnvironmentStartupModule } = input;
+  const { port, opts, log, logSecrets, loadWorkerEnvironmentStartupModule, pluginMetadataOwner } =
+    input;
   const formatRuntimeGatewayAuthTokenWarning = input.formatRuntimeGatewayAuthTokenWarning;
   normalizeStateDirEnv(process.env);
   await assertOpenClawStateWriteAllowedAtPath({
@@ -170,6 +166,7 @@ export async function prepareGatewayServerBootstrap(input: {
       minimalTestGateway,
       log,
       measure: (name, run) => startupTrace.measure(name, run),
+      pluginMetadataOwner,
       ...(opts.startupConfigSnapshotRead
         ? { initialSnapshotRead: opts.startupConfigSnapshotRead }
         : {}),
@@ -222,9 +219,12 @@ export async function prepareGatewayServerBootstrap(input: {
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
     channelAutostartSuppression: opts.channelAutostartSuppression,
-    ...(startupConfigLoad.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
-      : {}),
+    get manifestRegistry() {
+      return (
+        pluginMetadataOwner.getActive()?.manifestRegistry ??
+        startupConfigLoad.pluginMetadata.manifestRegistry
+      );
+    },
   });
   let startupInternalWriteHash: string | null = null;
   let startupLastGoodSnapshot = configSnapshot;
@@ -401,14 +401,18 @@ export async function prepareGatewayServerBootstrap(input: {
       previousConfig: previousSourceConfig,
       nextConfig: params.sourceConfig,
     });
-    const metadata = startupConfigLoad.pluginMetadataSnapshot;
+    const pluginMetadata = pluginMetadataOwner.prepare({
+      config: params.sourceConfig,
+      env: runtimeEnv.env,
+      additionalWorkspaceDirs: [defaultWorkspaceDir],
+    });
     const pluginCandidate = minimalTestGateway
       ? { runtimeConfig: params.runtimeConfig, compareConfig: params.sourceConfig }
       : resolveGatewayReloadPluginActivationCandidate({
           ...params,
           env: runtimeEnv.env,
-          ...(metadata?.manifestRegistry ? { manifestRegistry: metadata.manifestRegistry } : {}),
-          discovery: metadata?.discovery,
+          manifestRegistry: pluginMetadata.manifestRegistry,
+          discovery: pluginMetadata.selectedSnapshot.discovery,
           ambientEnvTriggers,
         });
     const applyCandidateOverrides = captureConfigOverrideApplier();
@@ -428,6 +432,7 @@ export async function prepareGatewayServerBootstrap(input: {
       runtimeConfig: reapplyRuntimeOverlays(params.runtimeConfig),
       compareConfig: reapplyCompareOverlays(params.sourceConfig),
       runtimeEnv,
+      pluginMetadata,
       reapplyRuntimeOverlays,
       reapplyCompareOverlays,
     };
@@ -436,7 +441,7 @@ export async function prepareGatewayServerBootstrap(input: {
   // callers that may still report a write, but startup itself no longer mutates config.
   if (startupConfigLoad.wroteConfig || authBootstrap.persistedGeneratedToken) {
     const startupSnapshot = await startupTrace.measure("config.final-snapshot", () =>
-      readConfigFileSnapshot(),
+      readConfigFileSnapshot({ pluginMetadataOwner }),
     );
     startupInternalWriteHash = startupSnapshot.hash ?? null;
     startupLastGoodSnapshot = startupSnapshot;
@@ -463,19 +468,24 @@ export async function prepareGatewayServerBootstrap(input: {
     current: import("./server-methods/types.js").GatewayRequestContext | undefined;
   } = { current: undefined };
   const resolvePluginGatewayContext = () => pluginGatewayContext.current;
+  // Migration hooks run before publication and need the source metadata paired
+  // with the runtime config derived from it.
   await startupTrace.measure("startup.maintenance", () =>
-    runGatewayStartupMaintenance({
-      cfgAtStart,
-      startupRuntimeConfig,
-      minimalTestGateway,
-      log,
-    }),
+    withPluginMetadataCollectionScope(
+      startupConfigLoad.pluginMetadata,
+      () =>
+        runGatewayStartupMaintenance({ cfgAtStart, startupRuntimeConfig, minimalTestGateway, log }),
+      {
+        config: startupActivationSourceConfig,
+        compatibleConfigs: [cfgAtStart, startupRuntimeConfig],
+      },
+    ),
   );
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
       cfgAtStart,
       activationSourceConfig: startupActivationSourceConfig,
-      pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
+      pluginMetadata: startupConfigLoad.pluginMetadata,
       workerProviderIds: workerEnvironmentStartup?.durableProviderIds ?? [],
       minimalTestGateway,
       ambientEnvTriggers,
@@ -488,37 +498,24 @@ export async function prepareGatewayServerBootstrap(input: {
     pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
-    pluginMetadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     ambientAutostartSuppressedChannelIds,
   } = pluginBootstrap;
-  // Plugin activation can return a new runtime config object. Publish that exact object before
-  // prepared owners are created so request-time exact-owner lookups cannot see the pre-activation
-  // snapshot and reject the Gateway's own model catalog.
+  // Activation can replace config identity. Publish and return that exact object so
+  // metadata ownership, startup consumers, and runtime reads share one accepted config.
   copyConfigResolutionFacts(cfgAtStart, gatewayPluginConfigAtStart);
-  publishGatewayPluginRuntimeConfigAtStartup({
-    runtimeConfig: gatewayPluginConfigAtStart,
-    sourceConfig: startupLastGoodSnapshot.sourceConfig,
-  });
+  setAppliedRuntimeConfigSnapshot(gatewayPluginConfigAtStart, startupLastGoodSnapshot.sourceConfig);
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
-  const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
-  const currentPluginMetadataSnapshot =
-    existingPluginMetadataSnapshot ??
-    completePluginMetadataSnapshot({
-      snapshot: pluginMetadataSnapshot,
-      config: startupActivationSourceConfig,
-      env: process.env,
-      workspaceDir: defaultWorkspaceDir,
-    });
-  if (!existingPluginMetadataSnapshot) {
-    setGatewayPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
-      config: startupActivationSourceConfig,
-      compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
-      env: process.env,
-      workspaceDir: pluginWorkspaceDir,
-    });
-  }
+  const pluginMetadata = pluginMetadataOwner.prepare({
+    config: startupActivationSourceConfig,
+    additionalWorkspaceDirs: [defaultWorkspaceDir],
+    seed: startupConfigLoad.pluginMetadata,
+  });
+  pluginMetadataOwner.publish(pluginMetadata, {
+    config: gatewayPluginConfigAtStart,
+    sourceConfig: startupActivationSourceConfig,
+  });
   if (pluginLookUpTable) {
     const metrics = pluginLookUpTable.metrics;
     startupTrace.detail("plugins.lookup-table", [
@@ -546,7 +543,7 @@ export async function prepareGatewayServerBootstrap(input: {
     startupConfigLoad,
     startupActivationSourceConfig,
     startupRuntimeConfig,
-    cfgAtStart,
+    cfgAtStart: gatewayPluginConfigAtStart,
     generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
     resolvedStartupAuthOverride,
     startupTailscaleOverride,
@@ -554,6 +551,7 @@ export async function prepareGatewayServerBootstrap(input: {
     activeTaskCount,
     applyFixedGatewayOverlays,
     prepareReloadCandidate,
+    pluginMetadataOwner,
     startupInternalWriteHash,
     startupLastGoodSnapshot,
     workerEnvironmentStartup,
@@ -565,7 +563,7 @@ export async function prepareGatewayServerBootstrap(input: {
     pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
-    pluginMetadataSnapshot: currentPluginMetadataSnapshot,
+    pluginMetadata,
     pluginLookUpTable,
     baseMethods,
     ambientAutostartSuppressedChannelIds,
@@ -573,7 +571,3 @@ export async function prepareGatewayServerBootstrap(input: {
     activateRuntimeSecrets,
   };
 }
-
-export const testing = {
-  publishGatewayPluginRuntimeConfigAtStartup,
-};

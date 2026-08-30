@@ -12,8 +12,8 @@ import {
   resolveSecretPlanTargetByPathCore,
 } from "./target-registry.js";
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  resolvePluginMetadataSnapshot: () => ({ plugins: [] }),
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: () => ({ plugins: [], diagnostics: [] }),
 }));
 
 describe("secret target registry", () => {

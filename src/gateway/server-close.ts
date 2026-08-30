@@ -20,11 +20,11 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   abortChatRunById,
-  type ChatAbortControllerEntry,
   isChatAbortControllerEntryAbortable,
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { abortQueuedChatTurns, type QueuedChatTurnMap } from "./chat-queued-turns.js";
 import {
   collectGatewayProcessMemoryUsageMb,

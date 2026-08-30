@@ -59,6 +59,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import * as usageFormat from "../../utils/usage-format.js";
 import { buildCommandContext } from "./commands-context.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -6078,6 +6079,34 @@ describe("persistSessionUsageUpdate", () => {
     expect(
       expectDefined(stored2[sessionKey], "stored2[sessionKey] test invariant").estimatedCostUsd,
     ).toBeCloseTo(0.007725, 8);
+
+    const configuredModel = expectDefined(
+      cfg.models?.providers?.openai?.models[0],
+      "configured pricing model",
+    );
+    configuredModel.cost = { input: 100, output: 100, cacheRead: 100, cacheWrite: 100 };
+    const costLookup = vi.spyOn(usageFormat, "resolveModelCostConfig");
+    try {
+      for (const costUsd of [0.007725, 0]) {
+        await persistSessionUsageUpdate({
+          storePath,
+          sessionKey,
+          cfg,
+          agentId: "main",
+          agentDir: "/tmp/openclaw-main-agent",
+          workspaceDir: "/tmp/openclaw-main-workspace",
+          costUsd,
+          usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
+          providerUsed: "openai",
+          modelUsed: "gpt-5.4",
+        });
+
+        expect(readSessionStoreFast(storePath)[sessionKey]?.estimatedCostUsd).toBe(costUsd);
+      }
+      expect(costLookup).not.toHaveBeenCalled();
+    } finally {
+      costLookup.mockRestore();
+    }
   });
 
   it("preserves the displayed session model when an internal announce uses fallback", async () => {

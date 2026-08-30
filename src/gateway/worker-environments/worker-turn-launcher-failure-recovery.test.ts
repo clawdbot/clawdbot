@@ -14,7 +14,6 @@ import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { placementTurnOwner } from "./placement-record.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -649,26 +648,9 @@ describe("worker turn launcher failure recovery", () => {
     },
   ])("keeps the placement active after $name", async ({ error, dispatched, expectedMessage }) => {
     seedActivePlacement();
-    const teardownStates: string[] = [];
-    const observedPlacements: WorkerSessionPlacementStore = {
-      ...placements,
-      startReconcile: (input) => {
-        teardownStates.push(`reconcile-before:${placements.get(SESSION_ID)?.state ?? "missing"}`);
-        const reconciling = placements.startReconcile(input);
-        teardownStates.push(`reconcile-after:${reconciling.state}`);
-        expect(reconciling.turnClaim).toBeNull();
-        return reconciling;
-      },
-    };
-    const stopTunnel = vi.fn(async () => {
-      const placement = placements.get(SESSION_ID);
-      teardownStates.push(`stop:${placement?.state ?? "missing"}`);
-      expect(placement).toMatchObject({ state: "draining", turnClaim: null });
-    });
-    const destroy = vi.fn(async () => {
-      teardownStates.push(`destroy:${placements.get(SESSION_ID)?.state ?? "missing"}`);
-      return attachedEnvironment();
-    });
+    const startReconcile = vi.spyOn(placements, "startReconcile");
+    const stopTunnel = vi.fn(async () => {});
+    const destroy = vi.fn(async () => attachedEnvironment());
     const acknowledgeCredentialDelivery = vi.fn(() => true);
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
@@ -708,7 +690,7 @@ describe("worker turn launcher failure recovery", () => {
     };
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
-      placements: observedPlacements,
+      placements,
     });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
 
@@ -729,7 +711,7 @@ describe("worker turn launcher failure recovery", () => {
     expect(acknowledgeCredentialDelivery).toHaveBeenCalledTimes(dispatched ? 1 : 0);
     expect(stopTunnel).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
-    expect(teardownStates).toEqual([]);
+    expect(startReconcile).not.toHaveBeenCalled();
   });
 
   it("preserves the admission diagnosis with bounded redacted process failure details", async () => {

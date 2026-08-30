@@ -3,8 +3,13 @@ import {
   normalizeBuiltInProviderModelId,
   stripSelfProviderModelPrefix,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { normalizeModelRef } from "../agents/model-ref-shared.js";
+import {
+  normalizeModelRef,
+  type ModelManifestNormalizationContext,
+  type ModelRef,
+} from "../agents/model-ref-shared.js";
 import { parseModelRef } from "../agents/model-selection-normalize.js";
+import { createModelManifestPluginContext } from "../agents/model-selection-shared.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 
 export function normalizePluginSubagentAllowedModelRef(raw: string): string | null {
@@ -28,23 +33,24 @@ export function normalizePluginSubagentAllowedModelRef(raw: string): string | nu
   return `${parsed.provider}/${modelId}`;
 }
 
-export function resolvePluginSubagentRequestedModelRef(params: {
-  provider?: string;
-  model?: string;
-}): string | null {
+export function resolvePluginSubagentRequestedModelRef(
+  params: ModelManifestNormalizationContext & { provider?: string; model?: string },
+): ModelRef | null {
+  const normalization = params.config
+    ? createModelManifestPluginContext({ ...params, cfg: params.config }).getContext()
+    : params;
   if (params.provider && params.model) {
-    const normalizedRequest = normalizeModelRef(params.provider, params.model);
-    return `${normalizedRequest.provider}/${normalizedRequest.model}`;
+    return normalizeModelRef(params.provider, params.model, normalization);
   }
   const rawModel = params.model?.trim();
   if (!rawModel || !rawModel.includes("/")) {
     return null;
   }
-  const parsed = parseModelRef(rawModel, "");
+  const parsed = parseModelRef(rawModel, "", normalization);
   if (!parsed?.provider || !parsed.model) {
     return null;
   }
-  return `${parsed.provider}/${parsed.model}`;
+  return parsed;
 }
 
 export function normalizePluginSubagentRunRuntime(

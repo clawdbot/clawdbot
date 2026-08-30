@@ -1,5 +1,6 @@
 // Status-all report data tests cover local read-only diagnosis probes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigFileSnapshot } from "../../config/types.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
@@ -60,6 +61,21 @@ vi.mock("../status.scan-overview.ts", () => ({
 
 import { buildStatusAllReportData } from "./report-data.js";
 
+const configSnapshot: ConfigFileSnapshot = {
+  path: "/tmp/openclaw.json",
+  exists: true,
+  valid: true,
+  raw: "{}",
+  parsed: {},
+  sourceConfig: {},
+  resolved: {},
+  runtimeConfig: {},
+  config: {},
+  issues: [],
+  warnings: [],
+  legacyIssues: [],
+};
+
 describe("buildStatusAllReportData", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -67,8 +83,9 @@ describe("buildStatusAllReportData", () => {
     mocks.resolveStatusGatewayHealthSafe.mockResolvedValue(undefined);
   });
 
-  it("keeps local config diagnosis non-observing", async () => {
-    await buildStatusAllReportData({
+  it("uses the command's observed config snapshot without another read", async () => {
+    const result = await buildStatusAllReportData({
+      configSnapshot,
       overview: {
         cfg: {},
         gatewaySnapshot: {
@@ -92,8 +109,8 @@ describe("buildStatusAllReportData", () => {
       progress: { setLabel: vi.fn(), tick: vi.fn() },
     });
 
-    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
-    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(result.diagnosis.snap).toEqual(configSnapshot);
     expect(mocks.resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
     expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789, {
       probeHosts: ["127.0.0.1"],
@@ -103,6 +120,7 @@ describe("buildStatusAllReportData", () => {
 
   it("collects delivery and exporter stability projections in parallel", async () => {
     await buildStatusAllReportData({
+      configSnapshot,
       overview: {
         cfg: {},
         gatewaySnapshot: {
@@ -145,6 +163,7 @@ describe("buildStatusAllReportData", () => {
 
   it("uses the configured system agent for workspace skill diagnosis", async () => {
     await buildStatusAllReportData({
+      configSnapshot,
       overview: {
         cfg: {
           agents: {
@@ -193,6 +212,7 @@ describe("buildStatusAllReportData", () => {
 
   it("does not inspect the first workspace when an explicit fleet has no owner", async () => {
     await buildStatusAllReportData({
+      configSnapshot,
       overview: {
         cfg: {
           agents: {

@@ -35,9 +35,9 @@ export async function getAgentLocalStatuses(
   const agentList = listGatewayAgentsBasic(cfg);
   const now = Date.now();
 
-  const sessionStores = readStatusSessionStores(cfg, agentList.agents);
+  const sessionStores = readStatusSessionStores(cfg, agentList.agents, 1);
   const statuses: AgentLocalStatus[] = [];
-  for (const { agent, path: sessionsPath, sessions } of sessionStores.byAgent) {
+  for (const { agent, path: sessionsPath, count, recent } of sessionStores.byAgent) {
     const agentId = agent.id;
     const workspaceDir = (() => {
       try {
@@ -51,10 +51,7 @@ export async function getAgentLocalStatuses(
     const bootstrapPath = workspaceDir != null ? path.join(workspaceDir, "BOOTSTRAP.md") : null;
     const bootstrapPending = bootstrapPath != null ? await pathExists(bootstrapPath) : null;
 
-    const lastUpdatedAt = sessions.reduce(
-      (max, session) => Math.max(max, session.entry.updatedAt ?? 0),
-      0,
-    );
+    const lastUpdatedAt = recent[0]?.entry.updatedAt ?? 0;
     const resolvedLastUpdatedAt = lastUpdatedAt > 0 ? lastUpdatedAt : null;
     const lastActiveAgeMs = resolvedLastUpdatedAt ? now - resolvedLastUpdatedAt : null;
 
@@ -64,7 +61,7 @@ export async function getAgentLocalStatuses(
       workspaceDir,
       bootstrapPending,
       sessionsPath,
-      sessionsCount: sessions.length,
+      sessionsCount: count,
       lastUpdatedAt: resolvedLastUpdatedAt,
       lastActiveAgeMs,
     });
@@ -78,7 +75,7 @@ export async function getAgentLocalStatuses(
     ownership: agentList.ownership ?? (agentList.selectionRequired === true ? "explicit" : "sole"),
     selectionRequired: agentList.selectionRequired === true,
     agents: statuses,
-    totalSessions: sessionStores.sessions.length,
+    totalSessions: sessionStores.count,
     bootstrapPendingCount,
   };
 }

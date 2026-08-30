@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -406,6 +407,21 @@ describe("doctor transcript and heartbeat session repairs", () => {
       agents: {
         defaults: { model: { primary: "github-copilot/gpt-5.4-mini" } },
         entries: { main: {}, ops: {} },
+      },
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://copilot.example/v1",
+            models: [
+              makeProviderModelFixture<"github-copilot">({
+                id: "gpt-5.4-mini",
+                provider: "github-copilot",
+                api: "github-copilot",
+                baseUrl: "https://copilot.example/v1",
+              }),
+            ],
+          },
+        },
       },
     };
     setupSessionState(cfg, process.env, tempHome, "ops");

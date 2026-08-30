@@ -184,7 +184,9 @@ export async function loadSessionCostSummary(params: {
   if (!currentFile) {
     return null;
   }
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir, {
+    agentId: params.agentId,
+  });
   const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {
     filePaths: [currentFile.filePath],
   }).get(currentFile.filePath);
@@ -227,7 +229,11 @@ export async function loadSessionUsageTimeSeries(params: {
 
   const points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
-  const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
+  const resolveCost = createUsageCostResolver({
+    config: params.config,
+    agentId: params.agentId,
+    agentDir,
+  });
 
   for await (const record of readTranscriptRecords(sessionFile)) {
     const entry = parseUsageCostTranscriptEntry(record, resolveCost);
@@ -336,7 +342,11 @@ export async function loadSessionLogs(params: {
   const boundedLimit = Number.isInteger(limit);
   const retentionLimit = limit * 2;
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
-  const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
+  const resolveCost = createUsageCostResolver({
+    config: params.config,
+    agentId: params.agentId,
+    agentDir,
+  });
 
   for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
     try {

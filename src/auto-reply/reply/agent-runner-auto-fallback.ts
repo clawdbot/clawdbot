@@ -6,7 +6,8 @@ import {
   hasSessionAutoModelFallbackProvenance,
   resolveAutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
-import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
+import { resolvePersistedOverrideModelRef } from "../../agents/model-selection-persisted.js";
+import { createModelManifestPluginContext } from "../../agents/model-selection-shared.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
@@ -38,11 +39,21 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
     return params.run;
   }
   const resolveEntrySelectionRun = (): FollowupRun["run"] => {
-    const entryRef = resolvePersistedOverrideModelRef({
-      defaultProvider: params.run.provider,
-      overrideProvider: params.entry?.providerOverride,
-      overrideModel: params.entry?.modelOverride,
-    });
+    const overrideRouteResolution = resolveSessionModelOverrideRouteResolution(params.entry);
+    const overrideModel = normalizeOptionalString(params.entry?.modelOverride);
+    const entryRef = overrideModel
+      ? resolvePersistedOverrideModelRef({
+          ...createModelManifestPluginContext({
+            cfg: params.run.config,
+            agentId: params.run.agentId,
+            workspaceDir: params.run.workspaceDir,
+          }).getContext(),
+          defaultProvider: params.run.provider,
+          overrideProvider: params.entry?.providerOverride,
+          overrideModel,
+          overrideRouteResolution,
+        })
+      : null;
     const hasEntryModelOverride = Boolean(entryRef);
     const authProfileId = normalizeOptionalString(params.entry?.authProfileOverride);
     const fallbackRun: FollowupRun["run"] = {
@@ -50,7 +61,7 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
       provider: entryRef?.provider ?? params.run.provider,
       model: entryRef?.model ?? params.run.model,
       requestedRouteResolution: entryRef
-        ? resolveSessionModelOverrideRouteResolution(params.entry)
+        ? overrideRouteResolution
         : params.run.requestedRouteResolution,
       autoFallbackPrimaryProbe: undefined,
     };

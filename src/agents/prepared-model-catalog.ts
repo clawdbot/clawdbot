@@ -384,8 +384,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
         params.workspaceDir ??
         resolveAgentWorkspaceDir(params.config, agentId) ??
         resolveDefaultAgentWorkspaceDir(),
-      defaultProvider: params.provider,
-      defaultModel: `${params.provider}/${params.model}`,
+      modelRef: { provider: params.provider, model: params.model },
       snapshot,
     });
     const entries = normalizeThinkingCatalogProviders(augmented.entries);

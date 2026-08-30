@@ -249,10 +249,10 @@ function resolveRegistryManifestContractPluginIds(params: {
   onlyPluginIds?: readonly string[];
   manifestRegistry?: PluginManifestRegistry;
 }): string[] {
-  const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   return resolveManifestRegistry({
     ...params,
-    registry,
+    registry: params.manifestRegistry ? undefined : loadProviderRegistrySnapshot(params),
     includeDisabled: true,
   })
     .plugins.filter((plugin) => {

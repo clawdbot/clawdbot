@@ -15,6 +15,7 @@ import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { createPreparedPluginMetadataFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
@@ -120,6 +121,7 @@ describe("prepared reply fallback ownership", () => {
       }));
       const metadata = createPluginMetadataSnapshot({
         config,
+        workspaceDir: "/tmp/unused-workspace",
         manifestRegistry: { plugins: manifests, diagnostics: [] },
       });
       mocks.configuredAgentIds = ["default"];
@@ -143,7 +145,10 @@ describe("prepared reply fallback ownership", () => {
         gatewayLifecycle: true,
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
-        pluginMetadataSnapshot: metadata,
+        pluginMetadata: createPreparedPluginMetadataFixture({
+          unionSnapshot: metadata,
+          agentWorkspaceDirs: new Map([["default", "/tmp/unused-workspace"]]),
+        }),
       });
       const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
       const run = {

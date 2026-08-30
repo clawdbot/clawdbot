@@ -4,8 +4,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
-const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
-
 export function resolveConfiguredEntries(
   cfg: OpenClawConfig,
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
@@ -15,7 +13,8 @@ export function resolveConfiguredEntries(
   return resolveConfiguredModelEntries({
     cfg,
     agentId,
-    ...DISPLAY_MODEL_PARSE_OPTIONS,
+    allowPluginNormalization: false,
+    manifestPlugins: metadataSnapshot?.manifestRegistry.plugins,
     canonicalizeRef: canonicalizer.ref,
   });
 }

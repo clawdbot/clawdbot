@@ -2,6 +2,7 @@ import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../agents
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { augmentModelCatalogWithAgentHarness } from "../../agents/harness/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { resolveModelRefFromString } from "../../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { includeConfiguredStaticCatalogEntries } from "./models-list-configured-static.js";
@@ -24,8 +25,16 @@ export async function prepareModelsListHarnessCatalog(params: {
         agentId: params.agentId,
         agentDir: params.agentDir ?? resolveAgentDir(params.cfg, params.agentId),
         workspaceDir: params.workspaceDir,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel,
+        modelRef: resolveModelRefFromString({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          workspaceDir: params.workspaceDir,
+          pluginMetadataSnapshot: params.metadataSnapshot,
+          raw: defaultModel ?? "",
+          defaultProvider: DEFAULT_PROVIDER,
+          allowManifestNormalization: true,
+          allowPluginNormalization: true,
+        })?.ref,
         snapshot: params.snapshot,
         onError: params.onError,
       })

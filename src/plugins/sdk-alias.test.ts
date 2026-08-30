@@ -1615,10 +1615,13 @@ describe("plugin sdk alias helpers", () => {
 
   it.each([
     ["node", "linux", "dist/plugins/runtime/index.js", false, true],
+    ["node", "linux", "dist/plugins/runtime/index.js", true, true],
     ["node", "linux", "extensions/demo/index.ts", false, false],
     ["bun", "linux", "dist/plugins/runtime/index.js", false, false],
+    ["bun", "linux", "dist/extensions/demo/index.js", false, false],
     ["bun", "linux", "dist/extensions/demo/index.js", true, false],
     ["node", "win32", "dist/plugins/runtime/index.js", false, true],
+    ["node", "win32", "dist/extensions/demo/index.js", false, true],
     ["node", "win32", "dist/extensions/demo/index.js", true, true],
     ["node", "win32", "dist/extensions/demo/helper.ts", true, false],
     ["node", "linux", "dist/extensions/demo/index.js", true, true],

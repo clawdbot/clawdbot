@@ -45,8 +45,11 @@ import { normalizePluginsConfigWithRegistry } from "./plugin-registry-contributi
 export function readStartupBundledDiscoveryMode(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  preparedState?: { bundledDiscoveryMode?: "compat" | "allowlist" },
 ): "compat" | "allowlist" | undefined {
-  const stateMode = readBundledDiscoveryMode({ env });
+  const stateMode = preparedState
+    ? preparedState.bundledDiscoveryMode
+    : readBundledDiscoveryMode({ env });
   if (stateMode) {
     return stateMode;
   }

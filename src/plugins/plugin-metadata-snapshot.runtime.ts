@@ -13,7 +13,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type CurrentSnapshotModule = Pick<
   typeof import("./current-plugin-metadata-snapshot.js"),
-  "adoptCurrentPluginMetadataSnapshotIfAbsent" | "getCurrentPluginMetadataSnapshot"
+  "getCurrentPluginMetadataSnapshot"
 >;
 type SnapshotLoaderModule = Pick<
   typeof import("./plugin-metadata-snapshot.js"),
@@ -21,7 +21,6 @@ type SnapshotLoaderModule = Pick<
 >;
 
 type SnapshotReaderSlot = {
-  adoptCurrentPluginMetadataSnapshotIfAbsent?: CurrentSnapshotModule["adoptCurrentPluginMetadataSnapshotIfAbsent"];
   getCurrentPluginMetadataSnapshot?: CurrentSnapshotModule["getCurrentPluginMetadataSnapshot"];
   resolvePluginMetadataSnapshot?: SnapshotLoaderModule["resolvePluginMetadataSnapshot"];
 };
@@ -79,14 +78,6 @@ export function getCurrentPluginMetadataSnapshotRuntime(
     snapshotReaderSlot.getCurrentPluginMetadataSnapshot ??
     loadCurrentSnapshotModule()?.getCurrentPluginMetadataSnapshot;
   return reader?.(params) ?? undefined;
-}
-
-/** Publishes through the loaded lifecycle owner without waking a cold metadata system. */
-export function adoptCurrentPluginMetadataSnapshotIfAbsentRuntime(
-  snapshot: Parameters<CurrentSnapshotModule["adoptCurrentPluginMetadataSnapshotIfAbsent"]>[0],
-  options: Parameters<CurrentSnapshotModule["adoptCurrentPluginMetadataSnapshotIfAbsent"]>[1],
-): void {
-  snapshotReaderSlot.adoptCurrentPluginMetadataSnapshotIfAbsent?.(snapshot, options);
 }
 
 /**

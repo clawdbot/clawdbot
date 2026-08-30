@@ -35,6 +35,18 @@ describe("worker deploy build plugin", () => {
     expect(transformed).not.toContain("was not composed by the build");
   });
 
+  it("composes model normalization with the bundled provider runtime", () => {
+    const bridgePath = path.resolve("src/agents/provider-model-normalization.runtime.ts");
+    const source = fs.readFileSync(bridgePath, "utf8");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    const transformed = plugin.transform.call({ error: fail }, source, bridgePath);
+
+    expect(transformed).toBe(
+      'export { normalizeProviderModelIdWithPlugin as normalizeProviderModelIdWithRuntime } from "../plugins/provider-runtime.js";',
+    );
+  });
+
   it("binds the lazy Playwright accessor to bundled modules", () => {
     const runtimePath = path.resolve("extensions/browser/src/browser/playwright-core.runtime.ts");
     const source = fs.readFileSync(runtimePath, "utf8");

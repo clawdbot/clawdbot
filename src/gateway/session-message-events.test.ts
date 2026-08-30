@@ -33,10 +33,6 @@ import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
 import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -56,7 +52,6 @@ import { createWorkerTranscriptCommitter } from "./worker-environments/transcrip
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
-const cleanupTestStates: OpenClawTestState[] = [];
 const SETUP_RPC_TIMEOUT_MS = 30_000;
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let subscribedOperatorWs:
@@ -85,9 +80,6 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
-  for (const state of cleanupTestStates.splice(0).toReversed()) {
-    await state.cleanup();
-  }
   await Promise.all(
     cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
@@ -1133,11 +1125,7 @@ describe("session.message websocket events", () => {
 
   test("projects current revisioned sender avatars consistently across live events and RPC reads", async () => {
     const SHARED_REV = 1_800_000_000_000;
-    const profileState = await createOpenClawTestState({
-      label: "session-message-current-profile-display",
-      layout: "state-only",
-    });
-    cleanupTestStates.push(profileState);
+    // Use the suite's isolated state; its Gateway keeps the same process roots after boot.
     const storePath = await createSessionStoreFile();
     const sessionId = "sess-current-profile-display";
     const sessionKey = "agent:main:current-profile-display";

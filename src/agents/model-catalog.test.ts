@@ -37,11 +37,19 @@ function providerManifestSnapshot(params: {
   discovery: "static" | "refreshable" | "runtime";
   modelIds: string[];
   aliases?: string[];
+  modelIdAliases?: Record<string, string>;
 }): PluginMetadataSnapshot {
   const plugin = {
     id: params.provider,
     origin: "bundled",
     providers: [params.provider],
+    ...(params.modelIdAliases
+      ? {
+          modelIdNormalization: {
+            providers: { [params.provider]: { aliases: params.modelIdAliases } },
+          },
+        }
+      : {}),
     modelCatalog: {
       aliases: Object.fromEntries(
         (params.aliases ?? []).map((alias) => [alias, { provider: params.provider }]),
@@ -125,6 +133,48 @@ describe("prepared model catalog builder", () => {
     expect(snapshot.entries.map((entry) => entry.id)).toEqual(["model-a", "model-b"]);
     expect(snapshot.entries.every((entry) => entry.providerOrder === undefined)).toBe(true);
   });
+
+  it.each(["registry", "configured"])(
+    "preserves distinct model namespaces from %s rows through catalog publication",
+    async (source) => {
+      const entries = [
+        { provider: "fixture", id: "model", name: "Plain", contextWindow: 8_000 },
+        { provider: "fixture", id: "fixture/model", name: "Namespaced", contextWindow: 16_000 },
+      ];
+      const config: OpenClawConfig = {
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            fixture: {
+              api: "openai-responses",
+              baseUrl: "https://models.example.test/v1",
+              models: entries.map(({ id, name, contextWindow }) => ({
+                id,
+                name,
+                contextWindow,
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 1_024,
+              })),
+            },
+          },
+        },
+      };
+      const snapshot = await build(source === "configured" ? { config } : { entries });
+
+      for (const rows of [snapshot.entries, snapshot.routeVariants]) {
+        expect(
+          rows
+            .map(({ id, contextWindow }) => ({ id, contextWindow }))
+            .toSorted((left, right) => left.id.localeCompare(right.id)),
+        ).toEqual([
+          { id: "fixture/model", contextWindow: 16_000 },
+          { id: "model", contextWindow: 8_000 },
+        ]);
+      }
+    },
+  );
 
   it("keeps account-denied runtime models out of the prepared catalog", async () => {
     const config: OpenClawConfig = { plugins: { enabled: false } };
@@ -266,6 +316,32 @@ describe("prepared model catalog builder", () => {
     ]);
     expect(snapshot.routeVariants.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
       "openai/gpt-5.5",
+    ]);
+  });
+
+  it("keeps account visibility on the model normalized at discovery", async () => {
+    const entry = {
+      provider: "fixture",
+      id: "legacy",
+      name: "Account model",
+      contextWindow: 8_000,
+    };
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      { ...entry, contextWindow: 16_000 },
+    ]);
+    const snapshot = await build({
+      entries: [entry],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "fixture",
+        discovery: "runtime",
+        modelIds: ["legacy"],
+        modelIdAliases: { legacy: "current", current: "other" },
+      }),
+      readOnly: false,
+    });
+
+    expect(snapshot.entries).toEqual([
+      expect.objectContaining({ provider: "fixture", id: "current", contextWindow: 16_000 }),
     ]);
   });
 

@@ -107,24 +107,17 @@ vi.mock("../../agents/model-selection.js", () => {
     normalizeProviderId,
     findNormalizedProviderValue: (record: Record<string, unknown> | undefined, provider: string) =>
       Object.entries(record ?? {}).find(([key]) => normalizeProviderId(key) === provider)?.[1],
-    parseModelRef: (raw: string, defaultProvider: string) => {
-      const [provider, ...modelParts] = raw.includes("/") ? raw.split("/") : [defaultProvider, raw];
-      const model = modelParts.join("/");
-      return provider && model ? { provider: normalizeProviderId(provider), model } : null;
-    },
   };
 });
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
 vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefString: resolveSecretRefStringMock,
 }));
 vi.mock("../status-all/format.js", () => ({
   redactStatusSecrets: (value: string) => value,
 }));
-vi.mock("./shared.js", () => ({
-  DEFAULT_PROVIDER: "openai",
-  formatMs: (ms: number) => `${ms}ms`,
-}));
-
 vi.mock("../../agents/auth-profiles.js", () => ({
   externalCliDiscoveryScoped: (params: Record<string, unknown> = {}) => ({
     mode: "scoped",

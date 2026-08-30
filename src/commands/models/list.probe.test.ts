@@ -6,10 +6,35 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentRunResultView } from "../../agents/agent-run-result.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
+import { bindPluginMetadataSnapshotCache, createPluginCache } from "../../plugins/plugin-cache.js";
+import { withPluginMetadataCollectionScope } from "../../plugins/plugin-metadata-collection.js";
+import { createPreparedPluginMetadataFixture } from "../../plugins/plugin-metadata.test-support.js";
 
 let probeModule: typeof import("./list.probe.js");
+
+function runAuthProbesWithMetadata(
+  runAuthProbes: typeof probeModule.runAuthProbes,
+  params: Parameters<typeof probeModule.runAuthProbes>[0],
+) {
+  // Direct probes replace the catalog and runner, but still need the command's
+  // exact prepared workspace instead of borrowing another operation's metadata.
+  const snapshot = createPluginMetadataSnapshot({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    manifestRegistry: { plugins: [], diagnostics: [] },
+  });
+  const metadata = createPreparedPluginMetadataFixture({ unionSnapshot: snapshot });
+  const cache = createPluginCache();
+  bindPluginMetadataSnapshotCache(snapshot, cache);
+  bindPluginMetadataSnapshotCache(metadata, cache);
+  return withPluginMetadataCollectionScope(metadata, () => runAuthProbes(params), {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+}
 
 function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
   return {
@@ -226,7 +251,7 @@ describe("runAuthProbes", () => {
         import.meta.url,
         `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
       );
-      const result = await module.runAuthProbes({
+      const result = await runAuthProbesWithMetadata(module.runAuthProbes, {
         cfg: {
           models: {
             providers: {
@@ -271,7 +296,7 @@ describe("runAuthProbes", () => {
         payloads: [{ text: "LLM request timed out.", isError: true }],
         meta: { livenessState: "abandoned" },
       });
-      const failed = await module.runAuthProbes({
+      const failed = await runAuthProbesWithMetadata(module.runAuthProbes, {
         cfg: {
           models: {
             providers: {
@@ -370,7 +395,7 @@ describe("runAuthProbes", () => {
         import.meta.url,
         `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
       );
-      await module.runAuthProbes({
+      await runAuthProbesWithMetadata(module.runAuthProbes, {
         cfg: { models: { providers: { openai: providerConfig } } },
         agentId: "probe-agent",
         agentDir: "/tmp/openclaw-probe-agent",
@@ -479,7 +504,7 @@ describe("runAuthProbes", () => {
         import.meta.url,
         `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
       );
-      await module.runAuthProbes({
+      await runAuthProbesWithMetadata(module.runAuthProbes, {
         cfg,
         agentId: "probe-agent",
         agentDir: "/tmp/openclaw-probe-agent",

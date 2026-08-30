@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -56,6 +57,7 @@ export async function withOperatorToolGatewayAuthority<T>(
 }
 
 type DispatchGatewayMethodInProcessOptions = {
+  expectedInitialModel?: Readonly<ModelRef>;
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
   agentToolCaller?: TrustedAgentToolCaller;
@@ -347,6 +349,7 @@ export async function dispatchGatewayMethodInProcess<T>(
       });
       return method === "agent"
         ? await facade.dispatch<T>(params as AgentRunRequest, {
+            expectedInitialModel: options?.expectedInitialModel,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,
             onSignalAbort: options?.onSignalAbort,

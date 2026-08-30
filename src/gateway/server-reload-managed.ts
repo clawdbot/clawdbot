@@ -93,6 +93,7 @@ export function startManagedGatewayConfigReloader(
     try {
       const snapshot = await params.activateRuntimeSecrets(config, {
         ...activationParams,
+        manifestRegistry: transactionOwnership.pluginMetadata?.manifestRegistry,
         activate: false,
         canPublishFailureAsDegraded: () =>
           transactionOwnership.isCurrent() &&
@@ -150,7 +151,7 @@ export function startManagedGatewayConfigReloader(
       : {}),
     getState: params.getState,
     setState: params.setState,
-    getPluginMetadataSnapshot: params.getPluginMetadataSnapshot,
+    getPluginMetadata: params.getPluginMetadata,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
     pruneInactiveChannelAccountState: params.channelManager.pruneInactiveChannelAccountState,
@@ -336,6 +337,7 @@ export function startManagedGatewayConfigReloader(
   let lastCommittedRuntimeConfig: OpenClawConfig | undefined;
   const configReloader = startGatewayConfigReloader({
     initialConfig: params.initialConfig,
+    pluginMetadataOwner: params.pluginMetadataOwner,
     initialCompareConfig: params.initialCompareConfig,
     initialSnapshotRawHash: params.initialSnapshotRawHash,
     initialAuthoredConfig: params.initialAuthoredConfig,
@@ -500,12 +502,12 @@ export function startManagedGatewayConfigReloader(
         // candidate. `secrets.providers.*` resolves to a different object, and
         // stamping the rebuilt owner with the pre-resolution identity makes every
         // strict catalog read reject it -- the failure this fix exists to remove.
-        const pluginMetadataSnapshot = params.getPluginMetadataSnapshot?.();
+        const pluginMetadata = params.getPluginMetadata?.();
         await refreshPreparedModelRuntimeSnapshots(lastCommittedRuntimeConfig ?? nextConfig, {
           gatewayLifecycle: true,
           catalogMode: "static",
           allowGatewaySubagentBinding: true,
-          ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+          ...(pluginMetadata ? { pluginMetadata } : {}),
         });
       }
       return applicationStatus;

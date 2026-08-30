@@ -112,20 +112,26 @@ describe("racePromiseWithAbortSignal", () => {
     expect(removed).toBe(2);
   });
 
-  it("rejects with the abort reason as cause without cancelling the source", async () => {
-    const controller = new AbortController();
-    let resolveSource!: (value: string) => void;
-    const source = new Promise<string>((resolve) => {
-      resolveSource = resolve;
-    });
-    const raced = racePromiseWithAbortSignal(source, controller.signal);
-    const reason = new Error("caller stopped");
+  it.each([false, true])(
+    "preserves the abort reason without cancelling the source (already aborted: %s)",
+    async (alreadyAborted) => {
+      const controller = new AbortController();
+      let resolveSource!: (value: string) => void;
+      const source = new Promise<string>((resolve) => {
+        resolveSource = resolve;
+      });
+      const reason = new DOMException("caller deadline expired", "TimeoutError");
+      if (alreadyAborted) {
+        controller.abort(reason);
+      }
+      const raced = racePromiseWithAbortSignal(source, controller.signal);
 
-    controller.abort(reason);
-    await expect(raced).rejects.toMatchObject({ name: "AbortError", cause: reason });
-    resolveSource("still alive");
-    await expect(source).resolves.toBe("still alive");
-  });
+      controller.abort(reason);
+      await expect(raced).rejects.toBe(reason);
+      resolveSource("still alive");
+      await expect(source).resolves.toBe("still alive");
+    },
+  );
 
   it("catches aborts that land while the listener is registered", async () => {
     let aborted = false;
@@ -140,8 +146,8 @@ describe("racePromiseWithAbortSignal", () => {
       removeEventListener: () => {},
     } as unknown as AbortSignal;
 
-    await expect(
-      racePromiseWithAbortSignal(new Promise<never>(() => {}), signal),
-    ).rejects.toMatchObject({ name: "AbortError", cause: "registration race" });
+    await expect(racePromiseWithAbortSignal(new Promise<never>(() => {}), signal)).rejects.toBe(
+      "registration race",
+    );
   });
 });

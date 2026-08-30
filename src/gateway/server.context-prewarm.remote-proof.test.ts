@@ -10,11 +10,13 @@ import { getContextWindowCaches, replaceContextWindowCaches } from "../agents/co
 import { resetContextWindowCacheForTest } from "../agents/context-runtime-state.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadata } from "../plugins/plugin-metadata-collection.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import {
   getGatewayTestPort,
   installGatewayTestHooks,
   startTestGatewayServer,
+  testState,
 } from "./test-helpers.js";
 
 installGatewayTestHooks();
@@ -37,6 +39,7 @@ describe("Gateway context cache remote proof", () => {
         contextWindow: baseWindow + (index % 17),
         maxTokens: 8_192,
       }));
+    testState.agentConfig = { workspace: process.cwd() };
     const port = await getGatewayTestPort();
     const token = "context-prewarm-proof-token";
     const server = await startTestGatewayServer(port, {
@@ -81,11 +84,13 @@ describe("Gateway context cache remote proof", () => {
       } satisfies OpenClawConfig;
       const { refreshPreparedModelRuntimeSnapshots } =
         await import("../agents/prepared-model-runtime.js");
+      const pluginMetadata = preparePluginMetadata({ config: warmConfig });
       await refreshPreparedModelRuntimeSnapshots(warmConfig, {
         gatewayLifecycle: true,
         catalogMode: "static",
         defaultWorkspaceDir: process.cwd(),
         allowGatewaySubagentBinding: true,
+        pluginMetadata,
       });
       const { getPublishedPreparedModelCatalogOwnerSnapshot } =
         await import("../agents/prepared-model-catalog.js");

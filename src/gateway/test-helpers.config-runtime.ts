@@ -14,6 +14,11 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
+import {
+  createPluginMetadataOwner,
+  getCurrentPluginMetadataOwner,
+  withPluginMetadataCollectionScope,
+} from "../plugins/plugin-metadata-collection.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
@@ -226,26 +231,41 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     };
   });
 
-  const readConfigFileSnapshotForWrite =
-    async (): Promise<ReadConfigFileSnapshotForWriteResult> => ({
-      snapshot: await readConfigFileSnapshot(),
-      writeOptions: {
-        expectedConfigPath: resolveConfigPath(),
+  const readConfigFileSnapshotWithPluginMetadata = async (
+    options: Parameters<GatewayConfigModule["readConfigFileSnapshotWithPluginMetadata"]>[0] = {},
+  ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> => {
+    const snapshot = await readConfigFileSnapshot();
+    const owner =
+      options.pluginMetadataOwner ?? getCurrentPluginMetadataOwner() ?? createPluginMetadataOwner();
+    const pluginMetadata = owner.prepare({ config: snapshot.config, env: process.env });
+    const validation = withPluginMetadataCollectionScope(
+      pluginMetadata,
+      () =>
+        actual.validateConfigObjectWithPlugins(snapshot.config, {
+          env: process.env,
+          pluginValidation: "skip",
+        }),
+      { config: snapshot.config, env: process.env },
+    );
+    return {
+      snapshot: {
+        ...snapshot,
+        valid: validation.ok,
+        issues: validation.ok ? [] : validation.issues,
+        warnings: validation.warnings,
       },
-    });
-  const readConfigFileSnapshotWithPluginMetadata =
-    async (): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> => {
-      const snapshot = await readConfigFileSnapshot();
-      const validation = actual.validateConfigObjectWithPlugins(snapshot.config, {
-        env: process.env,
-        pluginValidation: "skip",
-      });
+      pluginMetadata,
+    };
+  };
+
+  const readConfigFileSnapshotForWrite =
+    async (): Promise<ReadConfigFileSnapshotForWriteResult> => {
+      const { snapshot, pluginMetadata } = await readConfigFileSnapshotWithPluginMetadata();
       return {
-        snapshot: {
-          ...snapshot,
-          valid: validation.ok,
-          issues: validation.ok ? [] : validation.issues,
-          warnings: validation.warnings,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: resolveConfigPath(),
+          basePluginMetadata: pluginMetadata,
         },
       };
     };
@@ -261,10 +281,20 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     } catch {
       fileConfig = {};
     }
-    return applyPluginAutoEnable({
-      config: composeTestConfig(fileConfig),
-      env: process.env,
-    }).config;
+    const sourceConfig = composeTestConfig(fileConfig);
+    const owner = getCurrentPluginMetadataOwner() ?? createPluginMetadataOwner();
+    const metadata = owner.prepare({ config: sourceConfig, env: process.env });
+    const config = withPluginMetadataCollectionScope(
+      metadata,
+      () =>
+        applyPluginAutoEnable({
+          config: sourceConfig,
+          env: process.env,
+          manifestRegistry: metadata.manifestRegistry,
+        }).config,
+      { config: sourceConfig, env: process.env },
+    );
+    return { config, owner, pluginMetadata: owner.prepare({ config, env: process.env }) };
   };
 
   const loadRuntimeAwareTestConfig = () => {
@@ -272,7 +302,12 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     if (runtimeSnapshot) {
       return runtimeSnapshot;
     }
-    const config = loadTestConfig();
+    const { config, owner, pluginMetadata } = loadTestConfig();
+    // Tests accept mutable config overrides without the real reload handler.
+    // Mirror its paired publication, but leave initial startup publication to the Gateway.
+    if (owner.getActive()) {
+      owner.publish(pluginMetadata, { config, env: process.env });
+    }
     actual.setRuntimeConfigSnapshot(config);
     return config;
   };

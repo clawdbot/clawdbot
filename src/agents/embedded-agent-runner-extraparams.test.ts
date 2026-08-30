@@ -585,7 +585,7 @@ describe("applyExtraParamsToAgent", () => {
     expect("nativeWebSearchPolicyContext" in (capturedContext ?? {})).toBe(false);
   });
 
-  function runResponsesPayloadMutationCase(params: {
+  async function runResponsesPayloadMutationCase(params: {
     applyProvider: string;
     applyModelId: string;
     model:
@@ -618,7 +618,7 @@ describe("applyExtraParamsToAgent", () => {
       params.thinkingLevel,
     );
     const context: Context = { messages: [] };
-    void agent.streamFn?.(params.model, context, params.options ?? {});
+    await agent.streamFn?.(params.model, context, params.options ?? {});
     return payload;
   }
 
@@ -683,7 +683,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   }
 
-  function runToolPayloadMutationCase(params: {
+  async function runToolPayloadMutationCase(params: {
     applyProvider: "openai" | "xai";
     applyModelId: string;
     model: Model<"openai-completions">;
@@ -709,7 +709,7 @@ describe("applyExtraParamsToAgent", () => {
     const agent = { streamFn: baseStreamFn };
     applyExtraParamsToAgent(agent, undefined, params.applyProvider, params.applyModelId);
     const context: Context = { messages: [] };
-    void agent.streamFn?.(params.model, context, {});
+    await agent.streamFn?.(params.model, context, {});
     return payload;
   }
 
@@ -813,8 +813,8 @@ describe("applyExtraParamsToAgent", () => {
       },
       expectedPayloads: [{ thinking: { type: "disabled" } }],
     },
-  ])("$name", ({ modelId, thinkingLevel, payload, options, expectedPayloads }) => {
-    const mutatedPayload = runResponsesPayloadMutationCase({
+  ])("$name", async ({ modelId, thinkingLevel, payload, options, expectedPayloads }) => {
+    const mutatedPayload = await runResponsesPayloadMutationCase({
       applyProvider: "minimax",
       applyModelId: modelId,
       thinkingLevel,
@@ -830,8 +830,8 @@ describe("applyExtraParamsToAgent", () => {
     expect([mutatedPayload]).toStrictEqual(expectedPayloads);
   });
 
-  it("fills DeepSeek V4 reasoning_content for unowned OpenAI-compatible proxy models", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("fills DeepSeek V4 reasoning_content for unowned OpenAI-compatible proxy models", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "opencode",
       applyModelId: "deepseek-v4-pro",
       thinkingLevel: "high",
@@ -857,8 +857,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(messages[2]).not.toHaveProperty("reasoning_content");
   });
 
-  it("does not add DeepSeek V4 thinking params on the Foundry fallback path", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("does not add DeepSeek V4 thinking params on the Foundry fallback path", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "microsoft-foundry",
       applyModelId: "deepseek-v4-pro",
       thinkingLevel: "high",
@@ -877,8 +877,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("thinking");
   });
 
-  it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "opencode",
       applyModelId: "xiaomi/mimo-v2.6-pro",
       thinkingLevel: "high",
@@ -960,8 +960,8 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("strips xai Responses reasoning payload fields", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("strips xai Responses reasoning payload fields", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "xai",
       applyModelId: "grok-4.20-0309-reasoning",
       model: {
@@ -983,7 +983,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
-  it("strips disabled reasoning payloads for native OpenAI responses models that do not support none", () => {
+  it("strips disabled reasoning payloads for native OpenAI responses models that do not support none", async () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1004,7 +1004,7 @@ describe("applyExtraParamsToAgent", () => {
       baseUrl: "https://api.openai.com/v1",
     } as Model<"openai-responses">;
     const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
+    await agent.streamFn?.(model, context, {});
 
     expect(payloads).toStrictEqual([
       {
@@ -1016,8 +1016,8 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
-  it("keeps OpenAI Responses web_search compatible when thinking is minimal", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("keeps OpenAI Responses web_search compatible when thinking is minimal", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5",
       model: {
@@ -1046,7 +1046,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
   });
 
-  it("strips disabled reasoning payloads for proxied OpenAI responses routes", () => {
+  it("strips disabled reasoning payloads for proxied OpenAI responses routes", async () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1067,7 +1067,7 @@ describe("applyExtraParamsToAgent", () => {
       baseUrl: "https://proxy.example.com/v1",
     } as Model<"openai-responses">;
     const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
+    await agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).not.toHaveProperty("reasoning");
@@ -1190,8 +1190,8 @@ describe("applyExtraParamsToAgent", () => {
     },
   );
 
-  it("strips store from proxied openai-completions payloads", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("strips store from proxied openai-completions payloads", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "google",
       applyModelId: "gemini-2.5-pro",
       model: {
@@ -1209,8 +1209,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("store");
   });
 
-  it("keeps store untouched for native openai-completions payloads", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("keeps store untouched for native openai-completions payloads", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-4.1",
       model: {
@@ -1228,8 +1228,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
-  it("merges extra_body into openai-completions payloads before proxy store stripping", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("merges extra_body into openai-completions payloads before proxy store stripping", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "google",
       applyModelId: "gemini-2.5-pro",
       cfg: {
@@ -1263,8 +1263,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("store");
   });
 
-  it("forwards chat_template_kwargs params as top-level openai-completions payload fields", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("forwards chat_template_kwargs params as top-level openai-completions payload fields", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "vllm",
       applyModelId: "nemotron-3-super",
       cfg: {
@@ -1335,7 +1335,7 @@ describe("applyExtraParamsToAgent", () => {
     },
   ])(
     "$name",
-    ({
+    async ({
       applyProvider,
       applyModelId,
       configKey,
@@ -1347,7 +1347,7 @@ describe("applyExtraParamsToAgent", () => {
     }) => {
       const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
       try {
-        const payload = runResponsesPayloadMutationCase({
+        const payload = await runResponsesPayloadMutationCase({
           applyProvider,
           applyModelId,
           cfg: buildModelConfig(configKey, params),
@@ -1363,8 +1363,8 @@ describe("applyExtraParamsToAgent", () => {
     },
   );
 
-  it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("flattens pure text OpenAI completions message arrays for string-only compat models", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "inferrs",
       applyModelId: "google/gemma-4-E2B-it",
       model: {
@@ -1411,8 +1411,8 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
-  it("strips extra OpenAI completions message keys for strict-key compat models", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("strips extra OpenAI completions message keys for strict-key compat models", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "infomaniak",
       applyModelId: "mistral3",
       model: {
@@ -1460,8 +1460,8 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
-  it("strips function.strict for xai providers", () => {
-    const payload = runToolPayloadMutationCase({
+  it("strips function.strict for xai providers", async () => {
+    const payload = await runToolPayloadMutationCase({
       applyProvider: "xai",
       applyModelId: "grok-4-1-fast-reasoning",
       model: {
@@ -1474,8 +1474,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.tools[0]?.function).not.toHaveProperty("strict");
   });
 
-  it("keeps function.strict for non-xai providers", () => {
-    const payload = runToolPayloadMutationCase({
+  it("keeps function.strict for non-xai providers", async () => {
+    const payload = await runToolPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
       model: {
@@ -1919,9 +1919,9 @@ describe("applyExtraParamsToAgent", () => {
       payload: () => ({ config: { thinkingConfig: { thinkingBudget: 0 } } }),
       expectedConfig: { thinkingConfig: { thinkingLevel: "HIGH" } },
     },
-  ])("$name", ({ provider, modelId, reasoning, thinkingLevel, payload, expectedConfig }) => {
+  ])("$name", async ({ provider, modelId, reasoning, thinkingLevel, payload, expectedConfig }) => {
     const payloads = [
-      runResponsesPayloadMutationCase({
+      await runResponsesPayloadMutationCase({
         applyProvider: provider,
         applyModelId: modelId,
         thinkingLevel,
@@ -1939,9 +1939,9 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.config).toEqual(expectedConfig);
   });
 
-  it("preserves Gemma 4 thinking off instead of rewriting thinkingBudget=0 to MINIMAL", () => {
+  it("preserves Gemma 4 thinking off instead of rewriting thinkingBudget=0 to MINIMAL", async () => {
     const payloads = [
-      runResponsesPayloadMutationCase({
+      await runResponsesPayloadMutationCase({
         applyProvider: "google",
         applyModelId: "gemma-4-26b-a4b-it",
         thinkingLevel: "off",
@@ -2055,18 +2055,18 @@ describe("applyExtraParamsToAgent", () => {
       options: {},
       expected: "auto",
     },
-  ])("$name", ({ cfg, modelId, model, options, expected }) => {
+  ])("$name", async ({ cfg, modelId, model, options, expected }) => {
     const { calls, agent } = createOptionsCaptureAgent();
     applyExtraParamsToAgent(agent, cfg, "openai", modelId);
 
     const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, options);
+    await agent.streamFn?.(model, context, options);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe(expected);
   });
 
-  it("preserves maxTokens: 0 in shared extra params for providers that forward it", () => {
+  it("preserves maxTokens: 0 in shared extra params for providers that forward it", async () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
       agents: {
@@ -2090,14 +2090,14 @@ describe("applyExtraParamsToAgent", () => {
       id: "gpt-5",
     } as Model<"openai-responses">;
     const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
+    await agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.maxTokens).toBe(0);
   });
 
-  it("injects GPT-5 default parallel tool calls and low verbosity for OpenAI Responses payloads", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("injects GPT-5 default parallel tool calls and low verbosity for OpenAI Responses payloads", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
       model: {
@@ -2112,8 +2112,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.text).toEqual({ verbosity: "low" });
   });
 
-  it("injects GPT-5 default parallel tool calls for Codex Responses payloads", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("injects GPT-5 default parallel tool calls for Codex Responses payloads", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
       model: {
@@ -2128,8 +2128,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.text).toEqual({ verbosity: "low" });
   });
 
-  it("injects native Codex web_search for direct openai Responses models", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("injects native Codex web_search for direct openai Responses models", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg: {
@@ -2172,8 +2172,8 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
-  it("does not inject duplicate native Codex web_search tools", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("does not inject duplicate native Codex web_search tools", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg: {
@@ -2208,8 +2208,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.tools).toEqual([{ type: "web_search" }]);
   });
 
-  it("keeps payload unchanged when Codex native search is inactive", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("keeps payload unchanged when Codex native search is inactive", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5",
       cfg: {
@@ -2407,7 +2407,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(hookContext?.transport).toBe("websocket");
   });
 
-  it("applies transport hook parallel_tool_calls patches to request payloads", () => {
+  it("applies transport hook parallel_tool_calls patches to request payloads", async () => {
     extraParamsTesting.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: () => undefined,
       resolveProviderExtraParamsForTransport: () => ({
@@ -2417,7 +2417,7 @@ describe("applyExtraParamsToAgent", () => {
       }),
       wrapProviderStreamFn: (params) => params.context.streamFn,
     });
-    const payload = runResponsesPayloadMutationCase({
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "test-openai",
       applyModelId: "gpt-compatible",
       model: {
@@ -2792,8 +2792,8 @@ describe("applyExtraParamsToAgent", () => {
         baseUrl: "https://myresource.openai.azure.com/openai/v1",
       } as Model<"openai-responses">,
     },
-  ])("$name", ({ applyProvider, applyModelId, model }) => {
-    const payload = runResponsesPayloadMutationCase({ applyProvider, applyModelId, model });
+  ])("$name", async ({ applyProvider, applyModelId, model }) => {
+    const payload = await runResponsesPayloadMutationCase({ applyProvider, applyModelId, model });
 
     expect(payload.store).toBe(true);
   });
@@ -2874,8 +2874,8 @@ describe("applyExtraParamsToAgent", () => {
         baseUrl: "https://myresource.openai.azure.com/openai/v1",
       } as Model<"azure-openai-responses">,
     },
-  ])("$name", ({ applyProvider, model }) => {
-    const payload = runResponsesPayloadMutationCase({
+  ])("$name", async ({ applyProvider, model }) => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider,
       applyModelId: "gpt-5-mini",
       model,
@@ -2919,8 +2919,8 @@ describe("applyExtraParamsToAgent", () => {
       payload: { store: false, service_tier: "default" },
       expectedTier: "default",
     },
-  ])("$name", ({ model, payload: initialPayload, expectedTier }) => {
-    const payload = runResponsesPayloadMutationCase({
+  ])("$name", async ({ model, payload: initialPayload, expectedTier }) => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg: buildModelConfig("openai/gpt-5.4", { serviceTier: "priority" }),
@@ -2980,8 +2980,8 @@ describe("applyExtraParamsToAgent", () => {
       payload: { store: false, text: { verbosity: "high" } },
       expectedText: { verbosity: "high" },
     },
-  ])("$name", ({ params, model, payload: initialPayload, expectedText }) => {
-    const payload = runResponsesPayloadMutationCase({
+  ])("$name", async ({ params, model, payload: initialPayload, expectedText }) => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg: buildModelConfig("openai/gpt-5.4", params),
@@ -2992,10 +2992,10 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.text).toEqual(expectedText);
   });
 
-  it("warns and skips invalid OpenAI text verbosity values", () => {
+  it("warns and skips invalid OpenAI text verbosity values", async () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     try {
-      const payload = runResponsesPayloadMutationCase({
+      const payload = await runResponsesPayloadMutationCase({
         applyProvider: "openai",
         applyModelId: "gpt-5.4",
         cfg: {
@@ -3025,8 +3025,8 @@ describe("applyExtraParamsToAgent", () => {
     }
   });
 
-  it("lets null runtime override suppress inherited text verbosity injection", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("lets null runtime override suppress inherited text verbosity injection", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg: {
@@ -3055,10 +3055,10 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("text");
   });
 
-  it("ignores OpenAI text verbosity params for non-OpenAI providers without warning", () => {
+  it("ignores OpenAI text verbosity params for non-OpenAI providers without warning", async () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     try {
-      const payload = runResponsesPayloadMutationCase({
+      const payload = await runResponsesPayloadMutationCase({
         applyProvider: "anthropic",
         applyModelId: "claude-sonnet-4-5",
         cfg: {
@@ -3112,8 +3112,8 @@ describe("applyExtraParamsToAgent", () => {
         baseUrl: "https://chatgpt.com/backend-api",
       } as Model<"openai-chatgpt-responses">,
     },
-  ])("$name", ({ cfg, extraParamsOverride, model }) => {
-    const payload = runResponsesPayloadMutationCase({
+  ])("$name", async ({ cfg, extraParamsOverride, model }) => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg,
@@ -3127,8 +3127,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("priority");
   });
 
-  it("preserves caller-provided OpenAI payload fields when fast mode is enabled", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("preserves caller-provided OpenAI payload fields when fast mode is enabled", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
       extraParamsOverride: { fastMode: true },
@@ -3274,8 +3274,8 @@ describe("applyExtraParamsToAgent", () => {
       payload: {},
       expected: "standard_only",
     },
-  ])("$name", ({ cfg, extraParamsOverride, payload: initialPayload, expected }) => {
-    const payload = runAnthropicServiceTierCase({
+  ])("$name", async ({ cfg, extraParamsOverride, payload: initialPayload, expected }) => {
+    const payload = await runAnthropicServiceTierCase({
       cfg,
       extraParamsOverride,
       payload: initialPayload,
@@ -3284,12 +3284,12 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe(expected);
   });
 
-  it("injects configured Anthropic server compaction through the provider runtime", () => {
+  it("injects configured Anthropic server compaction through the provider runtime", async () => {
     const cfg = buildModelConfig("anthropic/claude-sonnet-4-5", {
       anthropicServerCompaction: true,
       anthropicCompactThreshold: 120_000,
     });
-    const payload = runAnthropicServiceTierCase({ cfg });
+    const payload = await runAnthropicServiceTierCase({ cfg });
     const headers = runAnthropicHeaderCase({
       cfg,
       modelId: "claude-sonnet-4-5",
@@ -3322,8 +3322,8 @@ describe("applyExtraParamsToAgent", () => {
       extraParamsOverride: { anthropicServerCompaction: true },
       baseUrl: "https://proxy.example.test/v1",
     },
-  ])("does not inject Anthropic server compaction when the opt-in $name", (params) => {
-    const payload = runAnthropicServiceTierCase(params);
+  ])("does not inject Anthropic server compaction when the opt-in $name", async (params) => {
+    const payload = await runAnthropicServiceTierCase(params);
 
     expect(payload).not.toHaveProperty("context_management");
   });
@@ -3354,8 +3354,8 @@ describe("applyExtraParamsToAgent", () => {
       cfg: undefined,
       extraParamsOverride: { fastMode: false },
     },
-  ])("$name", ({ cfg, extraParamsOverride }) => {
-    const payload = runAnthropicServiceTierCase({
+  ])("$name", async ({ cfg, extraParamsOverride }) => {
+    const payload = await runAnthropicServiceTierCase({
       cfg,
       extraParamsOverride,
       options: { apiKey: "sk-ant-oat-test-token" },
@@ -3364,10 +3364,10 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBeUndefined();
   });
 
-  it("does not warn for valid Anthropic serviceTier values", () => {
+  it("does not warn for valid Anthropic serviceTier values", async () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     try {
-      const payload = runResponsesPayloadMutationCase({
+      const payload = await runResponsesPayloadMutationCase({
         applyProvider: "anthropic",
         applyModelId: "claude-sonnet-4-5",
         cfg: {
@@ -3408,8 +3408,8 @@ describe("applyExtraParamsToAgent", () => {
       name: "does not inject explicit Anthropic service_tier for proxied base URLs",
       extraParamsOverride: { serviceTier: "standard_only" },
     },
-  ])("$name", ({ extraParamsOverride }) => {
-    const payload = runAnthropicServiceTierCase({
+  ])("$name", async ({ extraParamsOverride }) => {
+    const payload = await runAnthropicServiceTierCase({
       extraParamsOverride,
       baseUrl: "https://proxy.example.com/anthropic",
     });
@@ -3466,8 +3466,8 @@ describe("applyExtraParamsToAgent", () => {
         baseUrl: "https://api.openai.com/v1",
       } as Model<"openai-responses">,
     },
-  ])("$name", ({ applyProvider, configKey, serviceTier, model }) => {
-    const payload = runResponsesPayloadMutationCase({
+  ])("$name", async ({ applyProvider, configKey, serviceTier, model }) => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider,
       applyModelId: "gpt-5.4",
       cfg: buildModelConfig(configKey, { serviceTier }),
@@ -3477,10 +3477,10 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("service_tier");
   });
 
-  it("does not warn for valid OpenAI serviceTier values", () => {
+  it("does not warn for valid OpenAI serviceTier values", async () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     try {
-      const payload = runResponsesPayloadMutationCase({
+      const payload = await runResponsesPayloadMutationCase({
         applyProvider: "openai",
         applyModelId: "gpt-5.4",
         cfg: {
@@ -3511,8 +3511,8 @@ describe("applyExtraParamsToAgent", () => {
     }
   });
 
-  it("does not force store for OpenAI Responses routed through non-OpenAI base URLs", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("does not force store for OpenAI Responses routed through non-OpenAI base URLs", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5",
       model: {
@@ -3525,8 +3525,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
-  it("does not force store for OpenAI Responses when baseUrl is empty", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("does not force store for OpenAI Responses when baseUrl is empty", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5",
       model: {
@@ -3539,8 +3539,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
-  it("strips store from payload for models that declare supportsStore=false", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("strips store from payload for models that declare supportsStore=false", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "azure-openai-responses",
       applyModelId: "gpt-4o",
       model: {
@@ -3560,8 +3560,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("store");
   });
 
-  it("strips store from payload for non-OpenAI responses providers with supportsStore=false", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("strips store from payload for non-OpenAI responses providers with supportsStore=false", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "custom-openai-responses",
       applyModelId: "gemini-2.5-pro",
       model: {
@@ -3581,8 +3581,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("store");
   });
 
-  it("keeps existing context_management when stripping store for supportsStore=false models", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("keeps existing context_management when stripping store for supportsStore=false models", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "custom-openai-responses",
       applyModelId: "gemini-2.5-pro",
       model: {
@@ -3659,8 +3659,15 @@ describe("applyExtraParamsToAgent", () => {
     },
   ])(
     "$name",
-    ({ applyProvider, applyModelId, cfg, model, payload: initialPayload, expectedContext }) => {
-      const payload = runResponsesPayloadMutationCase({
+    async ({
+      applyProvider,
+      applyModelId,
+      cfg,
+      model,
+      payload: initialPayload,
+      expectedContext,
+    }) => {
+      const payload = await runResponsesPayloadMutationCase({
         applyProvider,
         applyModelId,
         cfg,
@@ -3697,8 +3704,8 @@ describe("applyExtraParamsToAgent", () => {
         baseUrl: "https://api.openai.com/v1",
       } as Model<"openai-responses">,
     },
-  ])("$name", ({ applyProvider, applyModelId, cfg, model }) => {
-    const payload = runResponsesPayloadMutationCase({
+  ])("$name", async ({ applyProvider, applyModelId, cfg, model }) => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider,
       applyModelId,
       cfg,
@@ -3740,13 +3747,13 @@ describe("applyExtraParamsToAgent", () => {
     },
   ])(
     "does not force store=true for Codex responses (Codex requires store=false) ($name)",
-    ({ run }) => {
-      expect(run().store).toBe(false);
+    async ({ run }) => {
+      expect((await run()).store).toBe(false);
     },
   );
 
-  it("strips prompt cache fields for non-OpenAI openai-responses endpoints", () => {
-    const payload = runResponsesPayloadMutationCase({
+  it("strips prompt cache fields for non-OpenAI openai-responses endpoints", async () => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider: "custom-proxy",
       applyModelId: "some-model",
       model: {
@@ -3801,8 +3808,8 @@ describe("applyExtraParamsToAgent", () => {
       } as Model<"openai-responses">,
       cacheKey: "session-default",
     },
-  ])("$name", ({ applyProvider, applyModelId, model, cacheKey }) => {
-    const payload = runResponsesPayloadMutationCase({
+  ])("$name", async ({ applyProvider, applyModelId, model, cacheKey }) => {
+    const payload = await runResponsesPayloadMutationCase({
       applyProvider,
       applyModelId,
       model,

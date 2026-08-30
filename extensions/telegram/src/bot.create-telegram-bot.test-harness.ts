@@ -139,7 +139,7 @@ const skillCommandListHoisted = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn<TelegramBotDeps["listSkillCommandsForAgents"]>(() => []),
 }));
 const modelProviderDataHoisted = vi.hoisted(() => ({
-  buildModelsProviderData: vi.fn() as MockFn<TelegramBotDeps["buildModelsProviderData"]>,
+  buildModelsProviderData: vi.fn<TelegramBotDeps["buildModelsProviderData"]>(),
 }));
 const replySpyHoisted = vi.hoisted(() => ({
   replySpy: vi.fn<ReplySpy>(async (_ctx, opts) => {
@@ -239,24 +239,11 @@ function normalizeLowercaseStringOrEmptyForTest(value: string | undefined): stri
   return value?.trim().toLowerCase() ?? "";
 }
 
-function resolveDefaultModelForAgentForTest(params: { cfg: OpenClawConfig }): {
-  provider: string;
-  model: string;
-} {
-  const modelConfig = params.cfg.agents?.defaults?.model;
-  const rawModel =
-    typeof modelConfig === "string" ? modelConfig : (modelConfig?.primary ?? "openai/gpt-5.4");
-  const parsed = parseModelRef(rawModel);
-  const provider = normalizeLowercaseStringOrEmptyForTest(parsed.provider) || "openai";
-  return {
-    provider: provider === "bedrock" ? "amazon-bedrock" : provider,
-    model: parsed.model || "gpt-5.4",
-  };
-}
-
-function createModelsProviderDataFromConfig(
+async function createModelsProviderDataFromConfig(
   cfg: OpenClawConfig,
-): Awaited<ReturnType<TelegramBotDeps["buildModelsProviderData"]>> {
+  agentId?: string,
+): ReturnType<TelegramBotDeps["buildModelsProviderData"]> {
+  const { resolveDefaultModelForAgent } = await import("openclaw/plugin-sdk/agent-runtime");
   const byProvider = new Map<string, Set<string>>();
   const add = (providerRaw: string | undefined, modelRaw: string | undefined) => {
     const provider = normalizeLowercaseStringOrEmptyForTest(providerRaw);
@@ -269,7 +256,13 @@ function createModelsProviderDataFromConfig(
     byProvider.set(provider, existing);
   };
 
-  const resolvedDefault = resolveDefaultModelForAgentForTest({ cfg });
+  // This mock catalog resolves config only; metadata normalization has producer coverage.
+  const resolvedDefault = resolveDefaultModelForAgent({
+    cfg,
+    agentId,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  });
   add(resolvedDefault.provider, resolvedDefault.model);
 
   for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {
@@ -286,6 +279,13 @@ function createModelsProviderDataFromConfig(
     modelCatalog: [...byProvider].flatMap(([provider, models]) =>
       [...models].map((id) => ({ provider, id, name: id, reasoning: false })),
     ),
+    // These catalog fixtures have no modelPolicy restrictions.
+    modelPolicy: { allows: () => true },
+    modelNormalization: {
+      manifestPlugins: [],
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    },
   };
 }
 
@@ -521,7 +521,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   enqueueSystemEvent: enqueueSystemEventSpy as TelegramBotDeps["enqueueSystemEvent"],
   dispatchReplyWithBufferedBlockDispatcher,
   loadWebMedia: loadWebMedia as TelegramBotDeps["loadWebMedia"],
-  buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
+  buildModelsProviderData,
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
   syncTelegramMenuCommands: syncTelegramMenuCommands as TelegramBotDeps["syncTelegramMenuCommands"],
@@ -715,9 +715,7 @@ beforeEach(() => {
   listSkillCommandsForAgents.mockReset();
   listSkillCommandsForAgents.mockReturnValue([]);
   buildModelsProviderData.mockReset();
-  buildModelsProviderData.mockImplementation(async (cfg: OpenClawConfig) => {
-    return createModelsProviderDataFromConfig(cfg);
-  });
+  buildModelsProviderData.mockImplementation(createModelsProviderDataFromConfig);
   middlewareUseSpy.mockReset();
   runnerHoisted.sequentializeMiddleware.mockReset();
   runnerHoisted.sequentializeMiddleware.mockImplementation(async (_ctx, next) => {

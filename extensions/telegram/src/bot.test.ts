@@ -2711,6 +2711,18 @@ describe("createTelegramBot", () => {
         expectedProfile: "team:prod",
       },
       {
+        name: "uses the catalog-normalized default when retaining a compatible auth profile",
+        caseId: "normalized-default",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5",
+        // The catalog producer has applied its runtime model-id normalization hook.
+        configuredDefaultModel: "openai/runtime-default-alias",
+        callbackData: "mdl_sel_openai/gpt-5",
+        outcomeText: "Compatible auth profile retained.",
+        expectedRuntime: "codex",
+        expectedProfile: "team:prod",
+      },
+      {
         name: "clears an incompatible auth profile on a cross-provider default reset",
         caseId: "cross-default",
         defaultProvider: "anthropic",
@@ -2726,6 +2738,7 @@ describe("createTelegramBot", () => {
         caseId,
         defaultProvider,
         defaultModel,
+        configuredDefaultModel,
         callbackData,
         expectedProfile,
         expectedRuntime,
@@ -2739,7 +2752,7 @@ describe("createTelegramBot", () => {
           config: {
             auth: { profiles: { "team:prod": { provider: "openai", mode: "api_key" } } },
           },
-          defaultModel: `${defaultProvider}/${defaultModel}`,
+          defaultModel: configuredDefaultModel ?? `${defaultProvider}/${defaultModel}`,
           models: {
             "openai/gpt-4o": {},
             "openai/gpt-4.1": {},
@@ -2794,6 +2807,12 @@ describe("createTelegramBot", () => {
               reasoning: true,
             },
           ],
+          modelPolicy: { allows: () => true },
+          modelNormalization: {
+            manifestPlugins: [],
+            allowManifestNormalization: false,
+            allowPluginNormalization: false,
+          },
         });
 
         loadConfig.mockReturnValue(config);
@@ -2823,61 +2842,73 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("renders model callback lists with configured display names", async () => {
-    const storePath = createTelegramTestStorePath("model-display-names");
-    const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
-    buildModelsProviderDataMock.mockResolvedValueOnce({
-      byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
-      providers: ["openai"],
-      resolvedDefault: { provider: "openai", model: "gpt-5" },
-      modelCatalog: [],
-      modelNames: new Map<string, string>([
-        ["openai/gpt-4.1", "GPT 4.1 Bridge"],
-        ["openai/gpt-5", "GPT Five Bridge"],
-      ]),
-    });
-
-    const config = makeModelPickerConfig(storePath, {
-      defaultModel: "openai/gpt-5",
-      omitModels: true,
-    });
-
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
-
-    await callbackHandler(
-      createTelegramCallbackContext({
-        id: "cbq-model-display-names-1",
-        data: "mdl_list_openai_1",
-        message: { message_id: 23 },
-      }),
-    );
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(firstEditMessageTextArg(2)).toContain(
-      "Selecting a model also applies its configured runtime.",
-    );
-    const params = firstEditMessageTextArg(3);
-    const inlineKeyboard = (
-      params as {
-        reply_markup?: {
-          inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
-        };
+  it.each([
+    { defaultSource: "global", defaultModel: "openai/gpt-5", agentModel: undefined },
+    { defaultSource: "agent", defaultModel: "openai/gpt-4.1", agentModel: "openai/gpt-5" },
+  ])(
+    "renders model callback lists with configured display names and the $defaultSource default",
+    async ({ defaultModel, agentModel }) => {
+      const storePath = createTelegramTestStorePath("model-display-names");
+      const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
+      const buildModelData = buildModelsProviderDataMock.getMockImplementation();
+      if (!buildModelData) {
+        throw new Error("Expected the configured model catalog fixture");
       }
-    ).reply_markup?.inline_keyboard;
+      buildModelsProviderDataMock.mockImplementationOnce(async (...args) => ({
+        ...(await buildModelData(...args)),
+        byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
+        providers: ["openai"],
+        modelNames: new Map<string, string>([
+          ["openai/gpt-4.1", "GPT 4.1 Bridge"],
+          ["openai/gpt-5", "GPT Five Bridge"],
+        ]),
+      }));
 
-    expect(inlineKeyboard).toStrictEqual([
-      [{ text: "GPT 4.1 Bridge", callback_data: "mdl_sel_openai/gpt-4.1" }],
-      [{ text: "GPT Five Bridge ✓", callback_data: "mdl_sel_openai/gpt-5" }],
-      [{ text: "<< Back", callback_data: "mdl_back" }],
-    ]);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
-  });
+      const config = makeModelPickerConfig(storePath, {
+        defaultModel,
+        omitModels: true,
+      });
+      if (agentModel) {
+        config.agents = { ...config.agents, entries: { main: { model: agentModel } } };
+      }
+
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = getTelegramCallbackHandlerForTests();
+
+      await callbackHandler(
+        createTelegramCallbackContext({
+          id: "cbq-model-display-names-1",
+          data: "mdl_list_openai_1",
+          message: { message_id: 23 },
+        }),
+      );
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      expect(firstEditMessageTextArg(2)).toContain(
+        "Selecting a model also applies its configured runtime.",
+      );
+      const params = firstEditMessageTextArg(3);
+      const inlineKeyboard = (
+        params as {
+          reply_markup?: {
+            inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+          };
+        }
+      ).reply_markup?.inline_keyboard;
+
+      expect(inlineKeyboard).toStrictEqual([
+        [{ text: "GPT 4.1 Bridge", callback_data: "mdl_sel_openai/gpt-4.1" }],
+        [{ text: "GPT Five Bridge ✓", callback_data: "mdl_sel_openai/gpt-5" }],
+        [{ text: "<< Back", callback_data: "mdl_back" }],
+      ]);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
+    },
+  );
 
   it("formats non-default model selection confirmations with Telegram HTML parse mode", async () => {
     const storePath = createTelegramTestStorePath("model-html");

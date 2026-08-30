@@ -162,14 +162,13 @@ async function readGuardedGatewayRunConfig(
   params: GatewayRunGuardParams,
 ): Promise<ConfigFileSnapshot | null> {
   const { readConfigFileSnapshot } = await import("../../config/config.js");
-  const snapshot = await readConfigFileSnapshot({ isolateEnv: true, observe: false });
-  return enforceGatewayRunFutureConfigGuard({
-    opts: params.opts,
-    runtime: params.runtime,
-    snapshot,
-  })
-    ? snapshot
-    : null;
+  // Plugin validation needs the migrated install ledger; these guards must remain read-only.
+  const snapshot = await readConfigFileSnapshot({
+    isolateEnv: true,
+    observe: false,
+    pluginValidation: "core-only",
+  });
+  return enforceGatewayRunFutureConfigGuard({ ...params, snapshot }) ? snapshot : null;
 }
 
 async function isSameGatewayRunConfigSnapshot(
@@ -204,6 +203,7 @@ async function recoverGuardedGatewayRunConfig(
   let recoveryAllowed = true;
   const recoveredSnapshot = await readConfigFileSnapshot({
     isolateEnv: true,
+    pluginValidation: "core-only",
     recoverSuspicious: true,
     allowSuspiciousRecovery: (config, current) => {
       recoveryAllowed = enforceGatewayRunFutureConfigGuard({

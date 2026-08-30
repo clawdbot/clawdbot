@@ -150,6 +150,7 @@ export async function readConfigFileSnapshot(
   const pluginValidation =
     options.pluginValidation ?? (options.skipPluginValidation ? "skip" : undefined);
   return await createConfigIO({
+    ...(options.pluginMetadataOwner ? { pluginMetadataOwner: options.pluginMetadataOwner } : {}),
     ...(options.measure ? { measure: options.measure } : {}),
     ...(options.observe === false ? { observe: false } : {}),
     ...(options.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
@@ -176,9 +177,11 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     | "observe"
     | "recoverSuspicious"
     | "skipPluginValidation"
+    | "pluginMetadataOwner"
   >,
 ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   return await createConfigIO({
+    ...(options?.pluginMetadataOwner ? { pluginMetadataOwner: options.pluginMetadataOwner } : {}),
     ...(options?.measure ? { measure: options.measure } : {}),
     ...(options?.observe === false ? { observe: false } : {}),
     ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
@@ -280,7 +283,7 @@ export async function writeConfigFile(
   const baseSnapshotRead = options.baseSnapshot
     ? {
         snapshot: options.baseSnapshot,
-        pluginMetadataSnapshot: options.basePluginMetadataSnapshot,
+        pluginMetadata: options.basePluginMetadata,
       }
     : await io.readConfigFileSnapshotWithPluginMetadata();
   const baseSnapshot = baseSnapshotRead.snapshot;
@@ -291,7 +294,7 @@ export async function writeConfigFile(
   let managedPreparedCandidates = new Map<symbol, RuntimeConfigWritePreparedCandidate>();
   const writeResult = await io.writeConfigFile(nextCfg, {
     baseSnapshot,
-    basePluginMetadataSnapshot: baseSnapshotRead.pluginMetadataSnapshot,
+    basePluginMetadata: baseSnapshotRead.pluginMetadata,
     assertConfigPathForWrite: options.assertConfigPathForWrite,
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
       actualConfigPath: io.configPath,

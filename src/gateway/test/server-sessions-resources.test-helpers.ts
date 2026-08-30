@@ -4,6 +4,7 @@ import path from "node:path";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { installGatewayTestHooks } from "../test-helpers.server.js";
 
@@ -40,7 +41,11 @@ export function installGatewaySessionsTestResources(
           harness = undefined;
           await acquiredHarness?.close();
         },
-        () => {
+        async () => {
+          // These stores live outside the Gateway home; retire writers before removing files.
+          if (sharedSessionStoreDir) {
+            await cleanupSessionStateForTest({ stateDir: sharedSessionStoreDir });
+          }
           sharedSessionStoreDir = undefined;
           tempDirs.cleanup();
         },

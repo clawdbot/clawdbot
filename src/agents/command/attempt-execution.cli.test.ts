@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 // Covers CLI-backed attempt execution and session-binding persistence.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { persistAcpDispatchTranscript } from "../../auto-reply/reply/dispatch-acp-transcript.runtime.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   formatSqliteSessionFileMarker,
@@ -19,6 +24,14 @@ import {
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import * as pluginMetadataRuntime from "../../plugins/plugin-metadata-snapshot.js";
+import type { ProviderResolveExternalAuthProfilesContext } from "../../plugins/provider-external-auth.types.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { getActivePluginRegistryWorkspaceDir } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import {
@@ -32,7 +45,7 @@ import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
-import { saveAuthProfileStore } from "../auth-profiles/store.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "../auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
@@ -351,25 +364,18 @@ const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const hasClaudeSessionMock = vi.hoisted(() => vi.fn(() => false));
 const providerAuthAliasMocks = vi.hoisted(() => ({
   resolveProviderAuthAliasMap: vi.fn(() => ({})),
-  resolveProviderIdForAuth: vi.fn(
-    (
-      provider: string,
-      params?: {
-        metadataSnapshot?: {
-          plugins?: readonly { providerAuthAliases?: Record<string, string> }[];
-        };
-      },
-    ) => {
-      const normalized = provider.trim().toLowerCase();
-      for (const plugin of params?.metadataSnapshot?.plugins ?? []) {
-        const alias = plugin.providerAuthAliases?.[normalized]?.trim();
-        if (alias) {
-          return alias.toLowerCase();
-        }
+  resolveProviderIdForAuth: vi.fn<
+    typeof import("../provider-auth-aliases.js").resolveProviderIdForAuth
+  >((provider, params) => {
+    const normalized = provider.trim().toLowerCase();
+    for (const plugin of params?.metadataSnapshot?.plugins ?? []) {
+      const alias = plugin.providerAuthAliases?.[normalized]?.trim();
+      if (alias) {
+        return alias.toLowerCase();
       }
-      return ["codex-cli", "openai"].includes(normalized) ? "openai" : normalized;
-    },
-  ),
+    }
+    return ["codex-cli", "openai"].includes(normalized) ? "openai" : normalized;
+  }),
 }));
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
@@ -3559,6 +3565,200 @@ describe("CLI attempt execution", () => {
     });
     expect(retryArg.images).toBeUndefined();
   });
+
+  it.each(
+    (["captured packet", "retained generation"] as const).flatMap((scope) =>
+      (["embedded", "cli"] as const).flatMap((runtime) =>
+        (["auto", "user"] as const).map((selection) => ({ scope, runtime, selection })),
+      ),
+    ),
+  )(
+    "keeps command auth on its captured workspace: $scope / $runtime / $selection",
+    async ({ scope, runtime, selection }) => {
+      const pluginId = "fixture-command-auth";
+      const aliasPluginId = "fixture-workspace-auth";
+      const profileId = "fixture-command:work";
+      const credentialProvider = runtime === "cli" ? "claude-cli" : "fixture-work-auth";
+      const provider = runtime === "cli" ? "anthropic" : "openai";
+      const workWorkspace = path.join(tmpDir, "workspace-work");
+      const mainWorkspace =
+        getActivePluginRegistryWorkspaceDir() ?? path.join(tmpDir, "workspace-main");
+      const config: OpenClawConfig = {
+        plugins: {
+          entries: {
+            [pluginId]: { enabled: true, config: { credentialOwner: "work" } },
+            [aliasPluginId]: { enabled: true },
+          },
+        },
+      };
+      const registry = makeRegistry([
+        { id: pluginId, channels: [], providers: [pluginId], origin: "global" },
+        { id: aliasPluginId, channels: [], origin: "workspace" },
+      ]);
+      const externalManifest = expectDefined(registry.plugins[0], "external auth manifest");
+      externalManifest.contracts = { externalAuthProviders: [pluginId] };
+      const aliasManifest = expectDefined(registry.plugins[1], "workspace auth alias manifest");
+      aliasManifest.providerAuthAliases = {
+        "fixture-work-auth": "openai",
+        "claude-cli": "anthropic",
+        "fixture-ambient-auth": "ambient-owner",
+      };
+      const captured = createPluginMetadataSnapshot({
+        config,
+        workspaceDir: workWorkspace,
+        manifestRegistry: registry,
+      });
+      const ambientConfig: OpenClawConfig = {};
+      const ambient = createPluginMetadataSnapshot({
+        config: ambientConfig,
+        workspaceDir: mainWorkspace,
+        manifestRegistry: {
+          plugins: [
+            externalManifest,
+            {
+              ...aliasManifest,
+              id: "fixture-main-auth",
+              providerAuthAliases: { "fixture-work-auth": "anthropic" },
+            },
+          ],
+          diagnostics: [],
+        },
+      });
+      const resolveProfiles = vi.fn((context: ProviderResolveExternalAuthProfilesContext) => {
+        const ownsWork =
+          context.config?.plugins?.entries?.[pluginId]?.config?.credentialOwner === "work";
+        return [
+          {
+            profileId,
+            credential: {
+              type: "oauth" as const,
+              provider: ownsWork ? credentialProvider : "fixture-ambient-auth",
+              access: "fixture-access",
+              refresh: "fixture-refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+        ];
+      });
+      const runtimeRegistry = createEmptyPluginRegistry();
+      runtimeRegistry.plugins.push(
+        createPluginRecord({
+          id: pluginId,
+          origin: externalManifest.origin,
+          source: externalManifest.source,
+          rootDir: externalManifest.rootDir,
+        }),
+      );
+      runtimeRegistry.providers.push({
+        pluginId,
+        source: externalManifest.source,
+        rootDir: externalManifest.rootDir,
+        provider: {
+          id: pluginId,
+          label: "Fixture auth",
+          auth: [],
+          resolveExternalAuthProfiles: resolveProfiles,
+        },
+      });
+      const previousAliasResolver =
+        providerAuthAliasMocks.resolveProviderIdForAuth.getMockImplementation();
+      if (!previousAliasResolver) {
+        throw new Error("Expected the suite auth alias resolver");
+      }
+      const actualAliases = await vi.importActual<typeof import("../provider-auth-aliases.js")>(
+        "../provider-auth-aliases.js",
+      );
+      const cliCredentials = await import("../cli-credentials.js");
+      const cliRead = vi
+        .spyOn(cliCredentials, "readCodexCliCredentialsCached")
+        .mockReturnValue(null);
+      const lease = installTemporaryCurrentPluginMetadataSnapshot(ambient, {
+        config: ambientConfig,
+        workspaceDir: mainWorkspace,
+      });
+      const metadataLoads = vi.spyOn(pluginMetadataRuntime, "loadPluginMetadataSnapshot");
+      try {
+        providerAuthAliasMocks.resolveProviderIdForAuth.mockImplementation(
+          actualAliases.resolveProviderIdForAuth,
+        );
+        // Model selection already validated this profile. The attempt must not
+        // replace its external owner while inspecting the same pin again.
+        const preparedStore = withPluginRuntimeRegistryScope(runtimeRegistry, () =>
+          ensureAuthProfileStore(agentDir, {
+            config,
+            workspaceDir: workWorkspace,
+            pluginMetadataSnapshot: captured,
+            allowKeychainPrompt: false,
+            externalCliProfileIds: [profileId],
+          }),
+        );
+        expect(preparedStore.profiles[profileId]?.provider).toBe(credentialProvider);
+        resolveProfiles.mockClear();
+        const sessionKey = "agent:main:direct:captured-command-auth";
+        const sessionEntry = makeSessionEntry(
+          "captured-command-auth",
+          selection === "user"
+            ? {
+                authProfileOverride: profileId,
+                authProfileOverrideSource: "user",
+              }
+            : {},
+        );
+        runEmbeddedAgentMock.mockResolvedValueOnce({
+          meta: { durationMs: 1 },
+        } satisfies EmbeddedAgentRunResult);
+        runCliAgentMock.mockResolvedValueOnce(makeCliResult("captured auth"));
+        const run = () =>
+          runAgentAttempt({
+            agentDir,
+            storePath,
+            cfg: config,
+            providerOverride: provider,
+            authProfileProvider: provider,
+            agentHarnessRuntimeOverride: runtime === "cli" ? "claude-cli" : "codex",
+            sessionEntry,
+            sessionKey,
+            workspaceDir: workWorkspace,
+            pluginsEnabled: true,
+            // A retained generation also wins over a newer explicitly supplied packet.
+            metadataSnapshot: scope === "retained generation" ? ambient : captured,
+          });
+        const loadsBefore = metadataLoads.mock.calls.length;
+        if (scope === "retained generation") {
+          await withPluginRuntimeGenerationScope(
+            { config, metadataSnapshot: captured, pluginRegistry: runtimeRegistry },
+            run,
+          );
+        } else {
+          await withPluginRuntimeRegistryScope(runtimeRegistry, run);
+        }
+        if (runtime === "cli") {
+          expectMockArgFields(runCliAgentMock, {
+            provider: "claude-cli",
+            authProfileId: profileId,
+          });
+        } else {
+          expectMockArgFields(runEmbeddedAgentMock, {
+            provider,
+            authProfileId: profileId,
+            authProfileIdSource: selection,
+          });
+        }
+        expect(resolveProfiles).toHaveBeenCalled();
+        for (const [context] of resolveProfiles.mock.calls) {
+          expect(context.config).toBe(config);
+          expect(context.workspaceDir).toBe(workWorkspace);
+          expect(context.agentDir).toBe(agentDir);
+        }
+        expect(metadataLoads.mock.calls.length).toBe(loadsBefore);
+      } finally {
+        metadataLoads.mockRestore();
+        cliRead.mockRestore();
+        providerAuthAliasMocks.resolveProviderIdForAuth.mockImplementation(previousAliasResolver);
+        lease.release();
+      }
+    },
+  );
 
   it("forwards selected auth profiles through metadata-scoped provider aliases", async () => {
     const sessionKey = "agent:main:direct:metadata-auth-alias";

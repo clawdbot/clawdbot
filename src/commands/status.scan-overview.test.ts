@@ -1,12 +1,13 @@
 // Status scan overview tests cover overview collection and gateway/runtime summary inputs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { collectStatusScanOverview } from "./status.scan-overview.ts";
+import type { ConfigFileSnapshot } from "../config/types.js";
+import { withStatusScanOverview } from "./status.scan-overview.ts";
 
 const mocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(),
-  readCommandConfigSnapshot: vi.fn(),
+  readConfigSnapshot: vi.fn(),
   resolveGatewayPort: vi.fn(),
   resolveOsSummary: vi.fn(),
   createStatusScanCoreBootstrap: vi.fn(),
@@ -29,7 +30,10 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 }));
 
 vi.mock("../cli/command-config-snapshot.js", () => ({
-  readCommandConfigSnapshot: mocks.readCommandConfigSnapshot,
+  withCommandConfigSnapshot: async (
+    _options: unknown,
+    run: (snapshot: ConfigFileSnapshot) => unknown,
+  ) => run((await mocks.readConfigSnapshot()).snapshot),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -92,13 +96,13 @@ function firstChannelsTableCall(): ChannelsTableCall {
   return call as ChannelsTableCall;
 }
 
-describe("collectStatusScanOverview", () => {
+describe("withStatusScanOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
     mocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
-    mocks.readCommandConfigSnapshot.mockResolvedValue({
+    mocks.readConfigSnapshot.mockResolvedValue({
       snapshot: {
         path: "/tmp/openclaw.json",
         exists: true,
@@ -152,14 +156,17 @@ describe("collectStatusScanOverview", () => {
   });
 
   it("uses gateway fallback overrides for channels.status when requested", async () => {
-    const result = await collectStatusScanOverview({
-      commandName: "status --all",
-      opts: { timeoutMs: 1234 },
-      showSecrets: false,
-      useGatewayCallOverridesForChannelsStatus: true,
-    });
+    const result = await withStatusScanOverview(
+      {
+        commandName: "status --all",
+        opts: { timeoutMs: 1234 },
+        showSecrets: false,
+        useGatewayCallOverridesForChannelsStatus: true,
+      },
+      (overview) => overview,
+    );
 
-    expect(mocks.readCommandConfigSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.readConfigSnapshot).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledTimes(2);
     const channelsRequest = gatewayRequest("channels.status");
     expect(channelsRequest?.url).toBe("ws://127.0.0.1:18789");
@@ -174,13 +181,16 @@ describe("collectStatusScanOverview", () => {
   });
 
   it("can keep channel overview on metadata-only status paths", async () => {
-    const result = await collectStatusScanOverview({
-      commandName: "status",
-      opts: { timeoutMs: 1234 },
-      showSecrets: false,
-      includeLiveChannelStatus: false,
-      includeChannelSetupRuntimeFallback: false,
-    });
+    const result = await withStatusScanOverview(
+      {
+        commandName: "status",
+        opts: { timeoutMs: 1234 },
+        showSecrets: false,
+        includeLiveChannelStatus: false,
+        includeChannelSetupRuntimeFallback: false,
+      },
+      (overview) => overview,
+    );
 
     expect(mocks.callGateway).toHaveBeenCalledOnce();
     expect(firstGatewayRequest().method).toBe("status");
@@ -220,11 +230,14 @@ describe("collectStatusScanOverview", () => {
       resolveTailscaleHttpsUrl: vi.fn(async () => null),
       skipColdStartNetworkChecks: false,
     });
-    const result = await collectStatusScanOverview({
-      commandName: "status",
-      opts: {},
-      showSecrets: true,
-    });
+    const result = await withStatusScanOverview(
+      {
+        commandName: "status",
+        opts: {},
+        showSecrets: true,
+      },
+      (overview) => overview,
+    );
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.channelsStatus).toBeNull();
@@ -269,12 +282,15 @@ describe("collectStatusScanOverview", () => {
     });
     mocks.callGateway.mockRejectedValueOnce(new Error("missing scope: operator.read"));
 
-    const result = await collectStatusScanOverview({
-      commandName: "status",
-      opts: {},
-      showSecrets: false,
-      includeChannelsData: false,
-    });
+    const result = await withStatusScanOverview(
+      {
+        commandName: "status",
+        opts: {},
+        showSecrets: false,
+        includeChannelsData: false,
+      },
+      (overview) => overview,
+    );
 
     expect(result.gatewaySnapshot.gatewayReachable).toBe(true);
     expect(result.gatewaySnapshot.gatewayProbe).toMatchObject({

@@ -1,8 +1,9 @@
 // Provider entry tests cover provider plugin entry contracts and catalog integration.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { capturePluginRegistration } from "../plugins/captured-registration.js";
 import type { ProviderCatalogContext } from "../plugins/types.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { defineSingleProviderPluginEntry } from "./provider-entry.js";
 
 function createModel(id: string, name: string): ModelDefinitionConfig {
@@ -86,6 +87,87 @@ async function captureProviderEntry(params: {
 }
 
 describe("defineSingleProviderPluginEntry", () => {
+  it("registers static facts before loading auth persistence or live catalog runtime", async () => {
+    let liveRequested = false;
+    const liveCatalog = {
+      provider: {
+        api: "openai-completions" as const,
+        baseUrl: "https://api.demo.test/v1",
+        models: [createModel("live", "Live")],
+      },
+    };
+    const buildLiveCatalog = vi.fn(async () => liveCatalog);
+    vi.doMock("../agents/auth-profiles/profiles.js", () => {
+      throw new Error("Static provider entry loaded auth persistence");
+    });
+    vi.doMock("../agents/provider-attribution.js", () => {
+      throw new Error("Static provider entry loaded transport policy");
+    });
+    vi.doMock("./provider-catalog-live-runtime.js", () => {
+      if (!liveRequested) {
+        throw new Error("Static provider entry loaded live catalog runtime");
+      }
+      return { buildOpenAICompatibleProviderCatalog: buildLiveCatalog };
+    });
+    vi.resetModules();
+    try {
+      const { defineSingleProviderPluginEntry: defineColdEntry } =
+        await import("./provider-entry.js");
+      const manifest = createProviderManifest();
+      const entry = defineColdEntry({
+        id: "demo",
+        name: "Demo Provider",
+        description: "Demo provider plugin",
+        manifest,
+        provider: {
+          label: "Demo",
+          docsPath: "/providers/demo",
+          aliases: ["demo-alias"],
+          catalog: { liveModelDiscovery: true },
+        },
+      });
+      const { providers, modelCatalogProviders } = capturePluginRegistration(entry);
+      const provider = providers[0];
+      expect(provider?.auth[0]?.starterModel).toBe("demo/default");
+      const context = createCatalogContext();
+      const { defaultModel: _defaultModel, ...manifestProvider } =
+        manifest.modelCatalog.providers.demo;
+      await expect(provider?.staticCatalog?.run(context)).resolves.toEqual({
+        provider: manifestProvider,
+      });
+      await expect(modelCatalogProviders[0]?.staticCatalog?.(context)).resolves.toEqual([
+        { kind: "text", provider: "demo", model: "default", label: "Default", source: "static" },
+      ]);
+      await expect(
+        provider?.auth[0]?.validateNonInteractive?.({
+          authChoice: "demo-api-key",
+          config: {},
+          baseConfig: {},
+          opts: { demoApiKey: "fixture-key" },
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn<RuntimeEnv["exit"]>() },
+          resolveApiKey: async () => ({ key: "fixture-key", source: "flag" as const }),
+        }),
+      ).resolves.toBe(true);
+      await expect(provider?.catalog?.run({ ...context, providerIds: [] })).resolves.toBeNull();
+      expect(buildLiveCatalog).not.toHaveBeenCalled();
+      liveRequested = true;
+      const scopedContext = { ...context, providerIds: ["demo-alias"] };
+      await expect(provider?.catalog?.run(scopedContext)).resolves.toBe(liveCatalog);
+      expect(buildLiveCatalog).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          ctx: scopedContext,
+          providerId: "demo",
+          providerAliases: ["demo-alias"],
+        }),
+      );
+    } finally {
+      vi.doUnmock("../agents/auth-profiles/profiles.js");
+      vi.doUnmock("../agents/provider-attribution.js");
+      vi.doUnmock("./provider-catalog-live-runtime.js");
+      vi.resetModules();
+    }
+  });
+
   it("derives API-key auth and static and live model catalogs from the provider manifest", async () => {
     const manifest = createProviderManifest();
     const entry = defineSingleProviderPluginEntry({

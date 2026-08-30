@@ -1,5 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { unregisterResolvedAgentDir } from "../agents/agent-dir-registry.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
+import * as providerModelNormalization from "../agents/provider-model-normalization.runtime.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createPluginMetadataOwner,
+  withPluginMetadataCollectionScope,
+} from "../plugins/plugin-metadata-collection.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 
 type ResolverInput = {
@@ -15,6 +28,19 @@ type ResolverInput = {
 };
 
 describe("config model validation env handling", () => {
+  let normalize: MockInstance<
+    typeof providerModelNormalization.normalizeProviderModelIdWithRuntime
+  >;
+  beforeEach(() => {
+    // These collector/syntax cases inject the final resolver and a deterministic execution port.
+    normalize = vi
+      .spyOn(providerModelNormalization, "normalizeProviderModelIdWithRuntime")
+      .mockImplementation(({ context }) => context.modelId);
+  });
+  afterEach(() => {
+    normalize.mockRestore();
+  });
+
   it("validates an expanded ref while preserving the authored config", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {
@@ -388,4 +414,151 @@ describe("config model validation env handling", () => {
       },
     });
   });
+});
+
+describe("config model validation scoped environments", () => {
+  it.each([
+    { name: "primary", fallback: false, runtimeAlias: false },
+    { name: "fallback", fallback: true, runtimeAlias: false },
+    { name: "runtime primary", fallback: false, runtimeAlias: true },
+    { name: "runtime fallback", fallback: true, runtimeAlias: true },
+  ])(
+    "resolves an agent-owned $name alias through the real model catalog",
+    async ({ fallback, runtimeAlias }) => {
+      await withTempDir("openclaw-config-model-alias-", async (tempDir) => {
+        const stateDir = path.join(tempDir, "state");
+        await withEnvAsync(
+          {
+            HOME: tempDir,
+            USERPROFILE: tempDir,
+            OPENCLAW_HOME: tempDir,
+            OPENCLAW_STATE_DIR: stateDir,
+          },
+          async () => {
+            const agentDir = path.join(stateDir, "agents", "ops", "agent");
+            const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
+            const workspaceDir = path.join(tempDir, "ops");
+            const provider: ModelProviderConfig = {
+              api: "openai-completions",
+              baseUrl: "https://fixture.invalid/v1",
+              models: [
+                {
+                  id: "available",
+                  name: "Fixture model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 1024,
+                },
+              ],
+            };
+            const config: OpenClawConfig = {
+              plugins: runtimeAlias
+                ? {
+                    allow: ["runtime-fixture"],
+                    entries: { "runtime-fixture": { enabled: true } },
+                  }
+                : { enabled: false },
+              agents: {
+                defaults: {
+                  model: "fixture/available",
+                  models: { "unavailable/default": { alias: "selected" } },
+                },
+                entries: {
+                  main: { agentDir: mainAgentDir, workspace: path.join(tempDir, "main") },
+                  ops: {
+                    agentDir,
+                    workspace: workspaceDir,
+                    model: fallback
+                      ? { primary: "unavailable/untouched-primary", fallbacks: ["selected"] }
+                      : { primary: "selected" },
+                    models: {
+                      [runtimeAlias ? "runtime-fixture/legacy" : "fixture/available"]: {
+                        alias: "selected",
+                      },
+                    },
+                  },
+                },
+              },
+              models: { providers: { fixture: provider } },
+            };
+            if (runtimeAlias) {
+              const pluginDir = path.join(
+                workspaceDir,
+                ".openclaw",
+                "extensions",
+                "runtime-fixture",
+              );
+              await fs.mkdir(pluginDir, { recursive: true });
+              await fs.writeFile(
+                path.join(pluginDir, "package.json"),
+                JSON.stringify({
+                  name: "runtime-fixture",
+                  version: "1.0.0",
+                  openclaw: { extensions: ["./index.cjs"] },
+                }),
+              );
+              await fs.writeFile(
+                path.join(pluginDir, "openclaw.plugin.json"),
+                JSON.stringify({
+                  id: "runtime-fixture",
+                  providers: ["runtime-fixture"],
+                  configSchema: { type: "object" },
+                }),
+              );
+              await fs.writeFile(
+                path.join(pluginDir, "index.cjs"),
+                `module.exports = {
+  id: "runtime-fixture",
+  register(api) {
+    api.registerProvider({
+      id: "runtime-fixture",
+      label: "Runtime fixture",
+      auth: [],
+      normalizeModelId({ modelId }) {
+        return modelId === "legacy" ? "available" : undefined;
+      },
+    });
+  },
+};`,
+              );
+              await fs.mkdir(agentDir, { recursive: true });
+              await fs.writeFile(
+                path.join(agentDir, "models.json"),
+                JSON.stringify({ providers: { "runtime-fixture": provider } }),
+              );
+            }
+            const owner = createPluginMetadataOwner();
+            try {
+              const result = await withPluginMetadataCollectionScope(
+                owner.prepare({ config }),
+                () =>
+                  checkTouchedTextModelRefs({
+                    config,
+                    touchedPaths: [
+                      [
+                        "agents",
+                        "entries",
+                        "ops",
+                        "model",
+                        ...(fallback ? ["fallbacks", "0"] : ["primary"]),
+                      ],
+                    ],
+                  }),
+                { config },
+              );
+
+              expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+            } finally {
+              resetPreparedModelRuntimeSnapshotsForTest();
+              closeOpenClawAgentDatabasesForTest();
+              unregisterResolvedAgentDir({ agentId: "ops", agentDir });
+              unregisterResolvedAgentDir({ agentId: "main", agentDir: mainAgentDir });
+              owner.dispose();
+            }
+          },
+        );
+      });
+    },
+  );
 });

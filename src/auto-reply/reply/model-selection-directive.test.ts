@@ -1,40 +1,146 @@
 // Covers direct model directive authorization and upgrade-era repair guidance.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resetPluginLoaderTestStateForTest,
+  writePlugin,
+} from "../../plugins/loader.test-fixtures.js";
+import {
+  preparePluginMetadata,
+  withPluginMetadataCollectionScope,
+} from "../../plugins/plugin-metadata-collection.js";
 import { resolveModelDirectiveSelection } from "./model-selection-directive.js";
 import { createModelSelectionState } from "./model-selection.js";
+import { prepareRawModelSelectionFixture } from "./model-selection.test-support.js";
+
+let directivePlugin: ReturnType<typeof writePlugin>;
+
+beforeEach(() => {
+  directivePlugin = writePlugin({
+    id: "directive-provider-fixture",
+    body: `module.exports = {
+  id: "directive-provider-fixture",
+  register(api) {
+    api.registerProvider({ id: "openai", label: "Fixture", auth: [] });
+  },
+};`,
+  });
+  fs.writeFileSync(
+    path.join(directivePlugin.dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: directivePlugin.id,
+      providers: ["openai"],
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+  );
+});
+
+afterEach(() => {
+  resetPluginLoaderTestStateForTest();
+});
+
+function withDirectiveMetadata<T>(config: OpenClawConfig, run: (cfg: OpenClawConfig) => T): T {
+  const cfg: OpenClawConfig = {
+    ...config,
+    plugins: {
+      allow: [directivePlugin.id],
+      entries: { [directivePlugin.id]: { enabled: true } },
+      load: { paths: [directivePlugin.file] },
+      slots: { memory: "none" },
+    },
+  };
+  const metadata = preparePluginMetadata({
+    config: cfg,
+    workspaceDir: directivePlugin.dir,
+    allowCurrent: false,
+  });
+  return withPluginMetadataCollectionScope(metadata, () => run(cfg), {
+    config: cfg,
+    workspaceDir: directivePlugin.dir,
+  });
+}
 
 function resolveDirective(params: { cfg: OpenClawConfig; raw: string; agentId?: string }) {
-  const defaultProvider = "openai";
-  const defaultModel = "safe";
-  const policy = createModelVisibilityPolicy({
-    cfg: params.cfg,
-    catalog: [],
-    defaultProvider,
-    defaultModel,
-    agentId: params.agentId,
-  });
-  return {
-    policy,
-    result: resolveModelDirectiveSelection({
-      raw: params.raw,
+  return withDirectiveMetadata(params.cfg, (cfg) => {
+    const defaultProvider = "openai";
+    const defaultModel = "safe";
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
       defaultProvider,
       defaultModel,
-      aliasIndex: buildModelAliasIndex({
-        cfg: params.cfg,
-        defaultProvider,
-        agentId: params.agentId,
-      }),
-      allowedModelKeys: policy.allowedKeys,
-      cfg: params.cfg,
       agentId: params.agentId,
-    }),
-  };
+      workspaceDir: directivePlugin.dir,
+    });
+    return {
+      policy,
+      result: resolveModelDirectiveSelection({
+        raw: params.raw,
+        defaultProvider,
+        defaultModel,
+        aliasIndex: buildModelAliasIndex({
+          cfg,
+          defaultProvider,
+          agentId: params.agentId,
+          workspaceDir: directivePlugin.dir,
+        }),
+        allowedModelKeys: policy.allowedKeys,
+        modelPolicy: policy,
+        cfg,
+        agentId: params.agentId,
+        workspaceDir: directivePlugin.dir,
+      }),
+    };
+  });
 }
 
 describe("resolveModelDirectiveSelection", () => {
+  it.each([
+    { raw: "custom/custom/model", alias: undefined },
+    { raw: "custom/nested-nick", alias: "nested-nickname" },
+  ])("preserves the configured model namespace for $raw", ({ raw, alias }) => {
+    const { result } = resolveDirective({
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://models.example.test",
+              models: ["model", "custom/model"].map((id) => ({
+                id,
+                name: id,
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 1_024,
+              })),
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "custom/model": { alias: "plain" },
+              "custom/custom/model": { alias: "nested-nickname" },
+            },
+            modelPolicy: { allow: ["custom/model", "custom/custom/model"] },
+          },
+        },
+      },
+      raw,
+    });
+
+    expect(result.selection).toEqual({
+      provider: "custom",
+      model: "custom/model",
+      isDefault: false,
+      alias,
+    });
+  });
+
   it.each([
     {
       allow: ["fixture-route/namespace/*"],
@@ -89,31 +195,37 @@ describe("resolveModelDirectiveSelection", () => {
   it.each([undefined, {}, { allow: [] }, { allow: ["openai/*"] }])(
     "permits an explicit uncataloged model with policy %j",
     async (modelPolicy) => {
-      const cfg: OpenClawConfig = {
+      const config: OpenClawConfig = {
         agents: { defaults: { model: "anthropic/claude-sonnet-4-6", modelPolicy } },
       };
       const entries = [{ provider: "anthropic", id: "claude-sonnet-4-6", name: "Sonnet" }];
-      const state = await createModelSelectionState({
-        cfg,
-        agentCfg: cfg.agents?.defaults,
-        defaultProvider: "anthropic",
-        defaultModel: "claude-sonnet-4-6",
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-        hasModelDirective: true,
-        preparedModelCatalog: { entries, routeVariants: entries },
-      });
-      const result = resolveModelDirectiveSelection({
-        raw: "openai/gpt-5.6-luna",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-sonnet-4-6",
-        aliasIndex: state.policyAliasIndex,
-        allowedModelKeys: state.allowedModelKeys,
-        modelPolicy: state.modelPolicy,
-        cfg,
-      });
-      expect(result).toMatchObject({
-        selection: { provider: "openai", model: "gpt-5.6-luna", isDefault: false },
+      await withDirectiveMetadata(config, async (cfg) => {
+        const state = await createModelSelectionState(
+          prepareRawModelSelectionFixture({
+            cfg,
+            agentCfg: cfg.agents?.defaults,
+            workspaceDir: directivePlugin.dir,
+            defaultProvider: "anthropic",
+            defaultModel: "claude-sonnet-4-6",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            hasModelDirective: true,
+            preparedModelCatalog: { entries, routeVariants: entries },
+          }),
+        );
+        const result = resolveModelDirectiveSelection({
+          ...state.runtimeModelNormalization,
+          raw: "openai/gpt-5.6-luna",
+          defaultProvider: "anthropic",
+          defaultModel: "claude-sonnet-4-6",
+          aliasIndex: state.policyAliasIndex,
+          allowedModelKeys: state.allowedModelKeys,
+          modelPolicy: state.modelPolicy,
+          cfg,
+        });
+        expect(result).toMatchObject({
+          selection: { provider: "openai", model: "gpt-5.6-luna", isDefault: false },
+        });
       });
     },
   );

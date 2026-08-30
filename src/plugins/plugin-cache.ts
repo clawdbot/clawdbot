@@ -19,6 +19,7 @@ import {
 } from "./plugin-cache-management.js";
 import { createPluginCacheMetadata, type PluginCacheMetadata } from "./plugin-cache-metadata.js";
 import { createPluginCacheSdk, type PluginCacheSdk } from "./plugin-cache-sdk.js";
+import type { PreparedPluginMetadata } from "./plugin-metadata-collection.types.js";
 
 export type PluginRootCacheRecord = ReturnType<typeof createPluginRootArtifacts> & {
   rootDir: string;
@@ -41,10 +42,10 @@ export interface PluginCache
 
 const state = resolveGlobalSingleton<{
   current?: PluginCache;
-  scope: AsyncLocalStorage<PluginCache>;
+  scope: AsyncLocalStorage<{ cache: PluginCache; collection?: PreparedPluginMetadata }>;
   snapshotOwners: WeakMap<object, PluginCache>;
 }>(Symbol.for("openclaw.pluginCache"), () => ({
-  scope: new AsyncLocalStorage<PluginCache>(),
+  scope: new AsyncLocalStorage<{ cache: PluginCache; collection?: PreparedPluginMetadata }>(),
   snapshotOwners: new WeakMap(),
 }));
 
@@ -72,15 +73,27 @@ export function adoptProcessPluginCache(cache: PluginCache): void {
 }
 
 export function getScopedPluginCache(): PluginCache | undefined {
-  return state.scope.getStore();
+  return state.scope.getStore()?.cache;
 }
 
 export function getPluginCache(): PluginCache {
   return getScopedPluginCache() ?? getProcessPluginCache();
 }
 
-export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
-  return state.scope.run(cache, run);
+export function getScopedPluginMetadataCollection(): PreparedPluginMetadata | undefined {
+  return state.scope.getStore()?.collection;
+}
+
+export function withPluginCache<T>(
+  cache: PluginCache,
+  run: () => T,
+  collection?: PreparedPluginMetadata,
+): T {
+  const parent = state.scope.getStore();
+  return state.scope.run(
+    { cache, collection: collection ?? (parent?.cache === cache ? parent.collection : undefined) },
+    run,
+  );
 }
 
 /** Frozen views retain their producer so deferred access fills the same generation. */
@@ -96,6 +109,7 @@ export function getPluginMetadataSnapshotCache(snapshot: object): PluginCache {
 export function resetPluginCache(): void {
   const previous = state.current;
   state.current = undefined;
+  previous?.metadata.collectionOwner?.dispose();
   previous?.disposeModules?.();
 }
 

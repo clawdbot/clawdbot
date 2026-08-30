@@ -145,6 +145,59 @@ function createInternalCoreAliasFixture(prefix: string): {
 }
 
 describe("installOpenClawInternalCorePackageNativeResolver", () => {
+  it("keeps native ESM on compiled core exports while CJS resolves source aliases", () => {
+    const fixture = createInternalCoreAliasFixture("openclaw-sdk-native-core-esm-");
+    try {
+      writeInternalCorePackageExports(fixture.root, "media-core", ["mime"]);
+      const sourcePath = writeInternalCorePackageSource(fixture.root, "media-core", "mime.ts");
+      fs.writeFileSync(sourcePath, 'export { value } from "./constants.js";\n');
+      fs.writeFileSync(
+        path.join(path.dirname(sourcePath), "constants.ts"),
+        'export const value = "source";\n',
+      );
+      const packageRoot = path.join(fixture.root, "packages", "media-core");
+      const distDir = path.join(packageRoot, "dist");
+      fs.mkdirSync(distDir);
+      fs.writeFileSync(
+        path.join(distDir, "mime.mjs"),
+        'export { value } from "./constants.mjs";\n',
+      );
+      fs.writeFileSync(path.join(distDir, "constants.mjs"), 'export const value = "compiled";\n');
+      fs.cpSync(packageRoot, path.join(fixture.root, "node_modules", "@openclaw", "media-core"), {
+        recursive: true,
+      });
+      const nativeEntry = path.join(fixture.root, "src", "native-entry.mjs");
+      fs.writeFileSync(nativeEntry, 'export { value } from "@openclaw/media-core/mime";\n');
+      const resolverModuleUrl = pathToFileURL(
+        path.join(process.cwd(), "src", "plugins", "plugin-sdk-native-resolver.ts"),
+      ).href;
+      const probePath = path.join(fixture.root, "probe.mjs");
+      fs.writeFileSync(
+        probePath,
+        [
+          'import { createRequire } from "node:module";',
+          `const require = createRequire(${JSON.stringify(resolverModuleUrl)});`,
+          // Only bootstrap the resolver through CJS; an ESM TS loader would hide the failure.
+          'const { installOpenClawInternalCorePackageNativeResolver } = require("tsx/cjs/api").require(',
+          `  ${JSON.stringify(resolverModuleUrl)}, import.meta.url,`,
+          ");",
+          `installOpenClawInternalCorePackageNativeResolver({ moduleUrl: ${JSON.stringify(fixture.moduleUrl)} });`,
+          `const source = createRequire(${JSON.stringify(nativeEntry)}).resolve("@openclaw/media-core/mime");`,
+          `const loaded = await import(${JSON.stringify(pathToFileURL(nativeEntry).href)});`,
+          `console.log(JSON.stringify({ cjsSource: source === ${JSON.stringify(sourcePath)}, value: loaded.value }));`,
+        ].join("\n"),
+      );
+      const result = spawnSync(process.execPath, [probePath], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ cjsSource: true, value: "compiled" });
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it("shares one internal core alias scan between resolver installers", () => {
     const fixture = createInternalCoreAliasFixture("openclaw-sdk-native-core-cache-");
     const externalPluginEntry = writeExternalPluginEntry(

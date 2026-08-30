@@ -1,5 +1,5 @@
 /** Shared command implementation for text and image model fallback lists. */
-import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
@@ -8,10 +8,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
-  DEFAULT_PROVIDER,
+  createModelCommandRefResolver,
   ensureFlagCompatibility,
   mergePrimaryFallbackConfig,
-  modelKey,
   resolveModelTarget,
   resolveModelKeysFromEntries,
   upsertCanonicalModelConfigEntry,
@@ -124,24 +123,19 @@ export async function removeFallbackCommand(
 ) {
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-    const targetKey = modelKey(resolved.provider, resolved.model);
-    const aliasIndex = buildModelAliasIndex({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
+    const targetKey = buildModelCatalogRef(resolved.provider, resolved.model);
+    const resolveModelRef = createModelCommandRefResolver({ cfg });
     const existing = getFallbacks(cfg, params.key);
     // Fallback entries may be aliases or provider/model refs. Resolve each entry
     // before comparison so removing an alias removes the canonical target.
     const filtered = existing.filter((entry) => {
-      const resolvedEntry = resolveModelRefFromString({
-        raw: entry ?? "",
-        defaultProvider: DEFAULT_PROVIDER,
-        aliasIndex,
-      });
+      const resolvedEntry = resolveModelRef(entry);
       if (!resolvedEntry) {
         return true;
       }
-      return modelKey(resolvedEntry.ref.provider, resolvedEntry.ref.model) !== targetKey;
+      return (
+        buildModelCatalogRef(resolvedEntry.ref.provider, resolvedEntry.ref.model) !== targetKey
+      );
     });
 
     if (filtered.length === existing.length) {

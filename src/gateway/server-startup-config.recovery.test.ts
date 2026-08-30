@@ -2,7 +2,11 @@
 // auto-enable behavior, model defaults, and recovery diagnostics.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, ModelDefinitionConfig, OpenClawConfig } from "../config/types.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataOwner } from "../plugins/plugin-metadata-collection.js";
+import {
+  createPluginMetadataSnapshotFixture,
+  createPreparedPluginMetadataFixture,
+} from "../plugins/plugin-metadata.test-support.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -16,50 +20,19 @@ const configMocks = vi.hoisted(() => ({
   isNixMode: { value: false },
 }));
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
-const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
-  const emptyOwners = {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-  };
-  const zeroMetrics = {
-    registrySnapshotMs: 0,
-    manifestRegistryMs: 0,
-    ownerMapsMs: 0,
-    totalMs: 0,
-    indexPluginCount: 0,
-    manifestPluginCount: 0,
-  };
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "policy",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
-  return {
-    policyHash: "policy",
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: pluginManifestRegistry,
-    plugins: [],
-    diagnostics: [],
-    byPluginId: new Map(),
-    normalizePluginId: (pluginId) => pluginId,
-    owners: emptyOwners,
-    metrics: zeroMetrics,
-  };
+const pluginMetadata = createPreparedPluginMetadataFixture({
+  unionSnapshot: createPluginMetadataSnapshotFixture(pluginManifestRegistry),
 });
+const pluginMetadataOwner: PluginMetadataOwner = {
+  prepare: () => pluginMetadata,
+  publish: () => {},
+  getActive: () => undefined,
+  isPreparedCurrent: () => true,
+  readSnapshot: () => undefined,
+  readConfigWide: () => undefined,
+  invalidatePreparation: () => {},
+  dispose: () => {},
+};
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: vi.fn(),
   readConfigFileSnapshotWithPluginMetadata: vi.fn(),
@@ -165,7 +138,7 @@ function buildRuntimeSnapshot(
 function mockStartupSnapshot(snapshot: ConfigFileSnapshot) {
   vi.mocked(configIo.readConfigFileSnapshotWithPluginMetadata).mockResolvedValueOnce({
     snapshot,
-    pluginMetadataSnapshot,
+    pluginMetadata,
   });
 }
 
@@ -185,7 +158,7 @@ async function expectStartupResult(params: {
   ).resolves.toEqual({
     snapshot: params.snapshot,
     wroteConfig: false,
-    pluginMetadataSnapshot,
+    pluginMetadata,
   });
 }
 
@@ -274,6 +247,7 @@ function loadTestStartup(params: {
     minimalTestGateway: params.minimalTestGateway ?? true,
     log: params.log ?? testStartupLog(),
     initialSnapshotRead: params.initialSnapshotRead,
+    pluginMetadataOwner,
   });
 }
 
@@ -299,10 +273,10 @@ function installConfigIoMockDefaults() {
     if (!snapshot) {
       throw new Error(
         "configIo.readConfigFileSnapshot mock returned no snapshot; " +
-          "mock readConfigFileSnapshotWithPluginMetadata with { snapshot, pluginMetadataSnapshot }.",
+          "mock readConfigFileSnapshotWithPluginMetadata with { snapshot, pluginMetadata }.",
       );
     }
-    return snapshot.valid ? { snapshot, pluginMetadataSnapshot } : { snapshot };
+    return snapshot.valid ? { snapshot, pluginMetadata } : { snapshot };
   });
   writeConfig.mockResolvedValue({
     persistedHash: "test-persisted-hash",
@@ -380,7 +354,7 @@ describe("gateway startup config validation", () => {
       log,
       initialSnapshotRead: {
         snapshot,
-        pluginMetadataSnapshot,
+        pluginMetadata,
       },
     });
 

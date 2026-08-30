@@ -285,6 +285,43 @@ describe("applyModelDefaults", () => {
     });
   });
 
+  it("preserves literal nested provider refs and their independent model settings", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: { api: "openai-completions", baseUrl: "https://custom.example/v1", models: [] },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "custom/custom/model",
+            fallbacks: ["custom/model", "openrouter/auto"],
+          },
+          models: {
+            "custom/model": { alias: "short", params: { temperature: 0.2 } },
+            "custom/custom/model": { alias: "nested", params: { temperature: 0.8 } },
+            "openrouter/auto": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults).toEqual({
+      model: {
+        primary: "custom/custom/model",
+        fallbacks: ["custom/model", "openrouter/auto"],
+      },
+      models: {
+        "custom/model": { alias: "short", params: { temperature: 0.2 } },
+        "custom/custom/model": { alias: "nested", params: { temperature: 0.8 } },
+        "openrouter/auto": {},
+      },
+    });
+  });
+
   it("normalizes the retired Together default primary and fallback refs", () => {
     const cfg = {
       agents: {

@@ -542,7 +542,7 @@ describe("buildProviderStreamFamilyHooks", () => {
 
     const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
     payloadSeed = { reasoning: { effort: "medium", summary: "auto" } };
-    void requireStreamFn(
+    await requireStreamFn(
       requireWrapStreamFn(openAiHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         thinkingLevel: "max",

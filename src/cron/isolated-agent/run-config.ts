@@ -52,12 +52,12 @@ function mergeCronAgentModelOverride(params: {
   return nextDefaults;
 }
 
-/** Selects the active runtime snapshot before deriving isolated cron agent defaults. */
+/** Derives isolated defaults from the caller-captured runtime config. */
 export function resolveCronAgentConfig(params: {
   config: OpenClawConfig;
   agentConfigOverride?: ResolvedAgentConfig;
 }) {
-  const runtimeConfig = resolveCronActiveRuntimeConfig(params.config);
+  const runtimeConfig = params.config;
   const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
     params.agentConfigOverride,
   );

@@ -30,7 +30,7 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*getCapabilityWeb(Fetch|Search)CommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
-    source.includes("collectStatusScanOverview({")
+    source.includes("withStatusScanOverview({")
   );
 }
 
@@ -40,12 +40,12 @@ function hasSupportedSecretResolutionWiring(source: string): boolean {
     source.includes("resolveLocalCapabilityRuntimeConfig(") ||
     source.includes("resolveCommandConfigWithSecrets(") ||
     source.includes("resolveCommandSecretRefsViaGateway(") ||
-    source.includes("collectStatusScanOverview(")
+    source.includes("withStatusScanOverview(")
   );
 }
 
 function usesDelegatedStatusOverviewFlow(source: string): boolean {
-  return source.includes("collectStatusScanOverview(");
+  return source.includes("withStatusScanOverview(");
 }
 
 describe("command secret resolution coverage", () => {

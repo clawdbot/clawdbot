@@ -1,4 +1,4 @@
-import type { PluginPackageInstall } from "./manifest.js";
+import type { PluginPackageInstall } from "./package-manifest.js";
 
 export function normalizePluginInstallDefaultChoice(
   value: unknown,

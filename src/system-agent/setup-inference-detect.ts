@@ -61,7 +61,7 @@ function resolveConfiguredCandidateKind(
 
 async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agentId?: string) {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
-  const { snapshot, pluginMetadataSnapshot } = await readConfigFileSnapshotWithPluginMetadata();
+  const { snapshot, pluginMetadata } = await readConfigFileSnapshotWithPluginMetadata();
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
   }
@@ -73,7 +73,7 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
   )({
     config: cfg,
     workspaceDir: workspace,
-    metadataSnapshot: pluginMetadataSnapshot,
+    metadataSnapshot: pluginMetadata?.selectedSnapshot,
     includeUntrustedWorkspacePlugins: false,
     includeWorkspacePlugins: false,
   }).filter(

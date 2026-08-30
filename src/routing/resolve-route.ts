@@ -19,6 +19,7 @@ import {
 } from "./binding-scope.js";
 import { listBindings } from "./bindings.js";
 import { peerKindMatches } from "./peer-kind-match.js";
+import type { ResolvedAgentRoute } from "./resolve-route.types.js";
 import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
@@ -52,32 +53,6 @@ export type ResolveAgentRouteInput = {
   teamId?: string | null;
   /** Discord member role IDs — used for role-based agent routing. */
   memberRoleIds?: string[];
-};
-
-export type ResolvedAgentRoute = {
-  agentId: string;
-  channel: string;
-  accountId: string;
-  /** Effective direct-message scope after a matching binding override. */
-  dmScope?: DmScope;
-  groupScope?: GroupScope;
-  /** Internal session key used for persistence + concurrency. */
-  sessionKey: string;
-  /** Convenience alias for direct-chat collapse. */
-  mainSessionKey: string;
-  /** Which session should receive inbound last-route updates. */
-  lastRoutePolicy: "main" | "session";
-  /** Match description for debugging/logging. */
-  matchedBy:
-    | "binding.peer"
-    | "binding.peer.parent"
-    | "binding.peer.wildcard"
-    | "binding.guild+roles"
-    | "binding.guild"
-    | "binding.team"
-    | "binding.account"
-    | "binding.channel"
-    | "default";
 };
 
 export function deriveLastRoutePolicy(params: {

@@ -1,6 +1,13 @@
-import type { PluginDiscoveryResult } from "../plugins/discovery.js";
-import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isScopedPluginMetadataSnapshotRuntimeGeneration,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataOwner,
+  getPluginMetadataWorkspaceSnapshot,
+  preparePluginMetadata,
+} from "../plugins/plugin-metadata-collection.js";
+import { projectPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
@@ -13,57 +20,79 @@ type PreparedPluginContextInput = Pick<
   "config" | "workspaceDir" | "loadRuntimePlugins" | "runtimePluginSelections"
 >;
 
-const emptyPluginDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
-
 /** Resolves and attaches the plugin facts owned by one prepared workspace generation. */
 export function prepareOwnedPluginLoadContext(
   input: PreparedPluginContextInput,
   env: NodeJS.ProcessEnv,
-  registry: PluginRegistry | undefined,
+  registry?: PluginRegistry,
   preparedMetadataSnapshot?: PluginMetadataSnapshot,
   preferBuiltPluginArtifacts = false,
 ): PluginMetadataSnapshot {
-  const metadataSnapshot =
-    preparedMetadataSnapshot ??
-    resolvePluginMetadataSnapshot({
-      config: input.config,
-      env,
-      ...(input.workspaceDir
-        ? { workspaceDir: input.workspaceDir, allowWorkspaceScopedCurrent: true }
-        : {}),
-      ...(input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
-        ? {
-            pluginIdScope: createAgentRuntimeMetadataPluginIdScope({
-              config: input.config,
-              workspaceDir: input.workspaceDir,
-              selections: input.runtimePluginSelections,
-            }),
-          }
-        : {}),
-    });
-  if (!registry) {
-    return metadataSnapshot;
+  const metadataSnapshot = preparedMetadataSnapshot ?? prepareOperationMetadataSnapshot(input, env);
+  if (registry) {
+    setPluginRuntimeLoadContext(
+      registry,
+      resolvePluginRuntimeLoadContext({
+        config: input.config,
+        env,
+        workspaceDir: metadataSnapshot.workspaceDir ?? input.workspaceDir,
+        metadataSnapshot,
+        preferBuiltPluginArtifacts,
+      }),
+    );
   }
-  const { config } = input;
-  const workspaceDir = metadataSnapshot.workspaceDir ?? input.workspaceDir;
-  // The prepared owner already selected the exact metadata generation for this runtime.
-  // Missing discovery facts stay empty here instead of reopening cold plugin discovery.
-  const discoverySnapshot = metadataSnapshot.discovery
-    ? metadataSnapshot
-    : { ...metadataSnapshot, discovery: emptyPluginDiscovery };
-  const context = {
-    ...resolvePluginRuntimeLoadContext({
-      config,
-      env,
-      workspaceDir,
-      metadataSnapshot: discoverySnapshot,
-      manifestRegistry: metadataSnapshot.manifestRegistry,
-      preferBuiltPluginArtifacts,
-    }),
-    metadataSnapshot,
-    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
-  };
-  // The prepared registry is the lifecycle-owned carrier; standalone callers keep the cold path.
-  setPluginRuntimeLoadContext(registry, context);
   return metadataSnapshot;
+}
+
+function prepareOperationMetadataSnapshot(
+  input: PreparedPluginContextInput,
+  env: NodeJS.ProcessEnv,
+): PluginMetadataSnapshot {
+  const inherited = getCurrentPluginMetadataSnapshot({
+    config: input.config,
+    env,
+    workspaceDir: input.workspaceDir,
+    allowScopedSnapshot: true,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  // A nested runtime carries executable authority for one immutable graph.
+  // Operation preparation must not replace it with another workspace's inventory.
+  if (inherited && isScopedPluginMetadataSnapshotRuntimeGeneration(inherited)) {
+    return inherited;
+  }
+  const scope =
+    input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
+      ? {
+          pluginIdScope: createAgentRuntimeMetadataPluginIdScope({
+            config: input.config,
+            workspaceDir: input.workspaceDir,
+            selections: input.runtimePluginSelections,
+          }),
+        }
+      : {};
+  if (inherited && inherited.pluginIds === undefined) {
+    return projectPluginMetadataSnapshot(
+      inherited,
+      scope.pluginIdScope?.resolve({ index: inherited.index }),
+    );
+  }
+  const prepared = getCurrentPluginMetadataOwner()?.readSnapshot({
+    config: input.config,
+    env,
+    workspaceDir: input.workspaceDir,
+    allowWorkspaceScopedCurrent: true,
+    ...scope,
+  });
+  if (prepared) {
+    return prepared;
+  }
+  const metadata = preparePluginMetadata({
+    config: input.config,
+    env,
+    workspaceDir: input.workspaceDir,
+  });
+  return getPluginMetadataWorkspaceSnapshot(metadata, {
+    workspaceDir: input.workspaceDir,
+    ...scope,
+  });
 }

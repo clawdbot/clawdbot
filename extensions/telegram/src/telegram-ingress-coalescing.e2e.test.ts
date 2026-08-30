@@ -64,8 +64,6 @@ vi.mock("./telegram-media.runtime.js", async (importOriginal) => {
 
 vi.mock("./bot-handlers.agent.runtime.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 }));
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
@@ -178,10 +176,16 @@ function createTelegramDeps(stateDir: string): TelegramBotDeps {
       resolvedDefault: { provider: "openai", model: "gpt-test" },
       modelNames: new Map<string, string>(),
       modelCatalog: [],
+      modelPolicy: { allows: () => true },
+      modelNormalization: {
+        manifestPlugins: [],
+        allowManifestNormalization: false,
+        allowPluginNormalization: false,
+      },
     }),
     listSkillCommandsForAgents: () => [],
     wasSentByBot: () => false,
-  } as TelegramBotDeps;
+  };
 }
 
 /** Both members must land in one turn; a second turn is the split this file guards. */

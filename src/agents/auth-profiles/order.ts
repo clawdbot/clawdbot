@@ -17,7 +17,7 @@ import {
   resolveTokenExpiryState,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
-import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
+import { dedupeProfileIds } from "./profile-list.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
@@ -37,8 +37,6 @@ type AuthProfileEligibility = {
   eligible: boolean;
   reasonCode: AuthProfileEligibilityReasonCode;
 };
-
-const OPENAI_PROVIDER_ID = "openai";
 
 function isProfileProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
@@ -75,12 +73,8 @@ function listProfilesCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store: AuthProfileStore;
-  provider: string;
   providerAuthKey: string;
 }): string[] {
-  if (params.providerAuthKey !== OPENAI_PROVIDER_ID) {
-    return listProfilesForProvider(params.store, params.provider);
-  }
   return Object.entries(params.store.profiles)
     .filter(([, credential]) =>
       isProfileProviderCompatibleWithAuthProvider({
@@ -284,7 +278,6 @@ export function resolveAuthProfileOrderWithMetadata(
     cfg,
     authAliasLookupParams: params.authAliasLookupParams,
     store,
-    provider,
     providerAuthKey,
   });
   const baseOrder =

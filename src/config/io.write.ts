@@ -87,12 +87,17 @@ function hasOwnIncludeDirective(value: unknown): value is Record<string, unknown
 }
 
 function hasIncludedGatewayModeOwner(value: unknown): boolean {
-  return (
-    hasOwnIncludeDirective(value) ||
-    (isRecord(value) &&
-      (hasOwnIncludeDirective(value.gateway) ||
-        (isRecord(value.gateway) && hasOwnIncludeDirective(value.gateway.mode))))
-  );
+  if (hasOwnIncludeDirective(value)) {
+    return true;
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  const gateway = value.gateway;
+  if (hasOwnIncludeDirective(gateway)) {
+    return true;
+  }
+  return isRecord(gateway) && hasOwnIncludeDirective(gateway.mode);
 }
 
 export async function writeConfigFileFromContext(
@@ -108,7 +113,7 @@ export async function writeConfigFileFromContext(
   const snapshotRead = options.baseSnapshot
     ? {
         snapshot: options.baseSnapshot,
-        pluginMetadataSnapshot: options.basePluginMetadataSnapshot,
+        pluginMetadata: options.basePluginMetadata,
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
@@ -218,6 +223,9 @@ export async function writeConfigFileFromContext(
       pluginValidation: options.skipPluginValidation ? "skip" : "full",
       semanticValidation: "strict",
       preservedLegacyRootKeys: options.preservedLegacyRootKeys,
+      loadPluginMetadataSnapshot: context.createValidationPluginMetadataSnapshotLoader({
+        env: deps.env,
+      }).load,
     });
     if (!result.ok) {
       throw createConfigValidationFailedError(result.issues);

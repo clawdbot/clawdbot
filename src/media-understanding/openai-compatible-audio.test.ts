@@ -2,12 +2,12 @@
 // filename normalization, and stable malformed-response errors.
 import { describe, expect, it, vi } from "vitest";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
+import { transcribeOpenAiCompatibleAudio } from "../plugin-sdk/media-understanding.js";
 import { VERSION } from "../version.js";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "./audio.test-helpers.js";
-import { transcribeOpenAiCompatibleAudio } from "./openai-compatible-audio.js";
 
 installPinnedHostnameTestHooks();
 

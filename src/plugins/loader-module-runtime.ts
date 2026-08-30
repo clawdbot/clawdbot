@@ -12,6 +12,7 @@ import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
 import { createRuntimeConfig } from "./runtime/runtime-config.js";
 import { createRuntimeState } from "./runtime/runtime-state.js";
+import { createRuntimeSystem } from "./runtime/runtime-system.js";
 import type {
   CreatePluginRuntimeOptions,
   PluginRuntimeFactory,
@@ -199,9 +200,14 @@ export function createLazyPluginRuntime(params: {
     state: createRuntimeState(),
   };
   let resolvedRuntime: PluginRuntime | null = null;
+  let system: PluginRuntime["system"] | undefined;
+  const resolveSystem = () => (system ??= params.runtimeOptions?.system ?? createRuntimeSystem());
   const resolveRuntime = (): PluginRuntime => {
     resolvedRuntime ??= withPluginCache(cache, () =>
-      resolveCreatePluginRuntime()(params.runtimeOptions, initialRuntime),
+      resolveCreatePluginRuntime()(
+        { ...params.runtimeOptions, system: resolveSystem() },
+        initialRuntime,
+      ),
     );
     return resolvedRuntime;
   };
@@ -233,6 +239,11 @@ export function createLazyPluginRuntime(params: {
   };
   return new Proxy({} as PluginRuntime, {
     get(_target, prop, receiver) {
+      // Registration probes need only the system facade. Once initialized, the
+      // full runtime owns property replacement/deletion and retains this same instance.
+      if (prop === "system" && !resolvedRuntime) {
+        return resolveSystem();
+      }
       // Instance-bound surfaces are complete runtime objects. Keep them direct so
       // the first Gateway call does not materialize the broad plugin runtime graph.
       if (prop === "gateway" || prop === "nodes" || prop === "subagent") {

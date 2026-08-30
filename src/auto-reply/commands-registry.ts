@@ -341,15 +341,12 @@ function resolveDefaultCommandContext(cfg?: OpenClawConfig): {
   provider: string;
   model: string;
 } {
-  const resolved = resolveConfiguredModelRef({
-    cfg: cfg ?? ({} as OpenClawConfig),
+  return resolveConfiguredModelRef({
+    cfg: cfg ?? {},
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: false,
   });
-  return {
-    provider: resolved.provider ?? DEFAULT_PROVIDER,
-    model: resolved.model ?? DEFAULT_MODEL,
-  };
 }
 
 export type ResolvedCommandArgChoice = { value: string; label: string };
@@ -372,7 +369,8 @@ export function resolveCommandArgChoices(params: {
   const raw = Array.isArray(provided)
     ? provided
     : (() => {
-        const defaults = resolveDefaultCommandContext(cfg);
+        const defaults =
+          params.provider && params.model ? params : resolveDefaultCommandContext(cfg);
         const context: CommandArgChoiceContext = {
           cfg,
           provider: params.provider ?? defaults.provider,

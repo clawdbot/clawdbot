@@ -3090,6 +3090,59 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it.each([true, false])(
+    "keeps literal provider namespaces distinct for live switches (target in chain: %s)",
+    async (targetInChain) => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "custom/model",
+              fallbacks: ["other/intermediate", ...(targetInChain ? ["custom/custom/model"] : [])],
+            },
+          },
+        },
+        models: {
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://custom.example.test/v1",
+              models: ["model", "custom/model"].map((id) => ({
+                id,
+                name: id,
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 1_024,
+              })),
+            },
+          },
+        },
+      });
+      const switchError = new LiveSessionModelSwitchError({
+        provider: "custom",
+        model: "custom/model",
+      });
+      const run = vi.fn().mockRejectedValueOnce(switchError).mockResolvedValue("ok");
+      const result = runWithModelFallback({ cfg, provider: "custom", model: "model", run });
+
+      if (targetInChain) {
+        await expect(result).resolves.toMatchObject({
+          result: "ok",
+          provider: "custom",
+          model: "custom/model",
+          attempts: [],
+        });
+      } else {
+        await expect(result).rejects.toBe(switchError);
+      }
+      expect(run.mock.calls.map(([provider, model]) => [provider, model])).toEqual([
+        ["custom", "model"],
+        ...(targetInChain ? [["custom", "custom/model"]] : []),
+      ]);
+    },
+  );
+
   it("returns runtime-changing live switches to the retry owner before redirecting", async () => {
     const cfg = makeCfg({
       agents: {

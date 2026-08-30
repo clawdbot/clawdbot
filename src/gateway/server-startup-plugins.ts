@@ -1,5 +1,4 @@
 // Gateway plugin startup bootstrap and adjacent startup maintenance.
-import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagents/registry/subagent-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
@@ -10,7 +9,7 @@ import {
   listAmbientOnlyConfiguredChannelIds,
 } from "../plugins/channel-plugin-ids.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PreparedPluginMetadata } from "../plugins/plugin-metadata-collection.js";
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -110,7 +109,7 @@ export async function runGatewayStartupMaintenance(params: {
 export async function prepareGatewayPluginBootstrap(params: {
   cfgAtStart: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  pluginMetadata: PreparedPluginMetadata;
   workerProviderIds?: readonly string[];
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
@@ -127,14 +126,13 @@ export async function prepareGatewayPluginBootstrap(params: {
         runtimeConfig: params.cfgAtStart,
         activationSourceConfig,
         env: process.env,
-        ...(params.pluginMetadataSnapshot?.manifestRegistry
-          ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
-          : {}),
-        discovery: params.pluginMetadataSnapshot?.discovery,
+        manifestRegistry: params.pluginMetadata.manifestRegistry,
+        discovery: params.pluginMetadata.selectedSnapshot.discovery,
         ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const pluginWorkspaceDir = tryResolveConfiguredAgentWorkspaceDir(gatewayPluginConfig);
+  const pluginMetadataSnapshot = params.pluginMetadata.selectedSnapshot;
+  const pluginWorkspaceDir = pluginMetadataSnapshot.workspaceDir;
   const defaultWorkspaceDir = pluginWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
@@ -144,16 +142,14 @@ export async function prepareGatewayPluginBootstrap(params: {
           workspaceDir: pluginWorkspaceDir,
           env: process.env,
           activationSourceConfig,
-          metadataSnapshot: params.pluginMetadataSnapshot,
+          metadataSnapshot: pluginMetadataSnapshot,
           workerProviderIds: params.workerProviderIds ?? [],
           ambientEnvTriggers: params.ambientEnvTriggers,
         });
   // Startup logging and lifecycle publication consume the process-stable metadata snapshot.
   // Minimal gateways skip runtime lookup-table construction, not metadata ownership.
   const pluginManifestRecords =
-    pluginLookUpTable?.manifestRegistry.plugins ??
-    params.pluginMetadataSnapshot?.manifestRegistry.plugins ??
-    [];
+    pluginLookUpTable?.manifestRegistry.plugins ?? pluginMetadataSnapshot.manifestRegistry.plugins;
   const startupPluginIds = [...(pluginLookUpTable?.startup.pluginIds ?? [])];
   const ambientAutostartSuppressedChannelIds =
     params.ambientEnvTriggers === "suppress"
@@ -184,7 +180,7 @@ export async function prepareGatewayPluginBootstrap(params: {
     pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
-    pluginMetadataSnapshot: pluginLookUpTable ?? params.pluginMetadataSnapshot,
+    pluginMetadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     pluginRegistry,

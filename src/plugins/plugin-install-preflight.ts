@@ -4,7 +4,7 @@ import {
 } from "../cli/plugin-install-config-policy.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
 
 type PluginInstallPreflightResult =
   | { ok: true; action: "install"; request: PluginInstallRequestContext }

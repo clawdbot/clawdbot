@@ -314,6 +314,7 @@ async function handleChatHistoryRequest({
   const sessionId = requestedSessionId ?? entry?.sessionId;
   const historyEntry =
     requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
+  // Transcript projection needs a provider id, not executable model preparation.
   const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId, {
     allowPluginNormalization: false,
   });
@@ -480,7 +481,6 @@ async function handleChatHistoryRequest({
   }
   const defaults = getSessionDefaults(cfg, defaultModelCatalog, {
     agentId: sessionAgentId,
-    allowPluginNormalization: false,
     providerPolicySource: "active",
   });
   // Unprepared catalog facts are unknown, not an Off default or a smaller profile.

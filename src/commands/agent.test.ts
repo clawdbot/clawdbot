@@ -19,6 +19,7 @@ import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
@@ -2409,6 +2410,18 @@ describe("agentCommand", () => {
           "openai/gpt-4.1-mini": {},
         },
       });
+      // Exact catalog metadata does not authorize the fallback for explicit selection.
+      const fallbackModel = makeProviderModelFixture<"openai-completions">({
+        id: "sensitive",
+        provider: "external",
+        api: "openai-completions",
+        baseUrl: "https://external.example.test/v1",
+      });
+      legacyCfg.models = {
+        providers: {
+          [fallbackModel.provider]: { baseUrl: fallbackModel.baseUrl, models: [fallbackModel] },
+        },
+      };
       delete (legacyCfg as { meta?: unknown }).meta;
       await expect(
         agentCommand(

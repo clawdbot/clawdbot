@@ -1,6 +1,8 @@
 // Run fallback policy tests cover isolated agent fallback behavior after run failures.
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as providerModelNormalization from "../../agents/provider-model-normalization.runtime.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
@@ -411,19 +413,103 @@ describe("resolveCronFallbacksOverride", () => {
     ).toBeUndefined();
   });
 
-  it("plans the full configured candidate chain for cron preflight", () => {
-    expect(
-      resolveCronPreflightCandidates({
-        cfg: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "ollama/qwen3:32b",
-                fallbacks: ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-5.4"],
-              },
+  it("retains the selected workspace metadata while resolving cron preflight fallbacks", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "fixture/prepared", fallbacks: ["fixture/backup"] } },
+      },
+    } satisfies OpenClawConfig;
+    const workspaceDir = "/tmp/cron-preflight-selected-workspace";
+    const snapshot = createPluginMetadataSnapshot({
+      config: cfg,
+      workspaceDir,
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [
+          {
+            id: "fixture-normalizer",
+            channels: [],
+            providers: ["fixture"],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "workspace",
+            rootDir: workspaceDir,
+            source: `${workspaceDir}/index.js`,
+            manifestPath: `${workspaceDir}/openclaw.plugin.json`,
+            modelIdNormalization: {
+              providers: { fixture: { aliases: { backup: "selected-backup" } } },
             },
           },
+        ],
+      },
+    });
+    const normalizeModel = vi
+      .spyOn(providerModelNormalization, "normalizeProviderModelIdWithRuntime")
+      .mockImplementation((params) =>
+        params.config === cfg &&
+        params.workspaceDir === workspaceDir &&
+        params.pluginMetadataSnapshot === snapshot
+          ? params.context.modelId
+          : "ambient-model",
+      );
+    const params = {
+      cfg,
+      workspaceDir,
+      pluginMetadataSnapshot: snapshot,
+      agentId: "work",
+      provider: "fixture",
+      model: "prepared",
+      job: makeJob({ kind: "agentTurn", message: "summarize" }),
+    };
+
+    try {
+      expect(resolveCronPreflightCandidates(params)).toEqual([
+        {
+          provider: "fixture",
+          model: "prepared",
+          routeOrigin: "requested",
+          routeResolution: "resolved",
         },
+        {
+          provider: "fixture",
+          model: "selected-backup",
+          routeOrigin: "configured-fallback",
+          routeResolution: "resolved",
+        },
+      ]);
+      expect(normalizeModel).toHaveBeenCalled();
+      for (const [call] of normalizeModel.mock.calls) {
+        expect(call.config).toBe(cfg);
+        expect(call.workspaceDir).toBe(workspaceDir);
+        expect(call.pluginMetadataSnapshot).toBe(snapshot);
+      }
+    } finally {
+      normalizeModel.mockRestore();
+    }
+  });
+
+  it("plans the full configured candidate chain for cron preflight", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "ollama/qwen3:32b",
+            fallbacks: ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-5.4"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const workspaceDir = "/tmp/cron-preflight-workspace";
+    expect(
+      resolveCronPreflightCandidates({
+        cfg,
+        workspaceDir,
+        pluginMetadataSnapshot: createPluginMetadataSnapshot({
+          config: cfg,
+          workspaceDir,
+          manifestRegistry: { plugins: [], diagnostics: [] },
+        }),
         agentId: "main",
         provider: "ollama",
         model: "qwen3:32b",
@@ -455,9 +541,17 @@ describe("resolveCronFallbacksOverride", () => {
   });
 
   it("keeps cron preflight strict when payload fallbacks are explicitly empty", () => {
+    const cfg = makeConfig(["openai/gpt-5.4"]);
+    const workspaceDir = "/tmp/cron-preflight-workspace";
     expect(
       resolveCronPreflightCandidates({
-        cfg: makeConfig(["openai/gpt-5.4"]),
+        cfg,
+        workspaceDir,
+        pluginMetadataSnapshot: createPluginMetadataSnapshot({
+          config: cfg,
+          workspaceDir,
+          manifestRegistry: { plugins: [], diagnostics: [] },
+        }),
         agentId: "main",
         provider: "ollama",
         model: "qwen3:32b",

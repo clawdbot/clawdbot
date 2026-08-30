@@ -1,7 +1,7 @@
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 // Applies parsed directives to session state, config overrides, and run options.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
@@ -122,6 +122,7 @@ export async function applyInlineDirectiveOverrides(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
+  manifestPluginContext?: HandleDirectiveOnlyParams["manifestPluginContext"];
   agentCfg: AgentDefaults;
   agentEntry?: AgentEntry;
   sessionEntry: SessionEntry;
@@ -194,6 +195,7 @@ export async function applyInlineDirectiveOverrides(params: {
   };
   const createDirectiveHandlingBase = () => ({
     cfg,
+    manifestPluginContext: params.manifestPluginContext,
     directives,
     sessionEntry,
     sessionStore,
@@ -293,6 +295,8 @@ export async function applyInlineDirectiveOverrides(params: {
       },
       cfg,
       agentDir,
+      workspaceDir,
+      manifestPluginContext: params.manifestPluginContext,
       defaultProvider,
       defaultModel,
       aliasIndex,
@@ -399,6 +403,8 @@ export async function applyInlineDirectiveOverrides(params: {
         },
         cfg,
         agentDir,
+        workspaceDir,
+        manifestPluginContext: params.manifestPluginContext,
         defaultProvider,
         defaultModel,
         aliasIndex,
@@ -444,6 +450,7 @@ export async function applyInlineDirectiveOverrides(params: {
           currentProvider: provider,
           currentModel: model,
           modelPolicy: modelState.modelPolicy,
+          modelNormalization: modelState.runtimeModelNormalization,
           modelCatalog: modelState.allowedModelCatalog,
           thinkingCatalog: modelState.allowedModelCatalog,
           canPersistStickyModelSelection,
@@ -551,7 +558,8 @@ export async function applyInlineDirectiveOverrides(params: {
   }
 
   const selectedCatalogEntry = selectionCatalog.find(
-    (entry) => modelKey(entry.provider, entry.id) === modelKey(provider, model),
+    (entry) =>
+      buildModelCatalogRef(entry.provider, entry.id) === buildModelCatalogRef(provider, model),
   );
   contextTokens = resolveContextTokens({
     cfg,

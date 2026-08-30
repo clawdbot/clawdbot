@@ -6,7 +6,7 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
+import type { ResolvedAgentRoute } from "../../routing/resolve-route.types.js";
 import {
   ensureConfiguredBindingRouteReady,
   resolveRuntimeConversationBindingRoute,

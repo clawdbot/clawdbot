@@ -10,11 +10,7 @@ import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
-import {
-  applySecretRefHeaderSentinels,
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
-} from "../model-auth.js";
+import { applySecretRefHeaderSentinels, ensureAuthProfileStore } from "../model-auth.js";
 import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
 import { isOpenAIProvider } from "../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
@@ -231,14 +227,17 @@ async function resolveHarnessCompactApiKey(params: {
   if (!model) {
     return fallbackResolution(initialHarness);
   }
-  const runtimeAuthProfileStore = isOpenAIProvider(provider)
-    ? ensureAuthProfileStore(agentDir, {
-        externalCliProviderIds: ["openai"],
-        allowKeychainPrompt: false,
-      })
-    : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-        allowKeychainPrompt: false,
-      });
+  const runtimeAuthProfileStore = ensureAuthProfileStore(agentDir, {
+    config: compactParams.config,
+    workspaceDir,
+    pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
+    externalCliProviderIds: isOpenAIProvider(provider) ? ["openai"] : [],
+    externalCliProfileIds:
+      compactParams.authProfileIdSource === "user" && compactParams.authProfileId
+        ? [compactParams.authProfileId]
+        : [],
+    allowKeychainPrompt: false,
+  });
   const prepareRuntimeAuth = (harness: AgentHarness) =>
     prepareAgentRuntimeAuth({
       provider,
@@ -249,6 +248,7 @@ async function resolveHarnessCompactApiKey(params: {
       env: process.env,
       agentDir,
       workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
       authProfileStore: runtimeAuthProfileStore,
       sessionAuthProfileId: compactParams.authProfileId,
       sessionAuthProfileSource: compactParams.authProfileIdSource,

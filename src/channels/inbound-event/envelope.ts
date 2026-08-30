@@ -6,11 +6,8 @@ import {
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionUpdatedAtCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  resolveAgentRoute,
-  type ResolvedAgentRoute,
-  type ResolveAgentRouteInput,
-} from "../../routing/resolve-route.js";
+import { resolveAgentRoute, type ResolveAgentRouteInput } from "../../routing/resolve-route.js";
+import type { ResolvedAgentRoute } from "../../routing/resolve-route.types.js";
 
 export type ChannelInboundEnvelopeInput = Omit<AgentEnvelopeParams, "previousTimestamp"> & {
   previousTimestamp?: AgentEnvelopeParams["previousTimestamp"] | null;

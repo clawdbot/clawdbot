@@ -6,12 +6,8 @@ import {
   resetAgentRunRegistryForTest,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import {
-  abortChatRunById,
-  registerChatAbortController,
-  type ChatAbortControllerEntry,
-  type ChatAbortOps,
-} from "./chat-abort.js";
+import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 
 beforeEach(() => {

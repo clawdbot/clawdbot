@@ -1,14 +1,23 @@
-// Covers channel catalog registry loading and reset behavior.
+// Covers raw channel catalog preparation, lookup, and cold inspection.
+import fs from "node:fs";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PreparedPluginChannelCatalog } from "./channel-catalog-registry.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.js";
+import { withPluginInstallRoots } from "./install-root-context.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("./discovery.js");
   vi.doUnmock("./installed-plugin-index-record-reader.js");
+  vi.doUnmock("./current-plugin-metadata-state.js");
 });
 
 const ENV: NodeJS.ProcessEnv = { HOME: "/tmp/openclaw-test-home" };
@@ -31,27 +40,52 @@ function emptyDiscoveryResult(): PluginDiscoveryResult {
 }
 
 async function loadWithMocks(params: {
-  loadRecords?: (env: NodeJS.ProcessEnv | undefined) => Record<string, PluginInstallRecord>;
+  loadRecords?: (
+    env: NodeJS.ProcessEnv | undefined,
+    stateDir?: string,
+  ) => Record<string, PluginInstallRecord>;
+  discover?: (
+    options: Parameters<typeof import("./discovery.js").discoverOpenClawPlugins>[0],
+  ) => PluginDiscoveryResult;
 }): Promise<{
   module: typeof import("./channel-catalog-registry.js");
+  setCatalog: (catalog: PreparedPluginChannelCatalog | undefined) => void;
   discoverSpy: ReturnType<typeof vi.fn>;
   loadRecordsSpy: ReturnType<typeof vi.fn>;
 }> {
-  const discoverSpy = vi.fn(() => emptyDiscoveryResult());
-  const loadRecordsSpy = vi.fn((opts: { env?: NodeJS.ProcessEnv } = {}) => {
-    return params.loadRecords ? params.loadRecords(opts.env) : RECORDS;
+  let currentCatalog: PreparedPluginChannelCatalog | undefined;
+  const discoverSpy = vi.fn(
+    (options: Parameters<NonNullable<typeof params.discover>>[0]) =>
+      params.discover?.(options) ?? emptyDiscoveryResult(),
+  );
+  const loadRecordsSpy = vi.fn((opts: { env?: NodeJS.ProcessEnv; stateDir?: string } = {}) => {
+    return params.loadRecords ? params.loadRecords(opts.env, opts.stateDir) : RECORDS;
   });
 
-  vi.doMock("./discovery.js", () => ({ discoverOpenClawPlugins: discoverSpy }));
+  vi.doMock("./discovery.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./discovery.js")>()),
+    discoverOpenClawPlugins: discoverSpy,
+  }));
   vi.doMock("./installed-plugin-index-record-reader.js", () => ({
     loadInstalledPluginIndexInstallRecordsSync: loadRecordsSpy,
+  }));
+  vi.doMock("./current-plugin-metadata-state.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./current-plugin-metadata-state.js")>()),
+    getCurrentPluginChannelCatalog: () => currentCatalog,
   }));
 
   const module = await importFreshModule<typeof import("./channel-catalog-registry.js")>(
     import.meta.url,
     `./channel-catalog-registry.js?case=${++loadCase}`,
   );
-  return { module, discoverSpy, loadRecordsSpy };
+  return {
+    module,
+    setCatalog: (catalog) => {
+      currentCatalog = catalog;
+    },
+    discoverSpy,
+    loadRecordsSpy,
+  };
 }
 
 function firstDiscoverOptions(discoverSpy: ReturnType<typeof vi.fn>): Record<string, unknown> {
@@ -90,6 +124,24 @@ function createChannelCandidate(params: {
   } as PluginCandidate;
 }
 
+function catalogSnapshot(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  installRecords?: Record<string, PluginInstallRecord>;
+  candidates?: PluginCandidate[];
+}) {
+  const snapshot = createPluginMetadataSnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    manifestRegistry: makeRegistry([]),
+  });
+  return {
+    ...snapshot,
+    index: { ...snapshot.index, installRecords: params.installRecords ?? RECORDS },
+    ...(params.candidates ? { discovery: { candidates: params.candidates, diagnostics: [] } } : {}),
+  };
+}
+
 describe("listChannelCatalogEntries", () => {
   it("forwards lazily loaded install records to discovery when origin is unspecified", async () => {
     const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
@@ -117,8 +169,15 @@ describe("listChannelCatalogEntries", () => {
     expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
   });
 
-  it("uses caller-supplied install records verbatim and does not load the ledger", async () => {
-    const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
+  it("uses live caller-supplied install records without loading the ledger", async () => {
+    const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({
+      discover: ({ installRecords }) => ({
+        candidates: Object.keys(installRecords ?? {}).map((pluginId) =>
+          createChannelCandidate({ pluginId }),
+        ),
+        diagnostics: [],
+      }),
+    });
     const supplied: Record<string, PluginInstallRecord> = {
       slack: {
         source: "npm",
@@ -126,7 +185,11 @@ describe("listChannelCatalogEntries", () => {
       } as PluginInstallRecord,
     };
 
-    module.listChannelCatalogEntries({ env: ENV, installRecords: supplied });
+    expect(
+      module
+        .listChannelCatalogEntries({ env: ENV, installRecords: supplied })
+        .map((entry) => entry.pluginId),
+    ).toEqual(["slack"]);
 
     expect(loadRecordsSpy).not.toHaveBeenCalled();
     expect(firstDiscoverOptions(discoverSpy)).toStrictEqual({
@@ -135,6 +198,13 @@ describe("listChannelCatalogEntries", () => {
       installRecords: supplied,
       workspaceDir: undefined,
     });
+    supplied.telegram = { source: "npm", spec: "@openclaw/telegram@1.0.0" };
+    expect(
+      module
+        .listChannelCatalogEntries({ env: ENV, installRecords: supplied })
+        .map((entry) => entry.pluginId),
+    ).toEqual(["slack", "telegram"]);
+    expect(loadRecordsSpy).not.toHaveBeenCalled();
   });
 
   it("omits installRecords from discovery when the ledger is empty", async () => {
@@ -164,11 +234,10 @@ describe("listChannelCatalogEntries", () => {
     });
   });
 
-  it("treats ledger read errors as a soft fallback (no installRecords propagated)", async () => {
-    const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({
-      loadRecords: () => {
-        throw new Error("simulated reader failure");
-      },
+  it("retries the ledger after a cold inspection falls back from a read error", async () => {
+    const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
+    loadRecordsSpy.mockImplementationOnce(() => {
+      throw new Error("simulated reader failure");
     });
 
     expect(module.listChannelCatalogEntries({ env: ENV })).toStrictEqual([]);
@@ -176,6 +245,12 @@ describe("listChannelCatalogEntries", () => {
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
     expect(discoverSpy).toHaveBeenCalledTimes(1);
     expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
+
+    module.listChannelCatalogEntries({ env: ENV });
+    expect(discoverSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ installRecords: RECORDS }),
+    );
+    expect(loadRecordsSpy).toHaveBeenCalledTimes(2);
   });
 
   it("uses discovered package metadata for channel plugin ids", async () => {
@@ -183,7 +258,6 @@ describe("listChannelCatalogEntries", () => {
 
     expect(
       module.listChannelCatalogEntries({
-        installRecords: {},
         discovery: {
           candidates: [createChannelCandidate({ pluginId: "package-plugin" })],
           diagnostics: [],
@@ -225,5 +299,217 @@ describe("listChannelCatalogEntries", () => {
         },
       })[0]?.pluginId,
     ).toBe("bundled-plugin");
+  });
+});
+
+describe("prepared channel catalogs", () => {
+  it("retains raw workspace shadows and serves alternating scopes without filesystem or hash work", async () => {
+    const { module, setCatalog, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
+    const { preparePluginChannelCatalogs } = await import("./plugin-metadata-catalog.js");
+    const bundled = createChannelCandidate({ pluginId: "bundled", origin: "bundled" });
+    const workspaces = new Map(
+      [undefined, "/tmp/workspace-a", "/tmp/workspace-b"].map((workspaceDir) => [
+        workspaceDir,
+        catalogSnapshot({
+          workspaceDir,
+          candidates: [
+            createChannelCandidate({
+              pluginId: workspaceDir ?? "shared",
+              origin: workspaceDir ? "workspace" : "global",
+            }),
+            bundled,
+          ],
+        }),
+      ]),
+    );
+    setCatalog(preparePluginChannelCatalogs({ config: {}, env: ENV, workspaces }).catalog);
+    expect(discoverSpy).not.toHaveBeenCalled();
+    loadRecordsSpy.mockClear();
+    const fileReads = [
+      "existsSync",
+      "statSync",
+      "lstatSync",
+      "realpathSync",
+      "readFileSync",
+    ] as const;
+    for (const method of fileReads) {
+      vi.spyOn(fs, method).mockImplementation(() => {
+        throw new Error(`unexpected ${method}`);
+      });
+    }
+    const stringify = vi.spyOn(JSON, "stringify");
+    const ids = [undefined, "/tmp/workspace-a", "/tmp/workspace-b", "/tmp/workspace-a"].map(
+      (workspaceDir) =>
+        module.listChannelCatalogEntries({ env: ENV, workspaceDir }).map((entry) => entry.pluginId),
+    );
+    const bundledIds = module
+      .listChannelCatalogEntries({ origin: "bundled", env: ENV })
+      .map((entry) => entry.pluginId);
+    const serializations = stringify.mock.calls.length;
+    stringify.mockRestore();
+    expect(ids).toEqual([
+      ["shared", "bundled"],
+      ["/tmp/workspace-a", "bundled"],
+      ["/tmp/workspace-b", "bundled"],
+      ["/tmp/workspace-a", "bundled"],
+    ]);
+    expect(bundledIds).toEqual(["bundled"]);
+    expect(serializations).toBe(0);
+    expect(discoverSpy).not.toHaveBeenCalled();
+    expect(loadRecordsSpy).not.toHaveBeenCalled();
+  });
+
+  it("prepares missing raw discovery and default paths without losing configured shadows", async () => {
+    const { module, setCatalog, discoverSpy } = await loadWithMocks({
+      discover: (options) => ({
+        candidates: [
+          createChannelCandidate({
+            pluginId: `${options.workspaceDir ?? "shared"}:${options.extraPaths?.length ? "configured" : "default"}`,
+          }),
+        ],
+        diagnostics: [],
+      }),
+    });
+    const { preparePluginChannelCatalogs } = await import("./plugin-metadata-catalog.js");
+    const config = { plugins: { load: { paths: ["/tmp/configured-plugin"] } } };
+    const workspaceDir = "/tmp/workspace-a";
+    setCatalog(
+      preparePluginChannelCatalogs({
+        config,
+        env: ENV,
+        workspaces: new Map([
+          [
+            workspaceDir,
+            catalogSnapshot({
+              config,
+              workspaceDir,
+              candidates: [
+                createChannelCandidate({ pluginId: "unvalidated-configured", origin: "config" }),
+              ],
+            }),
+          ],
+        ]),
+      }).catalog,
+    );
+    expect(
+      module.listChannelCatalogEntries({ workspaceDir, extraPaths: config.plugins.load.paths })[0]
+        ?.pluginId,
+    ).toBe("unvalidated-configured");
+    expect(module.listChannelCatalogEntries({ workspaceDir })[0]?.pluginId).toBe(
+      `${workspaceDir}:default`,
+    );
+    expect(module.listChannelCatalogEntries()[0]?.pluginId).toBe("shared:default");
+    expect(
+      module.listChannelCatalogEntries({ extraPaths: config.plugins.load.paths })[0]?.pluginId,
+    ).toBe("shared:configured");
+    expect(discoverSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("replaces published catalogs and requires preparation for changed inputs", async () => {
+    const { module, setCatalog, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
+    const { preparePluginChannelCatalogs } = await import("./plugin-metadata-catalog.js");
+    const env = { ...ENV };
+    for (const pluginId of ["first", "replacement"]) {
+      setCatalog(
+        preparePluginChannelCatalogs({
+          config: {},
+          env,
+          workspaces: new Map([
+            [undefined, catalogSnapshot({ candidates: [createChannelCandidate({ pluginId })] })],
+          ]),
+        }).catalog,
+      );
+      expect(module.listChannelCatalogEntries({ env })[0]?.pluginId).toBe(pluginId);
+    }
+    discoverSpy.mockClear();
+    loadRecordsSpy.mockClear();
+    const installRecords = structuredClone(RECORDS);
+    expect(module.listChannelCatalogEntries({ env, installRecords })[0]?.pluginId).toBe(
+      "replacement",
+    );
+    installRecords.weixin!.installPath = "/tmp/replaced-install";
+    for (const options of [
+      { workspaceDir: "/tmp/unprepared" },
+      { extraPaths: ["/tmp/other-plugin"] },
+      { installRecords },
+      { installRecords: {} },
+    ]) {
+      expect(() => module.listChannelCatalogEntries(options)).toThrow("were not prepared");
+    }
+    expect(
+      module.listChannelCatalogEntries({ env: { ...env, CHANNEL_TOKEN: "new-live-token" } })[0]
+        ?.pluginId,
+    ).toBe("replacement");
+    env.HOME = "/tmp/another-home";
+    expect(() => module.listChannelCatalogEntries({ env })).toThrow("were not prepared");
+    env.HOME = ENV.HOME;
+    expect(() =>
+      withPluginInstallRoots(
+        {
+          extensionsDir: "/tmp/pinned/extensions",
+          gitDir: "/tmp/pinned/git",
+          npmDir: "/tmp/pinned/npm",
+          stateDir: "/tmp/pinned",
+        },
+        () => module.listChannelCatalogEntries(),
+      ),
+    ).toThrow("were not prepared");
+    expect(discoverSpy).not.toHaveBeenCalled();
+    expect(loadRecordsSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing discovery", "different install ledger", "explicit state directory"])(
+    "prepares raw candidates for a snapshot with %s",
+    async (reason) => {
+      const stateDir = reason === "explicit state directory" ? "/tmp/other-state" : undefined;
+      const { discoverSpy } = await loadWithMocks({
+        loadRecords: (_env, directory) =>
+          directory === "/tmp/other-state"
+            ? { other: { source: "path", sourcePath: "/tmp/other-plugin" } }
+            : RECORDS,
+        discover: ({ installRecords }) => ({
+          candidates: [
+            createChannelCandidate({
+              pluginId: installRecords?.other ? "other-ledger-channel" : "ledger-channel",
+            }),
+          ],
+          diagnostics: [],
+        }),
+      });
+      const { preparePluginChannelCatalogs } = await import("./plugin-metadata-catalog.js");
+      const snapshot = catalogSnapshot(
+        reason === "missing discovery"
+          ? {}
+          : {
+              installRecords: {},
+              candidates: [createChannelCandidate({ pluginId: "old-channel" })],
+            },
+      );
+      const prepared = preparePluginChannelCatalogs({
+        config: {},
+        env: ENV,
+        stateDir,
+        workspaces: new Map([[undefined, snapshot]]),
+      });
+      const expectedPluginId = stateDir ? "other-ledger-channel" : "ledger-channel";
+      expect(prepared.catalog.read({})[0]?.pluginId).toBe(expectedPluginId);
+      expect(prepared.catalog.read({})[0]?.pluginId).toBe(expectedPluginId);
+      expect(prepared.discoveries.get(undefined)?.candidates[0]?.packageManifest?.plugin?.id).toBe(
+        expectedPluginId,
+      );
+      expect(discoverSpy).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("rejects incomplete preparation when the install ledger cannot be read", async () => {
+    await loadWithMocks({
+      loadRecords: () => {
+        throw new Error("unreadable ledger");
+      },
+    });
+    const { preparePluginChannelCatalogs } = await import("./plugin-metadata-catalog.js");
+    expect(() =>
+      preparePluginChannelCatalogs({ config: {}, env: ENV, workspaces: new Map() }),
+    ).toThrow("unreadable ledger");
   });
 });

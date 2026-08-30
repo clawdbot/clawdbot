@@ -1,6 +1,7 @@
 // Explicit model policy tests keep catalog metadata separate from override restrictions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { createNamespacedModelConfig } from "../test-utils/model-namespace-fixture.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 
 function createPolicy(cfg: OpenClawConfig, agentId?: string) {
@@ -128,6 +129,69 @@ describe("explicit model visibility policy", () => {
     expect(policy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(true);
     expect(policy.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(false);
   });
+
+  it.each([
+    {
+      name: "allows only the plain model",
+      allow: ["custom/model"],
+      liveCatalog: true,
+      expected: [{ id: "model", name: "Plain", contextWindow: 8_000, alias: "plain" }],
+    },
+    {
+      name: "allows only the nested model",
+      allow: ["custom/custom/model"],
+      liveCatalog: true,
+      expected: [{ id: "custom/model", name: "Nested", contextWindow: 16_000, alias: "nested" }],
+    },
+    {
+      name: "retains both configured rows without a live catalog",
+      allow: [],
+      liveCatalog: false,
+      expected: [
+        { id: "model", name: "Plain", contextWindow: 8_000, alias: "plain" },
+        { id: "custom/model", name: "Nested", contextWindow: 16_000, alias: "nested" },
+      ],
+    },
+  ])(
+    "keeps exact configured model namespaces distinct: $name",
+    ({ allow, liveCatalog, expected }) => {
+      const namespaceConfig = createNamespacedModelConfig([
+        { id: "model", name: "Plain", contextWindow: 8_000 },
+        { id: "custom/model", name: "Nested", contextWindow: 16_000 },
+      ]);
+      const cfg: OpenClawConfig = {
+        ...namespaceConfig,
+        agents: {
+          defaults: { ...namespaceConfig.agents?.defaults, modelPolicy: { allow } },
+        },
+      };
+      const policy = createModelVisibilityPolicy({
+        cfg,
+        catalog: liveCatalog
+          ? [
+              { provider: "custom", id: "model", name: "Discovered plain" },
+              { provider: "custom", id: "custom/model", name: "Discovered nested" },
+            ]
+          : [],
+        defaultProvider: "custom",
+      });
+
+      expect(policy.allows({ provider: "custom", model: "model" })).toBe(
+        expected.some((entry) => entry.id === "model"),
+      );
+      expect(policy.allows({ provider: "custom", model: "custom/model" })).toBe(
+        expected.some((entry) => entry.id === "custom/model"),
+      );
+      expect(
+        policy.allowedCatalog.map(({ id, name, contextWindow, alias }) => ({
+          id,
+          name,
+          contextWindow,
+          alias,
+        })),
+      ).toEqual(expected);
+    },
+  );
 
   it("keeps configured fallbacks failover-only while retaining the configured primary", () => {
     const policy = createPolicy({

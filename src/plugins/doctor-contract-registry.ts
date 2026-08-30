@@ -7,6 +7,7 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { shouldIncludeChannelSetupFeatureForConfig } from "../channels/plugins/bundled-setup-policy.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -28,6 +29,10 @@ import { isActivatedManifestOwner } from "./manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
+import {
+  getPluginMetadataWorkspaceSnapshot,
+  getScopedPluginMetadata,
+} from "./plugin-metadata-collection.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
@@ -312,12 +317,19 @@ function resolvePluginDoctorManifestRecords(params: {
     return [];
   }
 
-  const manifestRegistry = loadPluginManifestRegistryForPluginRegistry({
-    config: params?.config,
-    workspaceDir: params?.workspaceDir,
-    env,
-    includeDisabled: true,
-  });
+  const scopedMetadata = getScopedPluginMetadata(env);
+  const manifestRegistry =
+    params.workspaceDir === undefined
+      ? resolveConfigWidePluginManifestRegistry({ config: params.config ?? {}, env })
+      : scopedMetadata
+        ? getPluginMetadataWorkspaceSnapshot(scopedMetadata, { workspaceDir: params.workspaceDir })
+            .manifestRegistry
+        : loadPluginManifestRegistryForPluginRegistry({
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env,
+            includeDisabled: true,
+          });
 
   const scopedPluginIds = params?.pluginIds ? new Set(params.pluginIds) : null;
   return manifestRegistry.plugins.filter(

@@ -1,5 +1,5 @@
 /** Tests command registry definitions, native specs, aliases, and argument menus. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -773,67 +773,85 @@ describe("commands registry args", () => {
     expect(menu).toBeNull();
   });
 
-  it("resolves function-based choices with a default provider/model context", () => {
-    let seen: {
-      provider?: string;
-      model?: string;
-      agentRuntime?: string;
-      catalogLength?: number;
-      commandKey: string;
-      argName: string;
-    } | null = null;
+  it.each([false, true])(
+    "resolves function-based choices without runtime normalization (prepared context: %s)",
+    async (prepared) => {
+      const runtimeNormalizer = vi
+        .spyOn(
+          await import("../agents/provider-model-normalization.runtime.js"),
+          "normalizeProviderModelIdWithRuntime",
+        )
+        .mockReturnValue("runtime-only-model");
+      onTestFinished(() => runtimeNormalizer.mockRestore());
+      let seen: {
+        provider?: string;
+        model?: string;
+        agentRuntime?: string;
+        catalogLength?: number;
+        commandKey: string;
+        argName: string;
+      } | null = null;
 
-    const command: ChatCommandDefinition = {
-      key: "think",
-      description: "think",
-      textAliases: [],
-      scope: "both",
-      argsMenu: "auto",
-      argsParsing: "positional",
-      args: [
-        {
-          name: "level",
-          description: "level",
-          type: "string",
-          choices: ({ provider, model, agentRuntime, catalog, command: commandLocal, arg }) => {
-            seen = {
-              provider,
-              model,
-              agentRuntime,
-              catalogLength: catalog?.length,
-              commandKey: commandLocal.key,
-              argName: arg.name,
-            };
-            return ["low", "high"];
+      const command: ChatCommandDefinition = {
+        key: "think",
+        description: "think",
+        textAliases: [],
+        scope: "both",
+        argsMenu: "auto",
+        argsParsing: "positional",
+        args: [
+          {
+            name: "level",
+            description: "level",
+            type: "string",
+            choices: ({ provider, model, agentRuntime, catalog, command: commandLocal, arg }) => {
+              seen = {
+                provider,
+                model,
+                agentRuntime,
+                catalogLength: catalog?.length,
+                commandKey: commandLocal.key,
+                argName: arg.name,
+              };
+              return ["low", "high"];
+            },
+          },
+        ],
+      };
+
+      const menu = requireCommandArgMenu({
+        command,
+        args: undefined,
+        cfg: {
+          agents: {
+            defaults: {
+              model: "menu-alias",
+              models: { "fixture-menu/canonical-model": { alias: "menu-alias" } },
+            },
           },
         },
-      ],
-    };
-
-    const menu = requireCommandArgMenu({
-      command,
-      args: undefined,
-      cfg: {} as never,
-      agentRuntime: "codex",
-    });
-    expect(menu.arg.name).toBe("level");
-    expect(menu.choices).toEqual([
-      { label: "low", value: "low" },
-      { label: "high", value: "high" },
-    ]);
-    expect(formatCommandArgMenuTitle({ command, menu })).toBe(
-      "Choose level for /think.\nOptions: low, high.",
-    );
-    const seenChoice = requireSeenChoice(seen);
-    expect(seenChoice.commandKey).toBe("think");
-    expect(seenChoice.argName).toBe("level");
-    expect(typeof seenChoice.provider).toBe("string");
-    expect(seenChoice.provider?.trim().length).toBeGreaterThan(0);
-    expect(typeof seenChoice.model).toBe("string");
-    expect(seenChoice.model?.trim().length).toBeGreaterThan(0);
-    expect(seenChoice.agentRuntime).toBe("codex");
-    expect(seenChoice.catalogLength).toBe(0);
-  });
+        ...(prepared ? { provider: "prepared-provider", model: "prepared-model" } : {}),
+        agentRuntime: "codex",
+        catalog: [],
+      });
+      expect(menu.arg.name).toBe("level");
+      expect(menu.choices).toEqual([
+        { label: "low", value: "low" },
+        { label: "high", value: "high" },
+      ]);
+      expect(formatCommandArgMenuTitle({ command, menu })).toBe(
+        "Choose level for /think.\nOptions: low, high.",
+      );
+      const seenChoice = requireSeenChoice(seen);
+      expect(seenChoice.commandKey).toBe("think");
+      expect(seenChoice.argName).toBe("level");
+      expect(seenChoice.provider).toBe(prepared ? "prepared-provider" : "fixture-menu");
+      expect(seenChoice.model).toBe(prepared ? "prepared-model" : "canonical-model");
+      expect(seenChoice.agentRuntime).toBe("codex");
+      expect(seenChoice.catalogLength).toBe(0);
+      expect(runtimeNormalizer).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { model: "gpt-5.6-sol", agentRuntime: "codex", supportsUltra: true },

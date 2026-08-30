@@ -496,8 +496,10 @@ async function runScopeScenario(root: string): Promise<void> {
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   const { getPluginRegistryState } = await import("../plugins/runtime-state.js");
   const { setActivePluginRegistry } = await import("../plugins/runtime.js");
-  const { getPluginRuntimeGenerationRegistry, withPluginRuntimeGenerationScope } =
+  const { withPluginRuntimeGenerationScope } =
     await import("../plugins/runtime/generation-scope.js");
+  const { getPluginRuntimeGenerationRegistry } =
+    await import("../plugins/runtime/generation-state.js");
   const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
     await import("../plugins/runtime/gateway-request-scope.js");
   const { withMcpAuthProfileBearer } = await import("./mcp-auth-profile.js");

@@ -1,13 +1,16 @@
 // Tests get-reply config override handling for a single inbound turn.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
+import * as providerModelNormalizationRuntime from "../../agents/provider-model-normalization.runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../../config/sessions/session-diff-baseline-capture.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   buildGetReplyCtx,
@@ -90,20 +93,30 @@ async function prepareBaselineClaimSession(sessionId: string) {
 function createPreparedDispatchRuntime(
   overrides: Partial<PreparedReplyDispatchRuntime> = {},
 ): PreparedReplyDispatchRuntime {
+  const config = overrides.config ?? {
+    channels: { telegram: { botToken: "resolved-telegram-token" } },
+    agents: {
+      defaults: { model: "openai/gpt-4o-mini", userTimezone: "America/New_York" },
+      list: [{ id: "main", default: true }],
+    },
+  };
+  const workspaceDir = overrides.workspaceDir ?? "/tmp/prepared-model-workspace";
   return Object.freeze({
     agentId: "main",
     agentDir: "/tmp/prepared-model-owner",
-    workspaceDir: "/tmp/prepared-model-workspace",
-    config: {
-      channels: { telegram: { botToken: "resolved-telegram-token" } },
-      agents: {
-        defaults: { userTimezone: "America/New_York" },
-        list: [{ id: "main", default: true }],
-      },
-    },
+    workspaceDir,
+    config,
     modelCatalog: { entries: [], routeVariants: [] },
     inboundPluginRegistry: createEmptyPluginRegistry(),
-    pluginGeneration: {} as never,
+    pluginGeneration: {
+      pluginMetadataSnapshot: createPluginMetadataSnapshot({
+        config,
+        workspaceDir,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }),
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+    },
     ...overrides,
   });
 }
@@ -270,6 +283,89 @@ describe("getReplyFromConfig configOverride", () => {
         preparedModelCatalog: preparedRuntime.modelCatalog,
       }),
     );
+  });
+
+  it("keeps heartbeat fallback provenance on the admitted packet after metadata publication", async () => {
+    const preparedRuntime = createPreparedDispatchRuntime();
+    const capturedMetadata = preparedRuntime.pluginGeneration.pluginMetadataSnapshot;
+    const replacementMetadata = createPluginMetadataSnapshot({
+      config: preparedRuntime.config,
+      workspaceDir: "/tmp/replacement-model-workspace",
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    const normalizer = vi
+      .spyOn(providerModelNormalizationRuntime, "normalizeProviderModelIdWithRuntime")
+      .mockImplementation((params) => {
+        if (params.provider !== "openai" || params.context.modelId !== "legacy-primary") {
+          return undefined;
+        }
+        return params.config === preparedRuntime.config &&
+          params.pluginMetadataSnapshot === capturedMetadata &&
+          params.workspaceDir === preparedRuntime.workspaceDir
+          ? "gpt-4o-mini"
+          : "ambient-primary";
+      });
+    const publications = [
+      installTemporaryCurrentPluginMetadataSnapshot(capturedMetadata, {
+        config: preparedRuntime.config,
+      }),
+    ];
+    onTestFinished(() => {
+      for (const publication of publications.toReversed()) {
+        publication.release();
+      }
+      normalizer.mockRestore();
+    });
+    const sessionKey = "agent:main:telegram:123";
+    const storePath = path.join(tempDirs.make("openclaw-get-reply-heartbeat-"), "sessions.json");
+    const entry: InternalSessionEntry = {
+      sessionId: "captured-heartbeat",
+      updatedAt: Date.now(),
+      providerOverride: "fixture-fallback",
+      modelOverride: "fallback",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "legacy-primary",
+    };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    mocks.initSessionState.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      publications.push(
+        installTemporaryCurrentPluginMetadataSnapshot(replacementMetadata, {
+          config: preparedRuntime.config,
+        }),
+      );
+      return createGetReplySessionState({
+        initialSessionEntry: entry,
+        sessionEntry: entry,
+        sessionEntryHandle: { replaceCurrent: vi.fn() },
+        sessionKey,
+        sessionStore: { [sessionKey]: entry },
+        storePath,
+      });
+    });
+    const selections: Array<{ provider: string; model: string }> = [];
+    mocks.resolveReplyDirectives.mockImplementationOnce(
+      async (
+        params: Parameters<typeof import("./get-reply-directives.js").resolveReplyDirectives>[0],
+      ) => {
+        selections.push({ provider: params.provider, model: params.model });
+        return { kind: "reply", reply: { text: "ok" } };
+      },
+    );
+
+    await expect(
+      bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx(), {
+        isHeartbeat: true,
+      }),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(selections).toEqual([{ provider: "fixture-fallback", model: "fallback" }]);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "legacy-primary",
+    });
   });
 
   it("rejects a prepared dispatch runtime that crosses the admitted session agent", async () => {

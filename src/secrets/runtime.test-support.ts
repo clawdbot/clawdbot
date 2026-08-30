@@ -17,7 +17,8 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../plugins/installed-plugin-index-record-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installed-plugin-index-record-reader.js")>()),
   loadInstalledPluginIndexInstallRecordsSync: () => ({}),
 }));
 

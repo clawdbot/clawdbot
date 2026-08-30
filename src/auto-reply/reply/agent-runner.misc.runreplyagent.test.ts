@@ -20,6 +20,7 @@ import {
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
@@ -38,6 +39,9 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.test-fixtures.js";
+import { bindPluginMetadataSnapshotCache, createPluginCache } from "../../plugins/plugin-cache.js";
+import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { VerboseLevel } from "../thinking.shared.js";
@@ -354,7 +358,23 @@ function createBaseRun(options: BaseRunOptions = {}) {
     sessionCtx,
     resolvedQueue,
     followupRun,
-    run: () => runReplyAgent(replyParams),
+    run: () => {
+      // The real prepared-reply entrypoint retains this generation through accounting.
+      const metadataSnapshot = createPluginMetadataSnapshot({
+        config: followupRun.run.config,
+        workspaceDir: followupRun.run.workspaceDir,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
+      bindPluginMetadataSnapshotCache(metadataSnapshot, createPluginCache());
+      return withPluginRuntimeGenerationScope(
+        {
+          config: followupRun.run.config,
+          metadataSnapshot,
+          pluginRegistry: requireActivePluginRegistry(),
+        },
+        () => runReplyAgent(replyParams),
+      );
+    },
   };
 }
 

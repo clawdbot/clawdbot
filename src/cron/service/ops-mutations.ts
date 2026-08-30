@@ -73,11 +73,8 @@ const RETRY_ADD_AFTER_SESSION_CLEANUP = new Error("retry add after session clean
 async function resolveConfiguredChannelsForValidation(
   state: CronServiceState,
 ): Promise<readonly string[] | undefined> {
-  if (!state.deps.listConfiguredChannels) {
-    return undefined;
-  }
   try {
-    return await state.deps.listConfiguredChannels();
+    return await state.deps.listConfiguredChannels?.();
   } catch {
     // Channel discovery is advisory at mutation time. Runtime delivery remains
     // authoritative, so discovery failures must not create false rejections.
@@ -277,27 +274,24 @@ function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
   };
 }
 
-function consumeRuntimeAuthorityMutationOptions(
-  opts: CronAddOptions | CronUpdateOptions | undefined,
-): Pick<Parameters<typeof reconcileRuntimeAuthority>[0], "captured" | "runtimeAuthority"> {
-  // Validation-only guards must not look like an empty fresh capture: that
-  // would erase an existing runtime ceiling during an otherwise routine edit.
-  opts?.commitGuard?.();
-  return {
-    captured: opts?.captureRuntimeAuthority !== undefined,
-    runtimeAuthority: opts?.captureRuntimeAuthority?.(),
-  };
-}
-
 /** Adds or converges a declaration-keyed cron job inside one store lock and write transaction. */
 export async function add(
   state: CronServiceState,
   input: CronJobCreate,
   opts?: CronAddOptions,
+  validateSystemMonitorOwner?: (agentId: string) => void,
 ): Promise<CronAddResult> {
   let pendingSessionCleanup: Promise<void> | undefined;
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
+    if (
+      validateSystemMonitorOwner &&
+      (opts?.systemOwned !== true ||
+        !isSystemOwnedCronPayloadKind(input.payload.kind) ||
+        !normalizeOptionalAgentId(input.agentId))
+    ) {
+      throw new Error("candidate cron ownership requires an explicitly owned system monitor");
+    }
     const declarationKey = normalizeOptionalString(input.declarationKey);
     if (
       input.payload &&
@@ -314,7 +308,12 @@ export async function add(
     }
     await ensureLoaded(state, { skipRecompute: true });
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
-    if (state.deps.isAgentAvailable?.(agentId) === false) {
+    const validateOwner = validateSystemMonitorOwner
+      ? () => validateSystemMonitorOwner(agentId)
+      : undefined;
+    if (validateOwner) {
+      validateOwner();
+    } else if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
     }
     const normalizedId = normalizeOptionalString(input.id);
@@ -358,10 +357,10 @@ export async function add(
         toolsAllowExecTarget: opts?.toolsAllowExecTarget,
         configuredChannels,
       });
-      const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
       reconcileRuntimeAuthority({
         job: nextJob,
-        ...runtimeAuthorityMutation,
+        opts,
+        validateOwner,
         explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
       });
       const includeEnabled = opts?.enabledExplicit === true;
@@ -407,10 +406,10 @@ export async function add(
     if (opts?.createdActor) {
       job.createdActor = structuredClone(opts.createdActor);
     }
-    const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
     reconcileRuntimeAuthority({
       job,
-      ...runtimeAuthorityMutation,
+      opts,
+      validateOwner,
       explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
     });
     state.store?.jobs.push(job);
@@ -452,7 +451,7 @@ export async function add(
       throw error;
     }
     await pendingSessionCleanup;
-    return await add(state, input, opts);
+    return await add(state, input, opts, validateSystemMonitorOwner);
   });
 }
 
@@ -522,10 +521,9 @@ async function updateLoadedJob(params: {
     scheduleChanged: patch.schedule !== undefined,
     explicitTriggerState: patch.state,
   });
-  const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
   reconcileRuntimeAuthority({
     job: nextJob,
-    ...runtimeAuthorityMutation,
+    opts,
     explicitlyMutatesToolsAllow:
       patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
   });

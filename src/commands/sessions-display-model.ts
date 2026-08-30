@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 /**
  * Model display resolution for session listings.
@@ -9,7 +10,6 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
-  normalizeStoredOverrideModel,
   parseModelRef,
   resolvePersistedSelectedModelRef,
   type CliProviderClassifier,
@@ -123,23 +123,20 @@ export function resolveSessionDisplayModelRef(
   const agentId =
     ownerAgentId ?? (row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined);
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
-  const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: row.providerOverride,
-    modelOverride: row.modelOverride,
-  });
   const persistedRef = resolvePersistedSelectedModelRef({
+    config: cfg,
     defaultProvider: defaultRef.provider,
     runtimeProvider: row.modelProvider,
     runtimeModel: row.model,
-    overrideProvider: normalizedOverride.providerOverride,
-    overrideModel: normalizedOverride.modelOverride,
+    overrideProvider: row.providerOverride,
+    overrideModel: row.modelOverride,
     allowManifestNormalization: false,
     allowPluginNormalization: false,
   });
   if (!persistedRef) {
     return defaultRef;
   }
-  return normalizedOverride.modelOverride
+  return normalizeOptionalString(row.modelOverride)
     ? persistedRef
     : normalizeCliRuntimeDisplayRef(cfg, agentId, persistedRef, defaultRef, classifyCliProvider);
 }

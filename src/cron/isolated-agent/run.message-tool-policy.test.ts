@@ -1033,24 +1033,29 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   it("releases cron run context references after completion", async () => {
     const initialSessionEntry = { retained: true };
     loadSessionEntryMock.mockImplementation((_storePath, sessionKey) =>
-      sessionKey === "agent:default:cron:message-tool-policy" ? initialSessionEntry : undefined,
+      sessionKey === "agent:main:cron:message-tool-policy" ? initialSessionEntry : undefined,
     );
     const cronSession = makeCronSession({
-      store: { "agent:default:cron:message-tool-policy": initialSessionEntry },
+      store: { "agent:main:cron:message-tool-policy": initialSessionEntry },
       initialSessionEntry,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    const { getAgentRunContext, registerAgentRunContext } =
+    const { clearAgentRunContext, getAgentRunContext, registerAgentRunContext } =
       await import("../../infra/agent-run-registry.js");
     registerAgentRunContext("test-session-id", {
-      sessionKey: "agent:default:cron:message-tool-policy",
+      sessionKey: "agent:main:cron:message-tool-policy",
       verboseLevel: "off",
     });
 
-    await runCronIsolatedAgentTurn(makeParams());
+    try {
+      const result = await runCronIsolatedAgentTurn(makeParams());
 
-    expect(getAgentRunContext("test-session-id")).toBeUndefined();
-    expect(cronSession.store).toBeUndefined();
+      expect(result.status).toBe("ok");
+      expect(getAgentRunContext("test-session-id")).toBeUndefined();
+      expect(cronSession.store).toBeUndefined();
+    } finally {
+      clearAgentRunContext("test-session-id");
+    }
   });
 
   it("does not let old cron cleanup clear a newer same-id run context", async () => {
@@ -1066,7 +1071,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         runParams.onExecutionStarted?.();
         newerLifecycleGeneration = rotateAgentEventLifecycleGeneration();
         claimAgentRunContext("test-session-id", {
-          sessionKey: "agent:default:cron:message-tool-policy",
+          sessionKey: "agent:main:cron:message-tool-policy",
           sessionId: "test-session-id",
           lifecycleGeneration: newerLifecycleGeneration,
         });
@@ -1117,32 +1122,36 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   it("keeps shared cron run context references active after completion", async () => {
     const initialSessionEntry = { retained: true };
     loadSessionEntryMock.mockImplementation((_storePath, sessionKey) =>
-      sessionKey === "agent:default:cron:message-tool-policy" ? initialSessionEntry : undefined,
+      sessionKey === "agent:main:cron:message-tool-policy" ? initialSessionEntry : undefined,
     );
     const cronSession = makeCronSession({
-      store: { "agent:default:cron:message-tool-policy": initialSessionEntry },
+      store: { "agent:main:cron:message-tool-policy": initialSessionEntry },
       initialSessionEntry,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
     const { clearAgentRunContext, getAgentRunContext, registerAgentRunContext } =
       await import("../../infra/agent-run-registry.js");
     registerAgentRunContext("test-session-id", {
-      sessionKey: "agent:default:cron:message-tool-policy",
+      sessionKey: "agent:main:cron:message-tool-policy",
       verboseLevel: "off",
     });
     const currentSessionJob = makeMessageToolPolicyJob() as unknown as Record<string, unknown>;
     currentSessionJob.sessionTarget = "current";
 
-    await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      job: currentSessionJob as never,
-    });
+    try {
+      const result = await runCronIsolatedAgentTurn({
+        ...makeParams(),
+        job: currentSessionJob as never,
+      });
 
-    expect(getAgentRunContext("test-session-id")).toMatchObject({
-      sessionKey: "agent:default:cron:message-tool-policy",
-    });
-    expect(cronSession.store).toBeUndefined();
-    clearAgentRunContext("test-session-id");
+      expect(result.status).toBe("ok");
+      expect(getAgentRunContext("test-session-id")).toMatchObject({
+        sessionKey: "agent:main:cron:message-tool-policy",
+      });
+      expect(cronSession.store).toBeUndefined();
+    } finally {
+      clearAgentRunContext("test-session-id");
+    }
   });
 
   it("releases a shared cron run context created by this invocation", async () => {
@@ -1192,7 +1201,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
     runEmbeddedAgentMock.mockImplementation(async () => {
       claimAgentRunContext("test-session-id", {
-        sessionKey: "agent:default:cron:message-tool-policy",
+        sessionKey: "agent:main:cron:message-tool-policy",
         sessionId: "test-session-id",
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
       });
@@ -1238,7 +1247,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     const { getAgentEventLifecycleGeneration, rotateAgentEventLifecycleGeneration } =
       await import("../../infra/agent-events.js");
     claimAgentRunContext("test-session-id", {
-      sessionKey: "agent:default:cron:message-tool-policy",
+      sessionKey: "agent:main:cron:message-tool-policy",
       sessionId: "test-session-id",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
     });

@@ -2,11 +2,10 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 // TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  buildModelAliasIndex,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-  type ModelRef,
-} from "../agents/model-selection.js";
+  createModelManifestPluginContext,
+  resolveModelRefWithConfiguredAliases,
+} from "../agents/model-selection-shared.js";
+import { resolveDefaultModelForAgent, type ModelRef } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TextContent } from "../llm/types.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
@@ -48,31 +47,26 @@ type SummarizeResult = {
   outputLength: number;
 };
 
-type SummaryModelSelection = {
-  ref: ModelRef;
-  source: "summaryModel" | "default";
-};
-
-function resolveSummaryModelRef(
-  cfg: OpenClawConfig,
-  config: ResolvedTtsConfig,
-): SummaryModelSelection {
-  const defaultRef = resolveDefaultModelForAgent({ cfg });
+function resolveSummaryModelRef(cfg: OpenClawConfig, config: ResolvedTtsConfig): ModelRef {
+  const manifestPluginContext = createModelManifestPluginContext({ cfg });
   const override = normalizeOptionalString(config.summaryModel);
-  if (!override) {
-    return { ref: defaultRef, source: "default" };
+  if (override) {
+    const defaultRef = resolveDefaultModelForAgent({
+      cfg,
+      manifestPluginContext,
+      allowPluginNormalization: false,
+    });
+    const resolved = resolveModelRefWithConfiguredAliases({
+      cfg,
+      raw: override,
+      defaultProvider: defaultRef.provider,
+      manifestPluginContext,
+    });
+    if (resolved) {
+      return resolved;
+    }
   }
-
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: defaultRef.provider });
-  const resolved = resolveModelRefFromString({
-    raw: override,
-    defaultProvider: defaultRef.provider,
-    aliasIndex,
-  });
-  if (!resolved) {
-    return { ref: defaultRef, source: "default" };
-  }
-  return { ref: resolved.ref, source: "summaryModel" };
+  return resolveDefaultModelForAgent({ cfg, manifestPluginContext });
 }
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
@@ -97,7 +91,7 @@ export async function summarizeText(
 
   const startTime = Date.now();
   const resolvedDeps = deps ?? (await loadDefaultSummarizeTextDeps());
-  const { ref } = resolveSummaryModelRef(cfg, config);
+  const ref = resolveSummaryModelRef(cfg, config);
   // Dynamic model discovery precedes the request timeout, matching the established
   // summarization contract. The timeout below bounds only the completion request.
   const prepared = await resolvedDeps.prepareSimpleCompletionModel({

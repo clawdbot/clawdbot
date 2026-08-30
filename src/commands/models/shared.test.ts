@@ -1,7 +1,16 @@
 // Model command shared tests cover shared config and provider helper behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadValidConfigOrThrow, resolveModelsTargetAgent, updateConfig } from "./shared.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import {
+  applyDefaultModelPrimaryUpdate,
+  loadValidConfigOrThrow,
+  resolveModelKeysFromEntries,
+  resolveModelTarget,
+  resolveModelsTargetAgent,
+  updateConfig,
+} from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -11,6 +20,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
   replaceConfigFile: (...args: unknown[]) => mocks.replaceConfigFile(...args),
+}));
+
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
 describe("models/shared", () => {
@@ -41,6 +54,104 @@ describe("models/shared", () => {
       "Invalid config at /tmp/openclaw.json\n- providers.openai.apiKey: Required",
     );
   });
+
+  it("preserves exact configured model IDs when resolving command targets and entries", () => {
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      models: {
+        providers: {
+          custom: { api: "openai-completions", baseUrl: "https://custom.example/v1", models: [] },
+        },
+      },
+    };
+    const snapshot = createPluginMetadataSnapshot({
+      config: cfg,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(resolveModelTarget({ cfg, raw: "custom/custom/model" })).toEqual({
+          provider: "custom",
+          model: "custom/model",
+        });
+        expect(resolveModelKeysFromEntries({ cfg, entries: ["custom/custom/model"] })).toEqual([
+          "custom/custom/model",
+        ]);
+      },
+      { config: cfg },
+    );
+  });
+
+  it.each(["model", "imageModel"] as const)(
+    "preserves distinct model metadata and nested refs when selecting the %s primary",
+    (field) => {
+      const models = {
+        "custom/model": { alias: "short", params: { temperature: 0.2 } },
+        "custom/custom/model": { alias: "nested", params: { temperature: 0.8 } },
+      };
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            [field]: {
+              primary: "custom/model",
+              fallbacks: ["custom/custom/fallback"],
+            },
+            models,
+          },
+        },
+      };
+
+      const next = applyDefaultModelPrimaryUpdate({
+        cfg,
+        field,
+        modelRaw: "custom/custom/model",
+        resolvedTarget: { provider: "custom", model: "custom/model" },
+      });
+
+      expect(next.agents?.defaults).toEqual({
+        [field]: {
+          primary: "custom/custom/model",
+          fallbacks: ["custom/custom/fallback"],
+        },
+        models: {
+          "custom/model": { alias: "short", params: { temperature: 0.2 } },
+          "custom/custom/model": { alias: "nested", params: { temperature: 0.8 } },
+        },
+      });
+    },
+  );
+
+  it.each(["model", "imageModel"] as const)(
+    "retains equivalent short-ref settings when selecting the %s primary",
+    (field) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/auto": { params: { thinking: "high" } },
+            },
+          },
+        },
+      };
+
+      const next = applyDefaultModelPrimaryUpdate({
+        cfg,
+        field,
+        modelRaw: "openrouter/auto",
+        resolvedTarget: { provider: "openrouter", model: "openrouter/auto" },
+      });
+
+      expect(next.agents?.defaults).toEqual({
+        [field]: { primary: "openrouter/openrouter/auto" },
+        models: {
+          "openrouter/auto": { params: { thinking: "high" } },
+          "openrouter/openrouter/auto": { params: { thinking: "high" } },
+        },
+      });
+    },
+  );
 
   it("names only the supported model-command escape for an ambiguous roster", () => {
     expect(() =>

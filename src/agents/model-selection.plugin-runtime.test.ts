@@ -1,7 +1,26 @@
 // Covers plugin-owned model id normalization through selection surfaces.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareRawModelSelectionFixture } from "../auto-reply/reply/model-selection.test-support.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  buildModelAliasIndexCore,
+  resolveModelAliasFromPair,
+  resolveModelRefWithConfiguredAliases,
+} from "./model-selection-shared.js";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
+
+function normalizeLegacyFixtureModel({
+  provider,
+  context,
+}: {
+  provider: string;
+  context: { modelId?: string };
+}) {
+  return provider === "custom-provider" && context.modelId === "custom-legacy-model"
+    ? "custom-modern-model"
+    : undefined;
+}
 const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "model-selection-plugin-runtime-test-empty-plugin-metadata",
   plugins: [
@@ -38,14 +57,17 @@ vi.mock("./model-catalog.runtime.js", () => ({
   loadPreparedModelCatalogSnapshot: loadPreparedModelCatalogSnapshotMock,
 }));
 
-let createModelSelectionStateForTest: typeof import("../auto-reply/reply/model-selection.js").createModelSelectionState;
-let resolveSessionModelRef: typeof import("./session-model-ref.js").resolveSessionModelRef;
+let createPreparedModelSelectionState: typeof import("../auto-reply/reply/model-selection.js").createModelSelectionState;
 
+function createModelSelectionStateForTest(
+  params: Parameters<typeof prepareRawModelSelectionFixture>[0],
+) {
+  return createPreparedModelSelectionState(prepareRawModelSelectionFixture(params));
+}
 describe("model-selection plugin runtime normalization", () => {
   beforeAll(async () => {
-    ({ createModelSelectionState: createModelSelectionStateForTest } =
+    ({ createModelSelectionState: createPreparedModelSelectionState } =
       await import("../auto-reply/reply/model-selection.js"));
-    ({ resolveSessionModelRef } = await import("./session-model-ref.js"));
   });
 
   beforeEach(() => {
@@ -57,15 +79,7 @@ describe("model-selection plugin runtime normalization", () => {
   });
 
   it("delegates provider-owned model id normalization to plugin runtime hooks", async () => {
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
-    });
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
 
     const { parseModelRef } = await import("./model-selection.js");
 
@@ -96,16 +110,235 @@ describe("model-selection plugin runtime normalization", () => {
     expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
   });
 
-  it("keeps provider plugin normalization when inferring provider for bare defaults", async () => {
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
+  it.each([
+    "selected-provider/selected-provider/selected-provider/model",
+    "speech-summary",
+    "selected-provider/speech-summary",
+  ])("normalizes only the authored selected target for %s", (raw) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "unused-provider/another-model": { alias: "unused" },
+            "selected-provider/selected-provider/selected-provider/model": {
+              alias: "speech-summary",
+            },
+          },
+        },
+      },
+    };
+    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context, config }) => {
+      expect(config).toBe(cfg);
+      expect(provider).toBe("selected-provider");
+      expect(context.modelId).toBe("selected-provider/model");
+      return "runtime-summary";
     });
+
+    expect(
+      resolveModelRefWithConfiguredAliases({ cfg, raw, defaultProvider: "unused-provider" }),
+    ).toEqual({ provider: "selected-provider", model: "runtime-summary" });
+    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(["configured/configured/model", "speech-summary"])(
+    "preserves exact configured provider model paths for %s",
+    (raw) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "unused-provider/another-model": { alias: "unused" },
+              "configured/configured/model": { alias: "speech-summary" },
+            },
+          },
+        },
+        models: {
+          providers: {
+            configured: {
+              api: "openai-completions",
+              baseUrl: "https://configured.test/v1",
+              models: [
+                {
+                  id: "configured/model",
+                  name: "Configured model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 1_024,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      expect(
+        resolveModelRefWithConfiguredAliases({ cfg, raw, defaultProvider: "unused-provider" }),
+      ).toEqual({ provider: "configured", model: "configured/model" });
+      expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      raw: "shared",
+      expected: { provider: "other-provider", model: "second" },
+    },
+    {
+      raw: "selected-provider/Shared",
+      expected: { provider: "selected-provider", model: "first" },
+    },
+    {
+      raw: "redirected/model",
+      expected: { provider: "selected-provider", model: "third" },
+    },
+    {
+      raw: "shared",
+      agentAlias: "Shared",
+      expected: { provider: "selected-provider", model: "first" },
+    },
+    {
+      raw: "selected-provider/shared",
+      agentAlias: "",
+      expected: { provider: "selected-provider", model: "shared" },
+    },
+  ])(
+    "preserves alias precedence for $raw with agent alias $agentAlias",
+    ({ raw, agentAlias, expected }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "selected-provider/first": { alias: "shared" },
+              "other-provider/second": { alias: "Shared" },
+              "selected-provider/third": { alias: "redirected/model" },
+            },
+          },
+          entries: {
+            ops: {
+              models: {
+                "selected-provider/first": agentAlias === undefined ? {} : { alias: agentAlias },
+              },
+            },
+          },
+        },
+      };
+
+      expect(
+        resolveModelRefWithConfiguredAliases({
+          cfg,
+          raw,
+          agentId: "ops",
+          defaultProvider: "unused-provider",
+        }),
+      ).toEqual(expected);
+      expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: expected.provider,
+          context: { provider: expected.provider, modelId: expected.model },
+        }),
+      );
+    },
+  );
+
+  const runtimeAliasCollisionCases: Array<{
+    name: string;
+    defaults: Record<string, { alias: string }>;
+    agent: Record<string, { alias: string }>;
+    expected: { provider: string; model: string };
+  }> = [
+    {
+      name: "canonical agent key disables a legacy default alias",
+      defaults: { "provider/legacy": { alias: "fast" } },
+      agent: { "provider/current": { alias: "" } },
+      expected: { provider: "fallback-provider", model: "fast" },
+    },
+    {
+      name: "legacy agent key disables a canonical default alias",
+      defaults: { "provider/current": { alias: "fast" } },
+      agent: { "provider/legacy": { alias: "" } },
+      expected: { provider: "fallback-provider", model: "fast" },
+    },
+    {
+      name: "agent alias replaces the default at its runtime canonical key",
+      defaults: { "provider/legacy": { alias: "fast" } },
+      agent: { "provider/current": { alias: "slow" } },
+      expected: { provider: "fallback-provider", model: "fast" },
+    },
+    {
+      name: "another provider wins after a later duplicate alias is disabled",
+      defaults: {
+        "provider/older": { alias: "fast" },
+        "other-provider/other": { alias: "fast" },
+        "provider/legacy": { alias: "fast" },
+      },
+      agent: { "provider/current": { alias: "" } },
+      expected: { provider: "other-provider", model: "other" },
+    },
+  ];
+
+  it.each(runtimeAliasCollisionCases)(
+    "preserves runtime alias collisions: $name",
+    ({ defaults, agent, expected }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "unused-provider/primary" },
+            models: {
+              "unused-provider/another-model": { alias: "unused" },
+              ...defaults,
+            },
+          },
+          entries: { worker: { models: agent } },
+        },
+      };
+      normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
+        if (provider === "unused-provider") {
+          throw new Error("Unrelated provider normalization must remain cold");
+        }
+        return provider === "provider" && context.modelId === "legacy" ? "current" : undefined;
+      });
+
+      expect(
+        resolveModelRefWithConfiguredAliases({
+          cfg,
+          raw: "fast",
+          agentId: "worker",
+          defaultProvider: "fallback-provider",
+        }),
+      ).toEqual(expected);
+    },
+  );
+
+  it("keeps allowed model selection on manifest policy without executable hooks", async () => {
+    normalizeProviderModelIdWithPluginMock.mockReturnValue("runtime-only-model");
+    const { resolveAllowedModelRefCore } = await import("./model-selection-resolve.js");
+
+    expect(
+      resolveAllowedModelRefCore({
+        cfg: {
+          agents: {
+            defaults: {
+              modelPolicy: { allow: ["google/gemini-3.1-pro"] },
+              models: { "google/gemini-3.1-pro": { alias: "approved" } },
+            },
+          },
+        },
+        catalog: [
+          { provider: "google", id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
+        ],
+        raw: "google/gemini-3.1-pro",
+        defaultProvider: "google",
+      }),
+    ).toEqual({
+      key: "google/gemini-3.1-pro-preview",
+      ref: { provider: "google", model: "gemini-3.1-pro-preview" },
+    });
+    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps provider plugin normalization when inferring provider for bare defaults", async () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
 
     const { resolveConfiguredModelRef } = await import("./model-selection.js");
 
@@ -130,86 +363,156 @@ describe("model-selection plugin runtime normalization", () => {
     });
   });
 
-  it("keeps model visibility policy construction off plugin runtime hooks by default", async () => {
-    // Visibility policy is a hot/static path. It preserves configured keys
-    // unless callers explicitly opt into runtime plugin normalization.
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
-    });
-
-    const { createModelVisibilityPolicy } = await import("./model-visibility-policy.js");
-
-    const policy = createModelVisibilityPolicy({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "custom-provider/custom-legacy-model": {},
-            },
-          },
-        },
-      },
-      catalog: [],
-      defaultProvider: "custom-provider",
-      defaultModel: "custom-legacy-model",
-    });
-
-    expect(policy.allowedKeys.has("custom-provider/custom-legacy-model")).toBe(true);
-    expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(false);
-    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
-  });
-
-  it("propagates explicit plugin runtime normalization opt-in through model visibility policy", async () => {
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
-    });
-
-    const { createModelVisibilityPolicy } = await import("./model-visibility-policy.js");
-
-    const policy = createModelVisibilityPolicy({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "custom-provider/custom-legacy-model": {},
-            },
-          },
-        },
-      },
-      catalog: [],
-      defaultProvider: "custom-provider",
-      defaultModel: "custom-legacy-model",
+  it.each([
+    {
+      name: "keeps model visibility policy construction off plugin runtime hooks by default",
+      allowPluginNormalization: undefined,
+    },
+    {
+      name: "propagates explicit plugin runtime normalization opt-in through model visibility policy",
       allowPluginNormalization: true,
+    },
+  ])("$name", async ({ allowPluginNormalization }) => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
+    const { createModelVisibilityPolicy } = await import("./model-visibility-policy.js");
+    const policy = createModelVisibilityPolicy({
+      cfg: {
+        agents: { defaults: { models: { "custom-provider/custom-legacy-model": {} } } },
+      },
+      catalog: [],
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-legacy-model",
+      ...(allowPluginNormalization ? { allowPluginNormalization } : {}),
     });
 
-    expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(true);
-    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalled();
+    if (allowPluginNormalization) {
+      expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(true);
+      expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalled();
+    } else {
+      expect(policy.allowedKeys.has("custom-provider/custom-legacy-model")).toBe(true);
+      expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(false);
+      expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+    }
   });
+
+  it.each(["unrestricted", "catalog", "synthetic"] as const)(
+    "preserves selected and catalog model refs in %s visibility policy",
+    async (mode) => {
+      normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
+        if (provider !== "custom-provider") {
+          return undefined;
+        }
+        return context.modelId === "custom-legacy-model"
+          ? "custom-modern-model"
+          : "incorrectly-renormalized-model";
+      });
+      const { parseModelRef } = await import("./model-selection.js");
+      const { createModelVisibilityPolicy } = await import("./model-visibility-policy.js");
+      const selected = { provider: "custom-provider", model: "custom-modern-model" };
+      expect(parseModelRef("custom-legacy-model", "custom-provider")).toEqual(selected);
+      const policy = createModelVisibilityPolicy({
+        cfg: {
+          agents: {
+            defaults: {
+              modelPolicy: {
+                allow: mode === "unrestricted" ? [] : ["custom-provider/custom-legacy-model"],
+              },
+            },
+          },
+        },
+        catalog:
+          mode === "synthetic"
+            ? []
+            : [{ provider: selected.provider, id: selected.model, name: "Selected model" }],
+        defaultProvider: "custom-provider",
+        allowPluginNormalization: true,
+      });
+      const normalizationCalls = normalizeProviderModelIdWithPluginMock.mock.calls.length;
+
+      expect(policy.resolveSelection(selected)).toEqual(selected);
+      if (mode !== "unrestricted") {
+        expect(
+          policy.resolveSelection({ provider: "other-provider", model: "not-allowed" }),
+        ).toEqual(selected);
+      }
+      expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledTimes(normalizationCalls);
+    },
+  );
+
+  it.each([
+    { provider: "provider-a", model: "shared", defaultProvider: "provider-b", expected: "first" },
+    { provider: "provider-c", model: "shared", defaultProvider: "provider-c", expected: "second" },
+    { provider: "provider-c", model: "shared", defaultProvider: "provider-a", expected: null },
+    {
+      provider: "provider-a",
+      model: "qualified",
+      defaultProvider: "provider-a",
+      expected: "third",
+    },
+    {
+      provider: "provider-a",
+      model: " shared@work ",
+      defaultProvider: "provider-a",
+      expected: "first",
+    },
+    {
+      provider: "provider-a",
+      model: "version@20251001@work",
+      defaultProvider: "provider-a",
+      expected: "versioned",
+    },
+    {
+      provider: "provider-a",
+      model: "quant@q8_0@work",
+      defaultProvider: "provider-a",
+      expected: "quantized",
+    },
+    {
+      provider: "provider-a",
+      model: "@owner/model@work",
+      defaultProvider: "provider-a",
+      expected: "path",
+    },
+    { provider: "provider-a", model: "unknown", defaultProvider: "provider-a", expected: null },
+  ])(
+    "looks up the prepared alias for $provider/$model with default $defaultProvider without parsing misses",
+    ({ provider, model, defaultProvider, expected }) => {
+      const aliasIndex = buildModelAliasIndexCore({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "provider-a/first": { alias: "shared" },
+                "provider-b/second": { alias: "Shared" },
+                "provider-b/third": { alias: "provider-a/qualified" },
+                "provider-a/fourth": { alias: "qualified" },
+                "provider-a/versioned": { alias: "version@20251001" },
+                "provider-a/quantized": { alias: "quant@q8_0" },
+                "provider-a/path": { alias: "@owner/model" },
+              },
+            },
+          },
+        },
+        defaultProvider,
+      });
+      const normalizationCalls = normalizeProviderModelIdWithPluginMock.mock.calls.length;
+
+      expect(resolveModelAliasFromPair({ provider, model, defaultProvider, aliasIndex })).toEqual(
+        expected
+          ? {
+              provider: expected === "second" || expected === "third" ? "provider-b" : "provider-a",
+              model: expected,
+            }
+          : null,
+      );
+      expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledTimes(normalizationCalls);
+    },
+  );
 
   it("keeps plugin-normalized stored overrides allowed in auto-reply runtime selection", async () => {
     // Stored session overrides are runtime inputs, so provider-owned
     // normalization keeps old persisted ids usable without resetting them.
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
-      if (
-        provider === "custom-provider" &&
-        (context as { modelId?: string }).modelId === "custom-legacy-model"
-      ) {
-        return "custom-modern-model";
-      }
-      return undefined;
-    });
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
 
     const cfg = {
       agents: {
@@ -245,50 +548,6 @@ describe("model-selection plugin runtime normalization", () => {
     expect(state.provider).toBe("custom-provider");
     expect(state.model).toBe("custom-modern-model");
     expect(state.resetModelOverride).toBe(false);
-  });
-
-  it("keeps resolved persisted overrides off plugin runtime hooks", () => {
-    normalizeProviderModelIdWithPluginMock.mockReturnValue("incorrectly-renormalized-model");
-
-    expect(
-      resolveSessionModelRef(
-        {},
-        {
-          providerOverride: "custom-provider",
-          modelOverride: "custom-modern-model",
-          modelOverrideRouteResolution: "resolved",
-        },
-        "main",
-      ),
-    ).toEqual({
-      provider: "custom-provider",
-      model: "custom-modern-model",
-    });
-    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
-  });
-
-  it("normalizes raw persisted overrides through plugin runtime hooks", () => {
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) =>
-      provider === "custom-provider" &&
-      (context as { modelId?: string }).modelId === "custom-legacy-model"
-        ? "custom-modern-model"
-        : undefined,
-    );
-
-    expect(
-      resolveSessionModelRef(
-        {},
-        {
-          providerOverride: "custom-provider",
-          modelOverride: "custom-legacy-model",
-        },
-        "main",
-      ),
-    ).toEqual({
-      provider: "custom-provider",
-      model: "custom-modern-model",
-    });
-    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledOnce();
   });
 
   it("reuses one lifecycle metadata snapshot across auto-reply model normalization", async () => {

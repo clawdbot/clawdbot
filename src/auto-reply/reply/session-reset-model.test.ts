@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { buildModelAliasIndex } from "../../agents/model-selection-shared.js";
+import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -70,6 +70,51 @@ async function applyResetFixture(params: {
 }
 
 describe("applyResetModelOverride", () => {
+  it("preserves the exact configured namespace in a reset model hint", async () => {
+    const fixture = createResetFixture();
+    const catalog: ModelCatalogEntry[] = [
+      { provider: "custom", id: "model", name: "Plain" },
+      { provider: "custom", id: "custom/model", name: "Nested" },
+    ];
+    fixture.cfg.models = {
+      providers: {
+        custom: {
+          baseUrl: "https://models.example.test",
+          models: catalog.map(({ id, name }) => ({
+            id,
+            name,
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 1_024,
+          })),
+        },
+      },
+    };
+    fixture.cfg.agents = {
+      defaults: { modelPolicy: { allow: ["custom/model", "custom/custom/model"] } },
+    };
+
+    const result = await applyResetModelOverride({
+      cfg: fixture.cfg,
+      resetTriggered: true,
+      bodyStripped: "custom/custom/model summarize",
+      sessionCtx: fixture.sessionCtx,
+      ctx: fixture.ctx,
+      sessionEntry: fixture.sessionEntry,
+      sessionStore: fixture.sessionStore,
+      sessionKey: "agent:main:dm:1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex: fixture.aliasIndex,
+      modelCatalog: catalog,
+    });
+
+    expect(result.selection).toMatchObject({ provider: "custom", model: "custom/model" });
+    expect(fixture.sessionEntry.modelOverride).toBe("custom/model");
+    expect(result.cleanedBody).toBe("summarize");
+  });
+
   it.each(["initial", "persisted"])("honors the %s session model lock", async (owner) => {
     const fixture = createResetFixture({ modelSelectionLocked: owner === "initial" });
     const storePath = path.join(tempDirs.make("openclaw-reset-model-lock-"), "sessions.json");

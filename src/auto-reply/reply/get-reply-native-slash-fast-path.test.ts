@@ -2,6 +2,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { normalizeModelRef } from "../../agents/model-ref-shared.js";
+import { createModelManifestPluginContext } from "../../agents/model-selection-shared.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -56,12 +58,31 @@ type NativeSlashFastReplyDefaultKey =
   | "aliasIndex"
   | "provider"
   | "model"
+  | "preparedDefaultModel"
+  | "preparedInitialModel"
+  | "preparedPrimaryModel"
   | "workspaceDir";
 
 function runTestNativeSlashFastReply(
   overrides: Omit<NativeSlashFastReplyParams, NativeSlashFastReplyDefaultKey> &
     Partial<Pick<NativeSlashFastReplyParams, NativeSlashFastReplyDefaultKey>>,
 ) {
+  const manifestPluginContext =
+    overrides.manifestPluginContext ??
+    createModelManifestPluginContext({
+      cfg: overrides.cfg,
+      agentId: overrides.agentId,
+      workspaceDir: overrides.workspaceDir ?? "/tmp/workspace",
+    });
+  const prepareRawRef = (provider: string, model: string) => {
+    let prepared: ReturnType<typeof normalizeModelRef> | undefined;
+    return () =>
+      (prepared ??= normalizeModelRef(provider, model, manifestPluginContext.getContext()));
+  };
+  const preparedDefaultModel = prepareRawRef(
+    overrides.defaultProvider ?? "openai",
+    overrides.defaultModel ?? "gpt-5.5",
+  );
   return maybeResolveNativeSlashCommandFastReply({
     agentDir: "/tmp/agent",
     agentCfg: undefined,
@@ -72,6 +93,12 @@ function runTestNativeSlashFastReply(
     model: "gpt-5.5",
     workspaceDir: "/tmp/workspace",
     ...overrides,
+    manifestPluginContext,
+    preparedDefaultModel: overrides.preparedDefaultModel ?? preparedDefaultModel,
+    preparedInitialModel:
+      overrides.preparedInitialModel ??
+      prepareRawRef(overrides.provider ?? "openai", overrides.model ?? "gpt-5.5"),
+    preparedPrimaryModel: overrides.preparedPrimaryModel ?? preparedDefaultModel,
   });
 }
 

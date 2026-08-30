@@ -29,6 +29,7 @@ import {
 import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../../auto-reply/types.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { FailoverReason } from "../failover/signal.js";
@@ -552,6 +553,139 @@ describe("prepared harness source delivery", () => {
       expect.any(Object),
     );
   });
+
+  it.each(["admitted generation", "captured workspace"] as const)(
+    "plans %s aliases from captured metadata before acquiring the runtime",
+    async (source) => {
+      const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
+      const [currentMetadata, metadataLoader, modelNormalization] = await Promise.all([
+        import("../../plugins/current-plugin-metadata-snapshot.js"),
+        import("../../plugins/plugin-metadata-snapshot.js"),
+        import("../provider-model-normalization.runtime.js"),
+      ]);
+      const workspaceDir = state.workspaceDir;
+      const config = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/planning-alias",
+              fallbacks: ["openai/backup-alias"],
+            },
+          },
+          entries: { main: { workspace: workspaceDir } },
+        },
+      };
+      const metadataSnapshot = {
+        ...createPluginMetadataSnapshot({
+          config,
+          workspaceDir,
+          manifestRegistry: {
+            plugins: [
+              {
+                id: "normalizer-fixture",
+                channels: [],
+                providers: ["openai"],
+                cliBackends: [],
+                skills: [],
+                hooks: [],
+                origin: "workspace",
+                rootDir: workspaceDir,
+                source: `${workspaceDir}/index.js`,
+                manifestPath: `${workspaceDir}/openclaw.plugin.json`,
+                modelIdNormalization: {
+                  providers: {
+                    openai: {
+                      aliases: { "planning-alias": "gpt-5.4", "backup-alias": "gpt-5.5" },
+                    },
+                  },
+                },
+              },
+            ],
+            diagnostics: [],
+          },
+        }),
+        workspaceDir,
+      };
+      const acquire = mockedAcquireAgentRunPreparedModelRuntime.getMockImplementation();
+      if (!acquire) {
+        throw new Error("expected the prepared runtime acquisition fixture");
+      }
+      const baseLease = await acquire({
+        config,
+        agentId: "main",
+        agentDir: state.agentDir(),
+        workspaceDir,
+      });
+      const generation: PreparedModelRuntimePluginGeneration = {
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
+        pluginRegistry: baseLease.snapshot.pluginRegistry,
+        pluginMetadataSnapshot: metadataSnapshot,
+      };
+      const release = vi.fn();
+      mockedAcquireAgentRunPreparedModelRuntime.mockResolvedValue({
+        ...baseLease,
+        snapshot: { ...baseLease.snapshot, metadataSnapshot },
+        release,
+      });
+      mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "OK" }]);
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
+      useOpenAIPlatformAuthFixture();
+      const loadMetadata = vi
+        .spyOn(metadataLoader, "loadPluginMetadataSnapshot")
+        .mockImplementation(() => {
+          throw new Error("prepared run planning reopened plugin metadata discovery");
+        });
+      const normalizeModel = vi
+        .spyOn(modelNormalization, "normalizeProviderModelIdWithRuntime")
+        .mockReturnValue(undefined);
+      try {
+        const run = () =>
+          currentMetadata.withPluginMetadataSnapshotScope(
+            metadataSnapshot,
+            () =>
+              runEmbeddedAgent({
+                ...createOverflowRunParams(state),
+                config,
+                provider: "openai",
+                model: "planning-alias",
+                workspaceDir,
+                runId: `metadata-planning-${source}`,
+                sessionKey: undefined,
+              }),
+            { config, workspaceDir },
+          );
+        const result =
+          source === "admitted generation"
+            ? await withPreparedModelRuntimePluginGenerationScope(generation, run)
+            : await run();
+
+        const preparedInput = mockedAcquireAgentRunPreparedModelRuntime.mock.calls[0]?.[0];
+        expect({
+          workspaceDir: preparedInput?.workspaceDir,
+          selections: preparedInput?.runtimePluginSelections,
+        }).toEqual({
+          workspaceDir,
+          selections: [
+            { provider: "openai", modelId: "gpt-5.4", agentId: "main" },
+            { provider: "openai", modelId: "gpt-5.5", agentId: "main" },
+          ],
+        });
+        const firstAcquire = mockedAcquireAgentRunPreparedModelRuntime.mock.invocationCallOrder[0];
+        expect(firstAcquire).toBeDefined();
+        expect(
+          normalizeModel.mock.invocationCallOrder.filter((order) => order < firstAcquire!),
+        ).toEqual([]);
+        expect(loadMetadata).not.toHaveBeenCalled();
+        expect(result.payloads).toEqual([{ text: "OK" }]);
+        expect(release).toHaveBeenCalledOnce();
+      } finally {
+        loadMetadata.mockRestore();
+        normalizeModel.mockRestore();
+        mockedAcquireAgentRunPreparedModelRuntime.mockImplementation(acquire);
+      }
+    },
+  );
 
   it("completes an admitted turn on A after plugin-runtime generation B publishes", async () => {
     const { runEmbeddedAgent } = await loadSourceDeliveryHarness();

@@ -99,7 +99,9 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
 }));
 
 const providerModelNormalizationMock = vi.hoisted(() => ({
-  normalizeProviderModelIdWithRuntime: vi.fn(() => undefined),
+  normalizeProviderModelIdWithRuntime: vi.fn<
+    typeof import("./provider-model-normalization.runtime.js").normalizeProviderModelIdWithRuntime
+  >(() => undefined),
 }));
 
 const providerPolicySurfaceMock = vi.hoisted(() => ({
@@ -1019,6 +1021,49 @@ describe("model-selection", () => {
         provider: "openai",
         model: "gpt-a",
       });
+    });
+
+    it.each([
+      { name: "keeps both aliases", disableNested: false },
+      { name: "disables only the nested model's alias", disableNested: true },
+    ])("distinguishes exact configured model namespaces: $name", ({ disableNested }) => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://custom.example/v1",
+              models: ["model", "custom/model"].map((id) => ({
+                id,
+                name: id,
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 1_024,
+              })),
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "custom/model": { alias: "plain" },
+              "custom/custom/model": { alias: "nested" },
+            },
+          },
+          entries: {
+            worker: {
+              models: disableNested ? { "custom/custom/model": { alias: "" } } : {},
+            },
+          },
+        },
+      };
+      const index = buildModelAliasIndex({ cfg, agentId: "worker", defaultProvider: "custom" });
+
+      expect(index.byAlias.get("plain")?.ref).toEqual({ provider: "custom", model: "model" });
+      expect(index.byAlias.get("nested")?.ref).toEqual(
+        disableNested ? undefined : { provider: "custom", model: "custom/model" },
+      );
     });
 
     it("does not normalize configured model keys that have no alias", () => {
@@ -2521,6 +2566,53 @@ describe("model-selection", () => {
       expect(resolveAnthropicOpusThinking(cfg)).toBe(thinking);
     });
 
+    it.each([
+      { name: "authored", entry: { params: { thinking: "high" } }, expected: "high" },
+      { name: "empty", entry: {}, expected: "medium" },
+      { name: "absent", entry: undefined, expected: "medium" },
+    ])("keeps $name thinking settings scoped to the exact nested model", ({ entry, expected }) => {
+      const cfg = {
+        models: {
+          providers: {
+            custom: { api: "openai-completions", baseUrl: "https://custom.example/v1", models: [] },
+          },
+        },
+        agents: {
+          defaults: {
+            thinkingDefault: "medium",
+            models: {
+              "custom/model": { params: { thinking: "low" } },
+              ...(entry ? { "custom/custom/model": entry } : {}),
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({ cfg, provider: "custom", model: "custom/model", catalog: [] }),
+      ).toBe(expected);
+    });
+
+    it("resolves per-model thinking from a shipped short OpenRouter ref after normalization", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: { "openrouter/auto": { params: { thinking: "high" } } },
+          },
+        },
+      } satisfies OpenClawConfig;
+      const ref = parseModelRef("openrouter/auto", "openai", {
+        allowManifestNormalization: false,
+        allowPluginNormalization: false,
+      });
+      expect(ref).toEqual({ provider: "openrouter", model: "openrouter/auto" });
+      if (!ref) {
+        throw new Error("Expected the shipped OpenRouter ref to parse");
+      }
+
+      expect(resolveThinkingDefault({ cfg, ...ref, catalog: [] })).toBe("high");
+    });
+
     it("accepts legacy duplicated OpenRouter keys for per-model thinking", () => {
       const cfg = {
         agents: {
@@ -2894,10 +2986,52 @@ describe("resolveSubagentSpawnModelSelection", () => {
     },
     {
       name: "passes through already-qualified provider/model refs unchanged",
-      config: {},
+      config: {
+        modelEntries: { "google/gemini-2.5-pro": { alias: "unselected" } },
+      },
       agentId: "main",
       modelOverride: "openai/gpt-5.4",
       expected: "openai/gpt-5.4",
+      avoidsRuntimeNormalization: true,
+    },
+    {
+      name: "keeps qualified configured subagent models independent of unselected aliases",
+      config: {
+        defaultSubagentModel: "openai/gpt-5.4",
+        modelEntries: { "google/gemini-2.5-pro": { alias: "unselected" } },
+      },
+      agentId: "main",
+      modelOverride: undefined,
+      expected: "openai/gpt-5.4",
+      avoidsRuntimeNormalization: true,
+    },
+    {
+      name: "keeps runtime alias collisions in the default provider for a bare subagent alias",
+      config: {
+        defaultPrimary: "primary",
+        defaultSubagentModel: "spawn",
+        modelEntries: {
+          "fixture-a/model": { alias: "primary" },
+          "fixture-b/legacy": { alias: "primary" },
+          worker: { alias: "spawn" },
+        },
+        agents: [{ id: "research", models: { "fixture-b/current": { alias: "" } } }],
+      },
+      agentId: "research",
+      modelOverride: undefined,
+      expected: "fixture-a/worker",
+    },
+    {
+      name: "does not normalize the parent model for bare configured subagent selections",
+      config: {
+        defaultPrimary: "fixture-b/legacy",
+        defaultSubagentModel: "worker",
+      },
+      agentId: "main",
+      modelOverride: undefined,
+      expected: "worker",
+      avoidsRuntimeNormalization: true,
+      selectedDefault: { provider: "fixture-b", model: "current" },
     },
     {
       name: "falls back to runtime default when no override or config",
@@ -2905,11 +3039,31 @@ describe("resolveSubagentSpawnModelSelection", () => {
       agentId: "main",
       modelOverride: undefined,
       expected: "anthropic/claude-sonnet-4-6",
+      avoidsRuntimeNormalization: true,
     },
-  ])("$name", ({ config, agentId, modelOverride, expected }) => {
-    const cfg = createSubagentSelectionConfig(config);
+  ])(
+    "$name",
+    ({ config, agentId, modelOverride, expected, avoidsRuntimeNormalization, selectedDefault }) => {
+      const cfg = createSubagentSelectionConfig(config);
+      const normalize = providerModelNormalizationMock.normalizeProviderModelIdWithRuntime;
+      normalize.mockImplementation(({ provider, context }) =>
+        provider === "fixture-b" && context.modelId === "legacy" ? "current" : undefined,
+      );
+      normalize.mockClear();
 
-    expect(resolveSubagentSpawnModelSelection({ cfg, agentId, modelOverride })).toBe(expected);
-  });
+      try {
+        expect(resolveSubagentSpawnModelSelection({ cfg, agentId, modelOverride })).toBe(expected);
+        if (avoidsRuntimeNormalization) {
+          expect(normalize).not.toHaveBeenCalled();
+        }
+        if (selectedDefault) {
+          expect(resolveDefaultModelForAgent({ cfg, agentId })).toEqual(selectedDefault);
+          expect(normalize).toHaveBeenCalledOnce();
+        }
+      } finally {
+        normalize.mockReset();
+      }
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

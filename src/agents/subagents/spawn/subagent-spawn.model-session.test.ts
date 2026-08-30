@@ -2,6 +2,9 @@
 // before a child agent run starts.
 import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshot } from "../../../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
@@ -223,5 +226,78 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     const [, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
     expect(persistedEntry?.authProfileOverride).toBe("openai:test-profile");
     expect(persistedEntry?.authProfileOverrideSource).toBe("user");
+  });
+
+  it("inherits thinking from a literal configured requester model", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          model: "openai/gpt-5.5",
+          subagents: { model: "openai/gpt-5.4" },
+          models: {
+            "literal-provider/literal-provider/model": { params: { thinking: "low" } },
+            "literal-provider/model": { params: { thinking: "high" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "literal-provider": {
+            baseUrl: "https://literal-provider.test/v1",
+            models: [
+              {
+                id: "literal-provider/model",
+                name: "Literal model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 4096,
+                maxTokens: 1024,
+              },
+            ],
+          },
+        },
+      },
+    };
+    const updateStore = vi.fn();
+    const { spawnSubagentDirect: spawnWithLiteralModel } = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () => config,
+      loadSessionStoreMock: vi.fn(() => ({
+        "agent:main:main": {
+          sessionId: "requester-literal",
+          updatedAt: 1,
+          providerOverride: "literal-provider",
+          modelOverride: "literal-provider/model",
+        },
+      })),
+      updateSessionStoreMock: updateStore,
+      workspaceDir: os.tmpdir(),
+    });
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(updateStore, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await withPluginRuntimeGenerationScope(
+      {
+        config,
+        metadataSnapshot: createPluginMetadataSnapshot({
+          config,
+          manifestRegistry: { plugins: [], diagnostics: [] },
+        }),
+      },
+      () =>
+        spawnWithLiteralModel(
+          { task: "inherit literal model thinking" },
+          { agentSessionKey: "agent:main:main" },
+        ),
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(persistedStore?.[result.childSessionKey as string]?.thinkingLevel).toBe("low");
   });
 });

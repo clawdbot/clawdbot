@@ -20,8 +20,8 @@ import {
   listExactDirectMessageBindingPeerIds,
   resolveAgentRoute,
   resolveUnknownDirectMessageRoute,
-  type ResolvedAgentRoute,
 } from "../routing/resolve-route.js";
+import type { ResolvedAgentRoute } from "../routing/resolve-route.types.js";
 import { parseSessionDeliveryRoute, resolveLinkedDirectPeerId } from "../routing/session-key.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 

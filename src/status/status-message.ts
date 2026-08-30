@@ -941,6 +941,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         provider: activeProvider,
         model: activeModel,
         config: args.config,
+        agentId: args.agentId,
         allowPluginNormalization: false,
       })
     : undefined;

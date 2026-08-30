@@ -1,13 +1,18 @@
 /**
  * Tests server-level tool catalog assembly and filtering.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { connectOk, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
 import { withGatewayClient } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 describe("gateway tools.catalog", () => {
+  beforeEach(async () => {
+    const { writeConfigFile } = await import("../config/io.js");
+    await writeConfigFile({ plugins: { enabled: false, slots: { memory: "none" } } });
+  });
+
   it("returns core catalog data and includes tts", async () => {
     await withGatewayClient(async (ws) => {
       await connectOk(ws, { token: "secret", scopes: ["operator.read"] });
@@ -20,7 +25,7 @@ describe("gateway tools.catalog", () => {
         }>;
       }>(ws, "tools.catalog", {});
 
-      expect(res.ok).toBe(true);
+      expect(res.ok, JSON.stringify(res.error)).toBe(true);
       expect(res.payload?.agentId).toBeTypeOf("string");
       expect(res.payload?.agentId).not.toBe("");
       const mediaGroup = res.payload?.groups?.find((group) => group.id === "media");

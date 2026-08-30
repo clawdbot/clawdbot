@@ -104,6 +104,39 @@ export function collectTsdownEntrySources(config: unknown): Set<string> {
   );
 }
 
+/** Collects stable JavaScript output aliases relative to the root dist directory. */
+export function collectTsdownEntryOutputs(config: unknown): Map<string, string> {
+  const outputs = new Map<string, string>();
+  for (const build of Array.isArray(config) ? config : [config]) {
+    if (
+      !build ||
+      typeof build !== "object" ||
+      !build.entry ||
+      Array.isArray(build.entry) ||
+      typeof build.entry !== "object" ||
+      typeof build.outExtensions !== "function" ||
+      build.outExtensions.length !== 0
+    ) {
+      continue;
+    }
+    // nodeBuildConfig declares a constant .js suffix. Context-dependent/default
+    // suffixes are not proof that a literal .js sidecar exists.
+    if (build.outExtensions()?.js !== ".js") {
+      continue;
+    }
+    const outDir = typeof build.outDir === "string" ? build.outDir : "dist";
+    for (const [name, source] of Object.entries(build.entry)) {
+      if (typeof source === "string") {
+        outputs.set(
+          path.posix.relative("dist", path.posix.join(toPosixPath(outDir), `${name}.js`)),
+          normalizeRelativePath(source),
+        );
+      }
+    }
+  }
+  return outputs;
+}
+
 /**
  * Finds local runtime require loaders not represented as explicit tsdown entries.
  */
@@ -111,6 +144,7 @@ export function findRuntimeSidecarLoaderViolations(
   content: string,
   importerPath: string,
   explicitEntrySources: Set<string>,
+  explicitEntryOutputs: ReadonlyMap<string, string> = new Map(),
 ): RuntimeSidecarLoaderViolation[] {
   const sourceFile = ts.createSourceFile(importerPath, content, ts.ScriptTarget.Latest, true);
   const createRequireNames = new Set<string>();
@@ -137,6 +171,16 @@ export function findRuntimeSidecarLoaderViolations(
     }
     const sourcePath = resolveRuntimeSpecifierSource(importerPath, specifier);
     if (explicitEntrySources.has(sourcePath)) {
+      return;
+    }
+    // Bundled chunks live at dist root; source-relative paths and named build
+    // outputs are separate contracts, and neither may authorize an undeclared source.
+    const outputPath = normalizeRelativePath(specifier);
+    const outputSource =
+      specifier.startsWith("./") && specifier.endsWith(".js") && !outputPath.startsWith("../")
+        ? explicitEntryOutputs.get(outputPath)
+        : undefined;
+    if (outputSource && explicitEntrySources.has(outputSource)) {
       return;
     }
     const key = `${sourcePath}:${toLine(sourceFile, node)}`;
@@ -253,6 +297,7 @@ async function collectRuntimeSidecarLoaderViolations(params: {
   repoRoot: string;
   sourceRoots: string[];
   explicitEntrySources: Set<string>;
+  explicitEntryOutputs: ReadonlyMap<string, string>;
 }): Promise<LocatedRuntimeSidecarLoaderViolation[]> {
   const files = await collectTypeScriptFilesFromRoots(params.sourceRoots, {
     extraTestSuffixes: [".test-support.ts", ".test-helpers.ts"],
@@ -268,6 +313,7 @@ async function collectRuntimeSidecarLoaderViolations(params: {
       content,
       relativePath,
       params.explicitEntrySources,
+      params.explicitEntryOutputs,
     )) {
       violations.push({ path: relativePath, ...violation });
     }
@@ -281,6 +327,7 @@ async function main() {
     repoRoot,
     sourceRoots: defaultSourceRoots,
     explicitEntrySources: collectTsdownEntrySources(tsdownConfig),
+    explicitEntryOutputs: collectTsdownEntryOutputs(tsdownConfig),
   });
   if (violations.length === 0) {
     console.log("runtime-sidecar-loaders: local runtime sidecar loaders look OK.");

@@ -375,10 +375,6 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
     await importOriginal<typeof import("../plugins/installed-plugin-index-records.js")>();
   return {
     ...actual,
-    loadInstalledPluginIndexInstallRecords: ((...args: unknown[]) =>
-      invokeMock<unknown[], unknown>(loadInstalledPluginIndexInstallRecords, ...args)) as (
-      ...args: unknown[]
-    ) => unknown,
     writePersistedInstalledPluginIndexInstallRecords: ((...args: unknown[]) =>
       invokeMock<unknown[], unknown>(
         writePersistedInstalledPluginIndexInstallRecords,
@@ -411,6 +407,10 @@ vi.mock("../plugins/installed-plugin-index-record-reader.js", async (importOrigi
     await importOriginal<typeof import("../plugins/installed-plugin-index-record-reader.js")>();
   return {
     ...actual,
+    loadInstalledPluginIndexInstallRecords: ((...args: unknown[]) =>
+      invokeMock<unknown[], unknown>(loadInstalledPluginIndexInstallRecords, ...args)) as (
+      ...args: unknown[]
+    ) => unknown,
     loadInstalledPluginIndexInstallRecordsSync: () =>
       clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
   };

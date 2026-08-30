@@ -30,7 +30,7 @@ vi.mock("./current-plugin-metadata-snapshot.js", async (importOriginal) => ({
       ],
     },
   }),
-  isCurrentPluginMetadataSnapshotRuntimeGeneration: () => false,
+  isScopedPluginMetadataSnapshotRuntimeGeneration: () => false,
 }));
 
 const { resolveProviderDeprecatedAuthProfileIds } = await import("./provider-runtime.js");

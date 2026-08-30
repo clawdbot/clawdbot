@@ -1,11 +1,13 @@
 // Resolves persisted session model metadata without loading Gateway projections.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
+import { createModelManifestPluginContext } from "./model-selection-shared.js";
 import {
   inferUniqueProviderFromConfiguredModels,
-  normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
@@ -21,30 +23,28 @@ type SessionModelEntry =
       | "modelOverride"
       | "providerOverride"
       | "modelOverrideRouteResolution"
+      | "modelOverrideFallbackOriginProvider"
+      | "modelOverrideFallbackOriginModel"
     >;
 
 export function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?: SessionModelEntry,
   agentId?: string,
-  options?: { allowPluginNormalization?: boolean },
+  options?: { allowPluginNormalization?: boolean } & ModelManifestNormalizationContext,
 ): { provider: string; model: string } {
-  const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: entry?.providerOverride,
-    modelOverride: entry?.modelOverride,
-  });
-  if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
-    // Resolved overrides were canonicalized by their producer. Re-running plugin hooks here
-    // can cold-load provider runtime and transform the same persisted identity twice.
-    const allowPluginNormalization =
-      entry?.modelOverrideRouteResolution === "resolved"
-        ? false
-        : options?.allowPluginNormalization;
+  const manifestContext = createModelManifestPluginContext({ cfg, agentId, ...options });
+  const overrideProvider = normalizeOptionalString(entry?.providerOverride);
+  const overrideModel = normalizeOptionalString(entry?.modelOverride);
+  const overrideRouteResolution = resolveSessionModelOverrideRouteResolution(entry);
+  if (overrideProvider && overrideModel) {
     return resolvePersistedSelectedModelRef({
-      defaultProvider: normalizedOverride.providerOverride,
-      overrideProvider: normalizedOverride.providerOverride,
-      overrideModel: normalizedOverride.modelOverride,
-      allowPluginNormalization,
+      ...manifestContext.getContext(),
+      defaultProvider: overrideProvider,
+      overrideProvider,
+      overrideModel,
+      overrideRouteResolution,
+      allowPluginNormalization: options?.allowPluginNormalization,
     })!;
   }
   const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
@@ -54,24 +54,28 @@ export function resolveSessionModelRef(
     ? resolveDefaultModelForAgent({
         cfg,
         agentId,
-        allowPluginNormalization: options?.allowPluginNormalization,
+        ...options,
       })
     : resolveConfiguredModelRef({
         cfg,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
-        allowPluginNormalization: options?.allowPluginNormalization,
+        ...options,
       });
 
   const persisted = resolvePersistedSelectedModelRef({
+    ...(overrideModel || (!agentId && runtimeModel && !runtimeProvider)
+      ? manifestContext.getContext()
+      : options),
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
     // Runtime fields record the previous run. Agent-scoped selection must use
     // current config or an explicit override; legacy callers without an agent
     // still use the persisted pair as their fallback selection context.
     runtimeProvider: agentId ? undefined : runtimeProvider,
     runtimeModel: agentId ? undefined : runtimeModel,
-    overrideProvider: normalizedOverride.providerOverride,
-    overrideModel: normalizedOverride.modelOverride,
+    overrideProvider,
+    overrideModel,
+    overrideRouteResolution,
     allowPluginNormalization: options?.allowPluginNormalization,
   });
   return persisted ?? resolved;
@@ -82,8 +86,9 @@ export function resolveSessionModelIdentityRef(
   entry?: SessionModelEntry,
   agentId?: string,
   fallbackModelRef?: string,
-  options?: { allowPluginNormalization?: boolean },
+  options?: { allowPluginNormalization?: boolean } & ModelManifestNormalizationContext,
 ): { provider?: string; model: string } {
+  const manifestContext = createModelManifestPluginContext({ cfg, agentId, ...options });
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
   if (runtimeModel) {
@@ -94,12 +99,14 @@ export function resolveSessionModelIdentityRef(
       cfg,
       model: runtimeModel,
       agentId,
+      ...options,
     });
     if (inferredProvider) {
       return { provider: inferredProvider, model: runtimeModel };
     }
     if (runtimeModel.includes("/")) {
       const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER, {
+        ...manifestContext.getContext(),
         allowPluginNormalization: options?.allowPluginNormalization,
       });
       if (parsedRuntime) {
@@ -112,6 +119,7 @@ export function resolveSessionModelIdentityRef(
   const fallbackRef = fallbackModelRef?.trim();
   if (fallbackRef) {
     const parsedFallback = parseModelRef(fallbackRef, DEFAULT_PROVIDER, {
+      ...manifestContext.getContext(),
       allowPluginNormalization: options?.allowPluginNormalization,
     });
     if (parsedFallback) {
@@ -121,14 +129,13 @@ export function resolveSessionModelIdentityRef(
       cfg,
       model: fallbackRef,
       agentId,
+      ...options,
     });
     if (inferredProvider) {
       return { provider: inferredProvider, model: fallbackRef };
     }
     return { model: fallbackRef };
   }
-  const resolved = resolveSessionModelRef(cfg, entry, agentId, {
-    allowPluginNormalization: options?.allowPluginNormalization,
-  });
+  const resolved = resolveSessionModelRef(cfg, entry, agentId, options);
   return { provider: resolved.provider, model: resolved.model };
 }

@@ -1,5 +1,6 @@
 /** Discovers plugin-declared environment variable names for channel credential setup. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
@@ -20,13 +21,19 @@ type ChannelEnvVarLookupParams = {
 function resolveChannelEnvVars(
   params?: ChannelEnvVarLookupParams,
 ): Record<string, readonly string[]> {
-  const snapshot = resolvePluginMetadataSnapshot({
-    config: params?.config,
-    workspaceDir: params?.workspaceDir,
-    env: params?.env ?? process.env,
-  });
+  const env = params?.env ?? process.env;
+  // Setup without a workspace needs metadata from every configured workspace;
+  // an executable snapshot may cover only the Gateway's selected owner.
+  const plugins =
+    params?.workspaceDir === undefined
+      ? resolveConfigWidePluginManifestRegistry({ config: params?.config, env }).plugins
+      : resolvePluginMetadataSnapshot({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env,
+        }).plugins;
   const candidates: Record<string, string[]> = {};
-  for (const plugin of snapshot.plugins) {
+  for (const plugin of plugins) {
     const channelId = plugin.packageChannel?.id?.trim();
     const channelEnv = plugin.packageChannel?.configuredState?.env;
     if (!channelId || !channelEnv) {

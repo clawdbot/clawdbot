@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
@@ -510,19 +511,28 @@ export async function prepareReplyAgentPayloads(state: {
       promptTokens,
       usage,
     });
-    const costConfig = resolveModelCostConfig({
-      provider: providerUsed,
-      model: modelUsed,
-      config: cfg,
-      agentDir: followupRun.run.agentDir,
-    });
     const hasDiagnosticBillableUsageBuckets =
       diagnosticUsage.input !== undefined ||
       diagnosticUsage.output !== undefined ||
       diagnosticUsage.cacheRead !== undefined ||
       diagnosticUsage.cacheWrite !== undefined;
+    const recordedCostUsd =
+      diagnosticUsage === usage
+        ? asNonNegativeFiniteNumber(runResult.meta?.agentMeta?.costUsd)
+        : undefined;
     const costUsd = hasDiagnosticBillableUsageBuckets
-      ? estimateUsageCost({ usage: diagnosticUsage, cost: costConfig })
+      ? (recordedCostUsd ??
+        estimateUsageCost({
+          usage: diagnosticUsage,
+          cost: resolveModelCostConfig({
+            provider: providerUsed,
+            model: modelUsed,
+            config: cfg,
+            agentId: followupRun.run.agentId,
+            agentDir: followupRun.run.agentDir,
+            workspaceDir: followupRun.run.workspaceDir,
+          }),
+        }))
       : undefined;
     emitTrustedDiagnosticEvent({
       type: "model.usage",

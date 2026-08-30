@@ -11,7 +11,9 @@ import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 type ConfigSnapshotForWrite = {
   snapshot: { valid: boolean; resolved: OpenClawConfig };
-  writeOptions: { basePluginMetadataSnapshot?: PluginMetadataSnapshot };
+  writeOptions: {
+    basePluginMetadata?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
+  };
 };
 
 type ResolveCommandConfigParams = {
@@ -181,10 +183,10 @@ describe("agentCommand runtime config", () => {
       const pluginMetadataSnapshot = {
         plugins: [],
         manifestRegistry: { plugins: [], diagnostics: [] },
-      } as unknown as PluginMetadataSnapshot;
+      } satisfies Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
       readConfigFileSnapshotForWriteMock.mockResolvedValue({
         snapshot: { valid: true, resolved: sourceConfig },
-        writeOptions: { basePluginMetadataSnapshot: pluginMetadataSnapshot },
+        writeOptions: { basePluginMetadata: pluginMetadataSnapshot },
       });
       getActiveSecretsRuntimeSnapshotMock.mockReturnValue(null);
 

@@ -72,7 +72,7 @@ export async function persistActivatedSetupInference(input: {
   stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot;
   baselineTargetModelMetadata: unknown;
   sourceTargetModelMetadata: unknown;
-  routeDeps: Pick<SystemAgentConfiguredRouteDeps, "pluginMetadataPlugins">;
+  routeDeps: Pick<SystemAgentConfiguredRouteDeps, "pluginMetadataSnapshot">;
   readSnapshot: NonNullable<ActivateSetupInferenceDeps["readConfigFileSnapshot"]>;
   hasPreparedAuthProfiles: boolean;
   state: SetupInferenceActivationPersistenceState;
@@ -117,7 +117,6 @@ export async function persistActivatedSetupInference(input: {
   const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
   const selectModel = plan.persistModelRef
     ? await createSystemAgentModelSelectionUpdater({
-        model: plan.persistModelRef,
         ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
@@ -154,7 +153,7 @@ export async function persistActivatedSetupInference(input: {
       providerId: testPlan.provider,
       modelRef: plan.modelRef,
     }).config;
-    next = selectModel ? selectModel(next) : next;
+    next = selectModel ? selectModel(next, plan) : next;
     if (!pendingCodexInstall) {
       return next;
     }

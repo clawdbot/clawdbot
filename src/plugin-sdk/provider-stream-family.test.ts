@@ -1,6 +1,4 @@
-import { describe, expect, it } from "vitest";
-import * as providerStreamFamily from "./provider-stream-family.js";
-import * as providerStream from "./provider-stream.js";
+import { describe, expect, it, vi } from "vitest";
 
 const COMPATIBILITY_EXPORT_NAMES = [
   "GOOGLE_THINKING_STREAM_HOOKS",
@@ -13,7 +11,35 @@ const COMPATIBILITY_EXPORT_NAMES = [
 ] as const;
 
 describe("provider-stream-family compatibility exports", () => {
-  it.each(COMPATIBILITY_EXPORT_NAMES)("preserves the shipped %s shortcut", (exportName) => {
+  it("constructs provider stream hooks without loading native search or transport runtime", async () => {
+    vi.doMock("../agents/codex-native-web-search-core.js", () => {
+      throw new Error("Stream hook registration loaded native search runtime");
+    });
+    vi.doMock("../agents/openai-transport-stream.js", () => {
+      throw new Error("Stream hook registration loaded native transport runtime");
+    });
+    vi.resetModules();
+    try {
+      const providerStreamFamily = await import("./provider-stream-family.js");
+      const providerStream = await import("./provider-stream.js");
+
+      expect(providerStreamFamily.resolveOpenAIServiceTier({ serviceTier: "flex" })).toBe("flex");
+      for (const family of ["openrouter-thinking", "openai-responses-defaults"] as const) {
+        const hooks = providerStream.buildProviderStreamFamilyHooks(family);
+        expect(hooks.wrapStreamFn?.({ provider: "fixture", modelId: "model" })).toBeTypeOf(
+          "function",
+        );
+      }
+    } finally {
+      vi.doUnmock("../agents/codex-native-web-search-core.js");
+      vi.doUnmock("../agents/openai-transport-stream.js");
+      vi.resetModules();
+    }
+  });
+
+  it.each(COMPATIBILITY_EXPORT_NAMES)("preserves the shipped %s shortcut", async (exportName) => {
+    const providerStreamFamily = await import("./provider-stream-family.js");
+    const providerStream = await import("./provider-stream.js");
     const value = providerStreamFamily[exportName];
 
     expect(value).toBeDefined();

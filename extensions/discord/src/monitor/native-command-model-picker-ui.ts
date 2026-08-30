@@ -205,6 +205,8 @@ export async function resolveDiscordNativeChoiceContext(params: {
     });
     const sessionEntry = getSessionEntry({ storePath, sessionKey: route.sessionKey });
     const override = resolveStoredModelOverride({
+      config: params.cfg,
+      agentId: route.agentId,
       sessionEntry,
       loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
       sessionKey: route.sessionKey,
@@ -246,6 +248,8 @@ export function resolveDiscordModelPickerCurrentModel(params: {
       readConsistency: "latest",
     });
     const override = resolveStoredModelOverride({
+      config: params.cfg,
+      agentId: params.route.agentId,
       sessionEntry,
       loadSessionEntry: (sessionKey) =>
         getSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),

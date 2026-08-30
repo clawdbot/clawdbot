@@ -141,6 +141,7 @@ export async function buildPreparedPluginModelCatalog(params: {
         ? await augmentPreparedModelCatalogWithAgentHarness({
             input,
             snapshot,
+            metadataSnapshot,
             pluginRegistry,
           })
         : snapshot;

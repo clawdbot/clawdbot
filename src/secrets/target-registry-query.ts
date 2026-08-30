@@ -23,15 +23,10 @@ import type {
   SecretTargetRegistryEntry,
 } from "./target-registry-types.js";
 
-let compiledSecretTargetRegistryState: {
-  authProfilesCompiledSecretTargets: CompiledTargetRegistryEntry[];
-  authProfilesTargetsById: Map<string, CompiledTargetRegistryEntry[]>;
-  compiledSecretTargetRegistry: CompiledTargetRegistryEntry[];
-  knownTargetIds: Set<string>;
-  openClawCompiledSecretTargets: CompiledTargetRegistryEntry[];
-  openClawTargetsById: Map<string, CompiledTargetRegistryEntry[]>;
-  targetsByType: Map<string, CompiledTargetRegistryEntry[]>;
-} | null = null;
+const compiledSecretTargetRegistries = new WeakMap<
+  readonly SecretTargetRegistryEntry[],
+  ReturnType<typeof compileSecretTargetRegistryState>
+>();
 
 let compiledCoreOpenClawTargetState: {
   knownTargetIds: Set<string>;
@@ -45,8 +40,10 @@ let compiledCoreAuthProfileTargetState: {
   entriesById: Map<string, CompiledTargetRegistryEntry[]>;
 } | null = null;
 
-// Channel contract entries are process-stable; plugin install/reload is the owner of freshness.
-const compiledChannelOpenClawTargets = new Map<string, CompiledTargetRegistryEntry[] | null>();
+const compiledChannelOpenClawTargets = new WeakMap<
+  readonly SecretTargetRegistryEntry[],
+  CompiledTargetRegistryEntry[]
+>();
 
 function buildTargetTypeIndex(
   compiledSecretTargetRegistry: CompiledTargetRegistryEntry[],
@@ -84,7 +81,7 @@ function buildConfigTargetIdIndex(
   return byId;
 }
 
-function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[]) {
+function compileSecretTargetRegistryState(registry: readonly SecretTargetRegistryEntry[]) {
   const compiledSecretTargetRegistry = registry.map(compileTargetRegistryEntry);
   const openClawCompiledSecretTargets = compiledSecretTargetRegistry.filter(
     (entry) => entry.configFile === "openclaw.json",
@@ -103,12 +100,14 @@ function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[])
   };
 }
 
-function getCompiledSecretTargetRegistryState() {
-  if (compiledSecretTargetRegistryState) {
-    return compiledSecretTargetRegistryState;
+function getCompiledSecretTargetRegistryState(registry = getSecretTargetRegistry()) {
+  const cached = compiledSecretTargetRegistries.get(registry);
+  if (cached) {
+    return cached;
   }
-  compiledSecretTargetRegistryState = compileSecretTargetRegistryState(getSecretTargetRegistry());
-  return compiledSecretTargetRegistryState;
+  const compiled = compileSecretTargetRegistryState(registry);
+  compiledSecretTargetRegistries.set(registry, compiled);
+  return compiled;
 }
 
 function getConfiguredSecretTargetRegistryState(
@@ -116,7 +115,7 @@ function getConfiguredSecretTargetRegistryState(
   env: NodeJS.ProcessEnv,
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">,
 ) {
-  return compileSecretTargetRegistryState(
+  return getCompiledSecretTargetRegistryState(
     manifestRegistry
       ? buildSecretTargetRegistryFromPlugins(manifestRegistry.plugins)
       : getSecretTargetRegistry({ config, env }),
@@ -166,18 +165,21 @@ function getCompiledChannelOpenClawTargets(
   ) {
     return null;
   }
-  if (compiledChannelOpenClawTargets.has(normalizedChannelId)) {
-    return compiledChannelOpenClawTargets.get(normalizedChannelId) ?? null;
+  const entries = loadChannelSecretContractApi({
+    channelId: normalizedChannelId,
+    env: process.env,
+  })?.secretTargetRegistryEntries;
+  if (!entries) {
+    return null;
   }
-  const compiledEntries =
-    loadChannelSecretContractApi({
-      channelId: normalizedChannelId,
-      config: {} as OpenClawConfig,
-      env: process.env,
-    })
-      ?.secretTargetRegistryEntries?.filter((entry) => entry.configFile === "openclaw.json")
-      .map(compileTargetRegistryEntry) ?? null;
-  compiledChannelOpenClawTargets.set(normalizedChannelId, compiledEntries);
+  const cached = compiledChannelOpenClawTargets.get(entries);
+  if (cached) {
+    return cached;
+  }
+  const compiledEntries = entries
+    .filter((entry) => entry.configFile === "openclaw.json")
+    .map(compileTargetRegistryEntry);
+  compiledChannelOpenClawTargets.set(entries, compiledEntries);
   return compiledEntries;
 }
 

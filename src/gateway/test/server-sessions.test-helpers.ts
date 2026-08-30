@@ -100,12 +100,7 @@ export async function loadSeededTranscriptEvents(params: {
   storePath: string;
 }): Promise<unknown[]> {
   const { loadTranscriptEvents } = await getSessionAccessorModule();
-  return await loadTranscriptEvents({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
+  return await loadTranscriptEvents(params);
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({

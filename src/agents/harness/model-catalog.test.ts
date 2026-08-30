@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { augmentModelCatalogWithAgentHarness } from "./model-catalog.js";
 
@@ -107,8 +114,7 @@ describe("agent harness model catalog", () => {
       agentId: "main",
       agentDir: "/tmp/main-agent",
       workspaceDir: "/tmp/workspace",
-      defaultProvider: "openai",
-      defaultModel: "openai/gpt-5.6-sol",
+      modelRef: { provider: "openai", model: "gpt-5.6-sol" },
       snapshot,
       pluginRegistry: registryWithCatalog(async () => [native] as never),
     });
@@ -159,8 +165,7 @@ describe("agent harness model catalog", () => {
       agentId: "main",
       agentDir: "/tmp/main-agent",
       workspaceDir: "/tmp/workspace",
-      defaultProvider: "anthropic",
-      defaultModel: "openai/gpt-5.6-sol",
+      modelRef: { provider: "openai", model: "gpt-5.6-sol" },
       snapshot,
       pluginRegistry: registryWithCatalog(loadModelCatalog as never),
     });
@@ -200,6 +205,52 @@ describe("agent harness model catalog", () => {
     });
   });
 
+  it.each(["global", "scoped"] as const)(
+    "revalidates %s catalog ownership after a global registry replacement",
+    async (source) => {
+      const resume = createDeferred();
+      const native = {
+        provider: "openai",
+        id: "owned-model",
+        name: "Owned model",
+        nativeRuntime: "codex",
+      };
+      const loadModelCatalog = vi.fn(async () => {
+        await resume.promise;
+        return [native] as never;
+      });
+      const registry = registryWithCatalog(loadModelCatalog);
+      const previous = captureActivePluginRegistrySnapshot();
+      let pending: Promise<ModelCatalogSnapshot> | undefined;
+      try {
+        setActivePluginRegistry(source === "global" ? registry : createEmptyPluginRegistry());
+        const load = () =>
+          augmentModelCatalogWithAgentHarness({
+            cfg,
+            agentId: "main",
+            agentDir: "/tmp/main-agent",
+            workspaceDir: "/tmp/workspace",
+            modelRef: { provider: "openai", model: "gpt-5.6-sol" },
+            snapshot,
+          });
+        pending = source === "scoped" ? withPluginRuntimeRegistryScope(registry, load) : load();
+        expect(loadModelCatalog).toHaveBeenCalledOnce();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        resume.resolve();
+        const result = await pending;
+        if (source === "global") {
+          expect(result).toBe(snapshot);
+        } else {
+          expect(result.entries).toEqual([native, ...snapshot.entries]);
+        }
+      } finally {
+        resume.resolve();
+        await Promise.allSettled(pending ? [pending] : []);
+        restoreActivePluginRegistrySnapshot(previous);
+      }
+    },
+  );
+
   it("keeps prepared rows when harness discovery fails", async () => {
     const onError = vi.fn();
     const result = await augmentModelCatalogWithAgentHarness({
@@ -207,8 +258,7 @@ describe("agent harness model catalog", () => {
       agentId: "main",
       agentDir: "/tmp/main-agent",
       workspaceDir: "/tmp/workspace",
-      defaultProvider: "anthropic",
-      defaultModel: "openai/gpt-5.6-sol",
+      modelRef: { provider: "openai", model: "gpt-5.6-sol" },
       snapshot,
       pluginRegistry: registryWithCatalog(async () => {
         throw new Error("model/list unavailable");

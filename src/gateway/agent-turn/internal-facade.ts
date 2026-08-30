@@ -148,7 +148,13 @@ export function createInternalAgentTurnFacade(
         await createAgentTurnService(
           { context, isWebchatConnect },
           options.assertContextCurrent,
-        ).startTurn({ preflight, principal, io, onRunObserved });
+        ).startTurn({
+          preflight,
+          principal,
+          io,
+          onRunObserved,
+          expectedInitialModel: dispatchOptions.expectedInitialModel,
+        });
       },
       {
         context,

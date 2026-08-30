@@ -6,10 +6,12 @@ import {
   rejectPendingPreparedModelRuntimeReplacement,
   type PreparedModelRuntimeReplacementGateId,
 } from "../agents/prepared-model-runtime.js";
+import { resolveAgentWorkspaceDirsById } from "../agents/workspace-dirs.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-schedule.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
@@ -173,33 +175,27 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       isTruthyEnvValue(candidateEnv.OPENCLAW_SKIP_PROVIDERS);
     const channelReloadTargets = () =>
       new Set<ChannelKind>([...channelsToRestart, ...restartChannelAccounts.keys()]);
-    const getChannelAutostartSuppression = () => params.getChannelAutostartSuppression?.() ?? null;
-    const logSuppressedChannelRestart = (
-      channels: ReadonlySet<ChannelKind>,
-      action: string,
-    ): void => {
-      const suppression = getChannelAutostartSuppression();
-      if (!suppression) {
-        return;
-      }
-      params.logChannels.info(
-        `${action} suppressed by crash-loop breaker for channels: ${[...channels].join(", ")}`,
-      );
-    };
     const commitRuntime = async (onCommit?: () => void) => {
       if (runtimeCommitted) {
         return;
       }
-      const commit = async () => {
-        if (plan.restartHeartbeat || plan.reconcileSkillReviewJobs) {
-          // Runtime publication promises that durable monitor rows reflect this config.
-          // A retrying or superseded pass leaves the previous generation authoritative.
-          const reconciliation = await nextState.cronState.reconcileHeartbeatJobs(nextConfig);
-          assertReloadPublicationCurrent(publication?.isCurrent() ?? true, isRestartRetryStopped());
-          if (reconciliation !== "converged") {
-            throw new GatewayHotReloadRecoveryError("cron monitor");
-          }
+      if (plan.restartHeartbeat || plan.reconcileSkillReviewJobs) {
+        // Convergence can yield and reject. Keep the serving config, secrets,
+        // env, and metadata together until the synchronous publication edge.
+        const reconciliation = await nextState.cronState.reconcileHeartbeatJobs({
+          config: nextConfig,
+          agentWorkspaceDirs:
+            publication?.pluginMetadata?.agentWorkspaceDirs ??
+            resolveAgentWorkspaceDirsById(nextConfig, candidateEnv),
+          schedulerSeed: resolveHeartbeatSchedulerSeed(undefined, { env: candidateEnv }),
+          isCurrent,
+        });
+        assertReloadPublicationCurrent(publication?.isCurrent() ?? true, isRestartRetryStopped());
+        if (reconciliation !== "converged") {
+          throw new GatewayHotReloadRecoveryError("cron monitor");
         }
+      }
+      const commit = async () => {
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
@@ -218,6 +214,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         applyGatewayLaneConcurrency(laneConcurrency);
         runtimeCommitted = true;
+        publication?.onCommitted?.();
         onCommit?.();
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
         if (plan.restartCron) {
@@ -498,6 +495,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             nextConfig,
             // Without a managed publication, the direct caller's input is itself authored.
             sourceConfig: publication ? publication.sourceConfig : nextConfig,
+            pluginMetadata: publication?.pluginMetadata,
             changedPaths: plan.changedPaths,
             beforeReplace: stopChannelsBeforePluginReplace,
             commitRuntime,
@@ -589,7 +587,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       await mrReload.refreshModelRuntimeAfterHotReload({
         config: nextConfig,
         agentIds: modelRuntimeAgentIds,
-        pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
+        pluginMetadata: params.getPluginMetadata?.(),
       });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
@@ -663,9 +661,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       skipChannelRestartLogMessage:
         "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
       isLifecycleReloadAborted,
-      getChannelAutostartSuppression,
       channelReloadTargets,
-      logSuppressedChannelRestart,
       scheduleRecoveryRestart,
     });
 

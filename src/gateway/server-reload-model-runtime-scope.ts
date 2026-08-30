@@ -1,6 +1,6 @@
 import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PreparedPluginMetadata } from "../plugins/plugin-metadata-collection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 /** Returns affected agent ids when every meaningful reload path is agent-entry-local. */
@@ -27,7 +27,7 @@ export function resolveReloadAgentIds(
 export function refreshModelRuntimeAfterHotReload(params: {
   config: OpenClawConfig;
   agentIds: ReadonlySet<string> | undefined;
-  pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+  pluginMetadata: PreparedPluginMetadata | undefined;
   isPublicationCurrent?: () => boolean;
 }): Promise<void> {
   return refreshPreparedModelRuntimeSnapshots(params.config, {
@@ -35,8 +35,6 @@ export function refreshModelRuntimeAfterHotReload(params: {
     ...(params.isPublicationCurrent ? { isPublicationCurrent: params.isPublicationCurrent } : {}),
     allowGatewaySubagentBinding: true,
     ...(params.agentIds ? { agentIds: params.agentIds } : {}),
-    ...(params.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-      : {}),
+    ...(params.pluginMetadata ? { pluginMetadata: params.pluginMetadata } : {}),
   });
 }

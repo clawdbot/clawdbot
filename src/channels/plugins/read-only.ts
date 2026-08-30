@@ -55,7 +55,7 @@ type ReadOnlyChannelPluginOptions = {
   activationSourceConfig?: OpenClawConfig;
   includePersistedAuthState?: boolean;
   includeSetupFallbackPlugins?: boolean;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 };
 
 type ReadOnlyChannelPluginResolution = {
@@ -350,6 +350,11 @@ function loadSetupChannelPluginFromManifestRecord(params: {
   if (!params.record.setupSource || !params.record.channels.includes(params.channelId)) {
     return {};
   }
+  const adapters = getPluginCache().metadata.channelSetupAdapters;
+  const cached = adapters.get(params.record);
+  if (cached) {
+    return { plugin: cached };
+  }
   try {
     const moduleLoader = getCachedPluginModuleLoader({
       modulePath: params.record.setupSource,
@@ -383,6 +388,9 @@ function loadSetupChannelPluginFromManifestRecord(params: {
     ) {
       return {};
     }
+    // Factories may import lazy setup dependencies; retain successful adapters
+    // in this cache generation while their account methods keep reading live config.
+    adapters.set(params.record, registration.plugin);
     return { plugin: registration.plugin };
   } catch (error) {
     const detail = formatErrorMessage(error);
@@ -778,7 +786,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
   const plugins = [...byId.values()];
   return {
     plugins,
-    manifestRecords: [...manifestRecords],
+    manifestRecords,
     configuredChannelIds,
     missingConfiguredChannelIds: configuredChannelIds.filter((channelId) => !byId.has(channelId)),
     loadFailures,

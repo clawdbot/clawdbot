@@ -1,40 +1,47 @@
 /** Prepared plugin metadata handoff for runtime model normalization. */
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   findNormalizedProviderKey,
-  modelKey,
-  normalizeModelRef,
   normalizeProviderId,
-} from "../../agents/model-selection.js";
+  type ModelRef,
+  type normalizeModelRef,
+} from "../../agents/model-ref-shared.js";
+import {
+  createModelManifestPluginContext,
+  type ModelManifestPluginContext,
+} from "../../agents/model-selection-shared.js";
 import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
-import {
-  isManifestPluginAvailableForControlPlane,
-  loadManifestMetadataSnapshot,
-} from "../../plugins/manifest-contract-eligibility.js";
+import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 
-export type RuntimeModelNormalization = NonNullable<Parameters<typeof normalizeModelRef>[2]>;
+/** A producing branch owns either the selected ref or its deferred preparation. */
+export type PreparedReplyModelRef = ModelRef | (() => ModelRef);
 
-/** Carries the Gateway-owned metadata snapshot through one model-selection run. */
-export function resolveRuntimeNormalization(cfg: OpenClawConfig): RuntimeModelNormalization {
-  return {
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: getCurrentPluginMetadataSnapshot({
-      config: cfg,
-      allowWorkspaceScopedSnapshot: true,
-    })?.plugins,
-  };
+export function resolvePreparedReplyModelRef(ref: PreparedReplyModelRef): ModelRef {
+  return typeof ref === "function" ? ref() : ref;
 }
 
-export function normalizeRuntimeRef(
-  provider: string,
-  model: string,
-  normalization: RuntimeModelNormalization = RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-) {
-  return normalizeModelRef(provider, model, normalization);
+export type RuntimeModelNormalization = NonNullable<Parameters<typeof normalizeModelRef>[2]> & {
+  manifestPluginContext?: ModelManifestPluginContext;
+};
+
+/** Carries the Gateway-owned metadata snapshot through one model-selection run. */
+export function resolveRuntimeNormalization(
+  cfg: OpenClawConfig,
+  agentId?: string,
+  params?: { workspaceDir?: string; manifestPluginContext?: ModelManifestPluginContext },
+): RuntimeModelNormalization {
+  const manifestPluginContext =
+    params?.manifestPluginContext ??
+    createModelManifestPluginContext({ cfg, agentId, workspaceDir: params?.workspaceDir });
+  return {
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    ...manifestPluginContext.getContext(),
+    manifestPluginContext,
+  };
 }
 
 export function findSelectedCatalogEntry(params: {
@@ -42,9 +49,10 @@ export function findSelectedCatalogEntry(params: {
   provider: string;
   model: string;
 }): ModelCatalogEntry | undefined {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const selectedKey = modelKey(normalizedProvider, params.model);
-  return params.catalog?.find((entry) => modelKey(entry.provider, entry.id) === selectedKey);
+  const selectedKey = buildModelCatalogRef(params.provider, params.model);
+  return params.catalog?.find(
+    (entry) => buildModelCatalogRef(entry.provider, entry.id) === selectedKey,
+  );
 }
 
 /** Provider identity comes from authored routes or prepared/plugin metadata, not model inventory. */
@@ -52,6 +60,9 @@ export function isKnownModelSelectionProvider(params: {
   cfg: OpenClawConfig;
   provider: string;
   catalog: readonly ModelCatalogEntry[];
+  agentId?: string;
+  workspaceDir?: string;
+  manifestPluginContext?: ModelManifestPluginContext;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
   if (
@@ -60,11 +71,16 @@ export function isKnownModelSelectionProvider(params: {
   ) {
     return true;
   }
-  const snapshot = loadManifestMetadataSnapshot({ config: params.cfg });
-  return snapshot.plugins.some(
-    (plugin) =>
-      plugin.providers.some((id) => normalizeProviderId(id) === provider) &&
-      isManifestPluginAvailableForControlPlane({ snapshot, plugin, config: params.cfg }),
+  const context = params.manifestPluginContext ?? createModelManifestPluginContext(params);
+  const snapshot = context.getContext().pluginMetadataSnapshot;
+  // Provider eligibility belongs to this operation's captured graph, including
+  // an intentionally empty retained generation. Never reopen global discovery.
+  return (
+    snapshot?.manifestRegistry.plugins.some(
+      (plugin) =>
+        plugin.providers.some((id) => normalizeProviderId(id) === provider) &&
+        isManifestPluginAvailableForControlPlane({ snapshot, plugin, config: params.cfg }),
+    ) ?? false
   );
 }
 
@@ -80,6 +96,9 @@ type ModelSelectionPreparation =
 export async function prepareModelSelectionRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  manifestPluginContext?: ModelManifestPluginContext;
   provider: string;
   model: string;
   catalog: readonly ModelCatalogEntry[];
@@ -91,7 +110,9 @@ export async function prepareModelSelectionRuntime(params: {
     return { status: "rejected", reason: "invalid-runtime", message: runtime.errorText };
   }
   const selected = findSelectedCatalogEntry(params);
-  if (!isKnownModelSelectionProvider(params)) {
+  const manifestPluginContext =
+    params.manifestPluginContext ?? createModelManifestPluginContext(params);
+  if (!isKnownModelSelectionProvider({ ...params, manifestPluginContext })) {
     return {
       status: "rejected",
       reason: "unknown-provider",
@@ -105,9 +126,12 @@ export async function prepareModelSelectionRuntime(params: {
   // supply thinking or context metadata for an explicit cross-provider selection.
   const { loadProviderScopedThinkingCatalog } =
     await import("../../agents/model-catalog.runtime.js");
+  const { workspaceDir } = manifestPluginContext.getContext();
   const catalog = await loadProviderScopedThinkingCatalog({
     config: params.cfg,
     agentId: params.agentId,
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
     provider: params.provider,
     model: params.model,
   });
@@ -129,10 +153,10 @@ export function mergePreparedConfiguredCatalog(params: {
     return params.configured;
   }
   const preparedByKey = new Map(
-    params.prepared.map((entry) => [modelKey(entry.provider, entry.id), entry]),
+    params.prepared.map((entry) => [buildModelCatalogRef(entry.provider, entry.id), entry]),
   );
   return params.configured.map((entry) => {
-    const prepared = preparedByKey.get(modelKey(entry.provider, entry.id));
+    const prepared = preparedByKey.get(buildModelCatalogRef(entry.provider, entry.id));
     // The prepared row owns runtime capabilities; the configured row limits
     // visibility and retains any authored metadata absent from that snapshot.
     return prepared ? { ...entry, ...prepared } : entry;

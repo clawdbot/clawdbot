@@ -144,16 +144,19 @@ export async function prepareLogicalVisibleModelCatalog(
     ): Promise<() => LogicalModelCatalogEntryState>;
   },
 ): Promise<() => ModelCatalogEntry[]> {
+  // All-view route projection has no visibility policy to normalize.
   const policy =
-    params.policy ??
-    createModelVisibilityPolicy({
-      cfg: params.cfg,
-      catalog: params.catalog,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
-      agentId: params.agentId,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    });
+    params.view === "all"
+      ? undefined
+      : (params.policy ??
+        createModelVisibilityPolicy({
+          cfg: params.cfg,
+          catalog: params.catalog,
+          defaultProvider: params.defaultProvider,
+          defaultModel: params.defaultModel,
+          agentId: params.agentId,
+          ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+        }));
   const keyOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
     resolveLogicalKey(entry, params.routePolicy);
   const projectionCatalog = params.routeVariants?.length ? params.routeVariants : params.catalog;
@@ -169,22 +172,21 @@ export async function prepareLogicalVisibleModelCatalog(
     const slash = key.indexOf("/");
     return slash > 0 ? keyOf({ provider: key.slice(0, slash), id: key.slice(slash + 1) }) : key;
   };
-  const configuredKeys = new Set([...policy.configuredKeys].map(normalizePolicyKey));
-  const retainedKeys = new Set([...policy.retainedKeys].map(normalizePolicyKey));
+  const configuredKeys = new Set([...(policy?.configuredKeys ?? [])].map(normalizePolicyKey));
+  const retainedKeys = new Set([...(policy?.retainedKeys ?? [])].map(normalizePolicyKey));
   const retained = params.catalog.filter((entry) => retainedKeys.has(keyOf(entry)));
-  const wildcard = policy.allowAny || policy.hasProviderWildcards;
+  const wildcard = policy !== undefined && (policy.allowAny || policy.hasProviderWildcards);
   const configuredCatalog = wildcard
     ? sortModelCatalogEntries(buildConfiguredModelCatalog({ cfg: params.cfg }))
     : [];
-  const candidates =
-    params.view === "all"
-      ? params.catalog
-      : [
-          ...(wildcard ? params.catalog : []),
-          ...configuredCatalog,
-          ...policy.allowedCatalog,
-          ...retained,
-        ];
+  const candidates = policy
+    ? [
+        ...(wildcard ? params.catalog : []),
+        ...configuredCatalog,
+        ...policy.allowedCatalog,
+        ...retained,
+      ]
+    : params.catalog;
   const readers = new Map<string, () => LogicalModelCatalogEntryState>();
   for (const entry of candidates) {
     const key = keyOf(entry);
@@ -252,7 +254,7 @@ export async function prepareLogicalVisibleModelCatalog(
         dedupeLogicalModelCatalogEntries(projected, params.routePolicy),
       );
     };
-    if (params.view === "all") {
+    if (!policy) {
       return projectEntries(params.catalog);
     }
     const defaultVisibleCatalog = wildcard

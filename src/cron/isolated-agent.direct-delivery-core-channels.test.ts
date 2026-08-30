@@ -5,14 +5,17 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
+import {
+  resolveCronActiveRuntimeConfig,
+  resolveCronAgentConfig,
+} from "./isolated-agent/run-config.js";
 
 describe("resolveCronAgentConfig", () => {
   afterEach(() => {
     clearRuntimeConfigSnapshot();
   });
 
-  it("keeps the active runtime snapshot after agent-default derivation", () => {
+  it("captures active credentials once and retains that config through later publication", () => {
     const sourceCfg = {
       channels: {
         discord: {
@@ -33,8 +36,13 @@ describe("resolveCronAgentConfig", () => {
     } satisfies OpenClawConfig;
     setRuntimeConfigSnapshot(runtimeCfg, sourceCfg);
 
+    const capturedConfig = resolveCronActiveRuntimeConfig(sourceCfg);
+    setRuntimeConfigSnapshot(
+      { ...runtimeCfg, messages: { responsePrefix: "replacement" } },
+      runtimeCfg,
+    );
     const { agentDefaults, cfgWithAgentDefaults, runtimeConfig } = resolveCronAgentConfig({
-      config: sourceCfg,
+      config: capturedConfig,
       agentConfigOverride: { model: "openai/gpt-5.5" },
     });
 

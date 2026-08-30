@@ -4,6 +4,7 @@ import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
+  collectTsdownEntryOutputs,
   collectTsdownEntrySources,
   findRuntimeSidecarLoaderViolations,
 } from "../../scripts/check-runtime-sidecar-loaders.mts";
@@ -113,6 +114,56 @@ describe("check-runtime-sidecar-loaders", () => {
     ).toStrictEqual([]);
   });
 
+  it.each([
+    {
+      name: "matching output alias",
+      outputPath: "plugins/model-normalizer.runtime.js",
+      entrySource: "src/plugins/model-normalizer.runtime.ts",
+      violations: 0,
+    },
+    {
+      name: "different output alias",
+      outputPath: "plugins/renamed-normalizer.runtime.js",
+      entrySource: "src/plugins/model-normalizer.runtime.ts",
+      violations: 1,
+    },
+    {
+      name: "undeclared source",
+      outputPath: "plugins/model-normalizer.runtime.js",
+      entrySource: "src/plugins/undeclared.runtime.ts",
+      violations: 1,
+    },
+    {
+      name: "different package output directory",
+      outputPath: "../packages/example/dist/plugins/model-normalizer.runtime.js",
+      entrySource: "src/plugins/model-normalizer.runtime.ts",
+      violations: 1,
+    },
+  ])(
+    "requires an exact declared built output: $name",
+    ({ outputPath, entrySource, violations }) => {
+      const source = `
+      import { createRequire } from "node:module";
+      const require = createRequire(import.meta.url);
+      export function loadRuntime() {
+        return require("./plugins/model-normalizer.runtime.js");
+      }
+    `;
+      const entrySources = collectTsdownEntrySources({
+        entry: { "plugins/model-normalizer.runtime": "src/plugins/model-normalizer.runtime.ts" },
+      });
+
+      expect(
+        findRuntimeSidecarLoaderViolations(
+          source,
+          "src/agents/model-normalization.runtime.ts",
+          entrySources,
+          new Map([[outputPath, entrySource]]),
+        ),
+      ).toHaveLength(violations);
+    },
+  );
+
   it("resolves candidate arrays used by source/build fallback loops", () => {
     const source = `
       import { createRequire } from "node:module";
@@ -163,5 +214,41 @@ describe("check-runtime-sidecar-loaders", () => {
         },
       ]),
     ).toEqual(new Set(["src/index.ts", "src/tasks/task-registry-control.runtime.ts"]));
+  });
+
+  it("collects declared JavaScript outputs without flattening package directories or inventing suffixes", () => {
+    const outputs = collectTsdownEntryOutputs([
+      {
+        entry: { "plugins/model-normalizer.runtime": "src/plugins/model-normalizer.runtime.ts" },
+        outExtensions: () => ({ js: ".js" }),
+      },
+      {
+        entry: { "plugins/model-normalizer.runtime": "packages/example/src/normalizer.runtime.ts" },
+        outDir: "packages/example/dist",
+        outExtensions: () => ({ js: ".js" }),
+      },
+      {
+        entry: { "worker/worker.runtime": "src/worker/worker.runtime.ts" },
+        outDir: "dist",
+        outExtensions: () => ({ js: ".mjs" }),
+      },
+      { entry: { "implicit.runtime": "src/implicit.runtime.ts" } },
+      {
+        entry: { "contextual.runtime": "src/contextual.runtime.ts" },
+        outExtensions: (context: { format: string }) => ({
+          js: context.format === "es" ? ".js" : ".cjs",
+        }),
+      },
+    ]);
+
+    expect(outputs).toEqual(
+      new Map([
+        ["plugins/model-normalizer.runtime.js", "src/plugins/model-normalizer.runtime.ts"],
+        [
+          "../packages/example/dist/plugins/model-normalizer.runtime.js",
+          "packages/example/src/normalizer.runtime.ts",
+        ],
+      ]),
+    );
   });
 });

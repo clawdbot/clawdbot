@@ -1,8 +1,8 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
+import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -60,20 +60,20 @@ export function resolveSessionSelectedModelRef(params: {
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
 }): ReturnType<typeof resolveSessionModelRef> {
-  const override = normalizeStoredOverrideModel({
-    providerOverride: params.entry?.providerOverride,
-    modelOverride: params.entry?.modelOverride,
-  });
   if (!params.rowContext) {
     return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
       allowPluginNormalization: params.allowPluginNormalization,
     });
   }
-  const key = [
+  // Prefix stripping can merge literal configured ids; resolved provenance and
+  // detail/list normalization also change selection within one row context.
+  const key = JSON.stringify([
     normalizeAgentId(params.agentId),
-    override.providerOverride ?? "",
-    override.modelOverride ?? "",
-  ].join("\0");
+    params.entry?.providerOverride,
+    params.entry?.modelOverride,
+    resolveSessionModelOverrideRouteResolution(params.entry),
+    params.allowPluginNormalization !== false,
+  ]);
   const cached = params.rowContext.selectedModelByOverrideRef.get(key);
   if (cached) {
     return cached;
@@ -168,6 +168,7 @@ export function resolveTranscriptUsageFallback(params: {
   const model = snapshot.model ?? params.fallbackModel;
   const estimatedCostUsd = resolveEstimatedSessionCostUsd({
     cfg: params.cfg,
+    agentId,
     provider: modelProvider,
     model,
     explicitCostUsd: snapshot.costUsd,

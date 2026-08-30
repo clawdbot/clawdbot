@@ -68,6 +68,10 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   isPreparationCurrent?: () => boolean;
 }>;
 
+type PreparedModelRuntimeMetadataResolver = (
+  input: PreparedModelRuntimeInput,
+) => PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
+
 export type PreparedModelRuntimeBuildResult = Readonly<{
   snapshot: PreparedModelRuntimeSnapshot;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
@@ -295,7 +299,7 @@ async function buildSnapshotBatch(
   candidates: readonly PreparedModelRuntimeBuildCandidate[],
   catalogMode: PreparedModelRuntimeCatalogMode,
   agentBuildCompletions: Map<string, Promise<void>>,
-  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
+  resolveMetadataSnapshot?: PreparedModelRuntimeMetadataResolver,
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
 ): Promise<PreparedModelRuntimeBuildResult[]> {
   const freshGroups = new Map<string, PreparedModelRuntimeBuildCandidate[]>();
@@ -368,7 +372,7 @@ async function buildSnapshotBatch(
       { preferBuiltPluginArtifacts },
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
-      pluginMetadataSnapshot,
+      resolveMetadataSnapshot?.(groupCandidates[0]!.input),
     );
     assertPreparedModelRuntimeCandidatesCurrent(groupCandidates);
     runtimePluginMs += prepared.buildStats.runtimePluginMs;
@@ -567,7 +571,7 @@ export function startSerializedSnapshotBuildBatch(
   buildTimeoutMs: number,
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
-  pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
+  resolveMetadataSnapshot?: PreparedModelRuntimeMetadataResolver,
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -591,7 +595,7 @@ export function startSerializedSnapshotBuildBatch(
         candidates,
         catalogMode,
         agentBuildCompletions,
-        pluginMetadataSnapshot,
+        resolveMetadataSnapshot,
         onBuildStats,
       ),
     };
@@ -647,7 +651,7 @@ export function startSerializedSnapshotBuild(
     buildTimeoutMs,
     catalogMode,
     undefined,
-    pluginMetadataSnapshot,
+    pluginMetadataSnapshot ? () => pluginMetadataSnapshot : undefined,
   );
   return {
     pending: build.pending.then((results) => results[0]!),

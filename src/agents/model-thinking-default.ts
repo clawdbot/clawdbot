@@ -6,7 +6,10 @@
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import {
+  buildConfiguredModelCatalog,
+  type ModelSelectionNormalizationContext,
+} from "./model-selection-shared.js";
 import {
   resolveConfiguredThinkingDefaultCore,
   resolveThinkingDefaultCore,
@@ -33,14 +36,17 @@ export function resolveThinkingDefault(params: {
 }
 
 /** Resolves thinking default after loading runtime catalog only when needed. */
-export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  loadRuntimeCatalog: () => Promise<ModelCatalogEntry[]>;
-  agentRuntime?: string | null;
-}): Promise<ThinkLevel> {
-  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+export async function resolveThinkingDefaultWithRuntimeCatalog(
+  params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+    provider: string;
+    model: string;
+    loadRuntimeCatalog: () => Promise<ModelCatalogEntry[]>;
+    agentRuntime?: string | null;
+  } & ModelSelectionNormalizationContext,
+): Promise<ThinkLevel> {
+  const configuredCatalog = buildConfiguredModelCatalog(params);
   const configuredSelectedEntry = configuredCatalog.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );

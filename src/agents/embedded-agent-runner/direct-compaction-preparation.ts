@@ -92,6 +92,8 @@ export async function prepareDirectCompactionAttempt(
     modelId,
   } = resolveCompactionRuntimeSelection({
     ...params,
+    workspaceDir: resolvedWorkspace,
+    pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     modelId: params.model,
     boundHarnessRuntime: params.agentHarnessId,
     preparedRuntimePlan: params.runtimePlan,
@@ -175,6 +177,7 @@ export async function prepareDirectCompactionAttempt(
     reusableRuntimeAuthPlan,
     agentDir,
     workspaceDir: resolvedWorkspace,
+    pluginMetadataSnapshot: preparedModelRuntime.metadataSnapshot,
     authProfileId,
     runtimePolicyAgentId,
     runtimePolicySessionKey,

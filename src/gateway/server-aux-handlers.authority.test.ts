@@ -11,12 +11,14 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { clearProviderAuthRuntimeSnapshotActivation } from "../secrets/runtime-provider-auth-activation.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 type GatewayAux = ReturnType<typeof createGatewayAuxHandlers>;
@@ -35,9 +37,14 @@ function createAuthorityHarness(
 ): GatewayAux {
   const aux = createGatewayAuxHandlers({
     log: {},
-    activateRuntimeSecrets: async () => {
-      throw new Error("unexpected secrets reload");
-    },
+    activateRuntimeSecrets: createRuntimeSecretsActivator({
+      logSecrets: { info: () => {}, warn: () => {} },
+      emitStateEvent: () => {},
+      prepareRuntimeSecretsSnapshot: async () => {
+        throw new Error("unexpected secrets reload");
+      },
+    }),
+    getPluginMetadata: () => undefined,
     sharedGatewaySessionGenerationState: { current: undefined, required: null },
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
     clients: [],
@@ -60,6 +67,7 @@ afterEach(() => {
     aux.questionManager.reset();
   }
   resetAgentRunRegistryForTest();
+  clearProviderAuthRuntimeSnapshotActivation();
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });

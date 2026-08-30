@@ -2,7 +2,7 @@
  * Regression coverage for model catalog visibility filtering.
  * Keeps provider/model allow and hide rules aligned with catalog row metadata.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveLogicalModelCatalogEntryState,
@@ -11,6 +11,7 @@ import {
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
+import * as providerModelNormalizationRuntime from "./provider-model-normalization.runtime.js";
 
 describe("resolveLogicalVisibleModelCatalog", () => {
   const selectedRoute = {
@@ -160,12 +161,21 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     expect(result.map((entry) => entry.id)).toEqual(["alias-key", "primary"]);
   });
 
-  it("dedupes physical routes after selected-route projection", async () => {
+  it("dedupes physical routes in the all view without normalizing unused visibility policy", async () => {
+    const normalizeProviderModelId = vi
+      .spyOn(providerModelNormalizationRuntime, "normalizeProviderModelIdWithRuntime")
+      .mockImplementation(() => {
+        throw new Error("all-view projection must not execute unused visibility normalization");
+      });
+    onTestFinished(() => {
+      normalizeProviderModelId.mockRestore();
+    });
     const catalog = [platform, chatGPT];
     const result = await resolveLogicalVisibleModelCatalog({
       cfg: {} as OpenClawConfig,
       catalog,
       defaultProvider: "openai",
+      defaultModel: "openai/gpt-5.5",
       view: "all",
       routePolicy: openAIModelCatalogRoutePolicy,
       evaluateEntry: async (entry) =>
@@ -180,6 +190,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         }),
     });
 
+    expect(normalizeProviderModelId).not.toHaveBeenCalled();
     expect(result).toEqual([
       {
         provider: "openai",

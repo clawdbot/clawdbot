@@ -6,7 +6,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { buildChatChannelMetaById, type ChatChannelMeta } from "./chat-meta-shared.js";
-import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
+import { CHAT_CHANNEL_ORDER } from "./ids.js";
+import type { ChatChannelId } from "./plugins/channel-id.types.js";
 
 let chatChannelMetaCache:
   | { cacheKey: string; metaById: Record<ChatChannelId, ChatChannelMeta> }

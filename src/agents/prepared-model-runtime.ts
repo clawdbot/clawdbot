@@ -49,13 +49,17 @@ import {
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
-import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeCatalogMode,
+  PreparedModelRuntimeRefreshCandidate,
+} from "./prepared-model-runtime.types.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 export {
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
 } from "./prepared-model-runtime.owner.js";
 export type { PreparedModelRuntimeReplacementGateId } from "./prepared-model-runtime.owner.js";
+export type { PreparedModelRuntimeRefreshCandidate } from "./prepared-model-runtime.types.js";
 export { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 export type {
   PreparedModelRuntimeInput,
@@ -477,14 +481,16 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     // candidates, while a newer config epoch stops every remaining build in this publication.
     isBuildCurrent: isPublicationCurrent,
     onBuildStats: options.onBuildStats,
-    pluginMetadataSnapshot: options.pluginMetadataSnapshot,
+    pluginMetadata: options.pluginMetadata,
     registerEntriesAfterBuildStart: true,
   });
 }
 
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
-  config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
+  config:
+    | OpenClawConfig
+    | (() => PreparedModelRuntimeRefreshCandidate | Promise<PreparedModelRuntimeRefreshCandidate>),
   options: PreparedModelRuntimeRefreshOptions = {},
 ): Promise<void> {
   if (options.isPublicationCurrent?.() === false) {
@@ -541,16 +547,22 @@ export function refreshPreparedModelRuntimeSnapshots(
     if (!isPublicationCurrent()) {
       return;
     }
-    const currentConfig = typeof config === "function" ? await config() : config;
+    // Async startup preparation returns config and metadata from one observation.
+    // Reading either separately after an await could mix two accepted generations.
+    const candidate =
+      typeof config === "function"
+        ? await config()
+        : { config, pluginMetadata: options.pluginMetadata };
     if (!isPublicationCurrent()) {
       return;
     }
+    const refreshOptions = { ...options, pluginMetadata: candidate.pluginMetadata };
     publicationAgentIds = forceFullRefresh
       ? undefined
-      : resolveSafeRefreshAgentIds(currentConfig, options, owners);
+      : resolveSafeRefreshAgentIds(candidate.config, refreshOptions, owners);
     await refreshPreparedModelRuntimeSnapshotsNow(
-      currentConfig,
-      { ...options, agentIds: publicationAgentIds },
+      candidate.config,
+      { ...refreshOptions, agentIds: publicationAgentIds },
       isPublicationCurrent,
     );
     if (!isPublicationCurrent()) {

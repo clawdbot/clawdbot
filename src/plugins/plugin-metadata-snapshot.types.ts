@@ -52,8 +52,6 @@ export type PluginMetadataSnapshot = {
   registrySource?: PluginRegistrySnapshotSource;
   workspaceDir?: string;
   index: InstalledPluginIndex;
-  /** The original workspace-scoped index described by registrySource, before runtime unions. */
-  registryIndex: InstalledPluginIndex;
   registryDiagnostics: readonly PluginMetadataSnapshotRegistryDiagnostic[];
   manifestRegistry: PluginManifestRegistry;
   /** Independently validated bundled owners, including packages shadowed by active plugins. */
@@ -69,7 +67,7 @@ export type PluginMetadataSnapshot = {
 
 export type PluginMetadataRegistryView = Pick<
   PluginMetadataSnapshot,
-  "index" | "manifestRegistry" | "discovery"
+  "index" | "manifestRegistry" | "discovery" | "workspaceDir"
 >;
 
 export type PluginMetadataManifestView = Pick<PluginMetadataSnapshot, "index" | "plugins">;

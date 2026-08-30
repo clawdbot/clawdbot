@@ -2,13 +2,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import {
-  acquireAgentRunPreparedModelRuntime,
-  loadPublishedGatewayReplyDispatchRuntime,
-  PreparedModelRuntimeOwnerNotPublishedError,
-  type PreparedModelRuntimeLease,
-} from "../../agents/prepared-model-runtime.js";
-import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.owner.js";
+import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
+import type { PreparedModelRuntimeLease } from "../../agents/prepared-model-runtime.types.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
@@ -36,9 +31,10 @@ import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
 import type { CronJob, CronRunDiagnostics } from "../types.js";
 import {
+  acquireCronModelSelectionOwner,
   resolveCronModelSelection,
-  resolveCronModelSelectionOwner,
   resolveCronThinkingSelection,
+  type CronModelSelectionOwnerLease,
 } from "./model-selection.js";
 import { resolveCronCommandPromptPreflight } from "./run-command-preflight.js";
 import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
@@ -138,6 +134,7 @@ export type PreparedCronRunContext = {
   runTimeoutOverrideMs?: number;
   pluginRegistry?: PluginRegistry;
   preparedModelRuntimeLease: PreparedModelRuntimeLease;
+  modelOwnerLease: CronModelSelectionOwnerLease;
 };
 
 type CronPreparationResult =
@@ -163,31 +160,40 @@ export async function prepareCronRunContext(params: {
     { agentId: requiredAgentId },
     tryResolveAmbientOwnerAgentId(requestedRuntimeCfg),
   );
-  const modelOwner = await resolveCronModelSelectionOwner({
+  const modelOwnerLease = await acquireCronModelSelectionOwner({
     cfg: requestedRuntimeCfg,
+    agentId: initialAgentId,
+    abortSignal: input.abortSignal ?? input.signal,
     ...(requiredAgentId
       ? {
-          agentId: initialAgentId,
           requiredAgentId,
           agentDir: resolveAgentDir(requestedRuntimeCfg, initialAgentId),
           workspaceDir: resolveAgentWorkspaceDir(requestedRuntimeCfg, initialAgentId),
         }
       : {}),
   });
-  const { agentId, agentDir } = modelOwner;
-  const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
-    agentId,
-    abortSignal: input.abortSignal ?? input.signal,
-  });
-  if (
-    publishedRuntime &&
-    (publishedRuntime.pluginGeneration.pluginMetadataSnapshot !== modelOwner.metadataSnapshot ||
-      !preparedModelRuntimeConfigsMatch(publishedRuntime.config, modelOwner.config))
-  ) {
-    throw new PreparedModelRuntimeOwnerNotPublishedError(
-      "cron model runtime generation was superseded during preparation",
+  try {
+    const prepared = await modelOwnerLease.run(() =>
+      prepareCronRunContextWithModelOwner(params, modelOwnerLease, requiredAgentId),
     );
+    if (!prepared.ok) {
+      modelOwnerLease.release();
+    }
+    return prepared;
+  } catch (error) {
+    modelOwnerLease.release();
+    throw error;
   }
+}
+
+async function prepareCronRunContextWithModelOwner(
+  params: Parameters<typeof prepareCronRunContext>[0],
+  modelOwnerLease: CronModelSelectionOwnerLease,
+  requiredAgentId: string | undefined,
+): Promise<CronPreparationResult> {
+  const { input } = params;
+  const modelOwner = modelOwnerLease.owner;
+  const { agentId, agentDir } = modelOwner;
   const agentConfigOverride = requiredAgentId
     ? resolveAgentConfig(modelOwner.config, agentId)
     : undefined;
@@ -399,6 +405,8 @@ export async function prepareCronRunContext(params: {
 
     const preflight = await resolveCronPreflight({
       cfg: cfgWithAgentDefaults,
+      workspaceDir,
+      pluginMetadataSnapshot: modelOwner.metadataSnapshot,
       job: input.job,
       agentId: modelOwner.agentId,
       provider: resolvedModelSelection.provider,
@@ -473,15 +481,14 @@ export async function prepareCronRunContext(params: {
       }
     }
 
-    const explicitTimeoutSeconds =
-      input.job.payload.kind === "agentTurn" ? input.job.payload.timeoutSeconds : undefined;
+    const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
+    const explicitTimeoutSeconds = agentPayload?.timeoutSeconds;
     const timeoutMs = resolveAgentTimeoutMs({
       cfg: cfgWithAgentDefaults,
       overrideSeconds: explicitTimeoutSeconds,
     });
     // Preserve explicit timeout provenance so the idle watchdog does not reapply 120s when defaults match.
     const runTimeoutOverrideMs = resolveCronRunTimeoutOverrideMs(explicitTimeoutSeconds);
-    const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
     const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
     const modelApi =
       findModelInCatalog(thinkingSelection.catalog, provider, model)?.api ??
@@ -529,7 +536,6 @@ export async function prepareCronRunContext(params: {
     const allowUnsafeExternalContent =
       agentPayload?.allowUnsafeExternalContent === true ||
       (isGmailHook && input.cfg.hooks?.gmail?.allowUnsafeExternalContent === true);
-    const shouldWrapExternal = isExternalHook && !allowUnsafeExternalContent;
     let commandBody: string;
 
     if (isExternalHook) {
@@ -543,7 +549,7 @@ export async function prepareCronRunContext(params: {
       }
     }
 
-    if (shouldWrapExternal) {
+    if (isExternalHook && !allowUnsafeExternalContent) {
       const { buildSafeExternalPrompt } = await loadCronExternalContentRuntime();
       const hookType = mapHookExternalContentSource(hookExternalContentSource ?? "webhook");
       const safeContent = buildSafeExternalPrompt({
@@ -599,11 +605,12 @@ export async function prepareCronRunContext(params: {
         : {}),
       harnessRuntime: effectiveAgentRuntime,
       agentDir,
+      workspaceDir,
+      pluginMetadataSnapshot: modelOwner.metadataSnapshot,
       cronSession,
       sessionKey: agentSessionKey,
       isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
     });
-    const authProfileId = authSelection?.profileId;
     const liveSelection: CronLiveSelection = {
       provider,
       model,
@@ -612,13 +619,12 @@ export async function prepareCronRunContext(params: {
         entry: cronSession.sessionEntry,
         cfg: cfgWithAgentDefaults,
       }),
-      authProfileId,
+      authProfileId: authSelection?.profileId,
       authProfileIdSource: authSelection?.source,
     };
+    const pluginGeneration = modelOwnerLease.pluginGeneration;
     preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
       {
-        // Embedded execution borrows this exact per-agent config projection.
-        // Keep the published generation pinned without dropping cron's defaults.
         config: cfgWithAgentDefaults,
         agentId,
         agentDir,
@@ -637,12 +643,14 @@ export async function prepareCronRunContext(params: {
       },
       {
         catalogMode: "static",
-        ...(publishedRuntime
-          ? { pluginGeneration: publishedRuntime.pluginGeneration }
+        // Selection derives from the retained owner, never a newer ambient publication.
+        ...(pluginGeneration
+          ? { pluginGeneration }
           : { pluginMetadataSnapshot: modelOwner.metadataSnapshot }),
         abortSignal: input.abortSignal ?? input.signal,
       },
     );
+    const pluginRegistry = preparedModelRuntimeLease.snapshot.pluginRegistry;
     const runContinuationSession = usesExactRunSession
       ? createCronRunContinuationSession({
           cronSession,
@@ -706,8 +714,9 @@ export async function prepareCronRunContext(params: {
         timeoutMs,
         preflightDiagnostics,
         runTimeoutOverrideMs,
-        pluginRegistry: preparedModelRuntimeLease.snapshot.pluginRegistry,
         preparedModelRuntimeLease,
+        modelOwnerLease,
+        ...(pluginRegistry ? { pluginRegistry } : {}),
       },
     };
   } catch (error) {

@@ -5,15 +5,17 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   listAgentEntries,
   resolveAgentDir,
-  resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import {
+  createPluginMetadataOwner,
+  getScopedPluginMetadata,
+  type ConfigWidePluginMetadataView,
+} from "../../../plugins/plugin-metadata-collection.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
@@ -26,7 +28,7 @@ type StaleAgentModelRefRepair = {
 
 type RepairOptions = {
   env?: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  pluginMetadata?: ConfigWidePluginMetadataView;
   /** Test seam for the provider ids supplied by bundled or installed plugins. */
   pluginProviderIds?: ReadonlySet<string>;
   /** Test seam for provider ids already present in each agent's models.json. */
@@ -53,17 +55,15 @@ function collectPluginProviderIds(
   if (options.pluginProviderIds) {
     providerIds = new Set([...options.pluginProviderIds].map(normalizeProviderId).filter(Boolean));
   } else {
-    const defaultAgentId = tryResolveDefaultAgentId(cfg);
-    const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
-    const snapshot =
-      options.pluginMetadataSnapshot ??
-      resolvePluginMetadataSnapshot({
+    const metadata =
+      options.pluginMetadata ??
+      getScopedPluginMetadata() ??
+      createPluginMetadataOwner().prepare({
         config: cfg,
-        workspaceDir: workspaceDir ?? undefined,
         env: options.env ?? process.env,
-        allowWorkspaceScopedCurrent: true,
+        allowCurrent: false,
       });
-    if (snapshot.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
+    if (metadata.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
       return {
         warnings: [
           "Skipped stale agent model reference repair because plugin discovery reported errors.",
@@ -73,10 +73,10 @@ function collectPluginProviderIds(
 
     providerIds = new Set<string>();
     for (const owners of [
-      snapshot.owners.providers,
-      snapshot.owners.modelCatalogProviders,
-      snapshot.owners.setupProviders,
-      snapshot.owners.cliBackends,
+      metadata.owners.providers,
+      metadata.owners.modelCatalogProviders,
+      metadata.owners.setupProviders,
+      metadata.owners.cliBackends,
     ]) {
       for (const providerId of owners.keys()) {
         const normalized = normalizeProviderId(providerId);

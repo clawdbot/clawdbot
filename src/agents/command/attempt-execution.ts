@@ -247,21 +247,6 @@ type HarnessAuthProfileSelection = {
   authProfileMode?: string;
 };
 
-function resolveProfileAuthFromStore(params: { agentDir: string; profileId: string | undefined }): {
-  provider?: string;
-  mode?: string;
-} {
-  const profileId = params.profileId?.trim();
-  if (!profileId) {
-    return {};
-  }
-  const credential = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    externalCliProfileIds: [profileId],
-  }).profiles[profileId];
-  return { provider: credential?.provider, mode: credential?.type };
-}
-
 function resolveHarnessAuthProfileSelection(params: {
   config: OpenClawConfig;
   agentDir: string;
@@ -276,17 +261,25 @@ function resolveHarnessAuthProfileSelection(params: {
   providerAuthAliasesEnabled?: boolean;
   allowHarnessAuthProfileForwarding: boolean;
 }): HarnessAuthProfileSelection {
+  // External auth hooks run again for each read. A retained plugin graph does
+  // not restore the config and workspace facts omitted by its caller.
+  const storeOptions = {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    pluginMetadataSnapshot: params.metadataSnapshot,
+    allowKeychainPrompt: false,
+  };
   const sessionAuthProfileId = params.sessionAuthProfileId?.trim();
   if (sessionAuthProfileId) {
-    const profileAuth = resolveProfileAuthFromStore({
-      agentDir: params.agentDir,
-      profileId: sessionAuthProfileId,
-    });
+    const credential = ensureAuthProfileStore(params.agentDir, {
+      ...storeOptions,
+      externalCliProfileIds: [sessionAuthProfileId],
+    }).profiles[sessionAuthProfileId];
     return {
       authProfileId: sessionAuthProfileId,
       authProfileIdSource: params.sessionAuthProfileSource,
-      authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
-      authProfileMode: profileAuth.mode,
+      authProfileProvider: credential?.provider ?? params.authProfileProvider,
+      authProfileMode: credential?.type,
     };
   }
 
@@ -294,30 +287,20 @@ function resolveHarnessAuthProfileSelection(params: {
     return { authProfileProvider: params.authProfileProvider };
   }
 
-  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
-    provider: params.provider,
-    authProfileProvider: params.authProfileProvider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-    providerAuthAliasesEnabled: params.providerAuthAliasesEnabled,
-    harnessId: params.harnessId,
-    harnessRuntime: params.harnessRuntime,
-    allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
-  });
-  const harnessAuthProvider = runtimeAuthPlan.harnessAuthProvider;
+  const { harnessAuthProvider } = buildAgentRuntimeAuthPlan(params);
   if (!harnessAuthProvider) {
     return { authProfileProvider: params.authProfileProvider };
   }
 
   const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
+    ...storeOptions,
     externalCliProviderIds: [harnessAuthProvider],
   });
   const authProfileId = resolveAuthProfileOrder({
     cfg: params.config,
     store,
     provider: harnessAuthProvider,
+    authAliasLookupParams: params,
   })[0];
 
   return authProfileId
@@ -542,6 +525,7 @@ export async function persistCliTurnTranscript(params: {
 }
 
 export function runAgentAttempt(params: {
+  expectedInitialModel?: RunEmbeddedAgentInternalParams["expectedInitialModel"];
   preparedRunAdmission: PreparedAgentRunAdmission;
   providerOverride: string;
   modelOverride: string;
@@ -754,6 +738,7 @@ export function runAgentAttempt(params: {
           agentId: params.sessionAgentId,
           modelId: params.modelOverride,
           authProfileId: selectedAuthProfile?.id,
+          metadataSnapshot: params.metadataSnapshot,
         })
       : undefined;
   const cliExecutionProvider = isRawModelRun
@@ -841,6 +826,8 @@ export function runAgentAttempt(params: {
         authProfileProvider: params.authProfileProvider,
         config: params.cfg,
         agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        metadataSnapshot: params.metadataSnapshot,
         selected: harnessAuthSelection,
       })
     : undefined;
@@ -1256,6 +1243,7 @@ export function runAgentAttempt(params: {
     sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
+    expectedInitialModel: params.expectedInitialModel,
     agentHarnessId: embeddedAgentHarnessOverride,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,

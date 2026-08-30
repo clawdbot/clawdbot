@@ -1,8 +1,19 @@
 // Ollama probe planning tests cover keyless runtime auth and provider-scoped catalog reads.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
+
+const normalizeProviderModelIdWithRuntime = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../../agents/provider-model-normalization.runtime.js").normalizeProviderModelIdWithRuntime
+  >(),
+);
 
 const loadPreparedModelCatalog = vi.fn(
   async (): Promise<Array<Pick<ModelCatalogEntry, "provider" | "id" | "status">>> => [
@@ -12,6 +23,9 @@ const loadPreparedModelCatalog = vi.fn(
 );
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({ loadPreparedModelCatalog }));
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime,
+}));
 vi.mock("../../agents/auth-profiles.js", () => ({
   externalCliDiscoveryScoped: () => undefined,
   ensureAuthProfileStore: () => ({ version: 1, profiles: {}, order: {} }),
@@ -72,8 +86,14 @@ const options = {
   maxTokens: 8,
 };
 
+beforeEach(() => {
+  normalizeProviderModelIdWithRuntime.mockReset();
+});
+
 describe("Ollama probe targets", () => {
-  beforeEach(() => loadPreparedModelCatalog.mockClear());
+  beforeEach(() => {
+    loadPreparedModelCatalog.mockClear();
+  });
 
   it("builds a runtime-auth target for a configured keyless local provider", async () => {
     const cfg = {
@@ -112,6 +132,75 @@ describe("Ollama probe targets", () => {
         useRuntimeAuth: true,
       },
     ]);
+  });
+
+  it("keeps agent runtime aliases bound to metadata selected before the catalog await", async () => {
+    const workspaceDir = "/workspace/probe";
+    const cfg: OpenClawConfig = {
+      plugins: { allow: ["probe-owner"] },
+      agents: {
+        entries: { main: { models: { "ollama/runtime-alias": { alias: "fast" } } } },
+      },
+      models: {
+        providers: {
+          ollama: { api: "ollama", baseUrl: "http://127.0.0.1:11434", models: [] },
+        },
+      },
+    };
+    const manifestRegistry = makeRegistry([
+      { id: "probe-owner", channels: [], providers: ["ollama"], origin: "workspace" },
+    ]);
+    const snapshot = createPluginMetadataSnapshot({ config: cfg, workspaceDir, manifestRegistry });
+    const replacement = createPluginMetadataSnapshot({
+      config: cfg,
+      workspaceDir,
+      manifestRegistry,
+    });
+    const lease = installTemporaryCurrentPluginMetadataSnapshot(snapshot, {
+      config: cfg,
+      workspaceDir,
+    });
+    let replacementLease:
+      | ReturnType<typeof installTemporaryCurrentPluginMetadataSnapshot>
+      | undefined;
+    normalizeProviderModelIdWithRuntime.mockImplementation((params) =>
+      params.config === cfg &&
+      params.workspaceDir === workspaceDir &&
+      params.pluginMetadataSnapshot === snapshot &&
+      params.provider === "ollama" &&
+      params.context.modelId === "runtime-alias"
+        ? "gemma4:latest"
+        : undefined,
+    );
+    loadPreparedModelCatalog.mockImplementationOnce(async () => {
+      replacementLease = installTemporaryCurrentPluginMetadataSnapshot(replacement, {
+        config: cfg,
+        workspaceDir,
+      });
+      return [{ provider: "ollama", id: "llama3.2:latest" }];
+    });
+
+    try {
+      const plan = await buildProbeTargets({
+        cfg,
+        agentId: "main",
+        workspaceDir,
+        providers: ["ollama"],
+        modelCandidates: ["fast", "ollama/runtime-alias"],
+        options,
+      });
+
+      expect(plan.results).toEqual([]);
+      expect(plan.targets).toEqual([
+        expect.objectContaining({
+          provider: "ollama",
+          model: { provider: "ollama", model: "gemma4:latest" },
+        }),
+      ]);
+    } finally {
+      replacementLease?.release();
+      lease.release();
+    }
   });
 
   it("presents a local no-auth marker as provider configuration", async () => {
@@ -280,7 +369,7 @@ describe("automatic probe model lifecycle", () => {
     expect(
       selectProbeModel({
         provider,
-        candidates: buildProbeCandidateMap(requestedModels ?? []),
+        candidates: buildProbeCandidateMap({ cfg: {}, modelCandidates: requestedModels ?? [] }),
         catalog,
       }),
     ).toEqual(expectedModel === null ? null : { provider, model: expectedModel });

@@ -25,6 +25,7 @@ import * as pluginEnable from "../plugins/enable.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createPreparedPluginMetadataFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { capturePluginRegistryLifecycleEpoch } from "../plugins/registry-lifecycle.js";
@@ -621,7 +622,7 @@ describe("applySystemAgentModelSelection", () => {
   it("pins a verified credential without putting the profile suffix in model metadata", async () => {
     const result = await applySystemAgentModelSelection({
       config: {},
-      model: "openai/gpt-5.5",
+      model: { provider: "openai", model: "gpt-5.5" },
       authProfileId: "openai:setup-123",
     });
 
@@ -647,7 +648,7 @@ describe("applySystemAgentModelSelection", () => {
 
     const result = await applySystemAgentModelSelection({
       config,
-      model: "openai/gpt-5.5",
+      model: { provider: "openai", model: "gpt-5.5" },
       agentRuntimeId: "codex",
     });
 
@@ -666,7 +667,8 @@ describe("detectSetupInference", () => {
     ["manual options", listManualSetupInferenceOptions],
     ["full detection", detectSetupInference],
   ] as const)("keeps %s on one authored config snapshot", async (_name, detect) => {
-    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { readConfigFileSnapshot, readConfigFileSnapshotWithPluginMetadata } =
+      await import("../config/config.js");
     const workspace = path.resolve("/setup-initial");
     const snapshotForWorkspace = (workspaceDir: string) =>
       createConfigFileSnapshot({
@@ -683,10 +685,20 @@ describe("detectSetupInference", () => {
       });
     const initial = snapshotForWorkspace(workspace);
     const changed = snapshotForWorkspace(path.resolve("/setup-newer"));
+    const pluginMetadata = createPreparedPluginMetadataFixture({
+      unionSnapshot: expectDefined(pluginMetadataSnapshot, "prepared test metadata").bindForConfig(
+        initial.runtimeConfig ?? initial.config,
+        workspace,
+      ),
+    });
     let reads = 0;
     await vi.mocked(readConfigFileSnapshot).withImplementation(
       async () => (++reads === 1 ? initial : changed),
       async () => {
+        vi.mocked(readConfigFileSnapshotWithPluginMetadata).mockImplementationOnce(async () => ({
+          snapshot: await readConfigFileSnapshot(),
+          pluginMetadata,
+        }));
         const resolveChoices = vi.fn(() => []);
         const result = await detect({
           detectInferenceBackends: async () => [],
@@ -697,7 +709,11 @@ describe("detectSetupInference", () => {
         expect(result.workspace).toBe(workspace);
         expect(resolveChoices).toHaveBeenCalledOnce();
         expect(resolveChoices).toHaveBeenCalledWith(
-          expect.objectContaining({ config: initial.runtimeConfig, workspaceDir: workspace }),
+          expect.objectContaining({
+            config: initial.runtimeConfig,
+            workspaceDir: workspace,
+            metadataSnapshot: pluginMetadata.selectedSnapshot,
+          }),
         );
         expect(reads).toBe(1);
       },
@@ -2936,6 +2952,9 @@ describe("activateSetupInference", () => {
 
   it("runs provider-owned local setup from an app-guided discovery choice", async () => {
     const { stateDir, initialConfig } = await createMainAgentFixture();
+    const normalizeModelId = vi.fn(() => {
+      throw new Error("The detected model is already canonical");
+    });
     const runAuth = vi.fn(async () => ({
       profiles: [],
       defaultModel: "local-test/gemma4",
@@ -2944,7 +2963,6 @@ describe("activateSetupInference", () => {
           providers: {
             "local-test": {
               baseUrl: "http://127.0.0.1:12345",
-              api: "ollama" as const,
               models: [],
             },
           },
@@ -2963,7 +2981,6 @@ describe("activateSetupInference", () => {
           providers: {
             "local-test": {
               baseUrl: "http://127.0.0.1:12345",
-              api: "ollama" as const,
               models: [],
             },
           },
@@ -2974,6 +2991,7 @@ describe("activateSetupInference", () => {
       id: "local-test",
       label: "Local Test Provider",
       pluginId: "local-test",
+      normalizeModelId,
       auth: [
         {
           id: "local",
@@ -3016,6 +3034,8 @@ describe("activateSetupInference", () => {
 
       expect(result).toMatchObject({ ok: true, modelRef: "local-test/gemma4" });
       expect(runAuth).toHaveBeenCalledOnce();
+      expect(normalizeModelId).not.toHaveBeenCalled();
+      expect(configHarness.current().agents?.defaults?.model).toBe("local-test/gemma4");
       expect(detect).not.toHaveBeenCalled();
       expect(prepare).toHaveBeenCalledWith(
         expect.objectContaining({ modelRef: "local-test/gemma4" }),
@@ -3090,6 +3110,10 @@ describe("activateSetupInference", () => {
         },
         order: { groq: ["groq:legacy"] },
       });
+      const selectedModel = "llama-3.3-70b-versatile-prepared";
+      const selectedModelRef = `groq/${selectedModel}`;
+      const selectedMetadata = { alias: "selected-groq", params: { temperature: 0.2 } };
+      const selectedAgentMetadata = { params: { temperature: 0.6 } };
       const runAuth = vi.fn(async (ctx: { opts?: { token?: string } }) => ({
         profiles: [
           {
@@ -3101,12 +3125,20 @@ describe("activateSetupInference", () => {
           },
         ],
         defaultModel: "groq/llama-3.3-70b-versatile",
-        configPatch: { agents: { defaults: { models: { "groq/llama-3.3-70b-versatile": {} } } } },
+        configPatch: {
+          agents: {
+            defaults: { models: { "groq/llama-3.3-70b-versatile": selectedMetadata } },
+            entries: {
+              main: { models: { "groq/llama-3.3-70b-versatile": selectedAgentMetadata } },
+            },
+          },
+        },
       }));
       const provider: ProviderPlugin = {
         id: "groq",
         label: "Groq",
         pluginId: "groq",
+        normalizeModelId: ({ modelId }) => `${modelId}-prepared`,
         auth: [
           {
             id: "api-key",
@@ -3127,7 +3159,7 @@ describe("activateSetupInference", () => {
       }));
       const runEmbeddedAgent = vi.fn(
         async (params: SuccessfulRunParams & { authProfileId?: string }) =>
-          successfulRun("groq", "llama-3.3-70b-versatile", params),
+          successfulRun("groq", selectedModel, params),
       );
       const configHarness = createConfigTransformHarness(initialConfig);
 
@@ -3144,7 +3176,7 @@ describe("activateSetupInference", () => {
           },
         });
 
-        expect(result).toMatchObject({ ok: true, modelRef: "groq/llama-3.3-70b-versatile" });
+        expect(result).toMatchObject({ ok: true, modelRef: selectedModelRef });
         expect(resolvePluginProviders).toHaveBeenCalledWith(
           expect.objectContaining({
             config: expect.objectContaining({
@@ -3170,7 +3202,7 @@ describe("activateSetupInference", () => {
           expect.objectContaining({
             agentId: "main",
             provider: "groq",
-            model: "llama-3.3-70b-versatile",
+            model: selectedModel,
             authProfileId: activatedProfileId,
             agentDir: expect.stringContaining("setup-inference-test-"),
             authProfileStateMode: "read-only",
@@ -3181,7 +3213,7 @@ describe("activateSetupInference", () => {
           plugins: { entries: { groq: { enabled: true } } },
           agents: {
             defaults: {
-              model: `groq/llama-3.3-70b-versatile@${activatedProfileId}`,
+              model: `${selectedModelRef}@${activatedProfileId}`,
             },
           },
           auth: {
@@ -3190,6 +3222,17 @@ describe("activateSetupInference", () => {
             },
           },
         });
+        for (const config of [
+          runEmbeddedAgent.mock.calls[0]?.[0].config,
+          configHarness.current(),
+        ]) {
+          expect(config?.agents?.defaults?.models).toEqual({
+            [selectedModelRef]: selectedMetadata,
+          });
+          expect(config?.agents?.entries?.main?.models).toEqual({
+            [selectedModelRef]: { ...selectedAgentMetadata, agentRuntime: { id: "openclaw" } },
+          });
+        }
         expect(readInMemoryAuthProfileStore(agentDir).profiles[activatedProfileId]).toMatchObject(
           credentialType === "api_key"
             ? { type: "api_key", provider: "groq", key: "test-groq-key" }
@@ -3989,6 +4032,9 @@ describe("activateSetupInference", () => {
     const stateDir = await suiteTempRootTracker.make("case");
     const agentDir = path.join(stateDir, "agent");
     const runInteractive = vi.fn();
+    const normalizeModelId = vi.fn<NonNullable<ProviderPlugin["normalizeModelId"]>>(
+      ({ modelId }) => `${modelId}-prepared`,
+    );
     const runNonInteractive = vi.fn(
       async (ctx: {
         agentDir?: string;
@@ -4020,6 +4066,7 @@ describe("activateSetupInference", () => {
       id: "github-copilot",
       label: "GitHub Copilot",
       pluginId: "github-copilot",
+      normalizeModelId,
       auth: [
         {
           id: "device",
@@ -4033,7 +4080,7 @@ describe("activateSetupInference", () => {
     };
     const runEmbeddedAgent = vi.fn(
       async (params: SuccessfulRunParams & { authProfileId?: string }) =>
-        successfulRun("github-copilot", "claude-sonnet-4.5", params),
+        successfulRun("github-copilot", "claude-sonnet-4.5-prepared", params),
     );
     const initialConfig = {
       gateway: { port: 18789 },
@@ -4075,9 +4122,13 @@ describe("activateSetupInference", () => {
         },
       });
 
+      expect(normalizeModelId).toHaveBeenCalledExactlyOnceWith({
+        provider: "github-copilot",
+        modelId: "claude-sonnet-4.5",
+      });
       expect(result).toMatchObject({
         ok: true,
-        modelRef: "github-copilot/claude-sonnet-4.5",
+        modelRef: "github-copilot/claude-sonnet-4.5-prepared",
       });
       expect(runInteractive).not.toHaveBeenCalled();
       expect(runNonInteractive).toHaveBeenCalledWith(
@@ -4100,7 +4151,7 @@ describe("activateSetupInference", () => {
           agentDir: expect.stringContaining("setup-inference-test-"),
           authProfileId: activatedProfileId,
           provider: "github-copilot",
-          model: "claude-sonnet-4.5",
+          model: "claude-sonnet-4.5-prepared",
         }),
       );
       expect(readInMemoryAuthProfileStore(agentDir).profiles[activatedProfileId]).toMatchObject({
@@ -4111,7 +4162,7 @@ describe("activateSetupInference", () => {
       const persistedConfig = configHarness.current();
       expect(persistedConfig.gateway?.port).toBe(19000);
       expect(persistedConfig.agents?.defaults?.model).toEqual({
-        primary: `github-copilot/claude-sonnet-4.5@${activatedProfileId}`,
+        primary: `github-copilot/claude-sonnet-4.5-prepared@${activatedProfileId}`,
       });
     } finally {
       await removeOAuthTestTempRoot(stateDir);

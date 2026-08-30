@@ -99,7 +99,7 @@ vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
   resolveManifestContractOwnerPluginId: resolveManifestContractOwnerPluginIdMock,
 }));
 
-vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../plugins/installed-plugin-index-record-reader.js", () => ({
   loadInstalledPluginIndexInstallRecordsSync: loadInstalledPluginIndexInstallRecordsSyncMock,
 }));
 

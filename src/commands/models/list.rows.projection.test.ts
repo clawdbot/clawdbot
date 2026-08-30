@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { describe, expect, it, vi } from "vitest";
+import { formatModelRefForConfig } from "../../agents/model-selection-shared.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { Model } from "../../llm/types.js";
 import { appendDiscoveredRows, type RowBuilderContext } from "./list.rows.js";
@@ -50,6 +51,8 @@ describe("appendDiscoveredRows projection", () => {
     ];
     const context: RowBuilderContext = {
       cfg: { models: { providers } },
+      formatModelRef: (ref) =>
+        formatModelRefForConfig(ref, { cfg: { models: { providers } }, manifestPlugins: [] }),
       agentDir: "/tmp/openclaw-agent",
       authIndex: {
         evaluateModelAuth: () => ({ availability: true, routeResolution: null }),

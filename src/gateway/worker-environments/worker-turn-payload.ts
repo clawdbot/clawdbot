@@ -49,7 +49,7 @@ import {
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import {
-  bindWorkerTurnAdmissionContinuation,
+  bindWorkerTurnAdmission,
   bindWorkerTurnExecutionIdentity,
 } from "./placement-turn-claim-events.js";
 
@@ -130,11 +130,14 @@ export async function prepareWorkerAgentRuntimeIdentity(
       { agentId: params.agentId, sessionKey: params.sessionKey },
     );
   }
-  bindWorkerTurnAdmissionContinuation(
+  bindWorkerTurnAdmission(
     params.placements,
     params.turnClaim,
     admittedRunContext.operationalRunInstance,
-    params.turn.prepareAssistantTranscriptMessage,
+    {
+      expectedInitialModel: params.turn.expectedInitialModel,
+      prepareAssistantTranscriptMessage: params.turn.prepareAssistantTranscriptMessage,
+    },
   );
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,

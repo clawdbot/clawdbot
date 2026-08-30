@@ -434,6 +434,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       modelId: model,
       ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
+      workspaceDir: modelState.runtimeModelNormalization.workspaceDir,
+      pluginMetadataSnapshot: modelState.runtimeModelNormalization.pluginMetadataSnapshot,
       sessionEntry: authSessionEntry,
       sessionStore: authSessionStore,
       sessionKey: authSessionKey,

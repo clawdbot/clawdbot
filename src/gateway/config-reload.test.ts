@@ -34,6 +34,10 @@ import {
   getCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshotState,
 } from "../plugins/current-plugin-metadata-state.js";
+import {
+  createPluginMetadataOwner,
+  type PluginMetadataOwner,
+} from "../plugins/plugin-metadata-collection.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -903,21 +907,16 @@ function createReloaderHarness(
   readSnapshot: () => Promise<ConfigFileSnapshot>,
   options: {
     initialConfig?: OpenClawConfig;
+    pluginMetadataOwner?: PluginMetadataOwner;
     initialCompareConfig?: OpenClawConfig;
     initialSnapshotRawHash?: string | null;
     initialAuthoredConfig?: unknown;
     initialIncludedPaths?: readonly string[];
     initialSnapshotValid?: boolean;
     initialSnapshotIssues?: ConfigFileSnapshot["issues"];
-    prepareConfigCandidate?: (params: {
-      runtimeConfig: OpenClawConfig;
-      sourceConfig: OpenClawConfig;
-      previousSourceConfig: OpenClawConfig;
-    }) => {
-      runtimeConfig: OpenClawConfig;
-      compareConfig: OpenClawConfig;
-      runtimeEnv?: ReturnType<typeof prepareConfigRuntimeEnv>;
-    };
+    prepareConfigCandidate?: Parameters<
+      typeof startGatewayConfigReloader
+    >[0]["prepareConfigCandidate"];
     initialInternalWriteHash?: string | null;
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
@@ -1015,6 +1014,7 @@ function createReloaderHarness(
   const reloader = startGatewayConfigReloader({
     testDebounceMs: 0,
     initialConfig,
+    pluginMetadataOwner: options.pluginMetadataOwner,
     initialCompareConfig: options.initialCompareConfig,
     initialSnapshotRawHash:
       options.initialSnapshotRawHash === undefined
@@ -1069,6 +1069,47 @@ function createReloaderHarness(
 }
 
 type ReloaderHarness = ReturnType<typeof createReloaderHarness>;
+
+async function createMetadataReloadFixture() {
+  const root = await mkdtemp(nodePath.join(tmpdir(), "openclaw-reload-metadata-"));
+  const env: NodeJS.ProcessEnv = {
+    HOME: root,
+    OPENCLAW_STATE_DIR: nodePath.join(root, "state"),
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  };
+  const owner = createPluginMetadataOwner();
+  const config = (workspace: string): OpenClawConfig => ({
+    gateway: { reload: { mode: "hot" } },
+    agents: { defaults: { workspace: nodePath.join(root, workspace) } },
+    plugins: { enabled: false },
+    hooks: { enabled: true, token: "test", path: `/${workspace}` },
+  });
+  return {
+    owner,
+    env,
+    config,
+    prepareConfigCandidate: ({
+      runtimeConfig,
+      sourceConfig,
+    }: {
+      runtimeConfig: OpenClawConfig;
+      sourceConfig: OpenClawConfig;
+    }) => ({
+      runtimeConfig,
+      compareConfig: sourceConfig,
+      pluginMetadata: owner.prepare({ config: sourceConfig, env }),
+      runtimeEnv: prepareConfigRuntimeEnv({
+        previousConfig: sourceConfig,
+        nextConfig: sourceConfig,
+        env,
+      }),
+    }),
+    close: async () => {
+      owner.dispose();
+      await rm(root, { recursive: true, force: true });
+    },
+  };
+}
 
 async function flushWatcherChange(harness: ReloaderHarness) {
   harness.watcher.emit("change");
@@ -4869,6 +4910,160 @@ describe("startGatewayConfigReloader", () => {
     expect(nextConfig).toBe(activeConfig);
 
     await harness.reloader.stop();
+  });
+
+  it.each(["accepted", "rejected", "post-commit failure", "reload off", "writer none"] as const)(
+    "keeps metadata aligned with the runtime for %s candidates",
+    async (outcome) => {
+      const fixture = await createMetadataReloadFixture();
+      const initialConfig = fixture.config("old");
+      const nextConfig = fixture.config("next");
+      if (outcome === "reload off") {
+        nextConfig.gateway = { reload: { mode: "off" } };
+      }
+      const initialMetadata = fixture.owner.prepare({ config: initialConfig, env: fixture.env });
+      fixture.owner.publish(initialMetadata, { config: initialConfig, env: fixture.env });
+      const harness = createReloaderHarness(vi.fn(), {
+        initialConfig,
+        pluginMetadataOwner: fixture.owner,
+        prepareConfigCandidate: fixture.prepareConfigCandidate,
+        onHotReload: async (plan, runtimeConfig, ownership) => {
+          expect(fixture.owner.getActive()).toBe(initialMetadata);
+          if (outcome === "rejected") {
+            throw new Error("candidate rejected before publication");
+          }
+          ownership.markRuntimeCommitted(runtimeConfig, plan);
+          if (outcome === "post-commit failure") {
+            throw new Error("side effect failed after publication");
+          }
+          return "applied";
+        },
+      });
+      try {
+        harness.emitWrite({
+          ...makeZeroDebounceHookWrite("metadata-candidate"),
+          sourceConfig: nextConfig,
+          runtimeConfig: nextConfig,
+          ...(outcome === "writer none"
+            ? { afterWrite: { mode: "none" as const, reason: "source-only" } }
+            : {}),
+        });
+        await vi.runAllTimersAsync();
+
+        const candidate = fixture.owner.prepare({ config: nextConfig, env: fixture.env });
+        expect(candidate.workspaces.has(nextConfig.agents!.defaults!.workspace)).toBe(true);
+        expect(fixture.owner.getActive()).toBe(
+          outcome === "accepted" || outcome === "post-commit failure" ? candidate : initialMetadata,
+        );
+      } finally {
+        await harness.reloader.stop();
+        await fixture.close();
+      }
+    },
+  );
+
+  it("keeps serving workspace bindings while an activation replacement is pending", async () => {
+    const fixture = await createMetadataReloadFixture();
+    const config = fixture.config("active");
+    const nextConfig = fixture.config("candidate");
+    const initialMetadata = fixture.owner.prepare({ config, env: fixture.env });
+    fixture.owner.publish(initialMetadata, { config, env: fixture.env });
+    let release = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "candidate-config" })),
+      {
+        initialConfig: config,
+        pluginMetadataOwner: fixture.owner,
+        prepareConfigCandidate: fixture.prepareConfigCandidate,
+        onHotReload: async (plan, runtimeConfig, ownership) => {
+          await blocked;
+          ownership.markRuntimeCommitted(runtimeConfig, plan);
+          return "applied";
+        },
+      },
+    );
+    try {
+      harness.emitWrite({
+        ...makeZeroDebounceHookWrite("candidate-config"),
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
+      expect(fixture.owner.getActive()).toBe(initialMetadata);
+
+      release();
+      await vi.runAllTimersAsync();
+      expect(fixture.owner.getActive()).not.toBe(initialMetadata);
+      expect(fixture.owner.getActive()?.unionSnapshot).toBe(initialMetadata.unionSnapshot);
+      expect(
+        fixture.owner.getActive()?.workspaces.has(nextConfig.agents!.defaults!.workspace),
+      ).toBe(true);
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+      expect(harness.onHotReload).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await harness.reloader.stop();
+      await fixture.close();
+    }
+  });
+
+  it("rejects metadata publication from a superseded config transaction", async () => {
+    const fixture = await createMetadataReloadFixture();
+    const initialConfig = fixture.config("old");
+    const configA = fixture.config("a");
+    const configB = fixture.config("b");
+    const initialMetadata = fixture.owner.prepare({ config: initialConfig, env: fixture.env });
+    fixture.owner.publish(initialMetadata, { config: initialConfig, env: fixture.env });
+    let release = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot({ config: configB, hash: "metadata-b" })),
+      {
+        initialConfig,
+        pluginMetadataOwner: fixture.owner,
+        prepareConfigCandidate: fixture.prepareConfigCandidate,
+        onHotReload: async (plan, runtimeConfig, ownership) => {
+          if (runtimeConfig === configA) {
+            await blocked;
+            expect(() => ownership.publishPluginMetadata?.(runtimeConfig)).toThrow("superseded");
+            expect(fixture.owner.getActive()).toBe(initialMetadata);
+            return "applied";
+          }
+          ownership.markRuntimeCommitted(runtimeConfig, plan);
+          return "applied";
+        },
+      },
+    );
+    try {
+      harness.emitWrite({
+        ...makeZeroDebounceHookWrite("metadata-a"),
+        sourceConfig: configA,
+        runtimeConfig: configA,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      harness.watcher.emit("change");
+      release();
+      await vi.runAllTimersAsync();
+
+      expect(fixture.owner.getActive()?.workspaces.has(configA.agents!.defaults!.workspace)).toBe(
+        false,
+      );
+      expect(fixture.owner.getActive()?.workspaces.has(configB.agents!.defaults!.workspace)).toBe(
+        true,
+      );
+      expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await harness.reloader.stop();
+      await fixture.close();
+    }
   });
 
   it("reloads explicitly signaled plugin metadata when config bytes stay identical", async () => {

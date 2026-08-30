@@ -1,6 +1,6 @@
 // Owns process-local agent run context, ownership, and projection state.
 import { randomUUID } from "node:crypto";
-import type { VerboseLevel } from "../auto-reply/thinking.js";
+import type { VerboseLevel } from "../auto-reply/thinking.shared.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";

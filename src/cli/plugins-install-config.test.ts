@@ -37,7 +37,7 @@ vi.mock("../config/config.js", () => ({
     snapshot: await readConfigFileSnapshotMock(),
     writeOptions: {
       assertConfigPathForWrite: assertConfigPathForWriteMock,
-      basePluginMetadataSnapshot: {} as never,
+      basePluginMetadata: {} as never,
       expectedConfigPath: "/tmp/config.json5",
       ownedConfigPathForWrite: "/tmp/config.json5",
       includeFileHashesForWrite: includeFileHashesForWriteMock(),

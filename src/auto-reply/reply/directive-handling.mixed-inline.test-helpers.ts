@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { parseInlineSessionDirectives, type InlineDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
+import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";
 
 export function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   return { sessionId: "session-1", updatedAt: 1, ...overrides };
@@ -44,7 +45,11 @@ export async function applyMixedDirectives(params: {
     });
   const allowedModels = params.allowedModels ?? [];
   const aliasIndex = params.aliasIndex ?? { byAlias: new Map(), byKey: new Map() };
+  const runtimeModelNormalization = resolveRuntimeNormalization(cfg, "main", {
+    workspaceDir: "/tmp/workspace",
+  });
   const modelState: Parameters<typeof applyInlineDirectiveOverrides>[0]["modelState"] = {
+    runtimeModelNormalization,
     provider,
     model,
     requestedRouteResolution: "resolved",
@@ -54,6 +59,7 @@ export async function applyMixedDirectives(params: {
       defaultProvider: params.defaultProvider ?? provider,
       defaultModel: params.defaultModel ?? model,
       agentId: "main",
+      ...runtimeModelNormalization,
     }),
     allowedModelKeys: new Set(allowedModels.map((entry) => `${entry.provider}/${entry.id}`)),
     allowedModelCatalog: allowedModels,
@@ -86,6 +92,7 @@ export async function applyMixedDirectives(params: {
     agentId: "main",
     agentDir: "/tmp/agent",
     workspaceDir: "/tmp/workspace",
+    manifestPluginContext: runtimeModelNormalization.manifestPluginContext,
     agentCfg: cfg.agents?.defaults ?? {},
     sessionEntry,
     sessionStore,

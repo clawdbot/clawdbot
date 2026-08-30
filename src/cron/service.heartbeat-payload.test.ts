@@ -3,18 +3,128 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { heartbeatTaskDeclarationKey } from "./heartbeat-task.js";
+import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
   createNoopLogger,
   createStartedCronServiceWithFinishedBarrier,
   installCronTestHooks,
 } from "./service.test-harness.js";
+import { loadCronJobsStore } from "./store.js";
+import type { CronJobCreate } from "./types.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
 describe("heartbeat payload execution", () => {
+  it.each(["returned", "threw", "stopped", "restarted"] as const)(
+    "rejects in-flight and retained monitor writes after its owner %s",
+    async (expiry) => {
+      const { storePath, cleanup } = await makeStorePath();
+      const inventoryStarted = createDeferred();
+      const releaseInventory = createDeferred();
+      const releaseOwner = createDeferred();
+      const pending = createDeferred<{
+        add: CronService["add"];
+        mutation: ReturnType<CronService["add"]>;
+      }>();
+      let blockInventory = false;
+      const { cron, withSystemMonitorReconciliation } = CronService.createWithMonitorReconciliation(
+        {
+          storePath,
+          cronEnabled: false,
+          log: noopLogger,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+          isAgentAvailable: (agentId) => agentId === "main",
+          listConfiguredChannels: async () => {
+            if (blockInventory) {
+              inventoryStarted.resolve();
+              await releaseInventory.promise;
+            }
+            return [];
+          },
+        },
+      );
+      const owner = {
+        assertCurrent: () => {},
+        assertAgentAvailable: (agentId: string) => {
+          if (agentId !== "work") {
+            throw new Error(`candidate agent is unavailable: ${agentId}`);
+          }
+        },
+      };
+      const monitor = {
+        declarationKey: "heartbeat:work",
+        name: "heartbeat-work",
+        agentId: "work",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "heartbeat" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      } satisfies CronJobCreate;
+      const options = { systemOwned: true, enabledExplicit: true };
+      const ownerFailure = new Error("monitor pass failed");
+      let settledOwner: Promise<unknown> | undefined;
+      let mutation: Promise<unknown> | undefined;
+      try {
+        await withSystemMonitorReconciliation(owner, async (add) => await add(monitor, options));
+        const persistedBefore = (await loadCronJobsStore(storePath)).jobs;
+        expect(persistedBefore).toHaveLength(1);
+        await expect(cron.add(monitor, options)).rejects.toThrow(
+          "cron job agent is unavailable: work",
+        );
+
+        blockInventory = true;
+        const updatedMonitor = {
+          ...monitor,
+          schedule: { kind: "every" as const, everyMs: 120_000 },
+        };
+        const reconciliation = withSystemMonitorReconciliation(owner, async (add) => {
+          const inFlight = add(updatedMonitor, options);
+          void inFlight.catch(() => undefined);
+          pending.resolve({ add, mutation: inFlight });
+          await releaseOwner.promise;
+          if (expiry === "threw") {
+            throw ownerFailure;
+          }
+        });
+        settledOwner = reconciliation.catch((error: unknown) => error);
+        const captured = await pending.promise;
+        mutation = captured.mutation;
+        await inventoryStarted.promise;
+
+        if (expiry === "returned" || expiry === "threw") {
+          releaseOwner.resolve();
+          await expect(settledOwner).resolves.toBe(expiry === "threw" ? ownerFailure : undefined);
+        } else {
+          cron.stop();
+          if (expiry === "restarted") {
+            // Scheduling is disabled, so restart resets stopped without waiting
+            // on this add; only the lifecycle generation can reject the old owner.
+            await cron.start();
+          }
+        }
+        releaseInventory.resolve();
+        await expect(mutation).rejects.toThrow("cron monitor reconciliation is no longer active");
+        await expect(captured.add(updatedMonitor, options)).rejects.toThrow(
+          "cron monitor reconciliation is no longer active",
+        );
+        expect((await loadCronJobsStore(storePath)).jobs).toEqual(persistedBefore);
+      } finally {
+        releaseInventory.resolve();
+        releaseOwner.resolve();
+        await mutation?.catch(() => undefined);
+        await settledOwner;
+        cron.stop();
+        await cleanup();
+      }
+    },
+  );
+
   it("fires as an interval heartbeat wake without enqueuing a system event", async () => {
     const { storePath, cleanup } = await makeStorePath();
     const { cron, enqueueSystemEvent, requestHeartbeat } =

@@ -446,7 +446,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.sessionId).toBe("test-session-id");
   });
 
-  it("keeps cron timeout result when executor rejects after the cron abort signal fires", async () => {
+  it("preserves the scheduler timeout error when cron admission is already aborted", async () => {
     const abortController = new AbortController();
     const timeoutError = new Error(
       "cron: job execution timed out (last phase: model_call_started)",

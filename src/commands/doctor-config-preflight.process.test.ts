@@ -1,5 +1,5 @@
 // Process regression for typed gateway startup-migration refusal and lease cleanup.
-import { execFile, spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, type ExecException } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +20,18 @@ const STARTUP_RECOVERY =
   'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const execFileAsync = promisify(execFile);
+
+function runIsolatedNodeProcess(env: NodeJS.ProcessEnv, args: string[], timeoutMs: number) {
+  // Blocking child waits starve sibling process completion and timeout callbacks.
+  return new Promise<{ error: ExecException | null; stdout: string; stderr: string }>((resolve) => {
+    execFile(
+      process.execPath,
+      args,
+      { cwd: path.resolve("."), encoding: "utf8", env, timeout: timeoutMs },
+      (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+    );
+  });
+}
 
 function runIsolatedModuleScript(
   env: NodeJS.ProcessEnv,
@@ -141,7 +153,7 @@ function seedOwnerlessSchemaOnlyAgentDatabase(stateDir: string): string {
 }
 
 describe("doctor invalid config process exit", () => {
-  it("exits after a complete best-effort report for an unparseable config", () => {
+  it("exits after a complete best-effort report for an unparseable config", async () => {
     const root = fs.realpathSync(tempDirs.make("openclaw-doctor-invalid-config-exit-"));
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -170,8 +182,8 @@ describe("doctor invalid config process exit", () => {
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(configPath, '{"agents": {broken json');
 
-    const result = spawnSync(
-      process.execPath,
+    const result = await runIsolatedNodeProcess(
+      env,
       [
         "--import",
         "tsx",
@@ -180,18 +192,11 @@ describe("doctor invalid config process exit", () => {
         "--non-interactive",
         "--no-workspace-suggestions",
       ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-        env,
-        timeout: 60_000,
-      },
+      60_000,
     );
     const output = `${result.stderr}\n${result.stdout}`;
 
-    expect(result.error, output).toBeUndefined();
-    expect(result.status, output).toBe(0);
-    expect(result.signal, output).toBeNull();
+    expect(result.error, output).toBeNull();
     expect(output).toContain("Config invalid; doctor will run with best-effort config.");
     expect(output).toContain("Doctor complete.");
   }, 75_000);
@@ -290,7 +295,7 @@ describe("gateway startup-migration refusal", () => {
     expect(hasActiveStartupMigrationLease({ env })).toBe(false);
   }, 75_000);
 
-  it("refuses readiness for a schema-only legacy agent database without an owner", () => {
+  it("refuses readiness for a schema-only legacy agent database without an owner", async () => {
     const root = fs.realpathSync(tempDirs.make("openclaw-ownerless-agent-refusal-"));
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
@@ -336,15 +341,14 @@ describe("gateway startup-migration refusal", () => {
       }
     `;
 
-    const result = spawnSync(
-      process.execPath,
+    const result = await runIsolatedNodeProcess(
+      env,
       ["--import", "tsx", "--input-type=module", "--eval", script],
-      { cwd: path.resolve("."), encoding: "utf8", env, timeout: 60_000 },
+      60_000,
     );
     const output = `${result.stderr}\n${result.stdout}`;
 
-    expect(result.error, output).toBeUndefined();
-    expect(result.status, output).toBe(1);
+    expect(result.error, output).toMatchObject({ code: 1, killed: false, signal: null });
     expect(result.stdout, output).not.toContain("__READY__");
     expect(result.stderr, output).toContain("__REFUSED__");
     expect(result.stderr, output).toContain(STARTUP_REFUSAL);
@@ -434,21 +438,14 @@ describe("gateway startup-migration refusal", () => {
       fs.writeFileSync(configPath, originalConfig);
       seedPluginStateConflict(stateDir);
 
-      const result = spawnSync(
-        process.execPath,
+      const result = await runIsolatedNodeProcess(
+        env,
         ["--import", "tsx", path.resolve("src/entry.ts"), "gateway", "run", "--allow-unconfigured"],
-        {
-          cwd: path.resolve("."),
-          encoding: "utf8",
-          env,
-          timeout: 30_000,
-        },
+        30_000,
       );
       const output = `${result.stderr}\n${result.stdout}`;
 
-      expect(result.error, output).toBeUndefined();
-      expect(result.status, output).toBe(1);
-      expect(result.signal, output).toBeNull();
+      expect(result.error, output).toMatchObject({ code: 1, killed: false, signal: null });
       expect(result.stderr).toContain(STARTUP_REFUSAL);
       expect(result.stderr).toContain(STARTUP_RECOVERY);
       expect(result.stderr.split(STARTUP_REFUSAL)).toHaveLength(2);
@@ -527,26 +524,20 @@ describe("gateway startup-migration refusal", () => {
         }),
       );
 
-      const result = spawnSync(
-        process.execPath,
+      const result = await runIsolatedNodeProcess(
+        env,
         ["--import", "tsx", path.resolve("src/entry.ts"), "gateway", "run", "--allow-unconfigured"],
-        {
-          cwd: path.resolve("."),
-          encoding: "utf8",
-          env,
-          timeout: 30_000,
-        },
+        30_000,
       );
       const output = `${result.stderr}\n${result.stdout}`;
 
-      expect(result.error, output).toBeUndefined();
+      expect(result.error, output).toMatchObject({ code: 1, killed: false, signal: null });
       // The refused startup must be side-effect-free: the pending legacy
       // relocation stayed untouched for the live owner.
       expect(fs.existsSync(legacyArtifactPath), output).toBe(true);
       expect(fs.existsSync(path.join(stateDir, "agents", "main", "agent")), output).toBe(false);
       // No orphan-sidecar quarantine copy either: write admission never ran.
       expect(fs.readdirSync(sharedStateDbDir), output).toEqual(["openclaw.sqlite-wal"]);
-      expect(result.status, output).toBe(1);
       expect(result.stderr, output).toContain("already owns this state directory");
       expect(hasActiveStartupMigrationLease({ env })).toBe(false);
     } finally {
@@ -731,7 +722,7 @@ describe("gateway startup-migration refusal", () => {
         const after = readToolOwners();
         const manifest = JSON.parse(fs.readFileSync(${JSON.stringify(manifestPath)}, "utf8"));
         console.log("__RESULT__" + JSON.stringify({
-          retainedBaseSnapshot: configResult.pluginMetadataSnapshot !== undefined,
+          retainedBaseMetadata: configResult.pluginMetadata !== undefined,
           before,
           after,
           legacyTools: manifest.tools,
@@ -743,7 +734,7 @@ describe("gateway startup-migration refusal", () => {
     const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
     expect(resultLine, `${result.stderr}\n${result.stdout}`).toBeDefined();
     expect(JSON.parse(resultLine!.slice("__RESULT__".length))).toEqual({
-      retainedBaseSnapshot: false,
+      retainedBaseMetadata: false,
       before: [],
       after: [pluginId],
       contractTools: ["updater_tool"],

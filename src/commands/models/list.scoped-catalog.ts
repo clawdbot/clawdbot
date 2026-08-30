@@ -1,10 +1,10 @@
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 /** Dependency-light model catalog snapshots for default model-list views. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { modelCatalogRowToEntry } from "../../agents/model-catalog-entry.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
-import { modelKey } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -33,7 +33,7 @@ function selectProviderRows(
 }
 
 function entryKey(entry: Pick<ModelCatalogEntry, "provider" | "id">): string {
-  return modelKey(normalizeProviderId(entry.provider), entry.id.trim().toLowerCase());
+  return buildModelCatalogRef(entry.provider, entry.id.trim().toLowerCase());
 }
 
 function routeKey(entry: ModelCatalogEntry): string {

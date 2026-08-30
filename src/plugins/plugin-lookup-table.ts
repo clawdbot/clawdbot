@@ -6,6 +6,7 @@ import {
   resolveGatewayStartupPluginPlanFromRegistry,
   type GatewayStartupPluginPlan,
 } from "./channel-plugin-ids.js";
+import { bindPluginMetadataSnapshotCache, getPluginMetadataSnapshotCache } from "./plugin-cache.js";
 import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -74,7 +75,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
   });
   const startupPlanMs = performance.now() - startupPlanStartedAt;
 
-  return {
+  const table: PluginLookUpTable = {
     ...metadataSnapshot,
     startup,
     workerProviderIds,
@@ -85,4 +86,6 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
       startupPluginCount: startup.pluginIds.length,
     },
   };
+  bindPluginMetadataSnapshotCache(table, getPluginMetadataSnapshotCache(metadataSnapshot));
+  return table;
 }

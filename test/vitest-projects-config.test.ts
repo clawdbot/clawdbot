@@ -162,7 +162,7 @@ describe("projects vitest config", () => {
   });
 
   it.each([
-    ["ordinary", createUnitFastVitestConfig, "src/plugin-sdk/provider-entry.test.ts"],
+    ["ordinary", createUnitFastVitestConfig, "src/plugin-sdk/allow-from.test.ts"],
     [
       "isolated",
       createUnitFastIsolatedVitestConfig,
@@ -172,6 +172,7 @@ describe("projects vitest config", () => {
   ])("limits %s unit-fast include files to the project's owned tests", (_, createConfig, owned) => {
     const unrelated = "src/gateway/openresponses-http.test.ts";
     const mixedIncludeFile = patternFiles.writePatternFile("mixed-unit-fast-include.json", [
+      "src/plugin-sdk/allow-from.test.ts",
       "src/plugin-sdk/provider-entry.test.ts",
       "src/system-agent/assistant.configured.test.ts",
       "src/acp/control-plane/manager.test.ts",

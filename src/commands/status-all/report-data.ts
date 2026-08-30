@@ -2,7 +2,7 @@
 // This file performs local read-only probes; formatting stays in report-line builders.
 
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
-import { readConfigFileSnapshot, resolveGatewayPort } from "../../config/config.js";
+import { type ConfigFileSnapshot, resolveGatewayPort } from "../../config/config.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { loadExecApprovalsReadOnly } from "../../infra/exec-approvals.js";
@@ -35,7 +35,6 @@ type StatusServiceSummaries = Awaited<ReturnType<typeof resolveStatusServiceSumm
 type StatusGatewayServiceSummary = StatusServiceSummaries[0];
 type StatusNodeServiceSummary = StatusServiceSummaries[1];
 type StatusGatewayHealthSafe = Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>>;
-type ConfigFileSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
 
 type StatusAllProgress = {
   setLabel(label: string): void;
@@ -50,6 +49,7 @@ function resolveStatusAllConfigPath(path: string | null | undefined): string {
 /** Collects local diagnosis inputs that are not part of the shared overview scan. */
 async function resolveStatusAllLocalDiagnosis(params: {
   overview: StatusScanOverviewResult;
+  configSnapshot: ConfigFileSnapshot;
   progress: StatusAllProgress;
   gatewayReachable: boolean;
   gatewayProbe: StatusScanOverviewResult["gatewaySnapshot"]["gatewayProbe"];
@@ -60,7 +60,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
   configPath: string;
   health: StatusGatewayHealthSafe | undefined;
   diagnosis: {
-    snap: ConfigFileSnapshot | null;
+    snap: ConfigFileSnapshot;
     remoteUrlMissing: boolean;
     secretDiagnostics: StatusScanOverviewResult["secretDiagnostics"];
     sentinel: Awaited<ReturnType<typeof readRestartSentinelReadOnly>> | null;
@@ -87,9 +87,8 @@ async function resolveStatusAllLocalDiagnosis(params: {
     nodeOnlyGateway: NodeOnlyGatewayInfo | null;
   };
 }> {
-  const { overview } = params;
-  const snap = await readConfigFileSnapshot({ observe: false }).catch(() => null);
-  const configPath = resolveStatusAllConfigPath(snap?.path);
+  const { overview, configSnapshot: snap } = params;
+  const configPath = resolveStatusAllConfigPath(snap.path);
   const diagnosticsParams = {
     config: overview.cfg,
     timeoutMs: Math.min(5000, params.timeoutMs ?? 10_000),
@@ -195,6 +194,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
 /** Builds the full status-all report data model from a completed overview scan. */
 export async function buildStatusAllReportData(params: {
   overview: StatusScanOverviewResult;
+  configSnapshot: ConfigFileSnapshot;
   daemon: StatusGatewayServiceSummary;
   nodeService: StatusNodeServiceSummary;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
@@ -205,6 +205,7 @@ export async function buildStatusAllReportData(params: {
   const [{ configPath, health, diagnosis }, summary] = await Promise.all([
     resolveStatusAllLocalDiagnosis({
       overview: params.overview,
+      configSnapshot: params.configSnapshot,
       progress: params.progress,
       gatewayReachable: gatewaySnapshot.gatewayReachable,
       gatewayProbe: gatewaySnapshot.gatewayProbe,

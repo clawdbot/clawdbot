@@ -5,6 +5,7 @@ import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataRegistryView } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type {
   CronAgentExecutionPhaseUpdate,
@@ -85,13 +86,14 @@ export async function resolveCronAuthSelection(params: {
     CronAuthProfileRuntime["resolveSessionAuthSelection"]
   >[0]["harnessRuntime"];
   agentDir: string;
+  workspaceDir: string;
+  pluginMetadataSnapshot: PluginMetadataRegistryView;
   cronSession: MutableCronSession;
   sessionKey: string;
   isNewSession: boolean;
 }) {
-  const hasSessionOverride = Boolean(params.cronSession.sessionEntry.authProfileOverride?.trim());
   if (
-    !hasSessionOverride &&
+    !params.cronSession.sessionEntry.authProfileOverride?.trim() &&
     !hasConfiguredAuthProfiles(params.cfg) &&
     !hasAnyAuthProfileStoreSource(params.agentDir)
   ) {
@@ -105,6 +107,8 @@ export async function resolveCronAuthSelection(params: {
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
     harnessRuntime: params.harnessRuntime,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     sessionEntry: params.cronSession.sessionEntry,
     sessionStore: params.cronSession.store,
     sessionKey: params.sessionKey,

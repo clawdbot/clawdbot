@@ -14,6 +14,7 @@ export function includeConfiguredStaticCatalogEntries(params: {
   snapshot: ModelCatalogSnapshot;
   defaultModel?: string;
   metadataSnapshot: PluginMetadataSnapshot;
+  workspaceDir: string;
   enabled: boolean;
 }): ModelCatalogEntry[] {
   if (!params.enabled || !params.snapshot.staticEntries?.length) {
@@ -27,6 +28,8 @@ export function includeConfiguredStaticCatalogEntries(params: {
     agentId: params.agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     manifestPlugins: params.metadataSnapshot.plugins,
+    pluginMetadataSnapshot: params.metadataSnapshot,
+    workspaceDir: params.workspaceDir,
   });
   const configuredKeys = new Set(
     [...policy.configuredKeys].map((key) => {

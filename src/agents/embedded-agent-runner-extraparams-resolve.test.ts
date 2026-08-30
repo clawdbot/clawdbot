@@ -62,6 +62,45 @@ describe("resolveExtraParams", () => {
     });
   });
 
+  it.each([
+    {
+      label: "authored parameters",
+      entry: { params: { temperature: 0.8 } },
+      expected: { temperature: 0.8 },
+    },
+    { label: "an empty record", entry: {}, expected: undefined },
+    { label: "an absent record", entry: undefined, expected: undefined },
+  ])(
+    "preserves $label on an exact nested model instead of borrowing the shorter model",
+    ({ entry, expected }) => {
+      const result = resolveExtraParams({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                api: "openai-completions",
+                baseUrl: "https://custom.example/v1",
+                models: [],
+              },
+            },
+          },
+          agents: {
+            defaults: {
+              models: {
+                "custom/model": { params: { temperature: 0.2 } },
+                ...(entry ? { "custom/custom/model": entry } : {}),
+              },
+            },
+          },
+        },
+        provider: "custom",
+        modelId: "custom/model",
+      });
+
+      expect(result).toEqual(expected);
+    },
+  );
+
   it("ignores unrelated model entries", () => {
     const result = resolveExtraParams({
       cfg: {

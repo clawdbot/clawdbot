@@ -7,6 +7,7 @@ describe("aux method handler parity", () => {
     const aux = createGatewayAuxHandlers({
       log: {},
       activateRuntimeSecrets: vi.fn(async () => undefined),
+      getPluginMetadata: () => undefined,
       buildReloadPlan: vi.fn(),
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,

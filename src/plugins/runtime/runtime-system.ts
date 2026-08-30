@@ -1,12 +1,16 @@
 // Runtime system helpers expose host system operations to activated plugin runtimes.
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
 import type { RunHeartbeatOnceOptions } from "./types-core.js";
 import type { PluginRuntime } from "./types.js";
 
+// Keep process dependencies off the synchronous registration/import path.
+const runCommandWithTimeout = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../../process/exec.js")),
+  (runtime) => runtime.runCommandWithTimeout,
+);
 const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
   () => import("../../infra/heartbeat-runner.js"),
 );

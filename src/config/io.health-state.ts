@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 // Stores config health fingerprints in shared SQLite state.
@@ -67,40 +68,61 @@ function stringifyConfigHealthFingerprint(
   return value ? JSON.stringify(value) : null;
 }
 
-export function readConfigHealthStateFromStore(deps: ConfigHealthStateDeps): ConfigHealthState {
+function withConfigHealthStateDatabase<T>(
+  deps: ConfigHealthStateDeps,
+  read: (database: DatabaseSync) => T,
+): T | undefined {
   try {
     const database = openOpenClawStateDatabase({ env: resolveConfigHealthStateEnv(deps) });
-    const healthDb = getNodeSqliteKysely<ConfigHealthDatabase>(database.db);
-    const rows = executeSqliteQuerySync(
-      database.db,
-      healthDb
-        .selectFrom("config_health_entries")
-        .select([
-          "config_path",
-          "last_known_good_json",
-          "last_promoted_good_json",
-          "last_observed_suspicious_signature",
-        ])
-        .orderBy("config_path", "asc"),
-    ).rows;
-    return {
-      entries: Object.fromEntries(
-        rows.map((row) => [
-          row.config_path,
-          {
-            lastKnownGood: parseConfigHealthFingerprint(row.last_known_good_json),
-            lastPromotedGood: parseConfigHealthFingerprint(row.last_promoted_good_json),
-            lastObservedSuspiciousSignature: row.last_observed_suspicious_signature,
-          } satisfies ConfigHealthEntry,
-        ]),
-      ),
-    };
+    return read(database.db);
   } catch (error) {
+    // Config inspection stays available during state repair; ownership refusal still stops it.
     if (error instanceof OpenClawStateOwnershipError) {
       throw error;
     }
-    return {};
+    return undefined;
   }
+}
+
+/** Observing reads initialize the install ledger before preparing metadata from it. */
+export function prepareObservedConfigState(
+  deps: ConfigHealthStateDeps & { observe: boolean },
+): void {
+  if (deps.observe) {
+    withConfigHealthStateDatabase(deps, () => undefined);
+  }
+}
+
+export function readConfigHealthStateFromStore(deps: ConfigHealthStateDeps): ConfigHealthState {
+  return (
+    withConfigHealthStateDatabase(deps, (database) => {
+      const healthDb = getNodeSqliteKysely<ConfigHealthDatabase>(database);
+      const rows = executeSqliteQuerySync(
+        database,
+        healthDb
+          .selectFrom("config_health_entries")
+          .select([
+            "config_path",
+            "last_known_good_json",
+            "last_promoted_good_json",
+            "last_observed_suspicious_signature",
+          ])
+          .orderBy("config_path", "asc"),
+      ).rows;
+      return {
+        entries: Object.fromEntries(
+          rows.map((row) => [
+            row.config_path,
+            {
+              lastKnownGood: parseConfigHealthFingerprint(row.last_known_good_json),
+              lastPromotedGood: parseConfigHealthFingerprint(row.last_promoted_good_json),
+              lastObservedSuspiciousSignature: row.last_observed_suspicious_signature,
+            } satisfies ConfigHealthEntry,
+          ]),
+        ),
+      };
+    }) ?? {}
+  );
 }
 
 export function writeConfigHealthStateToStore(

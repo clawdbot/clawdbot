@@ -1,5 +1,5 @@
 /** Converts registry/catalog models into printable model-list rows. */
-import { modelKey } from "../../agents/model-ref-shared.js";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ModelRow } from "./list.types.js";
 
@@ -58,7 +58,7 @@ export function toModelRow(params: {
   const input = model.input?.join("+") || "-";
   const local = isLocalBaseUrl(model.baseUrl ?? "");
   const modelIsAvailable =
-    local || (availableKeys?.has(modelKey(model.provider, model.id)) ?? false);
+    local || (availableKeys?.has(buildModelCatalogRef(model.provider, model.id)) ?? false);
   // Registry model availability remains authoritative unless the row is outside
   // that inventory or provider-owned route facts select a physical auth route.
   const available = authAvailabilityAuthoritative

@@ -127,6 +127,7 @@ describe("ClawRouter cold prepared catalog", () => {
       agentId,
       snapshot: result.snapshot,
       metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      pluginRegistry: prepared.pluginGeneration.pluginRegistry,
       preparedAuthStore: result.authStore,
       preparedRuntimeAuthModes: result.authModes,
     });

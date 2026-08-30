@@ -20,7 +20,10 @@ import {
 import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { hashRuntimeConfigValue, resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
-import type { RuntimeConfigSnapshotRefreshOptions } from "../config/runtime-snapshot.js";
+import type {
+  RuntimeConfigSnapshotRefreshOptions,
+  RuntimeConfigWritePreparedCandidate,
+} from "../config/runtime-snapshot.js";
 import {
   getRuntimeConfigWriteApplication,
   type RuntimeConfigWriteApplicationClaim,
@@ -33,6 +36,10 @@ import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
+import type {
+  PluginMetadataOwner,
+  PreparedPluginMetadata,
+} from "../plugins/plugin-metadata-collection.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
@@ -124,14 +131,8 @@ export type GatewayConfigReloadTransactionOwnership = {
   reapplyRuntimeOverlays: (config: OpenClawConfig) => OpenClawConfig;
   runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
   runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
-};
-
-type PreparedGatewayConfigCandidate = {
-  runtimeConfig: OpenClawConfig;
-  compareConfig: OpenClawConfig;
-  runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
-  reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
-  reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
+  pluginMetadata?: PreparedPluginMetadata;
+  publishPluginMetadata?: (runtimeConfig: OpenClawConfig) => void;
 };
 
 function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
@@ -144,6 +145,7 @@ function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
 
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
+  pluginMetadataOwner?: PluginMetadataOwner;
   initialCompareConfig?: OpenClawConfig;
   initialSnapshotRawHash: string | null;
   initialAuthoredConfig: unknown;
@@ -158,7 +160,7 @@ export function startGatewayConfigReloader(opts: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
     previousSourceConfig: OpenClawConfig;
-  }) => PreparedGatewayConfigCandidate;
+  }) => RuntimeConfigWritePreparedCandidate;
   initialInternalWriteHash?: string | null;
   readSnapshot: (activeSourceConfig: OpenClawConfig) => Promise<ConfigFileSnapshot>;
   /** Pauses restart emission synchronously when a matching disk candidate is observed. */
@@ -267,9 +269,8 @@ export function startGatewayConfigReloader(opts: {
   const activeReloads = new Set<Promise<void>>();
   let missingConfigRetries = 0;
   let configWriteEpoch = 0;
-  // Signaled metadata changes clear the process snapshot slot before the diff
-  // pass runs; the counters keep that pass honest when config bytes are
-  // unchanged, and stay pending until a plugin reload or restart commits.
+  // Metadata replacement can require a reload with identical config bytes.
+  // Keep it pending until a plugin reload or restart accepts the generation.
   let pluginMetadataRefreshRequests = 0;
   let pluginMetadataRefreshApplied = 0;
   let pendingInProcessConfig: InProcessConfigCandidate | null = null;
@@ -487,7 +488,10 @@ export function startGatewayConfigReloader(opts: {
     let publishedRuntimeEnv: ConfigRuntimeEnvPublication | undefined;
     let runtimeEnvCommitted = false;
     const nextSettings = resolveSettings(nextConfig);
-    const isCurrent = () => configWriteEpoch === transactionEpoch;
+    const isCurrent = () =>
+      configWriteEpoch === transactionEpoch &&
+      (!preparedCandidate?.pluginMetadata ||
+        opts.pluginMetadataOwner?.isPreparedCurrent(preparedCandidate.pluginMetadata) !== false);
     const assertCurrent = () => {
       if (!isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
@@ -498,11 +502,24 @@ export function startGatewayConfigReloader(opts: {
       publishedRuntimeEnv?.commit();
       publishedRuntimeEnv = undefined;
     };
+    const publishPluginMetadata = (runtimeConfig: OpenClawConfig) => {
+      if (preparedCandidate?.pluginMetadata) {
+        assertCurrent();
+        opts.pluginMetadataOwner?.publish(preparedCandidate.pluginMetadata, {
+          config: runtimeConfig,
+          sourceConfig: nextSourceConfig,
+          env: preparedCandidate.runtimeEnv?.env,
+        });
+      }
+    };
     const ownership: GatewayConfigReloadTransactionOwnership = {
       isCurrent,
       reapplyRuntimeOverlays: preparedCandidate?.reapplyRuntimeOverlays ?? ((config) => config),
       ...(preparedCandidate?.runtimeEnv ? { runtimeEnv: preparedCandidate.runtimeEnv } : {}),
       ...(runtimeRefresh ? { runtimeRefresh } : {}),
+      ...(preparedCandidate?.pluginMetadata
+        ? { pluginMetadata: preparedCandidate.pluginMetadata, publishPluginMetadata }
+        : {}),
       publishRuntimeEnv: () => {
         assertCurrent();
         if (runtimeEnvCommitted) {
@@ -523,6 +540,7 @@ export function startGatewayConfigReloader(opts: {
         // Publication can win immediately before a watcher supersedes this
         // transaction. Advance the runtime diff baseline at that exact edge so
         // the newer disk config plans the reverse work instead of diffing stale state.
+        publishPluginMetadata(runtimeConfig);
         commitPublishedRuntimeEnv();
         opts.onRuntimeConfigCommitted?.(plan, runtimeConfig);
         committedRuntimeConfig = runtimeConfig;

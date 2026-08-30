@@ -1,9 +1,11 @@
 /** Canonical projection from skill workshop config to system-owned cron jobs. */
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { canonicalizePath } from "../agents/utils/paths.js";
+import { resolveAgentWorkspaceDirsById } from "../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
-import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
+import {
+  resolveHeartbeatPhaseMs,
+  resolveHeartbeatSchedulerSeed,
+} from "../infra/heartbeat-schedule.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
@@ -23,11 +25,15 @@ export function skillCollectionReviewMonitorAgentId(job: CronJob): string | unde
 
 export function resolveSkillCollectionReviewMonitorSpecs(
   cfg: OpenClawConfig,
-  options: { schedulerSeed?: string } = {},
+  options: {
+    schedulerSeed?: string;
+    agentWorkspaceDirs?: ReadonlyMap<string, string>;
+  } = {},
 ): Array<{ agentId: string; input: CronJobCreate }> {
   const workspaceAgents = new Map<string, string[]>();
-  for (const agentId of listAgentIds(cfg)) {
-    const workspaceDir = canonicalizePath(resolveAgentWorkspaceDir(cfg, agentId));
+  const agentWorkspaceDirs = options.agentWorkspaceDirs ?? resolveAgentWorkspaceDirsById(cfg);
+  for (const [agentId, preparedWorkspaceDir] of agentWorkspaceDirs) {
+    const workspaceDir = canonicalizePath(preparedWorkspaceDir);
     const agentIds = workspaceAgents.get(workspaceDir) ?? [];
     agentIds.push(agentId);
     workspaceAgents.set(workspaceDir, agentIds);

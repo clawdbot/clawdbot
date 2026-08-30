@@ -178,7 +178,7 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:default:cron:test",
+        key: "agent:main:cron:test",
         deleteTranscript: true,
         emitLifecycleHooks: false,
         expectedSessionId: "test-session-id",

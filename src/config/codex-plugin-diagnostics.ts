@@ -20,7 +20,7 @@ import {
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection-config.js";
 import {
-  buildModelAliasIndex,
+  buildModelAliasIndexCore as buildModelAliasIndex,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../agents/openai-routing.js";
@@ -228,15 +228,18 @@ function configuredModelRefsNeedCodex(params: {
   for (const agentId of params.agentIds) {
     const selected = resolveEffectiveSelectedModelRefs({ cfg: params.cfg, agentId });
     complete &&= selected.complete;
+    // Config diagnostics resolve authored routes without executing provider hooks.
     const primary = resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId,
-      manifestPlugins: [],
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
     });
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       defaultProvider: primary.provider,
-      manifestPlugins: [],
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
     });
     for (const ref of refs) {
       if (
@@ -257,6 +260,7 @@ function configuredModelRefsNeedCodex(params: {
         defaultProvider: primary.provider,
         aliasIndex,
         allowManifestNormalization: false,
+        allowPluginNormalization: false,
       });
       const route = resolved
         ? { provider: resolved.ref.provider, modelId: resolved.ref.model }

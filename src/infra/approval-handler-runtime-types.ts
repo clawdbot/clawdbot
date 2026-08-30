@@ -8,7 +8,7 @@ import type {
   PendingApprovalView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
-import type { ExecApprovalResolved } from "./exec-approvals.js";
+import type { ExecApprovalResolved } from "./exec-approvals-core.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
 
 export type { ChannelApprovalKind } from "./approval-types.js";

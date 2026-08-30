@@ -1,20 +1,32 @@
 // Utility-model resolution tests cover explicit/disabled/auto settings and
 // provider-declared default derivation.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import * as modelNormalization from "./provider-model-normalization.runtime.js";
 import { readUtilityModelSetting, resolveUtilityModelRefForAgent } from "./utility-model.js";
 
-function snapshotWithDefaults(defaults: Record<string, string>): PluginMetadataSnapshot {
+function snapshotWithDefaults(
+  defaults: Record<string, string>,
+): Pick<PluginMetadataSnapshot, "plugins"> {
   const plugins = Object.entries(defaults).map(([provider, defaultUtilityModel], index) => ({
     id: `plugin-${index}`,
+    channels: [],
+    providers: [provider],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: "config" as const,
+    rootDir: `/fixture/plugin-${index}`,
+    source: `/fixture/plugin-${index}/index.ts`,
+    manifestPath: `/fixture/plugin-${index}/openclaw.plugin.json`,
     modelCatalog: {
       providers: {
         [provider]: { defaultUtilityModel, models: [{ id: defaultUtilityModel }] },
       },
     },
   }));
-  return { plugins } as unknown as PluginMetadataSnapshot;
+  return { plugins };
 }
 
 describe("readUtilityModelSetting", () => {
@@ -85,9 +97,18 @@ describe("resolveUtilityModelRefForAgent", () => {
       agents: { defaults: { model: "anthropic/claude-fable-5" } },
     } as OpenClawConfig;
 
-    expect(resolveUtilityModelRefForAgent({ cfg, agentId: "main", metadataSnapshot })).toBe(
-      "anthropic/claude-haiku-4-5",
-    );
+    const normalize = vi
+      .spyOn(modelNormalization, "normalizeProviderModelIdWithRuntime")
+      .mockImplementation(() => {
+        throw new Error("Provider selection must not execute model hooks");
+      });
+    try {
+      expect(resolveUtilityModelRefForAgent({ cfg, agentId: "main", metadataSnapshot })).toBe(
+        "anthropic/claude-haiku-4-5",
+      );
+    } finally {
+      normalize.mockRestore();
+    }
   });
 
   it("carries the primary model's auth profile onto the derived default", () => {

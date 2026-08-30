@@ -385,6 +385,13 @@ export async function buildProbeTargets(params: {
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
   const profileFilter = new Set(normalizeUniqueStringEntries(options.profileIds));
   const refResolveCache: SecretRefResolveCache = {};
+  // Freeze candidate identities before catalog preparation can yield to a metadata reload.
+  const candidates = buildProbeCandidateMap({
+    cfg,
+    agentId: params.agentId,
+    workspaceDir,
+    modelCandidates,
+  });
   const catalog = await loadPreparedModelCatalog({
     config: cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -395,7 +402,6 @@ export async function buildProbeTargets(params: {
     readOnly: true,
     providerDiscoveryProviderIds: providers,
   });
-  const candidates = buildProbeCandidateMap(modelCandidates);
   const targets: AuthProbeTarget[] = [];
   const results: AuthProbeResult[] = [];
 

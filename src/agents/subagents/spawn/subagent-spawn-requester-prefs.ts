@@ -1,9 +1,10 @@
+import { resolveSessionModelOverrideRouteResolution } from "../../../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import { resolveFastModeState } from "../../fast-mode.js";
+import { createModelManifestPluginContext } from "../../model-selection-shared.js";
 import {
-  normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "../../model-selection.js";
@@ -13,6 +14,34 @@ import {
   resolveAgentConfig,
   resolveGatewaySessionStoreTarget,
 } from "./subagent-spawn.runtime.js";
+
+function resolveRequesterModel(
+  params: { cfg: OpenClawConfig; requesterAgentId?: string },
+  entry: SessionEntry | undefined,
+) {
+  const manifestPluginContext = createModelManifestPluginContext({
+    cfg: params.cfg,
+    agentId: params.requesterAgentId,
+  });
+  const defaultModel = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.requesterAgentId,
+    manifestPluginContext,
+  });
+  return (
+    (entry
+      ? resolvePersistedSelectedModelRef({
+          ...manifestPluginContext.getContext(),
+          defaultProvider: defaultModel.provider,
+          runtimeProvider: entry.modelProvider,
+          runtimeModel: entry.model,
+          overrideProvider: entry.providerOverride,
+          overrideModel: entry.modelOverride,
+          overrideRouteResolution: resolveSessionModelOverrideRouteResolution(entry),
+        })
+      : null) ?? defaultModel
+  );
+}
 
 export function readRequesterThinkingLevel(params: {
   cfg: OpenClawConfig;
@@ -43,34 +72,11 @@ export function readRequesterThinkingLevel(params: {
   if (requesterAgentThinking) {
     return requesterAgentThinking;
   }
-  const defaultModel = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.requesterAgentId,
-  });
-  if (entry) {
-    const normalizedOverride = normalizeStoredOverrideModel({
-      providerOverride: entry.providerOverride,
-      modelOverride: entry.modelOverride,
-    });
-    const persistedModel = resolvePersistedSelectedModelRef({
-      defaultProvider: defaultModel.provider,
-      runtimeProvider: entry.modelProvider,
-      runtimeModel: entry.model,
-      overrideProvider: normalizedOverride.providerOverride,
-      overrideModel: normalizedOverride.modelOverride,
-    });
-    if (persistedModel) {
-      return resolveThinkingDefault({
-        cfg: params.cfg,
-        provider: persistedModel.provider,
-        model: persistedModel.model,
-      });
-    }
-  }
+  const selectedModel = resolveRequesterModel(params, entry);
   return resolveThinkingDefault({
     cfg: params.cfg,
-    provider: defaultModel.provider,
-    model: defaultModel.model,
+    provider: selectedModel.provider,
+    model: selectedModel.model,
   });
 }
 
@@ -94,29 +100,11 @@ export function readRequesterFastMode(params: {
   } catch {
     entry = undefined;
   }
-  const defaultModel = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.requesterAgentId,
-  });
-  const normalizedOverride = entry
-    ? normalizeStoredOverrideModel({
-        providerOverride: entry.providerOverride,
-        modelOverride: entry.modelOverride,
-      })
-    : {};
-  const selectedModel = entry
-    ? resolvePersistedSelectedModelRef({
-        defaultProvider: defaultModel.provider,
-        runtimeProvider: entry.modelProvider,
-        runtimeModel: entry.model,
-        overrideProvider: normalizedOverride.providerOverride,
-        overrideModel: normalizedOverride.modelOverride,
-      })
-    : undefined;
+  const selectedModel = resolveRequesterModel(params, entry);
   return resolveFastModeState({
     cfg: params.cfg,
-    provider: selectedModel?.provider ?? defaultModel.provider,
-    model: selectedModel?.model ?? defaultModel.model,
+    provider: selectedModel.provider,
+    model: selectedModel.model,
     agentId: params.requesterAgentId,
     sessionEntry: entry,
   }).mode;

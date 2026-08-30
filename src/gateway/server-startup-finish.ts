@@ -94,7 +94,8 @@ export async function finishGatewayStartup(params: {
     baseMethods,
     startupPluginIds,
     pluginManifestRecords,
-    pluginMetadataSnapshot,
+    pluginMetadata,
+    pluginMetadataOwner,
     pluginLookUpTable,
     ambientEnvTriggers,
     replaceAttachedPluginRuntime,
@@ -129,7 +130,7 @@ export async function finishGatewayStartup(params: {
     chatMetadataLifecycle,
     gatewayRequestContext,
     gatewayInstanceRuntime,
-    getPluginMetadataSnapshot,
+    getPluginMetadata,
   } = runtime;
   const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
   const unregisterGatewayLifetimeSidecar = (sidecar: GatewayPostReadySidecarHandle) => {
@@ -242,10 +243,10 @@ export async function finishGatewayStartup(params: {
         gatewayPluginConfigAtStart,
         activationSourceConfig: startupActivationSourceConfig,
         pluginManifestRecords,
-        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+        ...(pluginMetadata ? { pluginMetadata } : {}),
         pluginRuntimeClaim: startupPluginRuntimeClaim,
         getCurrentPluginRegistry: () => pluginRuntime.registry,
-        getCurrentPluginMetadataSnapshot: getPluginMetadataSnapshot,
+        getCurrentPluginMetadata: getPluginMetadata,
         ambientEnvTriggers,
         pluginRegistry: pluginRuntime.registry,
         defaultWorkspaceDir,
@@ -353,6 +354,7 @@ export async function finishGatewayStartup(params: {
     resolveGatewayContext: resolvePluginGatewayContext,
     minimalTestGateway,
     initialConfig: cfgAtStart,
+    pluginMetadataOwner,
     initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
     initialSnapshotRawHash: startupLastGoodSnapshot.exists
       ? (startupLastGoodSnapshot.hash ?? null)
@@ -377,6 +379,7 @@ export async function finishGatewayStartup(params: {
             reason: "reload",
             activate: false,
             env: candidate.runtimeEnv.env,
+            manifestRegistry: candidate.pluginMetadata.manifestRegistry,
             includeAuthStoreRefs: runtimeRefresh?.includeAuthStoreRefs,
           });
           return candidate;
@@ -394,7 +397,7 @@ export async function finishGatewayStartup(params: {
         cronStartState.handled = true;
       }
     },
-    getPluginMetadataSnapshot,
+    getPluginMetadata,
     startChannel,
     stopChannel,
     getChannelAutostartSuppression: channelManager.getAutostartSuppression,
@@ -472,16 +475,17 @@ export async function finishGatewayStartup(params: {
     });
     // This Gateway may still import boot-generation code after an install retires
     // it. Capture those paths before the idle delay; cleanup also protects the new ledger.
-    const startupInstallPaths = [
-      ...Object.values(pluginMetadataSnapshot?.index.installRecords ?? {}).flatMap((record) =>
-        record.installPath ? [record.installPath] : [],
-      ),
-      ...(pluginMetadataSnapshot?.plugins.flatMap((record) =>
-        record.setupSource
-          ? [record.rootDir, record.source, record.setupSource]
-          : [record.rootDir, record.source],
-      ) ?? []),
-    ];
+    const startupInstallPaths = [...pluginMetadata.workspaces.values()].flatMap((snapshot) =>
+      Object.values(snapshot.index.installRecords)
+        .flatMap((record) => (record.installPath ? [record.installPath] : []))
+        .concat(
+          snapshot.plugins.flatMap((record) =>
+            record.setupSource
+              ? [record.rootDir, record.source, record.setupSource]
+              : [record.rootDir, record.source],
+          ),
+        ),
+    );
     postReadyState.retainedPluginCleanupHandle = gatewayRuntimeServices.scheduleGatewayIdleTask({
       delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
       retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,

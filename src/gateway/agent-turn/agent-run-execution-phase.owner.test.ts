@@ -98,6 +98,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
   it("dispatches with the runtime generation frozen at admission", async () => {
     const execution = createExecution();
+    const expectedInitialModel = { provider: "openai", model: "gpt-5.6-luna" };
+    execution.params.expectedInitialModel = expectedInitialModel;
     let resolveDispatched!: () => void;
     const dispatched = new Promise<void>((resolve) => {
       resolveDispatched = resolve;
@@ -131,6 +133,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(dispatch?.commandRuntimeContext).toEqual({
       config: { runtime: "A" },
       pluginGeneration: "generation-A",
+      expectedInitialModel,
     });
     expect(dispatch?.ingressOpts.workspaceDir).toBe("/workspace/A");
     expect(execution.runtimeRelease).not.toHaveBeenCalled();

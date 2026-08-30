@@ -10,7 +10,10 @@ function preserveLiteralLegacyModelRefs(values: string[]): string[] {
     if (value !== value.trim() || value === "*") {
       return false;
     }
-    const normalized = parseModelRef(value, "");
+    const normalized = parseModelRef(value, "", {
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
     if (!normalized) {
       return false;
     }

@@ -1168,7 +1168,7 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("logs async health-state write failures", async () => {
+  it("writes async health state to SQLite", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, warn } = makeDeps(home);
       const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);

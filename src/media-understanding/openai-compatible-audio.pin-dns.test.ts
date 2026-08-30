@@ -26,7 +26,7 @@ function requirePostTranscriptionRequest(): { pinDns?: unknown; body?: unknown }
   return request;
 }
 
-import { transcribeOpenAiCompatibleAudio } from "./openai-compatible-audio.js";
+import { transcribeOpenAiCompatibleAudio } from "../plugin-sdk/media-understanding.js";
 
 afterEach(() => {
   vi.clearAllMocks();

@@ -32,7 +32,10 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import {
+  createModelVisibilityPolicy,
+  type ModelVisibilityPolicy,
+} from "../../agents/model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
@@ -44,7 +47,10 @@ import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
-import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";
+import {
+  resolveRuntimeNormalization,
+  type RuntimeModelNormalization,
+} from "./model-runtime-normalization.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
@@ -65,6 +71,8 @@ export type ModelsProviderData = {
 
 type PreparedModelsProviderData = ModelsProviderData & {
   modelCatalog: ModelCatalogEntry[];
+  modelPolicy: Pick<ModelVisibilityPolicy, "allows">;
+  modelNormalization: RuntimeModelNormalization;
 };
 
 export type ModelsRuntimeChoice = {
@@ -161,7 +169,7 @@ export async function buildPreparedModelsProviderData(
   agentId?: string,
   options: { view?: "default" | "all"; workspaceDir?: string } = {},
 ): Promise<PreparedModelsProviderData> {
-  const runtimeNormalization = resolveRuntimeNormalization(cfg);
+  const runtimeNormalization = resolveRuntimeNormalization(cfg, agentId, options);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
     agentId,
@@ -194,6 +202,7 @@ export async function buildPreparedModelsProviderData(
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
+    preparedDefaultModel: resolvedDefault,
     agentId,
     ...runtimeNormalization,
   });
@@ -282,7 +291,7 @@ export async function buildPreparedModelsProviderData(
           model: trimmed,
           defaultProvider: resolvedDefault.provider,
           agentId,
-          manifestPlugins: runtimeNormalization.manifestPlugins,
+          ...runtimeNormalization,
         })
       : resolvedDefault.provider;
     const resolved = resolveModelRefFromString({
@@ -414,6 +423,8 @@ export async function buildPreparedModelsProviderData(
     // Selection needs the prepared capabilities, with selected physical routes
     // ahead of other inventory rows for the same logical model.
     modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
+    modelPolicy: visibilityPolicy,
+    modelNormalization: runtimeNormalization,
     runtimeChoicesByProvider,
   };
 }

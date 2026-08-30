@@ -3,7 +3,7 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
-import { resolveConfigSecretRef } from "../config/resolution-facts.js";
+import { getConfigResolutionFacts, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -655,9 +655,12 @@ export function providerConfigMatchesRuntimeSnapshot(params: {
   const toComparableConfig = (providerConfig: ModelProviderConfig): OpenClawConfig => ({
     models: { providers: { [params.provider]: providerConfig } },
   });
+  // Equal provider bytes can belong to different authored SecretRef generations.
   return (
+    getConfigResolutionFacts(params.inputConfig) ===
+      getConfigResolutionFacts(params.runtimeConfig) &&
     hashRuntimeConfigValue(toComparableConfig(inputProvider)) ===
-    hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
+      hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
   );
 }
 

@@ -11,7 +11,6 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
-import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type {
@@ -214,14 +213,12 @@ export function createTelegramMessageSessionRuntime({
     });
     const entry = loadSessionEntry({ storePath, sessionKey });
     const storedOverride = resolveStoredModelOverride({
+      config: params.runtimeCfg,
+      agentId: route.agentId,
       sessionEntry: entry,
       loadSessionEntry: (parentSessionKey) =>
         loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
       sessionKey,
-      defaultProvider: resolveDefaultModelForAgent({
-        cfg: params.runtimeCfg,
-        agentId: route.agentId,
-      }).provider,
     });
     if (storedOverride) {
       return {
@@ -236,22 +233,13 @@ export function createTelegramMessageSessionRuntime({
     }
     const provider = entry?.modelProvider?.trim();
     const model = entry?.model?.trim();
-    if (provider && model) {
-      return {
-        agentId: route.agentId,
-        sessionEntry: entry,
-        sessionKey,
-        storePath,
-        model: `${provider}/${model}`,
-      };
-    }
-    const modelCfg = params.runtimeCfg.agents?.defaults?.model;
+    // The picker owns the prepared agent default when no session model is recorded.
     return {
       agentId: route.agentId,
       sessionEntry: entry,
       sessionKey,
       storePath,
-      model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
+      model: provider && model ? `${provider}/${model}` : undefined,
     };
   };
 

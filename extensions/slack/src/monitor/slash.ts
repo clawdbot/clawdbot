@@ -134,6 +134,8 @@ function resolveSlackCommandMenuModelContext(params: {
       model = defaultModel.model;
     } else {
       const override = resolveStoredModelOverride({
+        config: params.cfg,
+        agentId: params.agentId,
         sessionEntry: entry,
         loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
         sessionKey: params.sessionKey,

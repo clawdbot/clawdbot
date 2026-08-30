@@ -21,7 +21,8 @@ import { getGlobalPluginRegistry } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { normalizeRouteBindingId } from "../routing/binding-scope.js";
 import { peerKindMatches } from "../routing/peer-kind-match.js";
-import { resolveAgentRoute, type ResolvedAgentRoute } from "../routing/resolve-route.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
+import type { ResolvedAgentRoute } from "../routing/resolve-route.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { ConversationInputError } from "./conversation-errors.js";
 

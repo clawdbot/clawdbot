@@ -15,9 +15,10 @@ import {
 } from "../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
+import { resolveModelTarget } from "../commands/models/shared.js";
 import { GEMINI_CLI_DEFAULT_MODEL_REF } from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderAuthResult } from "../plugins/types.js";
+import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   type ActivateSetupInferenceDeps,
@@ -281,19 +282,18 @@ export function mapFailoverReasonToSetupStatus(
 }
 
 export function prepareManualAuthForActivation(params: {
-  baseConfig: OpenClawConfig;
+  config: OpenClawConfig;
   preparedConfig: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
-  selectedProfileId: string;
-  modelRef: string;
-  providerId: string;
-  pluginId?: string;
-  agentId?: string;
+  selectedProfileId?: string;
 }): {
   config: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
-  selectedProfileId: string;
+  selectedProfileId: string | undefined;
 } {
+  if (!params.selectedProfileId) {
+    return { config: params.config, profiles: [], selectedProfileId: undefined };
+  }
   const selectedProfile = params.profiles.find(
     (profile) => profile.profileId === params.selectedProfileId,
   );
@@ -303,11 +303,20 @@ export function prepareManualAuthForActivation(params: {
   const provider = normalizeProviderId(selectedProfile.credential.provider) || "provider";
   const selectedProfileId = `${provider}:setup-${randomUUID()}`;
   const profile = { ...selectedProfile, profileId: selectedProfileId };
-  const config = projectManualInferenceConfig({
-    ...params,
-    selectedProfile,
-    selectedProfileId,
-  });
+  const metadata = params.preparedConfig.auth?.profiles?.[selectedProfile.profileId] ?? {
+    provider: selectedProfile.credential.provider,
+    mode: selectedProfile.credential.type,
+  };
+  const config = {
+    ...params.config,
+    auth: {
+      ...params.config.auth,
+      profiles: {
+        ...params.config.auth?.profiles,
+        [selectedProfileId]: structuredClone(metadata),
+      },
+    },
+  };
   return {
     config,
     profiles: [profile],
@@ -315,53 +324,61 @@ export function prepareManualAuthForActivation(params: {
   };
 }
 
-function copySelectedModelMetadata(params: {
+function withSelectedModelMetadata(params: {
   target: OpenClawConfig;
   prepared: OpenClawConfig;
   modelRef: string;
+  targetModelRef: string;
   agentId?: string;
-}): void {
+}): OpenClawConfig {
+  let target = params.target;
   const preparedDefaultModels = params.prepared.agents?.defaults?.models;
   if (preparedDefaultModels && Object.hasOwn(preparedDefaultModels, params.modelRef)) {
-    params.target.agents = {
-      ...params.target.agents,
-      defaults: {
-        ...params.target.agents?.defaults,
-        models: {
-          ...params.target.agents?.defaults?.models,
-          [params.modelRef]: structuredClone(
-            expectDefined(
-              preparedDefaultModels[params.modelRef],
-              "prepared default models entry at params.model ref",
+    target = {
+      ...target,
+      agents: {
+        ...target.agents,
+        defaults: {
+          ...target.agents?.defaults,
+          models: {
+            ...target.agents?.defaults?.models,
+            [params.targetModelRef]: structuredClone(
+              expectDefined(
+                preparedDefaultModels[params.modelRef],
+                "prepared default models entry at params.model ref",
+              ),
             ),
-          ),
+          },
         },
       },
     };
   }
 
-  const defaultAgentId = resolveAmbientOwnerAgentId(params.target, params.agentId);
+  const defaultAgentId = resolveAmbientOwnerAgentId(target, params.agentId);
   const preparedAgent = listAgentEntries(params.prepared).find(
     (agent) => normalizeAgentId(agent.id) === defaultAgentId,
   );
   if (!preparedAgent?.models || !Object.hasOwn(preparedAgent.models, params.modelRef)) {
-    return;
+    return target;
   }
-  const targetEntryKey = Object.keys(params.target.agents?.entries ?? {}).find(
+  const targetEntryKey = Object.keys(target.agents?.entries ?? {}).find(
     (agentId) => normalizeAgentId(agentId) === defaultAgentId,
   );
-  if (!targetEntryKey || !params.target.agents?.entries?.[targetEntryKey]) {
-    return;
+  if (!targetEntryKey || !target.agents?.entries?.[targetEntryKey]) {
+    return target;
   }
-  const nextEntries = structuredClone(params.target.agents.entries);
+  const nextEntries = { ...target.agents.entries };
   const targetAgent = expectDefined(nextEntries[targetEntryKey], "target agent entry");
-  targetAgent.models = {
-    ...targetAgent.models,
-    [params.modelRef]: structuredClone(
-      expectDefined(preparedAgent.models[params.modelRef], "models entry at params.model ref"),
-    ),
+  nextEntries[targetEntryKey] = {
+    ...targetAgent,
+    models: {
+      ...targetAgent.models,
+      [params.targetModelRef]: structuredClone(
+        expectDefined(preparedAgent.models[params.modelRef], "models entry at params.model ref"),
+      ),
+    },
   };
-  params.target.agents = { ...params.target.agents, entries: nextEntries };
+  return { ...target, agents: { ...target.agents, entries: nextEntries } };
 }
 
 function findSelectedProviderConfigKey(
@@ -389,28 +406,15 @@ function findSelectedProviderConfigKey(
 export function projectManualInferenceConfig(params: {
   baseConfig: OpenClawConfig;
   preparedConfig: OpenClawConfig;
-  selectedProfile?: ProviderAuthResult["profiles"][number];
-  selectedProfileId?: string;
   modelRef: string;
   providerId: string;
   pluginId?: string;
   agentId?: string;
-}): OpenClawConfig {
+  workspaceDir?: string;
+  /** Raw auth defaults use the selected provider; detected models are already canonical. */
+  normalizeWithProvider?: ProviderPlugin;
+}): Pick<SetupInferenceTestPlan, "config" | "provider" | "model" | "modelRef"> {
   const config = structuredClone(params.baseConfig);
-  if (params.selectedProfile && params.selectedProfileId) {
-    const metadata = params.preparedConfig.auth?.profiles?.[params.selectedProfile.profileId] ?? {
-      provider: params.selectedProfile.credential.provider,
-      mode: params.selectedProfile.credential.type,
-    };
-    config.auth = {
-      ...config.auth,
-      profiles: {
-        ...config.auth?.profiles,
-        [params.selectedProfileId]: structuredClone(metadata),
-      },
-    };
-  }
-
   const providerConfigKey = findSelectedProviderConfigKey(params.preparedConfig, params.providerId);
   if (providerConfigKey) {
     const preparedProvider = params.preparedConfig.models?.providers?.[providerConfigKey];
@@ -438,13 +442,32 @@ export function projectManualInferenceConfig(params: {
       };
     }
   }
-  copySelectedModelMetadata({
+  const metadata = {
     target: config,
     prepared: params.preparedConfig,
     modelRef: params.modelRef,
     ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
-  return config;
+  };
+  const projected = withSelectedModelMetadata({ ...metadata, targetModelRef: params.modelRef });
+  const ref = params.normalizeWithProvider
+    ? resolveModelTarget({
+        raw: params.modelRef,
+        cfg: projected,
+        workspaceDir: params.workspaceDir,
+        providerPlugin: params.normalizeWithProvider,
+      })
+    : parseRef(params.modelRef);
+  const modelRef = `${ref.provider}/${ref.model}`;
+  return {
+    ...ref,
+    modelRef,
+    // Resolve against the filtered patch, then carry its selected metadata to the
+    // canonical key without persisting an extra raw row from the auth result.
+    config:
+      modelRef === params.modelRef
+        ? projected
+        : withSelectedModelMetadata({ ...metadata, targetModelRef: modelRef }),
+  };
 }
 
 export function canonicalizeSetupModelRef(params: {

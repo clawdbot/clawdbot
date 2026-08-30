@@ -24,7 +24,11 @@ export function spawnOwnedVitestProcess(spec: {
       "oc-vt-",
       fs.realpathSync(env.TMPDIR || env.TMP || env.TEMP || tmpdir()),
     );
-    options = { ...options, env: { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot } };
+    const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
+    // This group owns and joins every cache writer before removing its namespace.
+    // Reuse source transforms here without opening the host-wide tsx disk cache.
+    delete childEnv.TSX_DISABLE_CACHE;
+    options = { ...options, env: childEnv };
   }
   let child;
   try {

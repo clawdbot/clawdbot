@@ -11,8 +11,8 @@ import {
   type ConversationRef,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
+import type { ResolvedAgentRoute } from "../../routing/resolve-route.types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { ensureConfiguredBindingTargetReady } from "./binding-targets.js";

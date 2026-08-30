@@ -4,7 +4,7 @@ import {
   findChatChannelMeta,
   getChatChannelMeta as getBuiltInChatChannelMeta,
 } from "../channels/chat-meta.js";
-import type { ChatChannelId } from "../channels/ids.js";
+import type { ChatChannelId } from "../channels/plugins/channel-id.types.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import {

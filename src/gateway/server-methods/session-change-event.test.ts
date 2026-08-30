@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({

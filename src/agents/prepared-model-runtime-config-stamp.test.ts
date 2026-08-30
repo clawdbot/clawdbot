@@ -7,6 +7,9 @@ import {
 } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import type { PreparedPluginMetadata } from "../plugins/plugin-metadata-collection.js";
+import { createPreparedPluginMetadataFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -60,7 +63,7 @@ describe("prepared model runtime config stamps", () => {
     setPreparedModelRuntimeAuthMaterializations(existingReader, materializations);
     const authStore = getPreparedModelRuntimeAuthStore(existingReader);
     const loadedAuth = await loadPreparedModelRuntimeAuth(existingReader, { providerIds: [] });
-    mocks.configuredAgentDirs.set("default", "/tmp/later-agent");
+    mocks.configuredAgentDirs.set("default", state.agentDir("later"));
 
     advancePreparedModelRuntimeConfig(nextConfig);
 
@@ -84,29 +87,59 @@ describe("prepared model runtime config stamps", () => {
     ).resolves.toMatchObject({ config: nextConfig });
   });
 
-  it("resolves startup config inside the serialized publication", async () => {
+  it("resolves startup config and workspace metadata inside the serialized publication", async () => {
     const initialConfig = {};
     const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
-    let currentConfig = initialConfig;
-
-    const publication = refreshPreparedModelRuntimeSnapshots(() => currentConfig, {
-      gatewayLifecycle: true,
+    const metadata = [initialConfig, nextConfig].map((config, index): PreparedPluginMetadata => {
+      const snapshot = createPluginMetadataSnapshot({
+        config,
+        workspaceDir: `/tmp/queued-metadata-workspace-${index}`,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
+      return createPreparedPluginMetadataFixture({
+        unionSnapshot: snapshot,
+        agentWorkspaceDirs: new Map([["default", `/tmp/queued-metadata-workspace-${index}`]]),
+      });
     });
-    currentConfig = nextConfig;
-    advancePreparedModelRuntimeConfig(nextConfig);
-    await publication;
+    let current = { config: initialConfig, pluginMetadata: metadata[0]! };
+    const next = { config: nextConfig, pluginMetadata: metadata[1]! };
+    const supplierStarted = createDeferred();
+    const supplierReady = createDeferred();
 
-    await expect(
-      prepareModelRuntimeSnapshot({
-        agentId: "default",
-        agentDir: state.agentDir("default"),
-        inheritedAuthDir: state.agentDir("default"),
+    const publication = refreshPreparedModelRuntimeSnapshots(
+      async () => {
+        supplierStarted.resolve();
+        await supplierReady.promise;
+        return current;
+      },
+      { gatewayLifecycle: true },
+    );
+    try {
+      await supplierStarted.promise;
+      current = next;
+      mocks.configuredWorkspaces.set("default", next.pluginMetadata.selectedSnapshot.workspaceDir!);
+      advancePreparedModelRuntimeConfig(nextConfig);
+      supplierReady.resolve();
+      await publication;
+
+      await expect(
+        prepareModelRuntimeSnapshot({
+          agentId: "default",
+          agentDir: state.agentDir("default"),
+          inheritedAuthDir: state.agentDir("default"),
+          config: nextConfig,
+        }),
+      ).resolves.toMatchObject({
         config: nextConfig,
-      }),
-    ).resolves.toMatchObject({ config: nextConfig });
-    await expect(
-      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-    ).resolves.toMatchObject({ config: nextConfig });
+        metadataSnapshot: next.pluginMetadata.selectedSnapshot,
+      });
+      await expect(
+        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+      ).resolves.toMatchObject({ config: nextConfig });
+    } finally {
+      supplierReady.resolve();
+      await Promise.allSettled([publication]);
+    }
   });
 
   it("drops an async startup config supplier superseded before it resolves", async () => {
@@ -118,7 +151,7 @@ describe("prepared model runtime config stamps", () => {
     try {
       stalePublication = refreshPreparedModelRuntimeSnapshots(async () => {
         await supplierReady.promise;
-        return staleConfig;
+        return { config: staleConfig };
       });
       nextPublication = refreshPreparedModelRuntimeSnapshots(nextConfig, {
         gatewayLifecycle: true,
@@ -156,7 +189,7 @@ describe("prepared model runtime config stamps", () => {
         async () => {
           supplierStarted.resolve();
           await releaseSupplier.promise;
-          return staleConfig;
+          return { config: staleConfig };
         },
         {
           gatewayLifecycle: true,
@@ -213,7 +246,7 @@ describe("prepared model runtime config stamps", () => {
     try {
       mocks.mutationListener?.({ affectsInheritedStores: true });
       await vi.waitFor(() => expect(finishAuthRefresh).toBeDefined());
-      mocks.configuredAgentDirs.set("default", "/tmp/later-agent");
+      mocks.configuredAgentDirs.set("default", state.agentDir("later"));
       advancePreparedModelRuntimeConfig(nextConfig);
       finishAuthRefreshGate.resolve();
 

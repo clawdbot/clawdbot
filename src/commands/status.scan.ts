@@ -6,7 +6,7 @@ import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin
 import type { RuntimeEnv } from "../runtime.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import { resolveStatusMemoryStatusSnapshot } from "./status.scan-memory.ts";
-import { collectStatusScanOverview } from "./status.scan-overview.ts";
+import { withStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
 import { scanStatusJsonWithPolicy } from "./status.scan.fast-json.js";
 
@@ -52,61 +52,65 @@ export async function scanStatus(
     },
     async (progress) => {
       const isFullScan = opts.all === true || opts.deep === true;
-      const overview = await collectStatusScanOverview({
-        env: process.env,
-        commandName: "status",
-        opts,
-        showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
-        includeLiveChannelStatus: isFullScan,
-        includeChannelSetupRuntimeFallback: isFullScan,
-        // Fast status avoids local secret resolution and relies on config/runtime hints.
-        channelCredentialResolutionSkipped: !isFullScan,
-        includeChannelSecretTargets: isFullScan ? undefined : false,
-        fetchGitUpdate: isFullScan,
-        includeRegistryUpdate: isFullScan,
-        includeAdvertisedControlUiLinks: true,
-        progress,
-        labels: {
-          loadingConfig: "Loading config…",
-          checkingTailscale: "Checking Tailscale…",
-          checkingForUpdates: "Checking for updates…",
-          resolvingAgents: "Resolving agents…",
-          probingGateway: "Probing gateway…",
-          queryingChannelStatus: "Querying channel status…",
-          summarizingChannels: "Summarizing channels…",
+      return await withStatusScanOverview(
+        {
+          env: process.env,
+          commandName: "status",
+          opts,
+          showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
+          includeLiveChannelStatus: isFullScan,
+          includeChannelSetupRuntimeFallback: isFullScan,
+          // Fast status avoids local secret resolution and relies on config/runtime hints.
+          channelCredentialResolutionSkipped: !isFullScan,
+          includeChannelSecretTargets: isFullScan ? undefined : false,
+          fetchGitUpdate: isFullScan,
+          includeRegistryUpdate: isFullScan,
+          includeAdvertisedControlUiLinks: true,
+          progress,
+          labels: {
+            loadingConfig: "Loading config…",
+            checkingTailscale: "Checking Tailscale…",
+            checkingForUpdates: "Checking for updates…",
+            resolvingAgents: "Resolving agents…",
+            probingGateway: "Probing gateway…",
+            queryingChannelStatus: "Querying channel status…",
+            summarizingChannels: "Summarizing channels…",
+          },
         },
-      });
+        async (overview) => {
+          progress.setLabel("Checking plugins…");
+          const pluginCompatibility = opts.all
+            ? await import("../plugins/status.js").then(
+                ({ buildPluginCompatibilitySnapshotNotices }) =>
+                  buildPluginCompatibilitySnapshotNotices({ config: overview.cfg }),
+              )
+            : [];
+          progress.tick();
 
-      progress.setLabel("Checking plugins…");
-      const pluginCompatibility = opts.all
-        ? await import("../plugins/status.js").then(({ buildPluginCompatibilitySnapshotNotices }) =>
-            buildPluginCompatibilitySnapshotNotices({ config: overview.cfg }),
-          )
-        : [];
-      progress.tick();
+          progress.setLabel("Checking memory and sessions…");
+          const result = await executeStatusScanFromOverview({
+            overview,
+            resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
+              // Memory plugin probing can touch disk/plugin state; reserve it for full scans.
+              opts.all
+                ? await resolveStatusMemoryStatusSnapshot({
+                    cfg,
+                    agentStatus,
+                    memoryPlugin,
+                  })
+                : null,
+            channelIssues: overview.channelIssues,
+            channels: overview.channels,
+            pluginCompatibility,
+          });
+          progress.tick();
 
-      progress.setLabel("Checking memory and sessions…");
-      const result = await executeStatusScanFromOverview({
-        overview,
-        resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
-          // Memory plugin probing can touch disk/plugin state; reserve it for full scans.
-          opts.all
-            ? await resolveStatusMemoryStatusSnapshot({
-                cfg,
-                agentStatus,
-                memoryPlugin,
-              })
-            : null,
-        channelIssues: overview.channelIssues,
-        channels: overview.channels,
-        pluginCompatibility,
-      });
-      progress.tick();
+          progress.setLabel("Rendering…");
+          progress.tick();
 
-      progress.setLabel("Rendering…");
-      progress.tick();
-
-      return result;
+          return result;
+        },
+      );
     },
   );
 }

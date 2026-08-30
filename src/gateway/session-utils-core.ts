@@ -3,6 +3,7 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
 import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
@@ -173,34 +174,37 @@ export function buildCompactionCheckpointPreview(
 }
 
 function resolveModelCostConfigCached(
-  provider: string | undefined,
-  model: string | undefined,
-  cfg: OpenClawConfig,
+  params: Parameters<typeof resolveModelCostConfig>[0],
   rowContext?: SessionListRowContext,
 ): ModelCostConfig | undefined {
   if (!rowContext) {
-    return resolveModelCostConfig({ provider, model, config: cfg });
+    return resolveModelCostConfig(params);
   }
-  const key = createSessionRowModelCacheKey(provider, model);
+  // The projection owns this cache; equal model refs in different agent
+  // workspaces can still have different manifest aliases and local prices.
+  const key = `${params.agentId ?? ""}\0${createSessionRowModelCacheKey(params.provider, params.model)}`;
   if (rowContext.modelCostConfigByModelRef.has(key)) {
     return rowContext.modelCostConfigByModelRef.get(key);
   }
-  const value = resolveModelCostConfig({ provider, model, config: cfg });
+  const value = resolveModelCostConfig(params);
   rowContext.modelCostConfigByModelRef.set(key, value);
   return value;
 }
 
-export function resolveEstimatedSessionCostUsd(params: {
-  cfg: OpenClawConfig;
-  provider?: string;
-  model?: string;
-  entry?: Pick<
-    SessionEntry,
-    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
-  >;
-  explicitCostUsd?: number;
-  rowContext?: SessionListRowContext;
-}): number | undefined {
+export function resolveEstimatedSessionCostUsd(
+  params: ModelManifestNormalizationContext & {
+    cfg: OpenClawConfig;
+    agentId?: string;
+    provider?: string;
+    model?: string;
+    entry?: Pick<
+      SessionEntry,
+      "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
+    >;
+    explicitCostUsd?: number;
+    rowContext?: SessionListRowContext;
+  },
+): number | undefined {
   const explicitCostUsd = asNonNegativeFiniteNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
   );
@@ -219,12 +223,7 @@ export function resolveEstimatedSessionCostUsd(params: {
   ) {
     return undefined;
   }
-  const cost = resolveModelCostConfigCached(
-    params.provider,
-    params.model,
-    params.cfg,
-    params.rowContext,
-  );
+  const cost = resolveModelCostConfigCached({ ...params, config: params.cfg }, params.rowContext);
   if (!cost) {
     return undefined;
   }

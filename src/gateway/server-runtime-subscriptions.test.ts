@@ -37,11 +37,8 @@ import {
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
-import {
-  abortChatRunById,
-  registerChatAbortController,
-  type ChatAbortControllerEntry,
-} from "./chat-abort.js";
+import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,

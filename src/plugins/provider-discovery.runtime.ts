@@ -232,6 +232,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   const manifestRegistry = metadataSnapshot.manifestRegistry;
   const pluginIds = resolveDiscoveredProviderPluginIds({
     ...params,
+    workspaceDir: metadataSnapshot.workspaceDir,
     registry,
     manifestRegistry,
   });

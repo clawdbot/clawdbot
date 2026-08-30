@@ -1,5 +1,14 @@
 // Verifies live session model selection, switch queuing, and pending-flag cleanup.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 
 const state = vi.hoisted(() => ({
   resolveDefaultModelForAgentMock: vi.fn(),
@@ -15,11 +24,8 @@ vi.mock("./embedded-agent.js", () => {
   return {};
 });
 
-vi.mock("./model-selection.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./model-selection.js")>("./model-selection.js");
+vi.mock("./model-selection.js", () => {
   return {
-    normalizeStoredOverrideModel: actual.normalizeStoredOverrideModel,
     resolveDefaultModelForAgent: (...args: unknown[]) =>
       state.resolveDefaultModelForAgentMock(...args),
     resolvePersistedSelectedModelRef: (...args: unknown[]) =>
@@ -44,6 +50,7 @@ vi.mock("../config/sessions/paths.js", () => ({
 }));
 
 let mod: typeof import("./live-model-switch.js");
+let realResolvePersistedSelectedModelRef: typeof import("./model-selection.js").resolvePersistedSelectedModelRef;
 
 async function loadModule() {
   return mod;
@@ -81,9 +88,22 @@ function resolvePendingSelection(
 describe("live model switch", () => {
   beforeAll(async () => {
     mod = await import("./live-model-switch.js");
+    ({ resolvePersistedSelectedModelRef: realResolvePersistedSelectedModelRef } =
+      await vi.importActual<typeof import("./model-selection.js")>("./model-selection.js"));
   });
 
   beforeEach(() => {
+    const cfg: OpenClawConfig = { session: { store: "/tmp/custom-store.json" } };
+    const metadata = installTemporaryCurrentPluginMetadataSnapshot(
+      createPluginMetadataSnapshot({
+        config: cfg,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }),
+      { config: cfg },
+    );
+    onTestFinished(() => {
+      metadata.release();
+    });
     state.embeddedAgentModuleImported = false;
     state.resolveDefaultModelForAgentMock
       .mockReset()
@@ -179,10 +199,12 @@ describe("live model switch", () => {
       authProfileId: "profile-gpt",
       authProfileIdSource: "user",
     });
-    expect(state.resolveDefaultModelForAgentMock).toHaveBeenCalledWith({
-      cfg: { session: { store: "/tmp/custom-store.json" } },
-      agentId: "reply",
-    });
+    expect(state.resolveDefaultModelForAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        agentId: "reply",
+      }),
+    );
     expect(state.resolveStorePathMock).toHaveBeenCalledWith("/tmp/custom-store.json", {
       agentId: "reply",
     });
@@ -281,36 +303,135 @@ describe("live model switch", () => {
     });
   });
 
-  it("strips duplicated provider prefixes from persisted overrides", () => {
-    expect(
-      resolvePendingSelection({
-        providerOverride: "openai",
-        modelOverride: "openai/gpt-5.4",
-      }),
-    ).toEqual({
+  it.each([
+    {
+      name: "a duplicated OpenAI provider prefix",
       provider: "openai",
-      model: "gpt-5.4",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-  });
+      model: "openai/gpt-5.4",
+      configured: false,
+      provenance: "raw",
+      expected: "gpt-5.4",
+      runtimeCalls: 0,
+    },
+    {
+      name: "a raw plugin model",
+      provider: "stored-provider",
+      model: "legacy",
+      configured: false,
+      provenance: "raw",
+      expected: "runtime-retained-legacy",
+      runtimeCalls: 1,
+    },
+    {
+      name: "a literal configured self-prefix",
+      provider: "stored-provider",
+      model: "stored-provider/legacy",
+      configured: true,
+      provenance: "raw",
+      expected: "stored-provider/legacy",
+      runtimeCalls: 0,
+    },
+    ...(["explicit", "legacy"] as const).map((provenance) => ({
+      name: `${provenance} resolved provenance`,
+      provider: "stored-provider",
+      model: "legacy",
+      configured: false,
+      provenance,
+      expected: "retained-legacy",
+      runtimeCalls: 0,
+    })),
+  ])(
+    "honors $name when reading a pending live switch",
+    ({ provider, model, configured, provenance, expected, runtimeCalls }) => {
+      state.resolvePersistedSelectedModelRefMock.mockImplementation(
+        realResolvePersistedSelectedModelRef,
+      );
+      const cfg: OpenClawConfig = {
+        session: { store: "/tmp/custom-store.json" },
+        agents: { entries: { reply: { workspace: "/tmp/configured-reply-workspace" } } },
+      };
+      if (configured) {
+        cfg.models = {
+          providers: {
+            [provider]: {
+              baseUrl: "https://stored-provider.test/v1",
+              models: [
+                {
+                  id: model,
+                  name: model,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 4096,
+                  maxTokens: 1024,
+                },
+              ],
+            },
+          },
+        };
+      }
+      const manifestRegistry = makeRegistry([
+        { id: "stored-provider", channels: [], providers: ["stored-provider"] },
+      ]);
+      const manifest = manifestRegistry.plugins[0]!;
+      manifest.modelIdNormalization = {
+        providers: { "stored-provider": { aliases: { legacy: "retained-legacy" } } },
+      };
+      const normalizeModelId = vi.fn(({ modelId }: { modelId: string }) => `runtime-${modelId}`);
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.plugins.push(
+        createPluginRecord({
+          id: manifest.id,
+          source: manifest.source,
+          rootDir: manifest.rootDir,
+          origin: manifest.origin,
+          providerIds: manifest.providers,
+        }),
+      );
+      pluginRegistry.providers.push({
+        pluginId: manifest.id,
+        source: manifest.source,
+        rootDir: manifest.rootDir,
+        provider: { id: manifest.id, label: "Stored provider", auth: [], normalizeModelId },
+      });
 
-  it("routes normalized overrides back through persisted ref resolution", () => {
-    // Normalization strips duplicate provider prefixes before handing the
-    // choice to the shared persisted-ref resolver.
-    resolvePendingSelection({
-      providerOverride: "z-ai",
-      modelOverride: "z-ai/deepseek-chat",
-    });
+      const selected = withPluginRuntimeGenerationScope(
+        {
+          config: cfg,
+          metadataSnapshot: createPluginMetadataSnapshot({
+            config: cfg,
+            manifestRegistry,
+            workspaceDir: "/tmp/retained-generation-workspace",
+          }),
+          pluginRegistry,
+        },
+        () =>
+          resolvePendingSelection(
+            {
+              providerOverride: provider,
+              modelOverride: model,
+              ...(provenance === "explicit"
+                ? { modelOverrideRouteResolution: "resolved" }
+                : provenance === "legacy"
+                  ? {
+                      modelOverrideFallbackOriginProvider: "origin-provider",
+                      modelOverrideFallbackOriginModel: "origin-model",
+                    }
+                  : {}),
+            },
+            { cfg },
+          ),
+      );
 
-    expect(state.resolvePersistedSelectedModelRefMock).toHaveBeenCalledWith({
-      defaultProvider: "anthropic",
-      runtimeProvider: undefined,
-      runtimeModel: undefined,
-      overrideProvider: "z-ai",
-      overrideModel: "deepseek-chat",
-    });
-  });
+      expect(selected).toEqual({
+        provider,
+        model: expected,
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+      });
+      expect(normalizeModelId).toHaveBeenCalledTimes(runtimeCalls);
+    },
+  );
 
   it("does not import the broad embedded-agent barrel on module load", async () => {
     await loadModule();

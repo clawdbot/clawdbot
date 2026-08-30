@@ -6,7 +6,7 @@ import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveTieredModel } from "../model-resolution.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveRequestStreamTransportOverrides } from "./runtime-resolution.js";
 import {
   buildBeforeModelResolveAttachments,
@@ -16,7 +16,7 @@ import {
 } from "./setup.js";
 
 export async function resolveEmbeddedRunModelSetup(params: {
-  runParams: RunEmbeddedAgentParams;
+  runParams: RunEmbeddedAgentInternalParams;
   provider: string;
   modelId: string;
   agentDir: string;
@@ -37,6 +37,16 @@ export async function resolveEmbeddedRunModelSetup(params: {
     hookRunner: params.hookRunner,
     hookContext: params.hookContext,
   });
+  // Hooks cannot reopen an authorized initial selection. Compare logical refs here;
+  // provider-owned transport resolution may legitimately rewrite the eventual model id.
+  const expectedInitialModel = runParams.expectedInitialModel;
+  if (
+    expectedInitialModel &&
+    (hookSelection.provider !== expectedInitialModel.provider ||
+      hookSelection.modelId !== expectedInitialModel.model)
+  ) {
+    throw new Error("Initial model selection no longer matches the authorized model override.");
+  }
   const modelSelectionChangedByHook =
     hookSelection.provider !== params.provider || hookSelection.modelId !== params.modelId;
   let provider = hookSelection.provider;

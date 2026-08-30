@@ -2603,22 +2603,25 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
-  it("passes a current-config supplier after loading the prepared runtime", async () => {
-    const initialConfig = { ui: { theme: "light" } } as never;
-    const nextConfig = { ui: { theme: "dark" } } as never;
-    let currentConfig = initialConfig;
+  it("passes a current config packet after loading the prepared runtime", async () => {
+    const initial = { config: { gateway: { port: 18789 } } };
+    const next = { config: { gateway: { port: 18790 } } };
+    let current = initial;
 
     const publication = testing.publishConfiguredModelRuntimeSnapshots({
-      cfg: initialConfig,
-      getConfig: () => currentConfig,
+      cfg: initial.config,
+      getConfig: () => current,
       log: { warn: vi.fn() },
-    } as never);
-    currentConfig = nextConfig;
+    });
+    current = next;
     await publication;
 
     const getConfig = hoisted.refreshPreparedModelRuntimeSnapshots.mock.calls[0]?.[0];
     expect(getConfig).toBeTypeOf("function");
-    await expect(Promise.resolve((getConfig as () => unknown)())).resolves.toBe(nextConfig);
+    if (typeof getConfig !== "function") {
+      throw new Error("model publication must receive a config packet supplier");
+    }
+    await expect(Promise.resolve(getConfig())).resolves.toBe(next);
   });
 
   it("hydrates external CLI auth from the config supplied to model publication", async () => {
@@ -2687,11 +2690,11 @@ describe("startGatewayPostAttachRuntime", () => {
       getConfig: async () => {
         configStarted.resolve();
         await releaseConfig.promise;
-        return {};
+        return { config: {} };
       },
       isCurrent: () => current,
       log: { warn: vi.fn() },
-    } as never);
+    });
 
     await configStarted.promise;
     current = false;

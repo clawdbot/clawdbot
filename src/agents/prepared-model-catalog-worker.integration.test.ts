@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
@@ -14,13 +14,7 @@ import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./auth-profiles/constants.js";
 import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
-import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
-import {
-  encodePluginModelCatalogRelativePath,
-  PLUGIN_MODEL_CATALOG_GENERATED_BY,
-  replacePersistedPluginModelCatalogs,
-} from "./plugin-model-catalog.js";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import {
   createPreparedModelCatalogWorker,
@@ -30,10 +24,8 @@ import {
   PROVIDER_ID,
   HARNESS_ID,
   SHARED_AUTH_PROVIDER_ID,
-  PLUGIN_ID,
   PROFILE_ID,
   MATERIALIZED_SECRET,
-  UNRELATED_SECRET,
   REF_ONLY_API_PROVIDER_ID,
   REF_ONLY_API_ENV,
   REF_ONLY_TOKEN_PROVIDER_ID,
@@ -43,6 +35,7 @@ import {
   EXTERNAL_AUTH_PROFILE_ID,
   EXTERNAL_AUTH_PATH_ENV,
   writeFixturePlugin,
+  createCatalogFixtureAtRoot,
 } from "./prepared-model-catalog-worker.test-support.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -62,6 +55,14 @@ import {
   usePreparedCatalogWorkerFixtures,
 } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
+// Full browse retains the prepared harness row while the auth-specific rows change.
+const UNAVAILABLE_HARNESS_MODEL = {
+  provider: PROVIDER_ID,
+  id: "account-scoped-model",
+  name: "Account scoped model",
+  available: false,
+};
+const retireFixtureGenerations: Array<() => Promise<void>> = [];
 const { makeTempDir, retireAfterTest, waitForWorkers, waitForMarker } =
   usePreparedCatalogWorkerFixtures();
 
@@ -92,94 +93,14 @@ function writeCodexAuth(codexHome: string, marker: string): void {
 function createCatalogFixture(
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
-  options?: {
-    hydrateExternalCliProviderIds?: readonly string[];
-  },
+  options?: Parameters<typeof createCatalogFixtureAtRoot>[3],
 ) {
-  const root = makeTempDir("openclaw-model-catalog-worker-");
-  const stateDir = path.join(root, "state");
-  const agentDir = path.join(stateDir, "agents", "main", "agent");
-  const workspaceDir = path.join(root, "workspace");
-  const marker = path.join(root, "worker-marker.txt");
-  const externalAuthPath = path.join(root, "external-auth.txt");
-  fs.mkdirSync(agentDir, { recursive: true });
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  const pluginFile = writeFixturePlugin({ root, spinMs });
-  fs.writeFileSync(externalAuthPath, "A", "utf8");
-  const env = {
-    ...process.env,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_WORKER_CATALOG_MARKER: marker,
-    [EXTERNAL_AUTH_PATH_ENV]: externalAuthPath,
-    ...envOverride,
-    [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
-    [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
-  };
-  const config = {
-    agents: {
-      defaults: {
-        model: `${PROVIDER_ID}/sqlite-model`,
-        models: {
-          [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
-        },
-      },
-    },
-    plugins: {
-      allow: [PLUGIN_ID],
-      load: { paths: [pluginFile] },
-      entries: { [PLUGIN_ID]: { enabled: true } },
-    },
-  } satisfies OpenClawConfig;
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      agentDir,
-      store: {
-        version: 1,
-        profiles: {
-          [PROFILE_ID]: {
-            type: "token",
-            provider: SHARED_AUTH_PROVIDER_ID,
-            token: MATERIALIZED_SECRET,
-            tokenRef: { source: "env", provider: "default", id: "SHARED_SECRET_REF" },
-          },
-          "unrelated-provider:default": {
-            type: "api_key",
-            provider: "unrelated-provider",
-            key: UNRELATED_SECRET,
-            keyRef: { source: "env", provider: "default", id: "UNRELATED_SECRET_REF" },
-          },
-        },
-        order: { [SHARED_AUTH_PROVIDER_ID]: [PROFILE_ID] },
-      },
-    },
-  ]);
-  const hydratedAuthStore = options?.hydrateExternalCliProviderIds
-    ? ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-        config,
-        externalCliProviderIds: options.hydrateExternalCliProviderIds,
-        readOnly: true,
-        syncExternalCli: false,
-      })
-    : undefined;
-  replacePersistedPluginModelCatalogs({
-    agentDir,
-    pluginCatalogWrites: {
-      [encodePluginModelCatalogRelativePath(PLUGIN_ID)]: JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {
-          [PROVIDER_ID]: {
-            baseUrl: "https://worker-catalog.invalid/v1",
-            api: "openai-completions",
-            apiKey: "WORKER_CATALOG_API_KEY",
-            models: [{ id: "sqlite-model", name: "SQLite model" }],
-          },
-        },
-      }),
-    },
-  });
-  return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
+  return createCatalogFixtureAtRoot(
+    makeTempDir("openclaw-model-catalog-worker-"),
+    spinMs,
+    envOverride,
+    options,
+  );
 }
 
 async function createStaticSnapshot(
@@ -203,10 +124,6 @@ async function createStaticSnapshot(
   };
   let current = true;
   const isCurrent = () => current;
-  const supersede = () => {
-    current = false;
-  };
-  retireAfterTest(supersede);
   const loadedMetadataSnapshot = options?.metadataWorkspace
     ? loadPluginMetadataSnapshot({
         config:
@@ -223,7 +140,7 @@ async function createStaticSnapshot(
     options?.provideMetadataToWorker && loadedMetadataSnapshot
       ? markPluginMetadataSnapshotProvided(loadedMetadataSnapshot)
       : loadedMetadataSnapshot;
-  const build = await startSerializedSnapshotBuild(
+  const build = startSerializedSnapshotBuild(
     {
       input,
       catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
@@ -233,13 +150,19 @@ async function createStaticSnapshot(
     30_000,
     "static",
     providedMetadataSnapshot,
-  ).pending;
+  );
+  // Direct fixtures own their generations independently of the global runtime reset.
+  retireFixtureGenerations.push(async () => {
+    current = false;
+    await build.completion;
+  });
+  const prepared = await build.pending;
   return {
     ...fixture,
-    pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
-    snapshot: build.snapshot,
+    pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+    snapshot: prepared.snapshot,
     isCurrent,
-    supersede,
+    supersede: () => (current = false),
   };
 }
 
@@ -255,6 +178,11 @@ async function createReadyWorkerFixture(spinMs: number) {
 describe("prepared model catalog worker boundary", () => {
   beforeEach(() => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
+  });
+
+  afterEach(async () => {
+    // The suite hook joins timed-out builds before the file hook removes worker fixtures.
+    await Promise.all(retireFixtureGenerations.splice(0).map((retire) => retire()));
   });
 
   it("preserves prepared catalog ownership across ambient environment changes", async () => {
@@ -664,7 +592,10 @@ describe("prepared model catalog worker boundary", () => {
     const added = await projectModels();
     expect(added).toMatchObject({
       result: {
-        models: [expect.objectContaining({ id: "durable-model", available: true })],
+        models: [
+          UNAVAILABLE_HARNESS_MODEL,
+          expect.objectContaining({ id: "durable-model", available: true }),
+        ],
       },
       projected: {
         authStore: {
@@ -693,7 +624,10 @@ describe("prepared model catalog worker boundary", () => {
     const removed = await projectModels();
     expect(removed).toMatchObject({
       result: {
-        models: [expect.objectContaining({ id: "durable-model", available: false })],
+        models: [
+          UNAVAILABLE_HARNESS_MODEL,
+          expect.objectContaining({ id: "durable-model", available: false }),
+        ],
       },
     });
     expect(removed.projected.authStore).toBeDefined();
@@ -830,7 +764,10 @@ describe("prepared model catalog worker boundary", () => {
     };
 
     await expect(listModels()).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "gpt-5.4", available: false })],
+      models: [
+        expect.objectContaining({ id: "gpt-5.4", available: false }),
+        UNAVAILABLE_HARNESS_MODEL,
+      ],
     });
     fs.writeFileSync(
       path.join(codexHome, "auth.json"),
@@ -845,11 +782,17 @@ describe("prepared model catalog worker boundary", () => {
     );
 
     await expect(listModels()).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "gpt-5.4", available: true })],
+      models: [
+        expect.objectContaining({ id: "gpt-5.4", available: true }),
+        UNAVAILABLE_HARNESS_MODEL,
+      ],
     });
     fs.rmSync(path.join(codexHome, "auth.json"));
     await expect(listModels()).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "gpt-5.4", available: false })],
+      models: [
+        expect.objectContaining({ id: "gpt-5.4", available: false }),
+        UNAVAILABLE_HARNESS_MODEL,
+      ],
     });
   });
 

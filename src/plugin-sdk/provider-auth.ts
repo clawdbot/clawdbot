@@ -594,11 +594,12 @@ export async function resolveProviderAuthProfileApiKey(params: {
   /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
 }): Promise<string | undefined> {
-  const { resolveApiKeyForProfile } = await import("../agents/auth-profiles/oauth.js");
   const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
   if (!agentDir || profileIds.length === 0) {
     return undefined;
   }
+  // Registration uses the synchronous availability helpers; OAuth loads only when resolving auth.
+  const { resolveApiKeyForProfile } = await import("../agents/auth-profiles/oauth.js");
   for (const profileId of filterAuthProfileIdsByType(store, profileIds, params)) {
     const resolved = await resolveApiKeyForProfile({
       cfg: params.cfg,

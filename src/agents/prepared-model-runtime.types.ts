@@ -1,6 +1,7 @@
 import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import type { PreparedPluginMetadata } from "../plugins/plugin-metadata-collection.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
@@ -118,10 +119,15 @@ export type PreparedModelRuntimeRefreshOptions = {
   catalogMode?: PreparedModelRuntimeCatalogMode;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   allowGatewaySubagentBinding?: boolean;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  pluginMetadata?: PreparedPluginMetadata;
   isPublicationCurrent?: () => boolean;
   /** Restricts replacement to configured owners whose normalized agent id is present. */
   agentIds?: ReadonlySet<string>;
+};
+
+export type PreparedModelRuntimeRefreshCandidate = {
+  config: OpenClawConfig;
+  pluginMetadata?: PreparedPluginMetadata;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{

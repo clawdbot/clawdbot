@@ -7,7 +7,7 @@ import { buildStatusAllReportData } from "./status-all/report-data.js";
 import { buildStatusAllReportLines } from "./status-all/report-lines.js";
 import { resolveStatusServiceSummaries } from "./status-runtime-shared.ts";
 import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
-import { collectStatusScanOverview } from "./status.scan-overview.ts";
+import { withStatusScanOverview } from "./status.scan-overview.ts";
 
 /** Runs the full read-only status report and writes it to the runtime logger. */
 export async function statusAllCommand(
@@ -15,49 +15,54 @@ export async function statusAllCommand(
   opts?: { timeoutMs?: number },
 ): Promise<void> {
   await withProgress({ label: "Scanning status --all…", total: 11 }, async (progress) => {
-    const overview = await collectStatusScanOverview({
-      env: process.env,
-      commandName: "status --all",
-      opts: {
-        timeoutMs: opts?.timeoutMs,
-      },
-      showSecrets: false,
-      runtime,
-      // status --all can afford gateway overrides so channel summaries reflect live runtime state.
-      useGatewayCallOverridesForChannelsStatus: true,
-      includeAdvertisedControlUiLinks: true,
-      progress,
-      labels: {
-        loadingConfig: "Loading config…",
-        checkingTailscale: "Checking Tailscale…",
-        checkingForUpdates: "Checking for updates…",
-        resolvingAgents: "Scanning agents…",
-        probingGateway: "Probing gateway…",
-        queryingChannelStatus: "Querying gateway…",
-        summarizingChannels: "Summarizing channels…",
-      },
-    });
-    progress.setLabel("Checking services…");
-    const [daemon, nodeService] = await resolveStatusServiceSummaries(opts?.timeoutMs);
-    const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
-      daemon,
-      node: nodeService,
-    });
-    progress.tick();
-    const lines = await buildStatusAllReportLines({
-      progress,
-      ...(await buildStatusAllReportData({
-        overview,
-        daemon,
-        nodeService,
-        nodeOnlyGateway,
+    return await withStatusScanOverview(
+      {
+        env: process.env,
+        commandName: "status --all",
+        opts: {
+          timeoutMs: opts?.timeoutMs,
+        },
+        showSecrets: false,
+        runtime,
+        // status --all can afford gateway overrides so channel summaries reflect live runtime state.
+        useGatewayCallOverridesForChannelsStatus: true,
+        includeAdvertisedControlUiLinks: true,
         progress,
-        timeoutMs: opts?.timeoutMs,
-      })),
-    });
+        labels: {
+          loadingConfig: "Loading config…",
+          checkingTailscale: "Checking Tailscale…",
+          checkingForUpdates: "Checking for updates…",
+          resolvingAgents: "Scanning agents…",
+          probingGateway: "Probing gateway…",
+          queryingChannelStatus: "Querying gateway…",
+          summarizingChannels: "Summarizing channels…",
+        },
+      },
+      async (overview, configSnapshot) => {
+        progress.setLabel("Checking services…");
+        const [daemon, nodeService] = await resolveStatusServiceSummaries(opts?.timeoutMs);
+        const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
+          daemon,
+          node: nodeService,
+        });
+        progress.tick();
+        const lines = await buildStatusAllReportLines({
+          progress,
+          ...(await buildStatusAllReportData({
+            overview,
+            configSnapshot,
+            daemon,
+            nodeService,
+            nodeOnlyGateway,
+            progress,
+            timeoutMs: opts?.timeoutMs,
+          })),
+        });
 
-    progress.setLabel("Rendering…");
-    runtime.log(lines.join("\n"));
-    progress.tick();
+        progress.setLabel("Rendering…");
+        runtime.log(lines.join("\n"));
+        progress.tick();
+      },
+    );
   });
 }

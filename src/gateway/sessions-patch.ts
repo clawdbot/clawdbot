@@ -571,12 +571,11 @@ export async function projectSessionsPatchEntry(params: {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    let thinkingRuntime: string | undefined;
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {
       const thinkingCatalog = await loadPreparedModelCatalogForPatch();
-      thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
+      const thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
       if (
         !isThinkingLevelSupported({
           provider: effectiveProvider,

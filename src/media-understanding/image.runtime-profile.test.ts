@@ -3,11 +3,15 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
+import { createImageRuntimeGenerationFixture } from "./image.runtime-test-support.js";
 
 const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
@@ -193,11 +197,10 @@ describe("describeImageWithModelCore", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
     acquireAgentRunPreparedModelRuntimeMock.mockImplementation(
-      async (input: { agentDir: string; config: object; workspaceDir?: string }) => ({
+      async (input: { agentDir: string; config: OpenClawConfig; workspaceDir?: string }) => ({
         snapshot: {
           agentDir: input.agentDir,
-          config: input.config,
-          workspaceDir: input.workspaceDir,
+          ...createImageRuntimeGenerationFixture(input.config, input.workspaceDir),
           createStores: () => ({
             authStorage: preparedAuthStorage,
             modelRegistry: {},
@@ -796,8 +799,7 @@ describe("describeImageWithModelCore", () => {
     acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
       snapshot: {
         agentDir: "/tmp/committed-agent",
-        config: committedCfg,
-        workspaceDir: "/tmp/committed-workspace",
+        ...createImageRuntimeGenerationFixture(committedCfg, "/tmp/committed-workspace"),
         createStores: () => ({
           authStorage: preparedAuthStorage,
           modelRegistry: {},
@@ -853,6 +855,47 @@ describe("describeImageWithModelCore", () => {
 
   it("reuses a parent run generation without acquiring another image lease", async () => {
     const cfg: OpenClawConfig = { logging: { level: "info" } };
+    const parentGeneration = createImageRuntimeGenerationFixture(cfg, "/tmp/parent-workspace");
+    const ambientGeneration = createImageRuntimeGenerationFixture(cfg, "/tmp/ambient-workspace");
+    const normalizeParentModel = vi.fn(({ modelId }: { modelId: string }) =>
+      modelId === "legacy-image" ? "gemini-2.5-flash" : "unexpected-renormalization",
+    );
+    const normalizeAmbientModel = vi.fn(() => "ambient-image");
+    const parentStream = vi.fn(async () => {
+      await Promise.resolve();
+      expect(getPluginRuntimeGenerationRegistry()).toBe(parentGeneration.pluginRegistry);
+      const stream = createAssistantMessageEventStream();
+      stream.end(await completeMock());
+      return stream;
+    });
+    const createParentStream = vi.fn(() => parentStream);
+    const createAmbientStream = vi.fn(() => {
+      throw new Error("ambient image stream must not run");
+    });
+    for (const [generation, normalizeModelId, createStreamFn] of [
+      [parentGeneration, normalizeParentModel, createParentStream],
+      [ambientGeneration, normalizeAmbientModel, createAmbientStream],
+    ] as const) {
+      generation.pluginRegistry.providers.push({
+        pluginId: "fixture-image",
+        source: "fixture-image",
+        provider: {
+          id: "google",
+          label: "Fixture image",
+          auth: [],
+          normalizeModelId,
+          createStreamFn,
+        },
+      });
+    }
+    const { registerProviderStreamForModel } = await vi.importActual<
+      typeof import("../agents/provider-stream.js")
+    >("../agents/provider-stream.js");
+    registerProviderStreamForModelMock.mockImplementationOnce(registerProviderStreamForModel);
+    prepareProviderRuntimeAuthMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      expect(getPluginRuntimeGenerationRegistry()).toBe(parentGeneration.pluginRegistry);
+    });
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         provider: "google",
@@ -872,28 +915,44 @@ describe("describeImageWithModelCore", () => {
     });
     const preparedModelRuntime = {
       agentDir: "/tmp/parent-agent",
-      config: cfg,
-      workspaceDir: "/tmp/parent-workspace",
+      ...parentGeneration,
       configuredRuntimeModels: [],
       inlineProviderModels: [],
       createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
     } as never;
 
-    const result = await describeImageWithModelCore({
-      cfg,
-      agentDir: "/tmp/parent-agent",
-      workspaceDir: "/tmp/parent-workspace",
-      preparedModelRuntime,
-      provider: "google",
-      model: "gemini-2.5-flash",
-      buffer: Buffer.alloc(1),
-      fileName: "image.png",
-      mime: "image/png",
-      prompt: "Describe the image.",
-      timeoutMs: 1000,
-    });
+    const result = await withPluginRuntimeGenerationScope(ambientGeneration, () =>
+      describeImageWithModelCore({
+        cfg,
+        agentDir: "/tmp/parent-agent",
+        workspaceDir: "/tmp/parent-workspace",
+        preparedModelRuntime,
+        provider: "google",
+        model: "legacy-image",
+        buffer: Buffer.alloc(1),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    );
 
     expect(result.text).toBe("parent runtime");
+    expect(normalizeParentModel).toHaveBeenCalledExactlyOnceWith({
+      provider: "google",
+      modelId: "legacy-image",
+    });
+    expect(normalizeAmbientModel).not.toHaveBeenCalled();
+    expect(createParentStream).toHaveBeenCalledOnce();
+    expect(parentStream).toHaveBeenCalledOnce();
+    expect(createAmbientStream).not.toHaveBeenCalled();
+    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
+      "google",
+      "gemini-2.5-flash",
+      "/tmp/parent-agent",
+      cfg,
+      expect.objectContaining({ preparedModelRuntime }),
+    );
     expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();
     expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
     for (const call of resolveModelAsyncMock.mock.calls) {

@@ -1,16 +1,27 @@
 /** Model candidate normalization and catalog selection for auth probes. */
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { normalizeProviderId, parseModelRef } from "../../agents/model-selection.js";
-import { DEFAULT_PROVIDER } from "./shared.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createModelCommandRefResolver } from "./shared.js";
 
 /** Groups configured model candidates by their requested provider identity. */
-export function buildProbeCandidateMap(modelCandidates: string[]): Map<string, string[]> {
+export function buildProbeCandidateMap(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  workspaceDir?: string;
+  modelCandidates: string[];
+}): Map<string, string[]> {
   const map = new Map<string, string[]>();
-  for (const raw of modelCandidates) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
-    if (!parsed) {
+  if (params.modelCandidates.length === 0) {
+    return map;
+  }
+  const resolveModelRef = createModelCommandRefResolver(params);
+  for (const raw of params.modelCandidates) {
+    const resolved = resolveModelRef(raw);
+    if (!resolved) {
       continue;
     }
+    const parsed = resolved.ref;
     const list = map.get(parsed.provider) ?? [];
     if (!list.includes(parsed.model)) {
       list.push(parsed.model);

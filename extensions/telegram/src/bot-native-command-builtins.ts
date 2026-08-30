@@ -85,6 +85,8 @@ function resolveTelegramCommandMenuModelContext(params: {
       });
     } else {
       const override = resolveStoredModelOverride({
+        config: params.cfg,
+        agentId: params.agentId,
         sessionEntry: entry,
         loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
         sessionKey: params.sessionKey,
@@ -144,6 +146,8 @@ function resolveTelegramFastCommandModelContext(params: {
       return fallback();
     }
     const override = resolveStoredModelOverride({
+      config: params.cfg,
+      agentId: params.agentId,
       sessionEntry: entry,
       loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
       sessionKey: params.sessionKey,

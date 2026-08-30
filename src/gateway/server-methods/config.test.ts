@@ -4,13 +4,23 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReadConfigFileSnapshotForWriteResult } from "../../config/io.types.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
+import type { ConfigUiHints } from "../../config/schema.hints.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getInstalledPluginIndexInstallRecordsCacheGeneration } from "../../plugins/installed-plugin-index-record-cache.js";
+import type { PreparedPluginMetadata } from "../../plugins/plugin-metadata-collection.js";
+import { resolvePluginMetadataEnvFingerprint } from "../../plugins/plugin-metadata-env.js";
+import {
+  getActivePluginRegistryVersion,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { clearConfigSchemaResponseCacheForTests, configHandlers } from "./config.js";
+import { invalidateConfigGetResponseCache } from "../config-get-response.js";
+import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 
 const configWriteMocks = vi.hoisted(() => ({
@@ -73,7 +83,7 @@ const { execOpenPathMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() =
   execOpenPathMock: vi.fn(),
   loadGatewayRuntimeConfigSchemaMock: vi.fn(() => ({
     schema: { type: "object" },
-    uiHints: undefined as Record<string, { advanced?: boolean }> | undefined,
+    uiHints: undefined as ConfigUiHints | undefined,
     version: "test-schema",
   })),
 }));
@@ -94,18 +104,16 @@ function mockOpenPathError(error: Error) {
 let storedConfig: OpenClawConfig;
 let storedHash: string;
 let nextHash: number;
-let modelNormalizationPluginMetadata: PluginMetadataSnapshot | undefined;
+let modelNormalizationPluginMetadata: PreparedPluginMetadata | undefined;
 
-function currentWriteSnapshot() {
+function currentWriteSnapshot(): ReadConfigFileSnapshotForWriteResult {
   const result = createConfigWriteSnapshot(storedConfig);
   result.snapshot.hash = storedHash;
   result.snapshot.raw = JSON.stringify(storedConfig);
-  if (modelNormalizationPluginMetadata) {
-    result.writeOptions = {
-      basePluginMetadataSnapshot: modelNormalizationPluginMetadata,
-    } as never;
-  }
-  return result;
+  return {
+    ...result,
+    writeOptions: { basePluginMetadata: modelNormalizationPluginMetadata },
+  };
 }
 
 async function invokeConfigPatch(args: {
@@ -198,7 +206,7 @@ async function invokeConfigOpenFile() {
 
 afterEach(() => {
   vi.useRealTimers();
-  clearConfigSchemaResponseCacheForTests();
+  invalidateConfigGetResponseCache();
   resetPluginRuntimeStateForTest();
   vi.clearAllMocks();
 });
@@ -409,7 +417,7 @@ describe("config.openFile", () => {
   });
 });
 
-describe("config schema response cache", () => {
+describe("config.schema", () => {
   it("returns resolved tier metadata through config.schema", async () => {
     loadGatewayRuntimeConfigSchemaMock.mockReturnValueOnce({
       schema: { type: "object" },
@@ -427,35 +435,31 @@ describe("config schema response cache", () => {
     );
   });
 
-  it("reuses a recent schema build across burst config requests", async () => {
-    await invokeConfigSchema();
-    await invokeConfigSchema();
-
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("rebuilds after config writes change schema inputs", async () => {
-    await invokeConfigSchema();
-    const patch = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "knot" } } } });
-
-    expect(patch.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ ok: true }),
-      undefined,
-    );
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
-
-    await invokeConfigSchema();
-
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("rebuilds when the active plugin registry generation changes", async () => {
-    await invokeConfigSchema();
+  it("returns current metadata schemas without replacing the executable plugin registry", async () => {
     setActivePluginRegistry(createTestRegistry([]));
-    await invokeConfigSchema();
+    const registryVersion = getActivePluginRegistryVersion();
+    let currentSchema: ReturnType<typeof loadGatewayRuntimeConfigSchemaMock> = {
+      schema: { type: "object" },
+      uiHints: {},
+      version: "test-schema",
+    };
+    await loadGatewayRuntimeConfigSchemaMock.withImplementation(
+      () => currentSchema,
+      async () => {
+        for (const label of ["Generation A", "Generation B", undefined]) {
+          const uiHints: ConfigUiHints = label ? { "plugins.entries.demo": { label } } : {};
+          currentSchema = { schema: currentSchema.schema, version: currentSchema.version, uiHints };
+          const { respond } = await invokeConfigSchema();
 
-    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ uiHints }),
+            undefined,
+          );
+        }
+        expect(getActivePluginRegistryVersion()).toBe(registryVersion);
+      },
+    );
   });
 });
 
@@ -735,17 +739,45 @@ describe("config.patch ID-keyed arrays", () => {
 
 describe("config.patch model input normalization", () => {
   it("uses write-snapshot policies before merging manifest-backed model IDs", async () => {
-    modelNormalizationPluginMetadata = {
-      plugins: [
-        {
-          modelIdNormalization: {
-            providers: {
-              myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
+    const snapshot = createPluginMetadataSnapshot({
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "myproxy",
+            origin: "config",
+            rootDir: "/plugins/myproxy",
+            source: "/plugins/myproxy/index.js",
+            manifestPath: "/plugins/myproxy/openclaw.plugin.json",
+            channels: [],
+            providers: ["myproxy"],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            modelIdNormalization: {
+              providers: {
+                myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
+              },
             },
           },
-        },
-      ],
-    } as unknown as PluginMetadataSnapshot;
+        ],
+        diagnostics: [],
+      },
+    });
+    modelNormalizationPluginMetadata = {
+      unionSnapshot: snapshot,
+      workspaces: new Map([[undefined, snapshot]]),
+      configWorkspaceDirs: [undefined],
+      agentWorkspaceDirs: new Map(),
+      installRecordsGeneration: getInstalledPluginIndexInstallRecordsCacheGeneration(),
+      envFingerprint: resolvePluginMetadataEnvFingerprint(),
+      selectedSnapshot: snapshot,
+      manifestRegistry: snapshot.manifestRegistry,
+      plugins: snapshot.plugins,
+      byPluginId: snapshot.byPluginId,
+      owners: snapshot.owners,
+      diagnostics: snapshot.diagnostics,
+      channelCatalog: { read: () => [] },
+    };
     storedConfig = {
       models: {
         providers: {

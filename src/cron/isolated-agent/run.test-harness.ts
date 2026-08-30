@@ -3,7 +3,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import type { LoadPreparedModelCatalogParams } from "../../agents/prepared-model-catalog.js";
+import type { ResolvedPublishedModelCatalogOwner } from "../../agents/prepared-model-catalog.types.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
@@ -124,7 +128,12 @@ const isExternalHookSessionMock = createMock();
 const resolveHookExternalContentSourceMock = createMock();
 const getSkillsSnapshotVersionMock = createMock();
 export const loadModelCatalogMock = createMock();
-export const loadModelCatalogOwnerMock = createMock();
+export const loadModelCatalogOwnerMock =
+  vi.fn<
+    (
+      params: LoadPreparedModelCatalogParams & { config: OpenClawConfig },
+    ) => Promise<ResolvedPublishedModelCatalogOwner>
+  >();
 export const preparedRunPluginRegistryMock = createMock();
 export const acquirePreparedModelRuntimeMock = createMock();
 export const loadPublishedReplyDispatchRuntimeMock = createMock();
@@ -584,41 +593,54 @@ function resetRunConfigMocks(): void {
   getSkillsSnapshotVersionMock.mockReturnValue(42);
   loadModelCatalogMock.mockResolvedValue([]);
   preparedRunPluginRegistryMock.mockReturnValue(createEmptyPluginRegistry());
+  loadPublishedReplyDispatchRuntimeMock.mockReset();
   loadPublishedReplyDispatchRuntimeMock.mockResolvedValue(undefined);
+  acquirePreparedModelRuntimeMock.mockReset();
   acquirePreparedModelRuntimeMock.mockImplementation(async (input, options) => {
-    const registry = preparedRunPluginRegistryMock();
-    const metadata = options?.pluginGeneration?.pluginMetadataSnapshot ??
-      options?.pluginMetadataSnapshot ?? { plugins: [], index: { plugins: [] } };
+    const pluginRegistry = preparedRunPluginRegistryMock();
+    const metadataSnapshot =
+      options?.pluginGeneration?.pluginMetadataSnapshot ??
+      options?.pluginMetadataSnapshot ??
+      createPluginMetadataSnapshot({
+        config: input.config,
+        workspaceDir: input.workspaceDir,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
     return {
-      snapshot: { ...input, metadataSnapshot: metadata, pluginRegistry: registry },
+      snapshot: { ...input, metadataSnapshot, pluginRegistry },
       pluginGeneration: {
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
         ...options?.pluginGeneration,
-        pluginMetadataSnapshot: metadata,
-        pluginRegistry: registry,
+        pluginMetadataSnapshot: metadataSnapshot,
+        pluginRegistry,
       },
       release: vi.fn(),
     };
   });
-  loadModelCatalogOwnerMock.mockImplementation(
-    async (params: {
-      agentId?: string;
-      agentDir?: string;
-      config: object;
-      workspaceDir?: string;
-    }) => {
-      const agentId = params.agentId ?? "default";
-      return {
-        agentId,
-        agentDir: params.agentDir ?? "/tmp/agent-dir",
-        workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDirMock(params.config, agentId),
+  loadModelCatalogOwnerMock.mockImplementation(async (params) => {
+    const agentId = params.agentId ?? "default";
+    const workspaceDir =
+      params.workspaceDir ?? resolveAgentWorkspaceDirMock(params.config, agentId);
+    return {
+      catalogOwner: { agentId, workspaceDir },
+      agentId,
+      agentDir: params.agentDir ?? "/tmp/agent-dir",
+      workspaceDir,
+      config: params.config,
+      authModes: {},
+      authStore: { version: 1, profiles: {} },
+      metadataSnapshot: createPluginMetadataSnapshot({
         config: params.config,
-        modelCatalog: {
-          entries: await loadModelCatalogMock(params),
-          routeVariants: [],
-        },
-      };
-    },
-  );
+        workspaceDir,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }),
+      modelCatalog: {
+        entries: await loadModelCatalogMock(params),
+        routeVariants: [],
+      },
+    };
+  });
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
 }
 

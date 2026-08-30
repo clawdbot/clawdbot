@@ -7,7 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRecord } from "../utils.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
-import { collectStatusScanOverview } from "./status.scan-overview.ts";
+import { withStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
 
 const statusScanMemoryModuleLoader = createLazyImportLoader(
@@ -92,37 +92,41 @@ export async function scanStatusJsonWithPolicy(
   runtime: RuntimeEnv,
   policy: StatusJsonScanPolicy,
 ): Promise<StatusScanResult> {
-  const overview = await collectStatusScanOverview({
-    env: process.env,
-    commandName: policy.commandName,
-    opts,
-    showSecrets: false,
-    runtime,
-    allowMissingConfigFastPath: policy.allowMissingConfigFastPath,
-    resolveHasConfiguredChannels: policy.resolveHasConfiguredChannels,
-    includeChannelsData: false,
-    // Fast JSON only needs to know whether channels may exist; it does not render channel tables.
-    includeChannelSecretTargets: false,
-    fetchGitUpdate: policy.fetchGitUpdate,
-    includeRegistryUpdate: policy.includeRegistryUpdate,
-    includeLocalStatusRpcFallback: policy.includeLocalStatusRpcFallback,
-    gatewayProbeTimeoutMs: policy.gatewayProbeTimeoutMs,
-  });
-  const pluginCompatibility = opts.all
-    ? await statusScanPluginStatusModuleLoader
-        .load()
-        .then(({ buildPluginCompatibilitySnapshotNotices }) =>
-          buildPluginCompatibilitySnapshotNotices({ config: overview.cfg }),
-        )
-    : [];
-  return await executeStatusScanFromOverview({
-    overview,
-    runtime,
-    resolveMemory: policy.resolveMemory,
-    channelIssues: [],
-    channels: { rows: [], details: [] },
-    pluginCompatibility,
-  });
+  return await withStatusScanOverview(
+    {
+      env: process.env,
+      commandName: policy.commandName,
+      opts,
+      showSecrets: false,
+      runtime,
+      allowMissingConfigFastPath: policy.allowMissingConfigFastPath,
+      resolveHasConfiguredChannels: policy.resolveHasConfiguredChannels,
+      includeChannelsData: false,
+      // Fast JSON only needs to know whether channels may exist; it does not render channel tables.
+      includeChannelSecretTargets: false,
+      fetchGitUpdate: policy.fetchGitUpdate,
+      includeRegistryUpdate: policy.includeRegistryUpdate,
+      includeLocalStatusRpcFallback: policy.includeLocalStatusRpcFallback,
+      gatewayProbeTimeoutMs: policy.gatewayProbeTimeoutMs,
+    },
+    async (overview) => {
+      const pluginCompatibility = opts.all
+        ? await statusScanPluginStatusModuleLoader
+            .load()
+            .then(({ buildPluginCompatibilitySnapshotNotices }) =>
+              buildPluginCompatibilitySnapshotNotices({ config: overview.cfg }),
+            )
+        : [];
+      return await executeStatusScanFromOverview({
+        overview,
+        runtime,
+        resolveMemory: policy.resolveMemory,
+        channelIssues: [],
+        channels: { rows: [], details: [] },
+        pluginCompatibility,
+      });
+    },
+  );
 }
 
 /** Runs the default fast status JSON scan. */

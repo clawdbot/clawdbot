@@ -1,4 +1,5 @@
 /** Projects effective configured model refs, aliases, and role tags for one agent. */
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -6,12 +7,12 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { type ModelManifestNormalizationContext, modelKey } from "./model-ref-shared.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import {
-  buildModelAliasIndex,
+  buildModelAliasIndexCore as buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
   type ModelAliasIndex,
+  type ModelSelectionNormalizationContext,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-shared.js";
@@ -34,7 +35,7 @@ export function resolveConfiguredModelEntries(
     allowPluginNormalization?: boolean;
     canonicalizeRef?: <TRef extends { provider: string; model: string }>(ref: TRef) => TRef;
     aliasIndex?: ModelAliasIndex;
-  } & ModelManifestNormalizationContext,
+  } & ModelSelectionNormalizationContext,
 ): {
   entries: ConfiguredModelEntry[];
   byKey: Map<string, ConfiguredModelEntry>;
@@ -57,8 +58,8 @@ export function resolveConfiguredModelEntries(
 
   const addEntry = (ref: { provider: string; model: string }, tag: string) => {
     const canonicalRef = params.canonicalizeRef?.(ref) ?? ref;
-    const key = modelKey(canonicalRef.provider, canonicalRef.model);
-    const originalKey = modelKey(ref.provider, ref.model);
+    const key = buildModelCatalogRef(canonicalRef.provider, canonicalRef.model);
+    const originalKey = buildModelCatalogRef(ref.provider, ref.model);
     const existing = entriesByKey.get(key);
     const aliases = [
       ...(existing?.aliases ?? []),
@@ -89,11 +90,8 @@ export function resolveConfiguredModelEntries(
     const inferredProvider = trimmed.includes("/")
       ? undefined
       : inferUniqueProviderFromConfiguredModels({
-          cfg: params.cfg,
-          agentId: params.agentId,
+          ...params,
           model: trimmed,
-          allowManifestNormalization: params.allowManifestNormalization,
-          manifestPlugins: params.manifestPlugins,
         });
     const resolved = resolveModelRefFromString({
       ...params,

@@ -9,7 +9,10 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import {
+  resolveProviderIdForAuth,
+  type ProviderAuthAliasLookupParams,
+} from "../provider-auth-aliases.js";
 import { CLAUDE_CLI_PROFILE_ID } from "./constants.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -22,6 +25,7 @@ export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
   agentId?: string;
   modelId?: string;
   workspaceDir?: string;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store?: AuthProfileStore;
   userPinnedAuthProfileId?: string;
 }): {
@@ -32,6 +36,7 @@ export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
     provider: params.provider,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
+    authAliasLookupParams: params.authAliasLookupParams,
     store: params.store,
     userPinnedAuthProfileId: params.userPinnedAuthProfileId,
   });
@@ -65,6 +70,7 @@ function resolveExternalCliAuthScopeFromAuthSelection(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store?: AuthProfileStore;
   userPinnedAuthProfileId?: string;
 }): {
@@ -127,11 +133,13 @@ function resolveConfiguredAuthProfileOrder(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store?: AuthProfileStore;
 }): string[] {
   const providerAuthKey = resolveProviderIdForAuth(params.provider, {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    ...params.authAliasLookupParams,
   });
   const orderedProfileIds =
     resolveAuthProfileOrderEntries({
@@ -171,6 +179,7 @@ function resolveExternalCliProviderIdForCompatibleAuthProfile(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store?: AuthProfileStore;
   profileId: string;
 }): {
@@ -189,6 +198,7 @@ function resolveExternalCliProviderIdForCompatibleAuthProfile(params: {
   const authAliasParams = {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    ...params.authAliasLookupParams,
   };
   const providerAuthKey = resolveProviderIdForAuth(params.provider, authAliasParams);
   const profileAuthKey = resolveProviderIdForAuth(profileProvider, authAliasParams);

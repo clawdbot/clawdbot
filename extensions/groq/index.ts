@@ -1,15 +1,16 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import {
-  createAssistantMessageEventStream,
-  streamSimple,
-  type AssistantMessageEvent,
-} from "openclaw/plugin-sdk/llm";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { AssistantMessageEvent } from "openclaw/plugin-sdk/llm";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { groqMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const GROQ_OVERSIZED_RECOVERY_MODEL_ID = "llama-3.3-70b-versatile";
 const GROQ_FALLBACK_MAX_TOKENS = 1_024;
+
+const loadLlm = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/llm"));
+const defaultStreamFn: StreamFn = (...args) =>
+  loadLlm().then(({ streamSimple }) => streamSimple(...args));
 
 function hasWireMaxTokens(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -45,7 +46,7 @@ function wrapGroqOversizedRequestRecovery(
   streamFn: StreamFn | undefined,
   enabled: boolean,
 ): StreamFn {
-  const underlying = streamFn ?? streamSimple;
+  const underlying = streamFn ?? defaultStreamFn;
   if (!enabled) {
     return underlying;
   }
@@ -76,59 +77,62 @@ function wrapGroqOversizedRequestRecovery(
     if (options?.maxTokens !== undefined) {
       return underlying(model, context, options);
     }
-    // Invoke before constructing the proxy stream so synchronous provider failures
-    // retain the caller-visible throw semantics of the underlying transport.
-    const initial = underlying(model, context, options);
-    const output = createAssistantMessageEventStream();
+    // Keep synchronous throws, and observe async rejection before the SDK import
+    // settles. The forwarding loop still owns conversion into complete error events.
+    const initial = Promise.resolve(underlying(model, context, options));
+    void initial.catch(() => {});
+    return loadLlm().then(({ createAssistantMessageEventStream }) => {
+      const output = createAssistantMessageEventStream();
 
-    void (async () => {
-      try {
-        const resolvedInitial = await Promise.resolve(initial);
-        let forwarded = false;
-        let retryWithoutTools = false;
-        for await (const event of resolvedInitial) {
-          if (!forwarded && !options?.signal?.aborted && isGroqTpmRequestTooLargeEvent(event)) {
-            retryWithoutTools = true;
-            break;
-          }
-          output.push(event);
-          forwarded = true;
-        }
-        if (retryWithoutTools) {
-          const fallback = await Promise.resolve(withoutTools(model, context, options));
-          for await (const event of fallback) {
+      void (async () => {
+        try {
+          const resolvedInitial = await initial;
+          let forwarded = false;
+          let retryWithoutTools = false;
+          for await (const event of resolvedInitial) {
+            if (!forwarded && !options?.signal?.aborted && isGroqTpmRequestTooLargeEvent(event)) {
+              retryWithoutTools = true;
+              break;
+            }
             output.push(event);
+            forwarded = true;
           }
-        }
-      } catch (error) {
-        output.push({
-          type: "error",
-          reason: "error",
-          error: {
-            role: "assistant",
-            content: [],
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          if (retryWithoutTools) {
+            const fallback = await Promise.resolve(withoutTools(model, context, options));
+            for await (const event of fallback) {
+              output.push(event);
+            }
+          }
+        } catch (error) {
+          output.push({
+            type: "error",
+            reason: "error",
+            error: {
+              role: "assistant",
+              content: [],
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "error",
+              errorMessage: error instanceof Error ? error.message : String(error),
+              timestamp: Date.now(),
             },
-            stopReason: "error",
-            errorMessage: error instanceof Error ? error.message : String(error),
-            timestamp: Date.now(),
-          },
-        });
-      } finally {
-        output.end();
-      }
-    })();
+          });
+        } finally {
+          output.end();
+        }
+      })();
 
-    return output;
+      return output;
+    });
   };
 }
 

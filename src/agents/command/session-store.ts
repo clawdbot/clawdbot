@@ -13,6 +13,7 @@ import { projectSessionSnapshotChanges } from "../../config/sessions/session-sna
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataRegistryView } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   clearAllCliSessions,
@@ -51,7 +52,10 @@ export function normalizeSessionTokenCount(value: number | undefined): number | 
 /** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir: string;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   sessionId: string;
   sessionKey: string;
   storePath: string;
@@ -196,18 +200,24 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const hasUsage = hasNonzeroUsage(usage);
   if (hasUsage && !preserveUserFacingRunState) {
-    const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
-    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
-      estimateUsageCost({
-        usage,
-        cost: resolveModelCostConfig({
-          provider: providerUsed,
-          model: modelUsed,
-          config: cfg,
-          agentDir: params.agentDir,
+    let runEstimatedCostUsd = asNonNegativeFiniteNumber(result.meta.agentMeta?.costUsd);
+    if (runEstimatedCostUsd === undefined) {
+      const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
+      runEstimatedCostUsd = asNonNegativeFiniteNumber(
+        estimateUsageCost({
+          usage,
+          cost: resolveModelCostConfig({
+            provider: providerUsed,
+            model: modelUsed,
+            config: cfg,
+            agentId: params.agentId,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+          }),
         }),
-      }),
-    );
+      );
+    }
     next.inputTokens = usage.input ?? 0;
     next.outputTokens = usage.output ?? 0;
     next.cacheRead = usage.cacheRead ?? 0;

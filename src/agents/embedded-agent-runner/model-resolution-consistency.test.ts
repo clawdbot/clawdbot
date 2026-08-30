@@ -1,20 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   prepareModelRunCapabilities,
   resolvePreparedModelThinkingCompat,
 } from "../model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import { createEmptyPluginMetadataSnapshot } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
+import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 
 const STATIC_MODEL_ID = "claude-haiku-4-5";
 const PROVIDER = "anthropic";
-const resolveHookModelSelectionMock = vi.hoisted(() =>
-  vi.fn(async ({ provider, modelId }: { provider: string; modelId: string }) => ({
-    provider,
-    modelId,
-  })),
-);
+const ensureSelectedAgentHarnessPluginMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadManifestMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn(() => undefined));
 
@@ -81,7 +81,7 @@ vi.mock("../../plugins/manifest-contract-eligibility.js", async (importOriginal)
 }));
 
 vi.mock("../harness/runtime-plugin.js", () => ({
-  ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+  ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginMock,
 }));
 
 vi.mock("../harness/selection.js", () => ({
@@ -99,13 +99,6 @@ vi.mock("../openai-routing.js", () => ({
 
 vi.mock("../prepared-model-runtime.js", () => ({
   prepareModelRuntimeSnapshot: vi.fn(),
-}));
-
-vi.mock("./run/setup.js", () => ({
-  buildBeforeModelResolveAttachments: vi.fn(() => []),
-  createNativeModelOwnedRuntimeModel: vi.fn(),
-  resolveHookModelSelection: resolveHookModelSelectionMock,
-  resolveNativeModelOwnedHarnessId: vi.fn(() => undefined),
 }));
 
 vi.mock("./compaction-runtime-preparation.js", () => ({
@@ -168,33 +161,122 @@ vi.mock("./compaction-runtime-context.js", () => ({
 }));
 
 vi.mock("./logger.js", () => ({
-  log: { warn: vi.fn() },
+  log: { info: vi.fn(), warn: vi.fn() },
 }));
 
+const { createEmptyAgentDiscoveryStores } = await import("./model.js");
 const { resolveEmbeddedRunModelSetup } = await import("./run/model-setup.js");
 const { prepareDirectCompactionAttempt } = await import("./direct-compaction-preparation.js");
 
-function createPreparedModelRuntime(config: Record<string, unknown>) {
+function createPreparedModelRuntime(config: OpenClawConfig) {
+  const workspaceDir = "/tmp/openclaw-model-resolution";
   return {
+    catalogOwner: undefined,
     agentDir: "/tmp/agents/main/agent",
     config,
-    workspaceDir: "/tmp/openclaw-model-resolution",
-    pluginRegistry: {},
+    workspaceDir,
+    activeProjectKeys: [],
+    authModes: {},
+    metadataSnapshot: createEmptyPluginMetadataSnapshot(workspaceDir),
+    pluginRegistry: createEmptyPluginRegistry(),
+    allowGatewaySubagentBinding: false,
+    modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
     inlineProviderModels: [],
-    createStores: () => ({ authStorage, modelRegistry: emptyModelRegistry }),
-  };
+    createStores: createEmptyAgentDiscoveryStores,
+  } satisfies PreparedModelRuntimeSnapshot;
 }
 
 describe("embedded model resolution consistency", () => {
   beforeEach(() => {
-    resolveHookModelSelectionMock.mockReset().mockImplementation(async ({ provider, modelId }) => ({
-      provider,
-      modelId,
-    }));
+    ensureSelectedAgentHarnessPluginMock.mockClear();
+    resolveModelAsyncMock.mockClear();
     loadManifestMetadataSnapshotMock.mockReset();
     normalizeProviderModelIdWithRuntimeMock.mockReset().mockReturnValue(undefined);
   });
+
+  it.each([
+    {
+      name: "rejects a provider remap before harness loading",
+      constrained: true,
+      provider: "other-provider",
+      modelId: STATIC_MODEL_ID,
+      rejects: true,
+    },
+    {
+      name: "rejects a model remap before harness loading",
+      constrained: true,
+      provider: PROVIDER,
+      modelId: "other-model",
+      rejects: true,
+    },
+    {
+      name: "accepts the matching authorized target",
+      constrained: true,
+      provider: PROVIDER,
+      modelId: STATIC_MODEL_ID,
+      rejects: false,
+    },
+    {
+      name: "preserves an unconstrained host hook remap",
+      constrained: false,
+      provider: "other-provider",
+      modelId: "other-model",
+      rejects: false,
+    },
+  ])(
+    "enforces the authorized initial model after before_model_resolve: $name",
+    async ({ constrained, provider, modelId, rejects }) => {
+      const config = {};
+      const preparedModelRuntime = createPreparedModelRuntime(config);
+      const runParams = {
+        config,
+        prompt: "hello",
+        sessionId: "chat-session",
+        agentId: "main",
+        workspaceDir: preparedModelRuntime.workspaceDir,
+        runId: "authorized-model-run",
+        timeoutMs: 1_000,
+        ...(constrained
+          ? { expectedInitialModel: { provider: PROVIDER, model: STATIC_MODEL_ID } }
+          : {}),
+      } satisfies RunEmbeddedAgentInternalParams;
+      const hookRunner = {
+        hasHooks: (name: string) => name === "before_model_resolve",
+        runBeforeModelResolve: vi.fn(async () => ({
+          providerOverride: provider,
+          modelOverride: modelId,
+        })),
+      };
+      const setup = resolveEmbeddedRunModelSetup({
+        runParams,
+        provider: PROVIDER,
+        modelId: STATIC_MODEL_ID,
+        agentDir: preparedModelRuntime.agentDir,
+        workspaceDir: preparedModelRuntime.workspaceDir,
+        globalLane: "test",
+        hookRunner,
+        hookContext: {
+          sessionId: runParams.sessionId,
+          workspaceDir: preparedModelRuntime.workspaceDir,
+        },
+        onHooksResolved: vi.fn(),
+        preparedModelRuntime,
+      });
+
+      if (rejects) {
+        await expect(setup).rejects.toThrow("authorized model override");
+        expect(ensureSelectedAgentHarnessPluginMock).not.toHaveBeenCalled();
+        expect(resolveModelAsyncMock).not.toHaveBeenCalled();
+      } else {
+        await expect(setup).resolves.toMatchObject({ provider, modelId });
+        expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
+          expect.objectContaining({ provider, modelId }),
+        );
+      }
+      expect(hookRunner.runBeforeModelResolve).toHaveBeenCalledOnce();
+    },
+  );
 
   it("resolves an explicit alias configured only on the selected agent", () => {
     const config = {
@@ -278,6 +360,9 @@ describe("embedded model resolution consistency", () => {
     ]);
     expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledWith({
       provider: "custom-provider",
+      config,
+      workspaceDir: undefined,
+      pluginMetadataSnapshot: undefined,
       plugins: manifestPlugins,
       context: {
         provider: "custom-provider",
@@ -311,7 +396,7 @@ describe("embedded model resolution consistency", () => {
       hookRunner: undefined,
       hookContext: {} as never,
       onHooksResolved: vi.fn(),
-      preparedModelRuntime: preparedModelRuntime as never,
+      preparedModelRuntime,
     });
     expect(chat.model).toMatchObject({ provider: PROVIDER, id: STATIC_MODEL_ID });
 
@@ -324,7 +409,7 @@ describe("embedded model resolution consistency", () => {
       sessionKey: "agent:main:compact-session",
       sessionFile: "agent:main:compact-session",
       workspaceDir: preparedModelRuntime.workspaceDir,
-      preparedModelRuntime: preparedModelRuntime as never,
+      preparedModelRuntime,
     });
 
     expect(emptyModelRegistry.find(PROVIDER, STATIC_MODEL_ID)).toBeNull();

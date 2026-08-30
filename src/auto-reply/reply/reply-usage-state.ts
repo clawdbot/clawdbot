@@ -1,8 +1,10 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
+import type { PluginMetadataRegistryView } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 const TTL_MS = 5 * 60_000;
@@ -13,6 +15,8 @@ const store = new Map<string, { snapshot: PluginHookReplyUsageState; expiresAt: 
 export function buildReplyUsageState(params: {
   config: OpenClawConfig;
   agentDir: string;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   provider?: string;
   model?: string;
   fallbackExhausted?: boolean;
@@ -33,6 +37,7 @@ export function buildReplyUsageState(params: {
   contextUsedTokens?: number;
   promptTokens?: number;
   usage?: NormalizedUsage;
+  costUsd?: number;
   lastCallUsage?: NormalizedUsage;
   durationMs?: number;
 }): PluginHookReplyUsageState {
@@ -62,15 +67,19 @@ export function buildReplyUsageState(params: {
         ? `${params.requestedProvider}/${params.requestedModel}`
         : undefined,
     turnUsd: hasBillableUsageBuckets
-      ? estimateUsageCost({
+      ? (asNonNegativeFiniteNumber(params.costUsd) ??
+        estimateUsageCost({
           usage: params.usage,
           cost: resolveModelCostConfig({
             provider: params.provider,
             model: params.model,
             config: params.config,
             agentDir: params.agentDir,
+            agentId: params.agentId,
+            workspaceDir: params.workspaceDir,
+            pluginMetadataSnapshot: params.pluginMetadataSnapshot,
           }),
-        })
+        }))
       : undefined,
     durationMs: params.durationMs,
     identity: resolveAgentIdentity(params.config, params.agentId),

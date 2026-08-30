@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   loadSessionEntryReadOnly,
@@ -16,6 +17,19 @@ import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
+
+// Route-state storage fixtures own exact model rows; they do not activate provider runtime.
+const copilotModel = makeProviderModelFixture<"github-copilot">({
+  id: "gpt-5-mini",
+  provider: "github-copilot",
+  api: "github-copilot",
+  baseUrl: "https://copilot.example/v1",
+});
+const copilotModels = {
+  providers: {
+    [copilotModel.provider]: { baseUrl: copilotModel.baseUrl, models: [copilotModel] },
+  },
+} satisfies OpenClawConfig["models"];
 
 const codexOwner = {
   id: "codex",
@@ -212,6 +226,7 @@ describe("doctor session state provider routes", () => {
     };
     const cfg = {
       agents: { defaults: { model: { primary: "github-copilot/gpt-5-mini" } } },
+      models: copilotModels,
     } satisfies OpenClawConfig;
 
     const result = await runDoctor({ cfg, store });
@@ -251,6 +266,7 @@ describe("doctor session state provider routes", () => {
         defaults: { model: { primary: "github-copilot/gpt-5-mini" } },
         entries: { main: {}, ops: {} },
       },
+      models: copilotModels,
     } satisfies OpenClawConfig;
     try {
       await upsertSessionEntryCore(
@@ -302,6 +318,7 @@ describe("doctor session state provider routes", () => {
     };
     const cfg = {
       agents: { defaults: { model: { primary: "github-copilot/gpt-5-mini" } } },
+      models: copilotModels,
     } satisfies OpenClawConfig;
 
     const result = await runDoctor({ cfg, store });
@@ -332,6 +349,7 @@ describe("doctor session state provider routes", () => {
           },
         },
       },
+      models: copilotModels,
     } satisfies OpenClawConfig;
 
     const result = await runDoctor({ cfg, store });
@@ -396,7 +414,10 @@ describe("doctor session state provider routes", () => {
     };
 
     const result = await runDoctor({
-      cfg: { agents: { defaults: { model: "github-copilot/gpt-5-mini" } } },
+      cfg: {
+        agents: { defaults: { model: "github-copilot/gpt-5-mini" } },
+        models: copilotModels,
+      },
       store,
     });
     const repaired = result.store[sessionKey] as unknown as Record<string, unknown>;

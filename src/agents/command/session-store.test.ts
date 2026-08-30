@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import * as usageFormat from "../../utils/usage-format.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   clearCliSessionInStore,
@@ -258,57 +259,83 @@ describe("updateSessionStoreAfterAgentRun", () => {
     },
   );
 
-  it("uses the prepared agent directory for multi-agent cost accounting", async () => {
-    await withTempSessionStore(async ({ dir, storePath }) => {
-      const sessionKey = "agent:marie:dashboard:cost-accounting";
-      const sessionId = "cost-accounting-session";
-      const sessionStore: Record<string, SessionEntry> = {};
+  it.each([
+    { name: "unrecorded cost", costUsd: undefined, expectedCost: 6 },
+    { name: "recorded cost", costUsd: 0.125, expectedCost: 0.125 },
+    { name: "recorded zero cost", costUsd: 0, expectedCost: 0 },
+  ])(
+    "uses the prepared agent for multi-agent accounting: $name",
+    async ({ costUsd, expectedCost }) => {
+      const costLookup = vi.spyOn(usageFormat, "resolveModelCostConfig");
+      try {
+        await withTempSessionStore(async ({ dir, storePath }) => {
+          const sessionKey = "agent:marie:dashboard:cost-accounting";
+          const sessionId = "cost-accounting-session";
+          const sessionStore: Record<string, SessionEntry> = {};
 
-      await updateSessionStoreAfterAgentRun({
-        cfg: {
-          agents: { list: [{ id: "main" }, { id: "marie" }] },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                models: [
-                  {
-                    id: "gpt-5.5",
-                    name: "GPT-5.5",
-                    reasoning: true,
-                    input: ["text"],
-                    cost: { input: 2, output: 4, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 128_000,
-                    maxTokens: 8_192,
+          await updateSessionStoreAfterAgentRun({
+            cfg: {
+              agents: { list: [{ id: "main" }, { id: "marie" }] },
+              models: {
+                providers: {
+                  openai: {
+                    baseUrl: "https://api.openai.com/v1",
+                    models: [
+                      {
+                        id: "gpt-5.5",
+                        name: "GPT-5.5",
+                        reasoning: true,
+                        input: ["text"],
+                        cost: { input: 2, output: 4, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: 128_000,
+                        maxTokens: 8_192,
+                      },
+                    ],
                   },
-                ],
+                },
+              },
+            } satisfies OpenClawConfig,
+            agentId: "marie",
+            agentDir: path.join(dir, "agents", "marie", "agent"),
+            workspaceDir: path.join(dir, "workspace-marie"),
+            sessionId,
+            sessionKey,
+            storePath,
+            sessionStore,
+            defaultProvider: "openai",
+            defaultModel: "gpt-5.5",
+            result: {
+              meta: {
+                durationMs: 1,
+                agentMeta: {
+                  sessionId,
+                  provider: "openai",
+                  model: "gpt-5.5",
+                  costUsd,
+                  usage: { input: 1_000_000, output: 1_000_000 },
+                },
               },
             },
-          },
-        } satisfies OpenClawConfig,
-        agentDir: path.join(dir, "agents", "marie", "agent"),
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
-        result: {
-          meta: {
-            durationMs: 1,
-            agentMeta: {
-              sessionId,
-              provider: "openai",
-              model: "gpt-5.5",
-              usage: { input: 1_000_000, output: 1_000_000 },
-            },
-          },
-        },
-      });
+          });
 
-      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBe(6);
-    });
-  });
+          expect(sessionStore[sessionKey]?.estimatedCostUsd).toBe(expectedCost);
+          if (costUsd !== undefined) {
+            expect(costLookup).not.toHaveBeenCalled();
+          } else {
+            expect(costLookup).toHaveBeenCalledWith(
+              expect.objectContaining({
+                agentId: "marie",
+                agentDir: path.join(dir, "agents", "marie", "agent"),
+                workspaceDir: path.join(dir, "workspace-marie"),
+              }),
+            );
+          }
+        });
+      } finally {
+        costLookup.mockRestore();
+      }
+    },
+  );
 
   it("clears the durable replay-safe recovery guard after the recovery run terminates", async () => {
     await withTempSessionStore(async ({ storePath }) => {

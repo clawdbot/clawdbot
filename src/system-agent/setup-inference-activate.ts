@@ -189,7 +189,7 @@ async function activateSetupInferenceUnredacted(
       const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
       const stagedConfig = await applySystemAgentModelSelection({
         config: plan.config,
-        model: plan.persistModelRef,
+        model: plan,
         ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
@@ -358,7 +358,7 @@ async function activateSetupInferenceUnredacted(
       ...(metadataWorkspaceDir ? { workspaceDir: metadataWorkspaceDir } : {}),
       ...(codexMetadataNeedsRestore ? { allowCurrent: false } : {}),
     });
-    const routeDeps = { pluginMetadataPlugins: routeMetadataSnapshot.plugins };
+    const routeDeps = { pluginMetadataSnapshot: routeMetadataSnapshot };
     const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
     const baselineRoute = await projectInferenceRoute(cfg, requestedAgentId, routeDeps);
     const verifiedRoute = await projectInferenceRoute(testPlan.config, requestedAgentId, routeDeps);

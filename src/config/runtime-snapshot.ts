@@ -1,6 +1,7 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
+import type { PreparedPluginMetadata } from "../plugins/plugin-metadata-collection.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
@@ -93,6 +94,7 @@ export type RuntimeConfigWriteNotification = {
 export type RuntimeConfigWritePreparedCandidate = {
   runtimeConfig: OpenClawConfig;
   compareConfig: OpenClawConfig;
+  pluginMetadata?: PreparedPluginMetadata;
   runtimeEnv?: PreparedConfigRuntimeEnv;
   reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
   reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;

@@ -7,6 +7,7 @@ import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import {
   clearCliSessionMock,
   clearFastTestEnv,
@@ -173,10 +174,18 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     };
     const ownerCatalog = [{ provider: "google", id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" }];
     loadModelCatalogOwnerMock.mockResolvedValueOnce({
+      catalogOwner: { agentId: "main", workspaceDir: "/tmp/replacement-workspace" },
       agentId: "main",
       agentDir: "/tmp/owner-agent",
       workspaceDir: "/tmp/replacement-workspace",
       config: ownerConfig,
+      authModes: {},
+      authStore: { version: 1, profiles: {} },
+      metadataSnapshot: createPluginMetadataSnapshot({
+        config: ownerConfig,
+        workspaceDir: "/tmp/replacement-workspace",
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }),
       modelCatalog: { entries: ownerCatalog, routeVariants: [] },
     });
     ensureAgentWorkspaceMock.mockImplementationOnce(async ({ dir }: { dir: string }) => ({ dir }));
@@ -187,6 +196,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(result.status).toBe("ok");
     expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
       config: callerConfig,
+      agentId: "main",
       readOnly: true,
       allowGatewaySubagentBinding: true,
     });
@@ -203,10 +213,18 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
     };
     loadModelCatalogOwnerMock.mockResolvedValueOnce({
+      catalogOwner: { agentId: "main", workspaceDir: "/tmp/main-workspace" },
       agentId: "main",
       agentDir: "/tmp/main-agent",
       workspaceDir: "/tmp/main-workspace",
       config: callerConfig,
+      authModes: {},
+      authStore: { version: 1, profiles: {} },
+      metadataSnapshot: createPluginMetadataSnapshot({
+        config: callerConfig,
+        workspaceDir: "/tmp/main-workspace",
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }),
       modelCatalog: { entries: [], routeVariants: [] },
     });
 

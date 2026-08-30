@@ -1,20 +1,29 @@
 // Tests model command output, catalog loading, and provider auth status rendering.
+import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { installPluginMetadataOwner } from "../../plugins/current-plugin-metadata.test-support.js";
+import { createPluginCache } from "../../plugins/plugin-cache.js";
+import { createPluginMetadataOwner } from "../../plugins/plugin-metadata-collection.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildPreparedModelsProviderData, handleModelsCommand } from "./commands-models.js";
-import type { HandleCommandsParams } from "./commands-types.js";
+import {
+  buildModelsCommandParams as buildParams,
+  menuOnlyModelsTestPlugin,
+  telegramModelsTestPlugin,
+  textSurfaceModelsTestPlugins,
+} from "./commands-models.test-helpers.js";
 
 const modelCatalogMocks = vi.hoisted(() => ({ loadModelCatalog: vi.fn() }));
 const modelAuthLabelMocks = vi.hoisted(() => ({
-  resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
+  resolveModelAuthLabel: vi.fn<typeof resolveModelAuthLabel>(() => undefined),
 }));
 const modelProviderAuthMocks = vi.hoisted(() => {
   const state = {
@@ -133,60 +142,6 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOrigin
   getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrent,
 }));
 
-const telegramModelsTestPlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "telegram",
-    label: "Telegram",
-    docsPath: "/channels/telegram",
-    capabilities: {
-      chatTypes: ["direct", "group", "channel", "thread"],
-      reactions: true,
-      threads: true,
-      media: true,
-      polls: true,
-      nativeCommands: true,
-      blockStreaming: true,
-    },
-  }),
-  commands: {
-    buildModelsProviderChannelData: ({ providers }) => ({
-      telegram: {
-        buttons: providers.map((provider) => [
-          {
-            text: provider.id,
-            callback_data: `models:${provider.id}`,
-          },
-        ]),
-      },
-    }),
-  },
-};
-
-const menuOnlyModelsTestPlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "menuonly",
-    label: "Menu Only",
-    capabilities: {
-      chatTypes: ["direct"],
-      nativeCommands: true,
-    },
-  }),
-  commands: {
-    buildModelsMenuChannelData: ({ providers }) => ({
-      menuonly: {
-        providerIds: providers.map((provider) => provider.id),
-        labels: providers.map((provider) => `${provider.id}:${provider.count}`),
-      },
-    }),
-  },
-};
-
-const textSurfaceModelsTestPlugins = (["discord", "whatsapp"] as const).map((id) => ({
-  pluginId: id,
-  plugin: createChannelTestPluginBase({ id }),
-  source: "test",
-}));
-
 beforeAll(async () => {
   setFastModelsCliBackendDeps();
   modelCatalogMocks.loadModelCatalog.mockResolvedValue([
@@ -253,52 +208,6 @@ beforeEach(() => {
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
 });
-
-function buildParams(
-  commandBodyNormalized: string,
-  cfgOverrides: Partial<OpenClawConfig> = {},
-): HandleCommandsParams {
-  return {
-    cfg: {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-5" },
-        },
-      },
-      commands: {
-        text: true,
-      },
-      ...cfgOverrides,
-    } as OpenClawConfig,
-    ctx: {
-      Surface: "discord",
-    },
-    command: {
-      commandBodyNormalized,
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "user-1",
-      channel: "discord",
-      channelId: "channel-1",
-      surface: "discord",
-      ownerList: [],
-      from: "user-1",
-      to: "bot",
-    },
-    sessionKey: "agent:main:discord:direct:user-1",
-    workspaceDir: "/tmp",
-    provider: "anthropic",
-    model: "claude-opus-4-5",
-    contextTokens: 0,
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    isGroup: false,
-    directives: {},
-    elevated: { enabled: true, allowed: true, failures: [] },
-  } as unknown as HandleCommandsParams;
-}
 
 function firstAuthCheckerParams() {
   return modelProviderAuthMocks.createProviderAuthChecker.mock.calls[0]?.[0];
@@ -500,35 +409,83 @@ describe("handleModelsCommand", () => {
     },
   );
 
-  it("shows plugin-normalized allowlist models in browse data", async () => {
-    pluginMetadataMocks.getCurrent.mockReturnValue({
-      plugins: [
-        {
-          modelIdNormalization: {
-            providers: {
-              custom: { aliases: { legacy: "modern" } },
+  it.each(["selected agent", "explicit workspace"] as const)(
+    "uses prepared %s policy for model defaults and browse data",
+    async (scope) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const workspaceDirs = { main: state.workspaceDir, work: state.path("work") };
+        for (const [agentId, workspaceDir] of Object.entries(workspaceDirs)) {
+          const rootDir = `${workspaceDir}/.openclaw/extensions/${agentId}-normalizer`;
+          await fs.mkdir(rootDir, { recursive: true });
+          createColdPluginFixture({
+            rootDir,
+            pluginId: `${agentId}-normalizer`,
+            manifest: {
+              providers: ["custom"],
+              channels: [],
+              channelConfigs: {},
+              providerAuthChoices: [],
+              modelIdNormalization: {
+                providers: { custom: { aliases: { legacy: `${agentId}-current` } } },
+              },
+            },
+          });
+        }
+        const cfg: OpenClawConfig = {
+          plugins: {
+            entries: { "main-normalizer": { enabled: true }, "work-normalizer": { enabled: true } },
+          },
+          agents: {
+            ownership: "explicit",
+            defaults: {
+              systemAgent: { agentId: "main" },
+              model: { primary: "custom/legacy" },
+              models: { "custom/legacy": {} },
+            },
+            entries: {
+              main: { workspace: workspaceDirs.main },
+              work: { workspace: workspaceDirs.work },
             },
           },
-        },
-      ],
-      owners: { cliBackends: new Map() },
-    });
-    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
-      { provider: "custom", id: "modern", name: "Modern" },
-    ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set(["custom"]);
-    const data = await buildPreparedModelsProviderData({
-      agents: {
-        defaults: {
-          model: { primary: "custom/modern" },
-          models: { "custom/legacy": {} },
-        },
-      },
-    } as OpenClawConfig);
+        };
+        const actualMetadata = await vi.importActual<
+          typeof import("../../plugins/current-plugin-metadata-snapshot.js")
+        >("../../plugins/current-plugin-metadata-snapshot.js");
+        pluginMetadataMocks.getCurrent.mockImplementation(
+          actualMetadata.getCurrentPluginMetadataSnapshot,
+        );
+        modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+          { provider: "custom", id: "main-current", name: "Main" },
+          { provider: "custom", id: "work-current", name: "Work" },
+        ]);
+        modelProviderAuthMocks.authenticatedProviders = new Set(["custom"]);
+        const pluginCache = createPluginCache();
+        const owner = createPluginMetadataOwner(pluginCache);
+        const dispose = installPluginMetadataOwner(owner, pluginCache);
+        try {
+          owner.publish(owner.prepare({ config: cfg }), { config: cfg });
+          const main = await buildPreparedModelsProviderData(cfg, "main");
+          expect(main.resolvedDefault).toEqual({ provider: "custom", model: "main-current" });
+          expect(main.byProvider.get("custom")).toEqual(new Set(["main-current"]));
 
-    expect(data.byProvider.get("custom")).toEqual(new Set(["modern"]));
-    expect(pluginMetadataMocks.getCurrent).toHaveBeenCalledTimes(1);
-  });
+          const data = await buildPreparedModelsProviderData(
+            cfg,
+            scope === "selected agent" ? "work" : "main",
+            scope === "explicit workspace" ? { workspaceDir: workspaceDirs.work } : {},
+          );
+          expect(data.resolvedDefault).toEqual({ provider: "custom", model: "work-current" });
+          expect(data.byProvider.get("custom")).toEqual(new Set(["work-current"]));
+
+          const again = await buildPreparedModelsProviderData(cfg, "main");
+          expect(again.resolvedDefault).toEqual(main.resolvedDefault);
+          expect(again.byProvider.get("custom")).toEqual(main.byProvider.get("custom"));
+        } finally {
+          dispose();
+          clearPluginMetadataLifecycleCaches();
+        }
+      });
+    },
+  );
 
   it("does not re-add the default provider when provider visibility is restricted", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
@@ -1041,12 +998,8 @@ describe("handleModelsCommand", () => {
 
     expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
     const [authLabelParams] = expectDefined(
-      (
-        modelAuthLabelMocks.resolveModelAuthLabel.mock.calls as unknown as Array<
-          [{ provider?: string; workspaceDir?: string }]
-        >
-      )[0],
-      "(modelAuthLabelMocks.resolveModelAuthLabel.mock.calls as unknown as Array<\n        [{ provider?: string; workspaceDir?: string }]\n      >)[0] test invariant",
+      modelAuthLabelMocks.resolveModelAuthLabel.mock.calls[0],
+      "first model auth label call",
     );
     expect(authLabelParams.provider).toBe("anthropic");
     expect(authLabelParams.workspaceDir).toBe("/tmp");
@@ -1068,7 +1021,7 @@ describe("handleModelsCommand", () => {
 
     expect(result?.reply?.text).toContain("Models (openai · 🔑 oauth (openai:user@example.com))");
     const openaiAuthCall = modelAuthLabelMocks.resolveModelAuthLabel.mock.calls.find(
-      ([params]) => (params as { provider?: string }).provider === "openai",
+      ([params]) => params.provider === "openai",
     );
     expect(openaiAuthCall?.[0]).toMatchObject({
       provider: "openai",

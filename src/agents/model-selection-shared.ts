@@ -1,6 +1,7 @@
 /**
  * Shared model-selection resolution, alias, allowlist, and visibility logic.
  */
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -14,9 +15,19 @@ import {
 import { parseModelPolicyWildcardRef } from "../config/model-policy-ref.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isScopedPluginMetadataSnapshotRuntimeGeneration,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import {
+  getCurrentPluginMetadataOwner,
+  getPluginMetadataWorkspaceSnapshot,
+  getScopedPluginMetadata,
+} from "../plugins/plugin-metadata-collection.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
@@ -27,7 +38,6 @@ import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   createConfiguredProviderCatalogModelIdNormalizer,
   normalizeConfiguredProviderCatalogModelId,
-  normalizeStaticProviderModelId,
   type ModelManifestNormalizationContext,
   type ModelRef,
   modelKey,
@@ -57,9 +67,14 @@ export type ModelAliasIndex = {
   disabledKeys?: Set<string>;
 };
 
-type ModelManifestPluginContext = {
+export type ModelManifestPluginContext = {
   peek: () => ModelManifestPlugins;
-  get: () => ModelManifestPlugins;
+  getContext: () => ModelManifestNormalizationContext;
+};
+
+/** Internal handoff after an operation has selected its metadata scope. */
+export type ModelSelectionNormalizationContext = ModelManifestNormalizationContext & {
+  manifestPluginContext?: ModelManifestPluginContext;
 };
 
 type ModelAliasCandidate = {
@@ -100,52 +115,142 @@ function hasSlashFormModelRef(raw: string): boolean {
   return slash > 0 && slash < trimmed.length - 1;
 }
 
-function resolveManifestPluginsForModelIdNormalization(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  manifestPlugins?: ModelManifestPlugins;
-  allowManifestNormalization?: boolean;
-}): ModelManifestPlugins {
-  if (params.allowManifestNormalization === false || params.manifestPlugins !== undefined) {
-    return params.manifestPlugins;
+function resolveModelManifestNormalizationContext(
+  params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+    workspaceDir?: string;
+    manifestPlugins?: ModelManifestPlugins;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelManifestNormalizationContext {
+  const context = {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    manifestPlugins: params.manifestPlugins,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+  };
+  if (params.allowManifestNormalization === false && params.allowPluginNormalization === false) {
+    return context;
+  }
+  const owner = getCurrentPluginMetadataOwner();
+  const scoped = getScopedPluginMetadata();
+  const runtimeGeneration = getPluginRuntimeGenerationRegistry();
+  if (!owner && !scoped && !runtimeGeneration && params.allowManifestNormalization === false) {
+    return context;
+  }
+  const current =
+    !owner &&
+    !scoped &&
+    !runtimeGeneration &&
+    (params.workspaceDir || params.manifestPlugins !== undefined || params.pluginMetadataSnapshot)
+      ? undefined
+      : getCurrentPluginMetadataSnapshot({
+          config: params.cfg,
+          allowWorkspaceScopedSnapshot: true,
+        });
+  if (current && isScopedPluginMetadataSnapshotRuntimeGeneration(current)) {
+    return {
+      config: params.cfg,
+      workspaceDir: current.workspaceDir,
+      manifestPlugins: current.plugins,
+      pluginMetadataSnapshot: current,
+    };
+  }
+  if (params.pluginMetadataSnapshot && !runtimeGeneration) {
+    // Operation preparation may own an auxiliary workspace outside the published
+    // collection. A retained runtime generation above still owns its exact graph.
+    const snapshot = params.pluginMetadataSnapshot;
+    return {
+      config: params.cfg,
+      workspaceDir: snapshot.workspaceDir ?? params.workspaceDir,
+      manifestPlugins: params.manifestPlugins ?? snapshot.manifestRegistry.plugins,
+      pluginMetadataSnapshot: snapshot,
+    };
+  }
+  const prepared = scoped
+    ? current && [...scoped.workspaces.values()].includes(current)
+      ? scoped
+      : undefined
+    : runtimeGeneration
+      ? undefined
+      : owner?.readConfigWide({ config: params.cfg, env: process.env });
+  if (prepared) {
+    // Agent paths belong to preparation. Retired session owners use the current
+    // control-plane policy without inventing or scanning another workspace.
+    const workspaceDir =
+      params.workspaceDir ??
+      (params.agentId
+        ? prepared.agentWorkspaceDirs.get(normalizeAgentId(params.agentId))
+        : undefined) ??
+      prepared.selectedSnapshot.workspaceDir;
+    const snapshot = getPluginMetadataWorkspaceSnapshot(prepared, { workspaceDir });
+    return {
+      config: params.cfg,
+      workspaceDir: snapshot.workspaceDir,
+      manifestPlugins: params.manifestPlugins ?? snapshot.plugins,
+      pluginMetadataSnapshot: snapshot,
+    };
+  }
+  if (runtimeGeneration) {
+    throw new Error("Model normalization escaped its prepared runtime generation");
+  }
+  if (params.manifestPlugins !== undefined && !scoped) {
+    return context;
+  }
+  if (owner?.getActive() || scoped) {
+    throw new Error("Config plugin metadata must be prepared before model normalization");
   }
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   if (!workspaceDir) {
-    const currentManifestPlugins = getCurrentPluginMetadataSnapshot({
-      config: params.cfg,
-      env: process.env,
-    })?.plugins;
+    const currentManifestPlugins =
+      current?.workspaceDir === undefined ? current?.plugins : undefined;
     if (currentManifestPlugins) {
-      return currentManifestPlugins;
+      return {
+        ...context,
+        manifestPlugins: currentManifestPlugins,
+        pluginMetadataSnapshot: current,
+      };
     }
   }
-  return loadManifestMetadataSnapshot({
+  const snapshot = loadManifestMetadataSnapshot({
     config: params.cfg,
     env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
-  }).plugins;
+  });
+  return {
+    config: params.cfg,
+    workspaceDir: snapshot.workspaceDir,
+    manifestPlugins: snapshot.plugins,
+    pluginMetadataSnapshot: snapshot,
+  };
 }
 
-function createModelManifestPluginContext(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  manifestPlugins?: ModelManifestPlugins;
-  allowManifestNormalization?: boolean;
-}): ModelManifestPluginContext {
-  let manifestPlugins = params.manifestPlugins;
-  let resolved =
-    params.allowManifestNormalization === false || params.manifestPlugins !== undefined;
+export function createModelManifestPluginContext(
+  params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+    workspaceDir?: string;
+    manifestPlugins?: ModelManifestPlugins;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelManifestPluginContext {
+  let context: ModelManifestNormalizationContext | undefined;
+  const getContext = () =>
+    (context ??= {
+      ...resolveModelManifestNormalizationContext(params),
+      ...(params.providerPlugin ? { providerPlugin: params.providerPlugin } : {}),
+    });
   return {
-    peek: () => manifestPlugins,
-    get: () => {
-      // Manifest metadata can touch plugin registries. Defer that work until a
-      // path actually needs plugin/provider normalization.
-      if (!resolved) {
-        manifestPlugins = resolveManifestPluginsForModelIdNormalization(params);
-        resolved = true;
-      }
-      return manifestPlugins;
-    },
+    peek: () =>
+      context?.manifestPlugins ??
+      params.manifestPlugins ??
+      params.pluginMetadataSnapshot?.manifestRegistry.plugins,
+    // Empty/default model paths never resolve metadata; parsing and hooks share
+    // the same prepared config, workspace, and manifest facts once needed.
+    getContext,
   };
 }
 
@@ -175,9 +280,9 @@ function buildEffectiveModelAliases(
   params: Omit<BuildModelAliasIndexParams, "manifestPlugins"> & {
     manifestPluginContext: ModelManifestPluginContext;
   },
+  candidates = listModelAliasCandidates(params.cfg, params.agentId),
 ): { aliases: EffectiveModelAlias[]; disabledKeys: Set<string> } {
   const aliasesByKey = new Map<string, EffectiveModelAlias | null>();
-  const candidates = listModelAliasCandidates(params.cfg, params.agentId);
   if (candidates.length === 0) {
     return { aliases: [], disabledKeys: new Set() };
   }
@@ -187,13 +292,17 @@ function buildEffectiveModelAliases(
     params.allowManifestNormalization !== false &&
     candidates.every((candidate) => isStaticDefaultProviderAliasCandidate(candidate, params.cfg)) &&
     params.manifestPluginContext.peek() === undefined &&
+    !getCurrentPluginMetadataOwner() &&
+    !getScopedPluginMetadata() &&
+    !getPluginRuntimeGenerationRegistry() &&
     !getActivePluginRegistryWorkspaceDirFromState() &&
     !getCurrentPluginMetadataSnapshot({ config: params.cfg, env: process.env });
-  const manifestPlugins = useStaticDefaultProviderAliases
+  const normalization = useStaticDefaultProviderAliases
     ? undefined
-    : params.manifestPluginContext.get();
+    : params.manifestPluginContext.getContext();
   for (const candidate of candidates) {
     const ref = parseModelRefWithCompatAlias({
+      ...normalization,
       cfg: params.cfg,
       agentId: params.agentId,
       raw: candidate.keyRaw,
@@ -204,12 +313,11 @@ function buildEffectiveModelAliases(
       allowPluginNormalization: useStaticDefaultProviderAliases
         ? false
         : params.allowPluginNormalization,
-      manifestPlugins,
     });
     if (!ref) {
       continue;
     }
-    const key = modelKey(ref.provider, ref.model);
+    const key = buildModelCatalogRef(ref.provider, ref.model);
     // Reinsert replacements so agent-owned aliases win duplicate-alias lookup
     // while an omitted agent alias leaves the inherited record untouched.
     aliasesByKey.delete(key);
@@ -260,9 +368,9 @@ function mergeModelCatalogEntries(params: {
   secondary: readonly ModelCatalogEntry[];
 }): ModelCatalogEntry[] {
   const merged = [...params.primary];
-  const seen = new Set(merged.map((entry) => modelKey(entry.provider, entry.id)));
+  const seen = new Set(merged.map((entry) => buildModelCatalogRef(entry.provider, entry.id)));
   for (const entry of params.secondary) {
-    const key = modelKey(entry.provider, entry.id);
+    const key = buildModelCatalogRef(entry.provider, entry.id);
     if (seen.has(key)) {
       continue;
     }
@@ -279,13 +387,19 @@ export function inferUniqueProviderFromConfiguredModels(
     model: string;
     agentId?: string;
     allowManifestNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
+  } & ModelSelectionNormalizationContext,
 ): string | undefined {
   const model = params.model.trim();
   if (!model) {
     return undefined;
   }
   const normalized = normalizeLowercaseStringOrEmpty(model);
+  const manifestContext =
+    params.manifestPluginContext ??
+    createModelManifestPluginContext({
+      ...params,
+      allowPluginNormalization: false,
+    });
   const collectModelMapProviders = (models: Record<string, unknown> | undefined) => {
     const providers = new Set<string>();
     for (const key of Object.keys(models ?? {})) {
@@ -294,9 +408,9 @@ export function inferUniqueProviderFromConfiguredModels(
         continue;
       }
       const parsed = parseModelRef(ref, DEFAULT_PROVIDER, {
+        ...manifestContext.getContext(),
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: false,
-        manifestPlugins: params.manifestPlugins,
       });
       if (
         parsed &&
@@ -324,10 +438,9 @@ export function inferUniqueProviderFromConfiguredModels(
   };
   const configuredProviders = params.cfg.models?.providers;
   if (configuredProviders) {
-    const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({
-      allowManifestNormalization: params.allowManifestNormalization,
-      manifestPlugins: params.manifestPlugins,
-    });
+    let normalizeModelId:
+      | ReturnType<typeof createConfiguredProviderCatalogModelIdNormalizer>
+      | undefined;
     for (const [providerId, providerConfig] of Object.entries(configuredProviders)) {
       const models = providerConfig?.models;
       if (!Array.isArray(models)) {
@@ -338,6 +451,10 @@ export function inferUniqueProviderFromConfiguredModels(
         if (!modelId) {
           continue;
         }
+        normalizeModelId ??= createConfiguredProviderCatalogModelIdNormalizer({
+          ...manifestContext.getContext(),
+          allowManifestNormalization: params.allowManifestNormalization,
+        });
         const normalizedModelId = normalizeModelId(providerId, modelId);
         if (
           modelId === model ||
@@ -397,14 +514,11 @@ export function resolveBareModelDefaultProvider(
     model: string;
     defaultProvider: string;
     agentId?: string;
-  } & ModelManifestNormalizationContext,
+  } & ModelSelectionNormalizationContext,
 ): string {
   return (
     inferUniqueProviderFromConfiguredModels({
-      cfg: params.cfg,
-      model: params.model,
-      agentId: params.agentId,
-      manifestPlugins: params.manifestPlugins,
+      ...params,
     }) ??
     inferUniqueProviderFromCatalog({ catalog: params.catalog, model: params.model }) ??
     params.defaultProvider
@@ -433,9 +547,9 @@ function resolveConfiguredOpenRouterCompatFreeRef(
         continue;
       }
       const parsed = parseModelRef(raw, params.defaultProvider, {
+        ...params,
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: params.manifestPlugins,
       });
       if (parsed && isConcreteOpenRouterFreeModelRef(parsed)) {
         return parsed;
@@ -453,9 +567,9 @@ function resolveConfiguredOpenRouterCompatFreeRef(
       continue;
     }
     return normalizeModelRef("openrouter", modelId, {
+      ...params,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
     });
   }
 
@@ -476,21 +590,17 @@ function resolveConfiguredOpenRouterCompatAlias(
   const normalized = normalizeLowercaseStringOrEmpty(params.raw);
   if (normalized === "openrouter:auto") {
     return normalizeModelRef("openrouter", "auto", {
+      ...params,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
     });
   }
   if (normalized !== OPENROUTER_COMPAT_FREE_ALIAS || !params.cfg) {
     return null;
   }
   return resolveConfiguredOpenRouterCompatFreeRef({
+    ...params,
     cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider: params.defaultProvider,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
   });
 }
 
@@ -516,9 +626,9 @@ function parseModelRefWithCompatAlias(
     exactConfiguredProviderRef ??
     exactDefaultProviderRef ??
     parseModelRef(params.raw, params.defaultProvider, {
+      ...params,
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
     })
   );
 }
@@ -547,7 +657,10 @@ function findExactConfiguredProviderRefParts(params: {
   const normalizedConfiguredProvider = normalizeProviderId(configuredProvider);
   const apiOwner =
     typeof providerConfig?.api === "string" ? normalizeProviderId(providerConfig.api) : "";
-  if (!apiOwner || apiOwner === normalizedConfiguredProvider) {
+  if (
+    (!apiOwner || apiOwner === normalizedConfiguredProvider) &&
+    !providerConfig.models?.some((entry) => entry.id.trim() === modelRaw)
+  ) {
     return null;
   }
   return { configuredProvider, modelRaw };
@@ -563,17 +676,7 @@ function normalizeExactConfiguredProviderRef(
   const provider = normalizeLowercaseStringOrEmpty(configuredProvider);
   return {
     provider,
-    model: normalizeConfiguredProviderCatalogModelId(
-      provider,
-      normalizeStaticProviderModelId(provider, modelRaw.trim(), {
-        allowManifestNormalization: params.allowManifestNormalization,
-        manifestPlugins: params.manifestPlugins,
-      }),
-      {
-        allowManifestNormalization: params.allowManifestNormalization,
-        manifestPlugins: params.manifestPlugins,
-      },
-    ),
+    model: normalizeConfiguredProviderCatalogModelId(provider, modelRaw, params),
   };
 }
 
@@ -595,31 +698,45 @@ function resolveExactConfiguredProviderRef(
   return normalizeExactConfiguredProviderRef(exactConfigured, params);
 }
 
+/** Preserve shipped short spellings only when they select the same exact model. */
+export function formatModelRefForConfig(
+  ref: ModelRef,
+  params: { cfg: OpenClawConfig; manifestPlugins: NonNullable<ModelManifestPlugins> },
+): string {
+  const key = modelKey(ref.provider, ref.model);
+  const exactKey = buildModelCatalogRef(ref.provider, ref.model);
+  if (key === exactKey) {
+    return key;
+  }
+  const parsed = parseModelRefWithCompatAlias({
+    ...params,
+    raw: key,
+    defaultProvider: ref.provider,
+    allowPluginNormalization: false,
+  });
+  return parsed?.provider === ref.provider && parsed.model === ref.model ? key : exactKey;
+}
+
 type BuildModelAliasIndexParams = {
   cfg: OpenClawConfig;
   defaultProvider: string;
   agentId?: string;
   allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
-} & ModelManifestNormalizationContext;
+} & ModelSelectionNormalizationContext;
 
-function buildModelAliasIndexWithManifestContext(
-  params: Omit<BuildModelAliasIndexParams, "manifestPlugins"> & {
-    manifestPluginContext: ModelManifestPluginContext;
-  },
+function indexModelAliases(
+  aliases: readonly { alias: string; ref: ModelRef }[],
+  disabledKeys: Set<string>,
 ): ModelAliasIndex {
-  const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
-  const byProviderAlias = new Map<string, { alias: string; ref: ModelRef }>();
+  const byAlias: ModelAliasIndex["byAlias"] = new Map();
+  const byProviderAlias: NonNullable<ModelAliasIndex["byProviderAlias"]> = new Map();
   const byKey = new Map<string, string[]>();
-  const { aliases, disabledKeys } = buildEffectiveModelAliases(params);
-  if (aliases.length === 0) {
-    return { byAlias, byProviderAlias, byKey, disabledKeys };
-  }
 
   for (const { alias, ref } of aliases) {
-    const aliasKey = normalizeLowercaseStringOrEmpty(alias);
     const match = { alias, ref };
-    const key = modelKey(ref.provider, ref.model);
+    const aliasKey = normalizeLowercaseStringOrEmpty(alias);
+    const key = buildModelCatalogRef(ref.provider, ref.model);
     byAlias.set(aliasKey, match);
     // Bare aliases retain their existing last-wins behavior. Provider-qualified
     // aliases stay scoped so duplicate display names cannot select another provider.
@@ -631,15 +748,12 @@ function buildModelAliasIndexWithManifestContext(
 }
 
 /** Build lookup maps from user-facing aliases to normalized model refs. */
-export function buildModelAliasIndex(params: BuildModelAliasIndexParams): ModelAliasIndex {
-  return buildModelAliasIndexWithManifestContext({
-    cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
-    agentId: params.agentId,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPluginContext: createModelManifestPluginContext(params),
+export function buildModelAliasIndexCore(params: BuildModelAliasIndexParams): ModelAliasIndex {
+  const { aliases, disabledKeys } = buildEffectiveModelAliases({
+    ...params,
+    manifestPluginContext: params.manifestPluginContext ?? createModelManifestPluginContext(params),
   });
+  return indexModelAliases(aliases, disabledKeys);
 }
 
 type ModelCatalogMetadata = {
@@ -653,7 +767,7 @@ function buildModelCatalogMetadata(params: {
 }): ModelCatalogMetadata {
   const configuredByKey = new Map<string, ModelCatalogEntry>();
   for (const entry of params.configuredCatalog) {
-    configuredByKey.set(modelKey(entry.provider, entry.id), entry);
+    configuredByKey.set(buildModelCatalogRef(entry.provider, entry.id), entry);
   }
 
   const aliasByKey = new Map(
@@ -670,7 +784,7 @@ function applyModelCatalogMetadata(params: {
   entry: ModelCatalogEntry;
   metadata: ModelCatalogMetadata;
 }): ModelCatalogEntry {
-  const key = modelKey(params.entry.provider, params.entry.id);
+  const key = buildModelCatalogRef(params.entry.provider, params.entry.id);
   const configuredEntry = params.metadata.configuredByKey.get(key);
   const alias = params.metadata.aliasByKey.get(key);
   if (!configuredEntry && !alias) {
@@ -711,7 +825,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
   parsed: ModelRef;
   metadata: ModelCatalogMetadata;
 }): ModelCatalogEntry {
-  const key = modelKey(params.parsed.provider, params.parsed.model);
+  const key = buildModelCatalogRef(params.parsed.provider, params.parsed.model);
   const configuredEntry = params.metadata.configuredByKey.get(key);
   const alias = params.metadata.aliasByKey.get(key);
   const nextContextWindow = configuredEntry?.contextWindow;
@@ -737,6 +851,112 @@ function buildSyntheticAllowedCatalogEntry(params: {
   };
 }
 
+function findModelAlias(
+  raw: string,
+  index?: Pick<ModelAliasIndex, "byAlias" | "byProviderAlias">,
+): { alias: string; ref: ModelRef } | undefined {
+  const slash = raw.indexOf("/");
+  return (
+    index?.byAlias.get(normalizeLowercaseStringOrEmpty(raw)) ??
+    (slash > 0
+      ? index?.byProviderAlias?.get(providerAliasKey(raw.slice(0, slash), raw.slice(slash + 1)))
+      : undefined)
+  );
+}
+
+/** Prepare only the alias competitors and raw fallback that can own one model operand. */
+export function planModelRefWithConfiguredAliases(
+  params: BuildModelAliasIndexParams & { raw: string },
+): { candidates: EffectiveModelAlias[]; fallbackRef: ModelRef | null } {
+  const { model } = splitTrailingAuthProfile(params.raw);
+  if (!model) {
+    return { candidates: [], fallbackRef: null };
+  }
+  const manifestPluginContext =
+    params.manifestPluginContext ?? createModelManifestPluginContext(params);
+  const candidates = listModelAliasCandidates(params.cfg, params.agentId);
+  const aliasKey = normalizeLowercaseStringOrEmpty(model);
+  const slash = model.indexOf("/");
+  const qualifiedAlias = slash > 0 ? normalizeLowercaseStringOrEmpty(model.slice(slash + 1)) : "";
+  const normalization = manifestPluginContext.getContext();
+  let competingCandidates: EffectiveModelAlias[] = [];
+  if (
+    candidates.some(({ alias }) => {
+      const key = normalizeLowercaseStringOrEmpty(alias);
+      return key && (key === aliasKey || key === qualifiedAlias);
+    })
+  ) {
+    const parsedCandidates = candidates.flatMap((candidate) => {
+      const ref = parseModelRefWithCompatAlias({
+        ...params,
+        ...normalization,
+        raw: candidate.keyRaw,
+        allowPluginNormalization: false,
+      });
+      return ref ? [{ ...candidate, ref }] : [];
+    });
+    const qualifiedProvider = slash > 0 ? normalizeProviderId(model.slice(0, slash)) : "";
+    const providers = new Set(
+      parsedCandidates
+        .filter(({ alias, ref }) => {
+          const key = normalizeLowercaseStringOrEmpty(alias);
+          return (
+            key &&
+            (key === aliasKey || (key === qualifiedAlias && ref.provider === qualifiedProvider))
+          );
+        })
+        .map(({ ref }) => ref.provider),
+    );
+    // Runtime-only model aliases can collide with blank or renamed agent rows.
+    // Retain every candidate for competing providers in authored order, including blanks.
+    competingCandidates = parsedCandidates.filter(({ ref }) => providers.has(ref.provider));
+  }
+  return {
+    candidates: competingCandidates,
+    // If runtime normalization removes every alias, the raw operand owns selection.
+    // Its provider must already belong to the same closed runtime generation.
+    fallbackRef: parseModelRefWithCompatAlias({
+      ...params,
+      ...normalization,
+      raw: model,
+      allowPluginNormalization: false,
+    }),
+  };
+}
+
+/** Resolve configured aliases without executing unrelated provider normalization hooks. */
+export function resolveModelRefWithConfiguredAliases(
+  params: BuildModelAliasIndexParams & { raw: string },
+  plan?: ReturnType<typeof planModelRefWithConfiguredAliases>,
+): ModelRef | null {
+  const { model } = splitTrailingAuthProfile(params.raw);
+  if (!model) {
+    return null;
+  }
+  const manifestPluginContext =
+    params.manifestPluginContext ?? createModelManifestPluginContext(params);
+  const { candidates, fallbackRef } =
+    plan ?? planModelRefWithConfiguredAliases({ ...params, manifestPluginContext });
+  if (candidates.length > 0) {
+    const { aliases, disabledKeys } = buildEffectiveModelAliases(
+      { ...params, manifestPluginContext },
+      candidates,
+    );
+    const alias = findModelAlias(model, indexModelAliases(aliases, disabledKeys));
+    if (alias) {
+      // Already normalized from its authored key; reparsing can strip nested paths twice.
+      return alias.ref;
+    }
+  }
+  return params.allowPluginNormalization === false
+    ? fallbackRef
+    : parseModelRefWithCompatAlias({
+        ...params,
+        ...manifestPluginContext.getContext(),
+        raw: model,
+      });
+}
+
 export function resolveModelRefFromString(
   params: {
     cfg?: OpenClawConfig;
@@ -746,34 +966,25 @@ export function resolveModelRefFromString(
     aliasIndex?: ModelAliasIndex;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
+  } & ModelSelectionNormalizationContext,
 ): { ref: ModelRef; alias?: string } | null {
   const { model } = splitTrailingAuthProfile(params.raw);
   if (!model) {
     return null;
   }
-  const aliasKey = normalizeLowercaseStringOrEmpty(model);
-  const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
+  const aliasMatch = findModelAlias(model, params.aliasIndex);
   if (aliasMatch) {
     return { ref: aliasMatch.ref, alias: aliasMatch.alias };
   }
-  const slash = model.indexOf("/");
-  if (slash > 0) {
-    const providerAliasMatch = params.aliasIndex?.byProviderAlias?.get(
-      providerAliasKey(model.slice(0, slash), model.slice(slash + 1)),
-    );
-    if (providerAliasMatch) {
-      return { ref: providerAliasMatch.ref, alias: providerAliasMatch.alias };
-    }
-  }
   const parsed = parseModelRefWithCompatAlias({
-    cfg: params.cfg,
-    agentId: params.agentId,
+    ...params,
+    ...(params.cfg
+      ? (
+          params.manifestPluginContext ??
+          createModelManifestPluginContext({ ...params, cfg: params.cfg })
+        ).getContext()
+      : undefined),
     raw: model,
-    defaultProvider: params.defaultProvider,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
   });
   if (!parsed) {
     return null;
@@ -781,31 +992,22 @@ export function resolveModelRefFromString(
   return { ref: parsed };
 }
 
-/** Resolves legacy provider/model pairs whose model field may still contain an alias. */
-export function resolveModelAliasFromPair(
-  params: {
-    cfg?: OpenClawConfig;
-    agentId?: string;
-    provider: string;
-    model: string;
-    defaultProvider: string;
-    aliasIndex?: ModelAliasIndex;
-    allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
-): ModelRef | null {
-  const bareAlias = resolveModelRefFromString({
-    ...params,
-    raw: params.model,
-    defaultProvider: params.provider,
-  });
-  const providerAlias = resolveModelRefFromString({
-    ...params,
-    raw: `${params.provider}/${params.model}`,
-  });
+/** Resolves legacy provider/model pairs only through their prepared alias index. */
+export function resolveModelAliasFromPair(params: {
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  aliasIndex?: ModelAliasIndex;
+}): ModelRef | null {
+  const bareModel = splitTrailingAuthProfile(params.model).model;
+  const providerModel = splitTrailingAuthProfile(`${params.provider}/${params.model}`).model;
+  const providerAlias = providerModel
+    ? findModelAlias(providerModel, params.aliasIndex)
+    : undefined;
   if (providerAlias?.alias) {
     return providerAlias.ref;
   }
+  const bareAlias = bareModel ? findModelAlias(bareModel, params.aliasIndex) : undefined;
   const provider = normalizeProviderId(params.provider);
   return bareAlias?.alias &&
     (normalizeProviderId(bareAlias.ref.provider) === provider ||
@@ -814,18 +1016,33 @@ export function resolveModelAliasFromPair(
     : null;
 }
 
+type ConfiguredModelRefParams = {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  /** Resolve an authored operand without replacing the caller's config or agent scope. */
+  rawModel?: string;
+  defaultProvider: string;
+  defaultModel: string;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
+} & ModelSelectionNormalizationContext;
+
 /** Resolve the default configured model ref, including aliases and fallback provider rows. */
-export function resolveConfiguredModelRef(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-    defaultProvider: string;
-    defaultModel: string;
-    allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
+export function resolveConfiguredModelRef(params: ConfiguredModelRefParams): ModelRef {
+  return resolveConfiguredModelSelection(params, params.allowPluginNormalization);
+}
+
+/** Resolve provider ownership without executing hooks for an unused final model id. */
+export function resolveConfiguredModelProvider(params: ConfiguredModelRefParams): string {
+  return resolveConfiguredModelSelection(params, false).provider;
+}
+
+function resolveConfiguredModelSelection(
+  params: ConfiguredModelRefParams,
+  allowSelectedPluginNormalization: boolean | undefined,
 ): ModelRef {
   const rawModel =
+    params.rawModel ??
     (params.agentId
       ? resolveAgentModelPrimaryValue(resolveAgentConfig(params.cfg, params.agentId)?.model)
       : undefined) ??
@@ -834,7 +1051,8 @@ export function resolveConfiguredModelRef(
   if (rawModel) {
     const trimmed = rawModel.trim();
     const { model: modelWithoutProfile } = splitTrailingAuthProfile(trimmed);
-    const manifestPluginContext = createModelManifestPluginContext(params);
+    const manifestPluginContext =
+      params.manifestPluginContext ?? createModelManifestPluginContext(params);
     const profileStripped = Boolean(modelWithoutProfile && modelWithoutProfile !== trimmed);
     const aliasKeys = new Set(
       [trimmed, ...(profileStripped ? [modelWithoutProfile] : [])].map(
@@ -846,6 +1064,8 @@ export function resolveConfiguredModelRef(
     );
     // Resolving alias targets can require workspace manifests. Keep ordinary
     // primary selection on the static path when it cannot match an alias.
+    // Normalized alias collisions and blank overrides can change the provider winner,
+    // even when the caller only needs its provider and discards the final model id.
     const aliasCandidates = hasPossibleAlias
       ? buildEffectiveModelAliases({
           cfg: params.cfg,
@@ -875,8 +1095,8 @@ export function resolveConfiguredModelRef(
     });
     if (exactConfiguredPrimary) {
       return normalizeExactConfiguredProviderRef(exactConfiguredPrimary, {
+        ...manifestPluginContext.getContext(),
         allowManifestNormalization: params.allowManifestNormalization,
-        manifestPlugins: manifestPluginContext.get(),
       });
     }
     const aliasCandidate = profileStripped ? undefined : exactAliasCandidate;
@@ -887,13 +1107,13 @@ export function resolveConfiguredModelRef(
       !hasSlashFormModelRef(aliasCandidate.keyRaw)
     ) {
       const primaryRef = parseModelRefWithCompatAlias({
+        ...manifestPluginContext.getContext(),
         cfg: params.cfg,
         agentId: params.agentId,
         raw: primaryWithoutProfile,
         defaultProvider: params.defaultProvider,
         allowManifestNormalization: params.allowManifestNormalization,
-        allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: manifestPluginContext.get(),
+        allowPluginNormalization: allowSelectedPluginNormalization,
       });
       if (primaryRef) {
         return primaryRef;
@@ -909,15 +1129,15 @@ export function resolveConfiguredModelRef(
         normalizedTrimmed === "openrouter:auto" ||
         normalizedTrimmed === OPENROUTER_COMPAT_FREE_ALIAS;
       const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
+        ...(needsOpenRouterCompatManifestPlugins
+          ? manifestPluginContext.getContext()
+          : { manifestPlugins }),
         cfg: params.cfg,
         agentId: params.agentId,
         raw: trimmed,
         defaultProvider: params.defaultProvider,
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: needsOpenRouterCompatManifestPlugins
-          ? manifestPluginContext.get()
-          : manifestPlugins,
       });
       if (openrouterCompatRef) {
         return openrouterCompatRef;
@@ -937,9 +1157,10 @@ export function resolveConfiguredModelRef(
       ) {
         // Non-default provider rows may normalize through plugin manifests. Avoid
         // that heavier lookup unless the cheap configured pass was ambiguous.
-        inferredProviderManifestPlugins = manifestPluginContext.get();
+        inferredProviderManifestPlugins = manifestPluginContext.getContext().manifestPlugins;
         inferredProvider =
           inferUniqueProviderFromConfiguredModels({
+            manifestPluginContext,
             cfg: params.cfg,
             model: trimmed,
             agentId: params.agentId,
@@ -948,12 +1169,18 @@ export function resolveConfiguredModelRef(
           }) ?? inferredProvider;
       }
       if (inferredProvider) {
+        const allowManifestNormalization = inferredProviderManifestPlugins
+          ? params.allowManifestNormalization
+          : false;
         return normalizeModelRef(inferredProvider, trimmed, {
-          allowManifestNormalization: inferredProviderManifestPlugins
-            ? params.allowManifestNormalization
-            : false,
-          allowPluginNormalization: params.allowPluginNormalization,
-          manifestPlugins: inferredProviderManifestPlugins,
+          ...(inferredProviderManifestPlugins
+            ? manifestPluginContext.getContext()
+            : createModelManifestPluginContext({
+                ...params,
+                allowManifestNormalization,
+              }).getContext()),
+          allowManifestNormalization,
+          allowPluginNormalization: allowSelectedPluginNormalization,
         });
       }
 
@@ -966,13 +1193,13 @@ export function resolveConfiguredModelRef(
     }
 
     const resolved = resolveModelRefFromString({
+      manifestPluginContext,
       cfg: params.cfg,
       agentId: params.agentId,
       raw: trimmed,
       defaultProvider: params.defaultProvider,
       allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: manifestPluginContext.get(),
+      allowPluginNormalization: allowSelectedPluginNormalization,
     });
     if (resolved) {
       return resolved.ref;
@@ -998,6 +1225,7 @@ export function resolveConfiguredModelRef(
 type ModelPolicyPreparationParams = BuildModelAliasIndexParams & {
   catalog: ModelCatalogEntry[];
   defaultModel?: string;
+  preparedDefaultModel?: ModelRef;
 };
 
 type AllowedModelSet = {
@@ -1014,24 +1242,32 @@ export function buildAllowedModelSet(
     defaultProvider: string;
     defaultModel?: string;
     agentId?: string;
-  } & ModelManifestNormalizationContext,
+  } & ModelSelectionNormalizationContext,
 ): AllowedModelSet {
-  return buildAllowedModelSetFromPrepared(params, prepareModelPolicy(params));
+  // Model authorization reads metadata; it must not activate provider runtime.
+  const policyParams = { ...params, allowPluginNormalization: false };
+  return buildAllowedModelSetFromPrepared(policyParams, prepareModelPolicy(policyParams));
 }
 
 function prepareModelPolicy(params: ModelPolicyPreparationParams) {
+  const manifestPluginContext =
+    params.manifestPluginContext ?? createModelManifestPluginContext(params);
   const visibility = parseConfiguredModelVisibilityEntries(params);
   const policyAliasAgentId = resolvePolicyAliasAgentId(visibility.configPath, params.agentId);
-  const policyAliasIndex = buildModelAliasIndex({ ...params, agentId: policyAliasAgentId });
+  const policyAliasIndex = buildModelAliasIndexCore({
+    ...params,
+    agentId: policyAliasAgentId,
+    manifestPluginContext,
+  });
   // Inherited policy aliases keep their owner's scope; selection and display
   // aliases still honor the selected agent's overrides.
   const selectionAliasIndex =
     params.agentId && policyAliasAgentId !== params.agentId
-      ? buildModelAliasIndex(params)
+      ? buildModelAliasIndexCore({ ...params, manifestPluginContext })
       : policyAliasIndex;
   const configuredCatalog = buildConfiguredModelCatalog({
-    cfg: params.cfg,
-    manifestPlugins: params.manifestPlugins,
+    ...params,
+    manifestPluginContext,
   });
   const metadata = buildModelCatalogMetadata({
     configuredCatalog,
@@ -1042,6 +1278,7 @@ function prepareModelPolicy(params: ModelPolicyPreparationParams) {
     secondary: configuredCatalog,
   }).map((entry) => applyModelCatalogMetadata({ entry, metadata }));
   return {
+    manifestPluginContext,
     visibility,
     policyAliasIndex,
     selectionAliasIndex,
@@ -1053,7 +1290,13 @@ function prepareModelPolicy(params: ModelPolicyPreparationParams) {
 
 function buildAllowedModelSetFromPrepared(
   params: ModelPolicyPreparationParams,
-  { visibility, policyAliasIndex, metadata, catalog }: ReturnType<typeof prepareModelPolicy>,
+  {
+    visibility,
+    policyAliasIndex,
+    metadata,
+    catalog,
+    manifestPluginContext,
+  }: ReturnType<typeof prepareModelPolicy>,
 ): AllowedModelSet {
   const wildcardModelKeys = visibility.wildcardModelKeys;
   const allowAny = !visibility.hasEntries;
@@ -1061,51 +1304,48 @@ function buildAllowedModelSetFromPrepared(
     ? {
         allowManifestNormalization: false,
         allowPluginNormalization: false,
-        manifestPlugins: params.manifestPlugins,
       }
     : {
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: params.manifestPlugins,
       };
   const defaultModel = params.defaultModel?.trim();
   const defaultRef =
-    defaultModel && params.defaultProvider
+    params.preparedDefaultModel ??
+    (defaultModel && params.defaultProvider
       ? parseModelRefWithCompatAlias({
+          ...(!allowAny ? manifestPluginContext.getContext() : undefined),
           cfg: params.cfg,
           agentId: params.agentId,
           raw: defaultModel,
           defaultProvider: params.defaultProvider,
           ...defaultModelNormalization,
         })
-      : null;
-  const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
+      : null);
+  const defaultKey = defaultRef
+    ? buildModelCatalogRef(defaultRef.provider, defaultRef.model)
+    : undefined;
   const resolvePolicyModelRef = (raw: string) => {
     const trimmed = raw.trim();
     const defaultProvider = !trimmed.includes("/")
       ? resolveBareModelDefaultProvider({
-          cfg: params.cfg,
+          ...params,
+          manifestPluginContext,
           catalog,
           model: trimmed,
-          defaultProvider: params.defaultProvider,
-          agentId: params.agentId,
-          manifestPlugins: params.manifestPlugins,
         })
       : params.defaultProvider;
     return resolveModelRefFromString({
-      cfg: params.cfg,
-      agentId: params.agentId,
+      ...params,
+      manifestPluginContext,
       raw,
       defaultProvider,
       aliasIndex: policyAliasIndex,
-      allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
     })?.ref;
   };
   const catalogKeys = new Set<string>();
   for (const entry of catalog) {
-    catalogKeys.add(modelKey(entry.provider, entry.id));
+    catalogKeys.add(buildModelCatalogRef(entry.provider, entry.id));
   }
 
   if (allowAny) {
@@ -1129,14 +1369,15 @@ function buildAllowedModelSetFromPrepared(
     if (
       !allowedRefs.some(
         (existing) =>
-          modelKey(existing.provider, existing.model) === modelKey(ref.provider, ref.model),
+          buildModelCatalogRef(existing.provider, existing.model) ===
+          buildModelCatalogRef(ref.provider, ref.model),
       )
     ) {
       allowedRefs.push(ref);
     }
   };
   for (const entry of expandModelCatalogWildcards(catalog, wildcardModelKeys)) {
-    allowedKeys.add(modelKey(entry.provider, entry.id));
+    allowedKeys.add(buildModelCatalogRef(entry.provider, entry.id));
     addAllowedCatalogRef({ provider: entry.provider, model: entry.id });
   }
   const addAllowedModelRef = (raw: string) => {
@@ -1144,7 +1385,7 @@ function buildAllowedModelSetFromPrepared(
     if (!parsed) {
       return;
     }
-    const key = modelKey(parsed.provider, parsed.model);
+    const key = buildModelCatalogRef(parsed.provider, parsed.model);
     allowedKeys.add(key);
     addAllowedCatalogRef(parsed);
 
@@ -1223,10 +1464,10 @@ export function getModelRefStatus(
     defaultProvider: string;
     defaultModel?: string;
     agentId?: string;
-  } & ModelManifestNormalizationContext,
+  } & ModelSelectionNormalizationContext,
 ): ModelRefStatus {
   const allowed = buildAllowedModelSet(params);
-  const key = modelKey(params.ref.provider, params.ref.model);
+  const key = buildModelCatalogRef(params.ref.provider, params.ref.model);
   return {
     key,
     inCatalog: Boolean(
@@ -1249,7 +1490,7 @@ export function resolveAllowedModelRefFromAliasIndex(
     agentId?: string;
     aliasIndex: ModelAliasIndex;
     getStatus: (ref: ModelRef) => ModelRefStatus;
-  } & ModelManifestNormalizationContext,
+  } & ModelSelectionNormalizationContext,
 ): ResolveAllowedModelRefResult {
   const trimmed = params.raw.trim();
   if (!trimmed) {
@@ -1258,20 +1499,15 @@ export function resolveAllowedModelRefFromAliasIndex(
 
   const effectiveDefaultProvider = !trimmed.includes("/")
     ? (inferUniqueProviderFromConfiguredModels({
-        cfg: params.cfg,
+        ...params,
         model: trimmed,
-        agentId: params.agentId,
-        manifestPlugins: params.manifestPlugins,
       }) ?? params.defaultProvider)
     : params.defaultProvider;
 
   const resolved = resolveModelRefFromString({
-    cfg: params.cfg,
-    agentId: params.agentId,
+    ...params,
     raw: trimmed,
     defaultProvider: effectiveDefaultProvider,
-    aliasIndex: params.aliasIndex,
-    manifestPlugins: params.manifestPlugins,
   });
   if (!resolved) {
     return { error: `invalid model: ${trimmed}` };
@@ -1338,44 +1574,36 @@ function hasConfiguredRowsNeedingManifestLookup(
   );
 }
 
-function resolveConfiguredModelManifestPlugins(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  manifestPlugins?: ModelManifestPlugins;
-}): ModelManifestPlugins {
-  if (params.manifestPlugins) {
-    return params.manifestPlugins;
-  }
-  if (!hasConfiguredProviderModelRows(params.cfg)) {
-    return undefined;
-  }
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  if (!workspaceDir) {
-    return getCurrentPluginMetadataSnapshot({
-      config: params.cfg,
-      env: process.env,
-    })?.plugins;
-  }
-  return loadManifestMetadataSnapshot({
-    config: params.cfg,
-    env: process.env,
-    ...(workspaceDir ? { workspaceDir } : {}),
-  }).plugins;
-}
-
 /** Build catalog entries from configured provider model rows. */
-export function buildConfiguredModelCatalog(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  manifestPlugins?: ModelManifestPlugins;
-}): ModelCatalogEntry[] {
+export function buildConfiguredModelCatalog(
+  params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+  } & ModelSelectionNormalizationContext,
+): ModelCatalogEntry[] {
   const providers = params.cfg.models?.providers;
-  if (!providers || typeof providers !== "object") {
+  if (!providers || !hasConfiguredProviderModelRows(params.cfg)) {
     return [];
   }
 
-  const manifestPlugins = resolveConfiguredModelManifestPlugins(params);
-  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({ manifestPlugins });
+  // A cold unscoped catalog may consume current global policy, but must not
+  // invent a workspace discovery context. Prepared operations carry their own.
+  const normalization =
+    params.manifestPluginContext?.getContext() ??
+    (params.manifestPlugins ||
+    params.pluginMetadataSnapshot ||
+    params.workspaceDir ||
+    getActivePluginRegistryWorkspaceDirFromState() ||
+    getCurrentPluginMetadataOwner() ||
+    getScopedPluginMetadata() ||
+    getPluginRuntimeGenerationRegistry()
+      ? createModelManifestPluginContext(params).getContext()
+      : {
+          manifestPlugins:
+            getCurrentPluginMetadataSnapshot({ config: params.cfg, env: process.env })?.plugins ??
+            [],
+        });
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(normalization);
   const catalog: ModelCatalogEntry[] = [];
   for (const [providerRaw, provider] of Object.entries(providers)) {
     const providerId = normalizeProviderId(providerRaw);
@@ -1444,25 +1672,22 @@ export function resolveHooksGmailModel(
   params: {
     cfg: OpenClawConfig;
     defaultProvider: string;
-  } & ModelManifestNormalizationContext,
+  } & ModelSelectionNormalizationContext,
 ): ModelRef | null {
   const hooksModel = params.cfg.hooks?.gmail?.model;
   if (!hooksModel?.trim()) {
     return null;
   }
 
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
-    manifestPlugins: params.manifestPlugins,
-  });
+  const manifestPluginContext =
+    params.manifestPluginContext ?? createModelManifestPluginContext(params);
+  const aliasIndex = buildModelAliasIndexCore({ ...params, manifestPluginContext });
 
   const resolved = resolveModelRefFromString({
-    cfg: params.cfg,
+    ...params,
+    manifestPluginContext,
     raw: hooksModel,
-    defaultProvider: params.defaultProvider,
     aliasIndex,
-    manifestPlugins: params.manifestPlugins,
   });
 
   return resolved?.ref ?? null;
@@ -1563,7 +1788,7 @@ function expandModelCatalogWildcards<T extends { provider: string; id: string }>
   wildcardModelKeys: ReadonlySet<string>,
 ): T[] {
   return catalog.filter((entry) =>
-    isModelKeyAllowedBySet(wildcardModelKeys, modelKey(entry.provider, entry.id)),
+    isModelKeyAllowedBySet(wildcardModelKeys, buildModelCatalogRef(entry.provider, entry.id)),
   );
 }
 
@@ -1579,44 +1804,6 @@ export function isModelKeyAllowedBySet(allowedKeys: ReadonlySet<string>, key: st
     separator = key.indexOf("/", separator + 1);
   }
   return false;
-}
-
-function resolveAllowedModelSelection(
-  params: {
-    cfg?: OpenClawConfig;
-    provider: string;
-    model: string;
-    allowAny: boolean;
-    allowedKeys: ReadonlySet<string>;
-    allowedCatalog: readonly ModelCatalogEntry[];
-    allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
-): ModelRef | null {
-  const normalizeSelectionRef = (provider: string, model: string) =>
-    resolveExactConfiguredProviderRef({
-      cfg: params.cfg,
-      raw: `${provider}/${model}`,
-      allowManifestNormalization: params.allowManifestNormalization,
-      manifestPlugins: params.manifestPlugins,
-    }) ??
-    normalizeModelRef(provider, model, {
-      allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
-    });
-  const current = normalizeSelectionRef(params.provider, params.model);
-  if (
-    params.allowAny ||
-    isModelKeyAllowedBySet(params.allowedKeys, modelKey(current.provider, current.model))
-  ) {
-    return current;
-  }
-  const fallback = params.allowedCatalog[0];
-  if (!fallback) {
-    return null;
-  }
-  return normalizeSelectionRef(fallback.provider, fallback.id);
 }
 
 export type ModelVisibilityPolicy = {
@@ -1648,7 +1835,7 @@ export type ModelVisibilityPolicy = {
 export function modelCatalogLogicalKey(entry: Pick<ModelCatalogEntry, "provider" | "id">): string {
   const provider = normalizeProviderId(entry.provider);
   const model = splitTrailingAuthProfile(entry.id).model;
-  return normalizeLowercaseStringOrEmpty(modelKey(provider, model));
+  return normalizeLowercaseStringOrEmpty(buildModelCatalogRef(provider, model));
 }
 
 export function dedupeModelCatalogEntries(
@@ -1659,7 +1846,7 @@ export function dedupeModelCatalogEntries(
   const seen = new Set<string>();
   const next: ModelCatalogEntry[] = [];
   for (const entry of entries) {
-    const key = modelKey(entry.provider, entry.id);
+    const key = buildModelCatalogRef(entry.provider, entry.id);
     if (seen.has(key)) {
       continue;
     }
@@ -1675,61 +1862,60 @@ export function createModelVisibilityPolicyWithFallbacks(
     catalog: ModelCatalogEntry[];
     defaultProvider: string;
     defaultModel?: string;
+    /** A prepared default keeps literal IDs and completed normalization intact. */
+    preparedDefaultModel?: ModelRef;
     fallbackModels: readonly string[];
     additionalConfiguredModelRefs?: readonly string[];
     agentId?: string;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
+  } & ModelSelectionNormalizationContext,
 ): ModelVisibilityPolicy {
   const prepared = prepareModelPolicy(params);
-  const { visibility, policyAliasIndex, selectionAliasIndex, configuredCatalog } = prepared;
+  const {
+    visibility,
+    policyAliasIndex,
+    selectionAliasIndex,
+    configuredCatalog,
+    manifestPluginContext,
+  } = prepared;
   const wildcardModelKeys = visibility.wildcardModelKeys;
   const allowed = buildAllowedModelSetFromPrepared(params, prepared);
   const configuredKeys = new Set(configuredCatalog.map(modelCatalogLogicalKey));
   const retainedKeys = new Set<string>();
   const addConfiguredRef = (
-    raw: string | undefined,
+    raw: string | ModelRef | undefined,
     retained: boolean,
     aliasIndex: ModelAliasIndex,
   ): ModelRef | undefined => {
-    if (!raw?.trim() || parseModelPolicyWildcardRef(raw)) {
+    if (typeof raw === "string" && (!raw.trim() || parseModelPolicyWildcardRef(raw))) {
       return undefined;
     }
-    const resolved = resolveModelRefFromString({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      raw,
-      defaultProvider: params.defaultProvider,
-      aliasIndex,
-      allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
-    });
-    if (!resolved) {
+    const ref =
+      typeof raw === "string"
+        ? resolveModelRefFromString({ ...params, manifestPluginContext, raw, aliasIndex })?.ref
+        : raw;
+    if (!ref) {
       return undefined;
     }
-    const key = modelCatalogLogicalKey({
-      provider: resolved.ref.provider,
-      id: resolved.ref.model,
-    });
+    const key = modelCatalogLogicalKey({ provider: ref.provider, id: ref.model });
     configuredKeys.add(key);
     if (retained) {
       retainedKeys.add(key);
     }
-    return resolved.ref;
+    return ref;
   };
   const exactConfiguredKeys = new Set<string>();
   for (const raw of visibility.exactModelRefs) {
     const resolved = addConfiguredRef(raw, false, policyAliasIndex);
     if (resolved) {
-      exactConfiguredKeys.add(modelKey(resolved.provider, resolved.model));
+      exactConfiguredKeys.add(buildModelCatalogRef(resolved.provider, resolved.model));
     }
   }
   for (const raw of params.additionalConfiguredModelRefs ?? []) {
     addConfiguredRef(raw, false, selectionAliasIndex);
   }
-  addConfiguredRef(params.defaultModel, true, selectionAliasIndex);
+  addConfiguredRef(params.preparedDefaultModel ?? params.defaultModel, true, selectionAliasIndex);
   for (const fallback of params.fallbackModels) {
     // Configured fallbacks remain available for automatic failover and catalog
     // retention, but are not user-selectable overrides unless policy also allows them.
@@ -1752,21 +1938,18 @@ export function createModelVisibilityPolicyWithFallbacks(
     allowConfigPath: visibility.configPath,
     allowRepairConfigPath: visibility.repairConfigPath,
     allowsKey,
-    allows: (ref) => allowsKey(modelKey(ref.provider, ref.model)),
+    allows: (ref) => allowsKey(buildModelCatalogRef(ref.provider, ref.model)),
     allowsByWildcard: (ref) =>
-      isModelKeyAllowedBySet(wildcardModelKeys, modelKey(ref.provider, ref.model)),
-    resolveSelection: (ref) =>
-      resolveAllowedModelSelection({
-        provider: ref.provider,
-        model: ref.model,
-        cfg: params.cfg,
-        allowAny: allowed.allowAny,
-        allowedKeys: allowed.allowedKeys,
-        allowedCatalog: allowed.allowedCatalog,
-        allowManifestNormalization: params.allowManifestNormalization,
-        allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: params.manifestPlugins,
-      }),
+      isModelKeyAllowedBySet(wildcardModelKeys, buildModelCatalogRef(ref.provider, ref.model)),
+    resolveSelection: (ref) => {
+      // Selected refs and catalog rows already own their model identities. Replaying
+      // provider normalization here can change the model after authorization.
+      if (allowsKey(buildModelCatalogRef(ref.provider, ref.model))) {
+        return ref;
+      }
+      const fallback = allowed.allowedCatalog[0];
+      return fallback ? { provider: fallback.provider, model: fallback.id } : null;
+    },
     visibleCatalog: ({ catalog, defaultVisibleCatalog, view }) => {
       if (view === "all") {
         return [...catalog];
@@ -1779,10 +1962,10 @@ export function createModelVisibilityPolicyWithFallbacks(
       }
       return dedupeModelCatalogEntries([
         ...defaultVisibleCatalog.filter((entry) =>
-          isModelKeyAllowedBySet(wildcardModelKeys, modelKey(entry.provider, entry.id)),
+          isModelKeyAllowedBySet(wildcardModelKeys, buildModelCatalogRef(entry.provider, entry.id)),
         ),
         ...allowed.allowedCatalog.filter((entry) =>
-          exactConfiguredKeys.has(modelKey(entry.provider, entry.id)),
+          exactConfiguredKeys.has(buildModelCatalogRef(entry.provider, entry.id)),
         ),
       ]);
     },

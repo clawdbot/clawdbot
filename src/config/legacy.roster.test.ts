@@ -2,9 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { configIncludeOwnsAgentRoster } from "./agent-roster-provenance.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.js";
+import {
+  cloneConfigWithResolutionFacts,
+  copyConfigResolutionFactsExcept,
+} from "./resolution-facts.js";
 import { validateConfigObjectRaw } from "./validation.js";
 
 describe("persisted implicit-main roster migration", () => {
@@ -450,6 +456,13 @@ describe("persisted implicit-main roster migration", () => {
       expect(snapshot.sourceConfig.agents?.defaults?.systemAgent?.agentId).toBe("research");
       expect(snapshot.sourceConfig.agents?.defaults?.authInheritance?.agentId).toBe("research");
       expect(snapshot.sourceConfig.talk?.agentId).toBe("research");
+
+      const runtimeCopy = cloneConfigWithResolutionFacts(snapshot.config);
+      const authOverlay = { ...runtimeCopy, gateway: { auth: { mode: "none" as const } } };
+      copyConfigResolutionFactsExcept(runtimeCopy, authOverlay, ["gateway.auth.token"]);
+      expect(resolveAgentWorkspaceDir(authOverlay, "research")).toBe(
+        resolveDefaultAgentWorkspaceDir(),
+      );
     });
   });
 

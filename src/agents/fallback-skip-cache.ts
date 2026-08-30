@@ -14,8 +14,8 @@
  * same `sessionId` shares the same skip set.
  */
 
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
-import { modelKey } from "./model-ref-shared.js";
 
 /**
  * Default time-to-live for a skip marker. Disabled by default so existing
@@ -99,7 +99,7 @@ function sessionBucket(sessionId: string, create: boolean): Map<string, SkipEntr
 }
 
 function candidateKey(provider: string, model: string, authScope?: string): string {
-  return JSON.stringify([modelKey(provider, model), authScope?.trim() || null]);
+  return JSON.stringify([buildModelCatalogRef(provider, model), authScope?.trim() || null]);
 }
 
 function pruneExpired(bucket: Map<string, SkipEntry>, now: number): void {

@@ -3,7 +3,7 @@ import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import {
-  buildModelAliasIndex,
+  buildModelAliasIndexCore as buildModelAliasIndex,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import {

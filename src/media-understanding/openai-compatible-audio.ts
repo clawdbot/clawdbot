@@ -24,7 +24,7 @@ function resolveModel(model: string | undefined, fallback: string): string {
 }
 
 /** Sends an OpenAI-compatible audio transcription request and returns validated text output. */
-export async function transcribeOpenAiCompatibleAudio(
+export async function transcribeOpenAiCompatibleAudioCore(
   params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;

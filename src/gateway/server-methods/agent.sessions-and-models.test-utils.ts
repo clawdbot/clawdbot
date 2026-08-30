@@ -11,6 +11,7 @@ import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import {
@@ -228,7 +229,18 @@ describe("gateway agent handler", () => {
       resetAgentTaskRegistryForTests();
       resetSubagentRegistryForTests({ persist: false });
       const childSessionKey = "agent:work:subagent:plugin-helper";
+      const model = makeProviderModelFixture<"anthropic-messages">({
+        id: "claude-sonnet-4-6",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+      });
       const cfg = {
+        models: {
+          providers: {
+            [model.provider]: { baseUrl: model.baseUrl, models: [model] },
+          },
+        },
         session: { mainKey: "main", scope: "per-sender" },
         agents: {
           defaults: {

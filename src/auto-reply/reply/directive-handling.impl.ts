@@ -137,6 +137,7 @@ export async function handleDirectiveOnly(
     runtimePolicySessionKey,
     resetModelOverride,
     workspaceDir: params.workspaceDir,
+    manifestPluginContext: params.manifestPluginContext,
     surface: params.surface,
     sessionEntry,
   });
@@ -148,6 +149,8 @@ export async function handleDirectiveOnly(
     directives,
     cfg: params.cfg,
     agentDir,
+    workspaceDir: params.workspaceDir,
+    manifestPluginContext: params.manifestPluginContext,
     defaultProvider,
     defaultModel,
     aliasIndex,
@@ -175,6 +178,9 @@ export async function handleDirectiveOnly(
     const prepared = await prepareModelSelectionRuntime({
       cfg: params.cfg,
       agentId: activeAgentId,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+      manifestPluginContext: params.manifestPluginContext,
       provider: resolvedProvider,
       model: resolvedModel,
       catalog: thinkingCatalog ?? [],
@@ -319,20 +325,29 @@ export async function handleDirectiveOnly(
       "hasReasoningDirective",
     );
   }
-  if (directives.hasElevatedDirective && !directives.elevatedLevel) {
-    if (!directives.rawElevatedLevel) {
-      if (!elevatedEnabled || !elevatedAllowed) {
-        return acknowledgeIgnoredDirective(
-          {
-            text: formatElevatedUnavailableText({
-              runtimeSandboxed: runtimeIsSandboxed,
-              failures: params.elevatedFailures,
-              sessionKey: params.sessionKey,
-            }),
-          },
-          "hasElevatedDirective",
-        );
-      }
+  if (directives.hasElevatedDirective) {
+    // Invalid levels keep their diagnostic ahead of availability errors.
+    if (!directives.elevatedLevel && directives.rawElevatedLevel) {
+      return acknowledgeIgnoredDirective(
+        {
+          text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on, ask, full.`,
+        },
+        "hasElevatedDirective",
+      );
+    }
+    if (!elevatedEnabled || !elevatedAllowed) {
+      return acknowledgeIgnoredDirective(
+        {
+          text: formatElevatedUnavailableText({
+            runtimeSandboxed: runtimeIsSandboxed,
+            failures: params.elevatedFailures,
+            sessionKey: params.sessionKey,
+          }),
+        },
+        "hasElevatedDirective",
+      );
+    }
+    if (!directives.elevatedLevel) {
       const level = currentElevatedLevel ?? "off";
       return acknowledgeIgnoredDirective(
         {
@@ -346,24 +361,6 @@ export async function handleDirectiveOnly(
         "hasElevatedDirective",
       );
     }
-    return acknowledgeIgnoredDirective(
-      {
-        text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on, ask, full.`,
-      },
-      "hasElevatedDirective",
-    );
-  }
-  if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {
-    return acknowledgeIgnoredDirective(
-      {
-        text: formatElevatedUnavailableText({
-          runtimeSandboxed: runtimeIsSandboxed,
-          failures: params.elevatedFailures,
-          sessionKey: params.sessionKey,
-        }),
-      },
-      "hasElevatedDirective",
-    );
   }
   if (directives.hasExecDirective) {
     const invalidExecMessage = directives.invalidExecHost

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
@@ -412,6 +413,86 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
     } finally {
       sibling.close();
     }
+  },
+);
+
+posixIt.each([true, false])(
+  "shares raw tsx transforms only inside an owned namespace (detached: %s)",
+  async (detached) => {
+    const root = tempDirs.make("oc-vt-source-cache-");
+    const tmp = path.join(root, "tmp");
+    fs.mkdirSync(tmp);
+    const sentinel = path.join(tmp, "caller-sentinel");
+    fs.writeFileSync(sentinel, "keep");
+    const compilerCalls = path.join(root, "compiler-calls");
+    const compilerProbe = path.join(root, "compiler-probe");
+    const tsxRequire = createRequire(createRequire(import.meta.url).resolve("tsx/package.json"));
+    const compilerCli = tsxRequire.resolve("esbuild/bin/esbuild");
+    const quoteShell = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    fs.writeFileSync(
+      compilerProbe,
+      [
+        "#!/bin/sh",
+        `printf 'service\\n' >> ${quoteShell(compilerCalls)}`,
+        "unset ESBUILD_BINARY_PATH",
+        `exec ${quoteShell(compilerCli)} "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    const fixture = path.join(root, "source.mts");
+    fs.writeFileSync(fixture, 'enum Value { Ready = "ready" }\nconsole.log(Value.Ready);\n');
+    const receiptPath = path.join(root, "receipt.json");
+    const script = `
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+const outputs = [];
+for (let index = 0; index < 2; index += 1) {
+  outputs.push(execFileSync(process.execPath, ["--import", "tsx", ${JSON.stringify(fixture)}], { encoding: "utf8" }).trim());
+}
+fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ outputs, namespace: os.tmpdir() }));
+`;
+    const env = {
+      ...process.env,
+      TMPDIR: tmp,
+      TMP: tmp,
+      TEMP: tmp,
+      TSX_DISABLE_CACHE: "1",
+      ESBUILD_BINARY_PATH: compilerProbe,
+    };
+    const { child, completion } = spawnOwnedVitestProcess({
+      command: process.execPath,
+      args: ["--input-type=module", "--eval", script],
+      options: { cwd: repoRoot, detached, env, stdio: ["ignore", "pipe", "pipe"] },
+    });
+    let output = "";
+    child.stdout?.on("data", (chunk) => {
+      output += String(chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      output += String(chunk);
+    });
+    expect(await completion, output).toEqual({ code: 0, signal: null });
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as {
+      outputs: string[];
+      namespace: string;
+    };
+    expect(receipt.outputs).toEqual(["ready", "ready"]);
+    // The probe delegates to the installed compiler: a cache hit must avoid
+    // starting a second native service, not merely reproduce the same output.
+    expect(fs.readFileSync(compilerCalls, "utf8").trim().split("\n")).toHaveLength(
+      detached ? 1 : 2,
+    );
+    if (detached) {
+      expect(path.dirname(receipt.namespace)).toBe(tmp);
+      expect(fs.existsSync(receipt.namespace)).toBe(false);
+    } else {
+      expect(receipt.namespace).toBe(tmp);
+    }
+    expect(env.TSX_DISABLE_CACHE).toBe("1");
+    expect(fs.readdirSync(tmp)).toEqual(["caller-sentinel"]);
+    expect(fs.readFileSync(sentinel, "utf8")).toBe("keep");
   },
 );
 

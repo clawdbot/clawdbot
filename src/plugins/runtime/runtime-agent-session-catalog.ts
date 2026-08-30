@@ -23,7 +23,11 @@ export function resolveAgentCatalogCreateTarget(
   params: RuntimeSessionCatalogCreateTargetParams,
 ): SessionCatalogCreateTarget | undefined {
   const agentId = params.requestedAgentId ?? resolveDefaultAgentId(params.config);
-  const defaultModel = resolveDefaultModelForAgent({ cfg: params.config, agentId });
+  const defaultModel = resolveDefaultModelForAgent({
+    cfg: params.config,
+    agentId,
+    allowPluginNormalization: false,
+  });
   for (const modelId of params.modelIds) {
     if (
       resolveEffectiveAgentRuntime({

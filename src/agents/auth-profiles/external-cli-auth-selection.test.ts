@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { makeRegistry } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./external-cli-auth-selection.js";
 import type { AuthProfileStore } from "./types.js";
@@ -38,6 +39,26 @@ function resolveScope(params: {
 }
 
 describe("resolveExternalCliAuthOverlayScopeFromSelection", () => {
+  it("keeps a captured provider alias when selecting an explicit CLI profile", () => {
+    const metadataSnapshot = makeRegistry([{ id: "alias-owner", channels: [], origin: "bundled" }]);
+    for (const plugin of metadataSnapshot.plugins) {
+      plugin.providerAuthAliases = { "workspace-route": "claude-cli" };
+    }
+    const cfg: OpenClawConfig = {
+      auth: { profiles: { "workspace:account": { provider: "claude-cli", mode: "oauth" } } },
+    };
+    expect(
+      resolveExternalCliAuthOverlayScopeFromSelection({
+        provider: "workspace-route",
+        modelId: "test-model",
+        cfg,
+        workspaceDir: "/workspace/captured",
+        authAliasLookupParams: { env: {}, metadataSnapshot },
+        userPinnedAuthProfileId: "workspace:account",
+      }),
+    ).toEqual({ providerIds: ["claude-cli"], ignoreAutoPreferredProfile: false });
+  });
+
   it("loads Claude CLI auth for an explicitly ordered OAuth profile", () => {
     const cfg = {
       auth: {

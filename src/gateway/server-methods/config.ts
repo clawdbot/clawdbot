@@ -15,7 +15,10 @@ import {
   validateConfigSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
-import { resolveModelIdNormalizationPolicies } from "../../config/io.context.js";
+import {
+  createConfigIoContext,
+  resolveModelIdNormalizationPolicies,
+} from "../../config/io.context.js";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -44,7 +47,7 @@ import {
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
-import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
+import type { PreparedPluginMetadata } from "../../plugins/plugin-metadata-collection.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   isRetryableSecretDegradationReason,
@@ -55,7 +58,7 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
 import { diffConfigPaths } from "../config-diff.js";
-import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
+import { readConfigGetResponse } from "../config-get-response.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import {
@@ -87,11 +90,6 @@ const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
 // Leaf preferences are LWW so independent tabs/devices do not CAS-conflict on the whole config;
 // every other path keeps strict document CAS.
 const HASHLESS_PATCH_LWW_PATH_PREFIXES = ["ui.prefs"] as const;
-
-let configSchemaResponseCache: {
-  pluginRegistryVersion: number;
-  response: ConfigSchemaResponse;
-} | null = null;
 
 type ConfigRedactionHints = Parameters<typeof redactConfigObject>[1];
 type ConfigWriteCommitResult = Awaited<ReturnType<typeof commitGatewayConfigWrite>>;
@@ -493,7 +491,12 @@ function parseValidateConfigFromRawOrRespond(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
   modelIdNormalizationPolicies?: Parameters<typeof normalizeSubmittedConfigModelRefs>[1],
-): { config: OpenClawConfig; writeConfig: OpenClawConfig; schema: ConfigSchemaResponse } | null {
+): {
+  config: OpenClawConfig;
+  writeConfig: OpenClawConfig;
+  schema: ConfigSchemaResponse;
+  pluginMetadata?: PreparedPluginMetadata;
+} | null {
   const rawValue = parseRawConfigOrRespond(params, requestName, respond);
   if (!rawValue) {
     return null;
@@ -503,7 +506,7 @@ function parseValidateConfigFromRawOrRespond(
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
     return null;
   }
-  const schema = loadSchemaWithPlugins();
+  const schema = loadGatewayRuntimeConfigSchema();
   const restored = restoreRedactedValues(parsedRes.parsed, snapshot.config, schema.uiHints);
   if (!restored.ok) {
     respond(
@@ -533,6 +536,7 @@ function parseValidateConfigFromRawOrRespond(
     config: validatedSubmission.config,
     writeConfig: validatedSubmission.validationCandidate,
     schema,
+    pluginMetadata: validatedSubmission.pluginMetadata,
   };
 }
 
@@ -581,7 +585,11 @@ function validateSubmittedConfigOrRespond(params: {
   sourceConfig: OpenClawConfig | undefined;
   modelIdNormalizationPolicies: Parameters<typeof normalizeSubmittedConfigModelRefs>[1];
   respond: RespondFn;
-}): { validationCandidate: OpenClawConfig; config: OpenClawConfig } | null {
+}): {
+  validationCandidate: OpenClawConfig;
+  config: OpenClawConfig;
+  pluginMetadata?: PreparedPluginMetadata;
+} | null {
   const validationCandidate = normalizeSubmittedConfigModelRefs(
     stripBundledProviderRuntimeDefaults({
       candidate: params.candidate,
@@ -598,17 +606,30 @@ function validateSubmittedConfigOrRespond(params: {
       }),
     );
   };
-  const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
+  // Submitted workspaces and plugin policy can differ from the applied generation.
+  // The loader prepares them after core validation without activating the candidate.
+  const pluginMetadata = createConfigIoContext().createValidationPluginMetadataSnapshotLoader({
+    env: process.env,
+  });
+  const validationOptions = { loadPluginMetadataSnapshot: pluginMetadata.load };
+  const sourceValidated = validateConfigObjectRawWithPlugins(
+    validationCandidate,
+    validationOptions,
+  );
   if (!sourceValidated.ok) {
     respondInvalid(sourceValidated.issues);
     return null;
   }
-  const validated = validateConfigObjectWithPlugins(validationCandidate);
+  const validated = validateConfigObjectWithPlugins(validationCandidate, validationOptions);
   if (!validated.ok) {
     respondInvalid(validated.issues);
     return null;
   }
-  return { validationCandidate: validationCandidate as OpenClawConfig, config: validated.config };
+  return {
+    validationCandidate,
+    config: validated.config,
+    pluginMetadata: pluginMetadata.getMetadata(),
+  };
 }
 
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
@@ -627,6 +648,7 @@ function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationI
 
 async function ensureResolvableSecretRefsOrRespond(params: {
   config: OpenClawConfig;
+  pluginMetadata?: PreparedPluginMetadata;
   respond: RespondFn;
 }): Promise<PreparedSecretsRuntimeSnapshot | null> {
   try {
@@ -634,6 +656,9 @@ async function ensureResolvableSecretRefsOrRespond(params: {
       config: params.config,
       includeAuthStoreRefs: false,
       allowUnavailableSecretOwners: true,
+      ...(params.pluginMetadata
+        ? { manifestRegistry: params.pluginMetadata.manifestRegistry }
+        : {}),
     });
     for (const owner of snapshot.degradedOwners ?? []) {
       const reason = redactSecretDegradationReason(owner.reason);
@@ -671,15 +696,6 @@ function preparedSecretDegradationPayload(snapshot: PreparedSecretsRuntimeSnapsh
   return degradedSecretOwners.length > 0 ? { degradedSecretOwners } : {};
 }
 
-export function clearConfigSchemaResponseCacheForTests() {
-  configSchemaResponseCache = null;
-  invalidateConfigGetResponseCache();
-}
-
-function clearConfigSchemaResponseCache() {
-  configSchemaResponseCache = null;
-}
-
 async function respondWithConfigRestartWrite(params: {
   requestParams: unknown;
   kind: ConfigRestartWriteKind;
@@ -706,7 +722,6 @@ async function respondWithConfigRestartWrite(params: {
       return;
     }
   }
-  clearConfigSchemaResponseCache();
   const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
     kind: params.kind,
@@ -777,21 +792,6 @@ function respondConfigPatchNoop(params: {
     },
     undefined,
   );
-}
-
-function loadSchemaWithPlugins(): ConfigSchemaResponse {
-  const pluginRegistryVersion = getActivePluginRegistryVersion();
-  if (
-    configSchemaResponseCache &&
-    configSchemaResponseCache.pluginRegistryVersion === pluginRegistryVersion
-  ) {
-    return configSchemaResponseCache.response;
-  }
-
-  // Plugin schema metadata is process-stable until config write or registry activation.
-  const response = loadGatewayRuntimeConfigSchema();
-  configSchemaResponseCache = { pluginRegistryVersion, response };
-  return response;
 }
 
 async function commitGatewayConfigWriteOrRespond(
@@ -868,7 +868,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       await readConfigGetResponse({
         getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
-        loadUiHints: () => loadSchemaWithPlugins().uiHints,
+        loadUiHints: () => loadGatewayRuntimeConfigSchema().uiHints,
         revisionProjector: context.configRevisionProjector,
       }),
       undefined,
@@ -878,7 +878,7 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {
       return;
     }
-    respond(true, loadSchemaWithPlugins(), undefined);
+    respond(true, loadGatewayRuntimeConfigSchema(), undefined);
   },
   "config.schema.lookup": ({ params, respond, context }) => {
     if (
@@ -887,7 +887,7 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const path = (params as { path: string }).path;
-    const schema = loadSchemaWithPlugins();
+    const schema = loadGatewayRuntimeConfigSchema();
     const result = lookupConfigSchema(schema, path, resolveConfigReloadMetadata);
     if (!result) {
       respond(
@@ -931,7 +931,7 @@ export const configHandlers: GatewayRequestHandlers = {
       "config.set",
       snapshot,
       respond,
-      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
+      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadata),
     );
     if (!parsed) {
       return;
@@ -947,6 +947,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
       config: parsed.config,
+      pluginMetadata: parsed.pluginMetadata,
       respond,
     });
     if (!preparedSecretsSnapshot) {
@@ -962,7 +963,6 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!writeResult) {
       return;
     }
-    clearConfigSchemaResponseCache();
     respond(
       true,
       {
@@ -996,7 +996,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const { snapshot, writeOptions } = writeSnapshot;
     const modelIdNormalizationPolicies = resolveModelIdNormalizationPolicies(
-      writeOptions.basePluginMetadataSnapshot,
+      writeOptions.basePluginMetadata,
     );
     if (!snapshot.valid) {
       respond(
@@ -1077,7 +1077,7 @@ export const configHandlers: GatewayRequestHandlers = {
       replaceArrayPaths: replacePaths,
     });
     const merged = applyMergePatch(snapshot.config, createMergePatch(sourceConfig, mergedSource));
-    const schemaPatch = loadSchemaWithPlugins();
+    const schemaPatch = loadGatewayRuntimeConfigSchema();
     const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
     if (!restoredMerge.ok) {
       respond(
@@ -1139,6 +1139,7 @@ export const configHandlers: GatewayRequestHandlers = {
     const validatedConfig = validatedSubmission.config;
     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
       config: validatedConfig,
+      pluginMetadata: validatedSubmission.pluginMetadata,
       respond,
     });
     if (!preparedSecretsSnapshot) {
@@ -1219,13 +1220,14 @@ export const configHandlers: GatewayRequestHandlers = {
       "config.apply",
       snapshot,
       respond,
-      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadataSnapshot),
+      resolveModelIdNormalizationPolicies(writeOptions.basePluginMetadata),
     );
     if (!parsed) {
       return;
     }
     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
       config: parsed.config,
+      pluginMetadata: parsed.pluginMetadata,
       respond,
     });
     if (!preparedSecretsSnapshot) {

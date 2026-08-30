@@ -389,11 +389,19 @@ describe("createLazyGatewayCronState", () => {
     hoisted.setState(state);
 
     const lazy = createLazyGatewayCronState(createParams());
-    const cfg = { agents: { defaults: { heartbeat: { every: "5m" } } } } as OpenClawConfig;
-    await lazy.reconcileHeartbeatJobs(cfg);
+    const candidate = {
+      config: { agents: { defaults: { heartbeat: { every: "5m" } } } },
+      agentWorkspaceDirs: new Map([["main", "/workspace/candidate"]]),
+      schedulerSeed: "candidate-seed",
+      isCurrent: () => true,
+    };
+    const reconcileHeartbeatJobs = vi.mocked(state.reconcileHeartbeatJobs);
+    reconcileHeartbeatJobs.mockResolvedValueOnce("retry-scheduled");
+    await expect(lazy.reconcileHeartbeatJobs(candidate)).resolves.toBe("retry-scheduled");
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(state.reconcileHeartbeatJobs).toHaveBeenCalledExactlyOnceWith(cfg);
+    expect(reconcileHeartbeatJobs).toHaveBeenCalledOnce();
+    expect(reconcileHeartbeatJobs.mock.calls[0]?.[0]).toBe(candidate);
   });
 
   it("forwards watcher reconciliation and teardown hooks through the proxy", async () => {

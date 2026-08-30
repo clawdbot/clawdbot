@@ -7,15 +7,17 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
+import type { ModelRef } from "./model-ref-shared.js";
 import {
-  buildModelAliasIndex,
+  buildModelAliasIndexCore as buildModelAliasIndex,
+  createModelManifestPluginContext,
   getModelRefStatus,
   resolveAllowedModelRefFromAliasIndex,
+  type ModelSelectionNormalizationContext,
 } from "./model-selection-shared.js";
 
 export {
-  buildModelAliasIndex,
+  buildModelAliasIndexCore as buildModelAliasIndex,
   getModelRefStatus,
   normalizeModelSelection,
   resolveConfiguredModelRef,
@@ -47,34 +49,30 @@ export function resolveAllowedModelRefCore(
     defaultProvider: string;
     defaultModel?: string;
     agentId?: string;
-  } & ModelManifestNormalizationContext,
+  } & ModelSelectionNormalizationContext,
 ):
   | { ref: ModelRef; key: string }
   | {
       error: string;
     } {
+  // Candidate refs and their allowlist must use the same static policy; runtime
+  // hooks normalize the selected ref later, inside its acquired generation.
+  const policyParams = { ...params, allowPluginNormalization: false };
+  const manifestPluginContext =
+    params.manifestPluginContext ?? createModelManifestPluginContext(policyParams);
   const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
-    agentId: params.agentId,
-    manifestPlugins: params.manifestPlugins,
+    ...policyParams,
+    manifestPluginContext,
   });
   return resolveAllowedModelRefFromAliasIndex({
-    cfg: params.cfg,
-    raw: params.raw,
-    defaultProvider: params.defaultProvider,
-    agentId: params.agentId,
+    ...policyParams,
+    manifestPluginContext,
     aliasIndex,
-    manifestPlugins: params.manifestPlugins,
     getStatus: (ref) =>
       getModelRefStatus({
-        cfg: params.cfg,
-        catalog: params.catalog,
+        ...policyParams,
+        manifestPluginContext,
         ref,
-        defaultProvider: params.defaultProvider,
-        defaultModel: params.defaultModel,
-        agentId: params.agentId,
-        manifestPlugins: params.manifestPlugins,
       }),
   });
 }

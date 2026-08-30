@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   createLegacyHealthSnapshotCollector,
   type LegacyHealthSnapshotParams,
@@ -72,9 +74,38 @@ async function loadFreshHealthModulesForTest() {
     resolveSessionStorePathCore: () => "/tmp/sessions.json",
   }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
-    listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {
-      listHealthSessionEntriesCalls.push(scope ?? {});
-      return Object.entries(testStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    readSessionStoreSummaryReadOnly: (
+      ...[scope, options]: Parameters<
+        typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
+      >
+    ) => {
+      listHealthSessionEntriesCalls.push(scope);
+      const entries = Object.entries(testStore)
+        .filter(
+          ([sessionKey]) =>
+            parseAgentSessionKey(sessionKey) !== null && !isInternalSessionEffectsKey(sessionKey),
+        )
+        .map(([sessionKey, entry]) => ({
+          sessionKey,
+          entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+        }))
+        .toSorted(
+          (left, right) =>
+            right.entry.updatedAt - left.entry.updatedAt ||
+            (left.sessionKey < right.sessionKey ? -1 : 1),
+        );
+      return {
+        count: entries.length,
+        recent: entries.slice(0, options.recentLimit),
+        byAgent: new Map(
+          options.agentIds.map((agentId) => {
+            const owned = entries.filter(
+              ({ sessionKey }) => parseAgentSessionKey(sessionKey)?.agentId === agentId,
+            );
+            return [agentId, { count: owned.length, recent: owned.slice(0, options.recentLimit) }];
+          }),
+        ),
+      };
     },
   }));
   vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
@@ -472,6 +503,8 @@ describe("collectGatewayHealthSnapshot", () => {
   });
 
   beforeEach(() => {
+    // Freeze payload time; collector.deadline.test.ts owns deadline advancement.
+    vi.useFakeTimers({ toFake: ["Date"] });
     setActiveDegradedPlugins([]);
     buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
     probeTelegramAccountForTestOverride = undefined;
@@ -485,6 +518,7 @@ describe("collectGatewayHealthSnapshot", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
@@ -1033,8 +1067,8 @@ describe("collectGatewayHealthSnapshot", () => {
     await getHealthSnapshot({ timeoutMs: 10, probe: false });
 
     expect(listHealthSessionEntriesCalls).toEqual([
-      { agentId: "main", clone: false, projection: "list", storePath: "/tmp/sessions.json" },
-      { agentId: "ops", clone: false, projection: "list", storePath: "/tmp/sessions.json" },
+      { agentId: "main", storePath: "/tmp/sessions.json" },
+      { agentId: "ops", storePath: "/tmp/sessions.json" },
     ]);
   });
 });

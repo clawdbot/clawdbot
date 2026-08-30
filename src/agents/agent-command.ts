@@ -198,14 +198,11 @@ async function agentCommandInternal(
                 readConsistency: "latest",
               })
             : sessionEntry;
-        if (!currentEntry && preparedSessionId) {
-          throw new Error(
-            `Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`,
-          );
-        }
-        const matchesIntentionalRollover =
-          isNewSession && currentEntry?.sessionId === preparedSessionId;
-        if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
+        const sessionChanged = currentEntry
+          ? currentEntry.sessionId !== sessionId &&
+            !(isNewSession && currentEntry.sessionId === preparedSessionId)
+          : Boolean(preparedSessionId);
+        if (sessionChanged) {
           throw new Error(
             `Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`,
           );
@@ -353,7 +350,7 @@ async function agentCommandInternal(
             suppressTextDelivery: opts.internalDeliverySuppressText,
           }),
         };
-        const persisted = await persistAgentSession({
+        sessionEntry = await persistAgentSession({
           sessionStore,
           sessionKey,
           storePath,
@@ -369,8 +366,7 @@ async function agentCommandInternal(
                   allowCreateRestartRecoveryEntry,
                 ),
         });
-        sessionEntry = persisted;
-        trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
+        trackedRestartRecoveryDeliveryClaim = sessionEntry?.restartRecoveryDeliveryRunId === runId;
       }
       if (sessionEntry && sessionKey && !suppressVisibleSessionEffects) {
         try {
@@ -396,6 +392,9 @@ async function agentCommandInternal(
       await prepareDeliveryForRun(sessionEntry);
 
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
+        if (prepared.commandRuntimeContext?.expectedInitialModel) {
+          throw new Error("ACP cannot verify the authorized initial model override for this run.");
+        }
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         return await runAcpAgentCommand({
           cfg,
@@ -467,7 +466,9 @@ async function agentCommandInternal(
         () =>
           resolveEmbeddedModelSelection({
             cfg,
+            agentDir: prepared.agentDir,
             opts,
+            expectedInitialModel: prepared.commandRuntimeContext?.expectedInitialModel,
             sessionEntry,
             sessionStore,
             sessionKey,
@@ -553,7 +554,7 @@ async function agentCommandInternal(
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         if (entry?.restartRecoveryDeliveryRunId === runId) {
-          const persisted = await persistAgentSession({
+          sessionEntry = await persistAgentSession({
             sessionStore,
             sessionKey,
             storePath,
@@ -572,7 +573,6 @@ async function agentCommandInternal(
             shouldPersist: (current) =>
               shouldPersistRestartRecoveryCleanup(current, runOwnedSessionId, runId),
           });
-          sessionEntry = persisted;
         }
       } catch (error) {
         log.warn(
@@ -636,7 +636,7 @@ async function agentCommandFromIngressInternal(
   const generation = runtimeContext?.pluginGeneration;
   const executeIngress = () =>
     withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-      let preparedAgentDir: string | undefined;
+      let preparedPricing: Parameters<typeof emitIngressModelUsageDiagnostic>[2] | undefined;
       const result = await runWithAgentCommandRecoveryOwner({
         lifecycleGeneration,
         mode: "claim",
@@ -649,7 +649,7 @@ async function agentCommandFromIngressInternal(
           await prepareAgentCommandExecution(preparedOpts, runtime, runtimeContext),
         restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
         run: async (prepared) => {
-          preparedAgentDir = prepared.agentDir;
+          preparedPricing = prepared;
           const run = async () =>
             await agentCommandInternal(
               prepared,
@@ -669,8 +669,8 @@ async function agentCommandFromIngressInternal(
         },
       });
 
-      if (result && preparedAgentDir) {
-        emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
+      if (result && preparedPricing) {
+        emitIngressModelUsageDiagnostic(result, opts, preparedPricing);
       }
 
       return result;

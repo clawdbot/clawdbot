@@ -14,10 +14,10 @@ import {
   resolveAgentRunExpiresAtMs,
   resolveChatRunExpiresAtMs,
   type ChatAbortOps,
-  type ChatAbortControllerEntry,
   resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
 
 type ChatAbortPayload = {

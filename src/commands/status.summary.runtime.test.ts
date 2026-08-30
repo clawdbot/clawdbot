@@ -1,8 +1,16 @@
 // Status summary runtime tests cover model context-token resolution.
 import { describe, expect, it } from "vitest";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  loadExactSessionEntryReadOnly,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { statusSummaryRuntime } from "../status/summary.runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 function resolveSessionRuntime(
   params: Parameters<typeof statusSummaryRuntime.resolveSessionRuntime>[0],
@@ -182,6 +190,54 @@ describe("statusSummaryRuntime.classifySessionKey", () => {
 });
 
 describe("statusSummaryRuntime.resolveSessionRuntime", () => {
+  it("projects ACP metadata from the captured session generation without rereading the store", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-status-acp-generation-" }, async (state) => {
+      const cfg = { agents: { entries: { main: {} } } };
+      const sessionKey = "agent:main:acp:fixture";
+      const scope = {
+        agentId: "main",
+        sessionKey,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }),
+      };
+      replaceSessionEntrySync(scope, {
+        sessionId: "captured-session",
+        lifecycleRevision: "captured-revision",
+        updatedAt: 1,
+      });
+      writeAcpSessionMetaForMigration({
+        sessionKey: buildAcpDatabaseSessionKey(sessionKey, "main"),
+        sessionId: "captured-session",
+        lifecycleRevision: "captured-revision",
+        meta: {
+          backend: "fixture-backend",
+          agent: "fixture-agent",
+          runtimeSessionName: "fixture",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      });
+      const captured = loadExactSessionEntryReadOnly(scope)?.entry;
+      expect(captured).toBeDefined();
+      replaceSessionEntrySync(scope, {
+        sessionId: "replacement-session",
+        lifecycleRevision: "replacement-revision",
+        updatedAt: 2,
+      });
+
+      expect(
+        statusSummaryRuntime.resolveSessionRuntime({
+          cfg,
+          entry: captured,
+          provider: "anthropic",
+          model: "fixture-model",
+          agentId: "main",
+          sessionKey,
+        }),
+      ).toEqual({ id: "fixture-backend", label: "fixture-backend" });
+    });
+  });
+
   it("uses the shared /status runtime label for the implicit OpenAI Codex route", () => {
     expect(
       resolveSessionRuntime({

@@ -1,6 +1,7 @@
 // Model set tests cover persisting default model/provider selections.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import * as providerModelNormalization from "../../agents/provider-model-normalization.runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
@@ -42,18 +43,31 @@ function makeRuntime(): RuntimeEnv {
 }
 
 describe("modelsSetCommand", () => {
+  let normalize: MockInstance<
+    typeof providerModelNormalization.normalizeProviderModelIdWithRuntime
+  >;
   beforeEach(() => {
     vi.clearAllMocks();
+    // Persistence tests exercise selection with deterministic provider normalization.
+    normalize = vi
+      .spyOn(providerModelNormalization, "normalizeProviderModelIdWithRuntime")
+      .mockImplementation(({ context }) => context.modelId);
     mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.repairCodexRuntimePluginInstallForModelSelection.mockResolvedValue({ warnings: [] });
     mocks.repairCopilotRuntimePluginInstallForModelSelection.mockResolvedValue({ warnings: [] });
   });
 
   afterEach(() => {
+    normalize.mockRestore();
     vi.unstubAllEnvs();
   });
 
   it("resolves aliases from runtime config while writing only source config", async () => {
+    normalize.mockImplementation(({ context }) =>
+      context.provider === "anthropic" && context.modelId === "set-selected"
+        ? "claude-sonnet-4-6"
+        : context.modelId,
+    );
     const sourceConfig = {
       agents: {
         defaults: {
@@ -67,7 +81,7 @@ describe("modelsSetCommand", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            "anthropic/set-selected": { alias: "sonnet" },
           },
         },
       },
@@ -82,6 +96,13 @@ describe("modelsSetCommand", () => {
     const runtime = makeRuntime();
 
     await modelsSetCommand("sonnet", runtime);
+
+    expect(normalize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: runtimeConfig,
+        context: { provider: "anthropic", modelId: "set-selected" },
+      }),
+    );
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];

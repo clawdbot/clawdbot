@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
 import { replaceConfigFile } from "../config/config.js";
@@ -8,18 +9,22 @@ import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withPluginMetadataCollectionScope } from "../plugins/plugin-metadata-collection.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ExitError, writeRuntimeJson } from "../runtime.js";
+import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
 import { toDotPath } from "../shared/dot-path.js";
 import {
   formatPluginInstallConfigSetError,
   type ConfigMutationOptions,
   type ConfigSetOperation,
+  type ParsedConfigSetOperation,
 } from "./config-cli-input.js";
 import {
   normalizeConfigMutationExplicitSetPath,
@@ -77,7 +82,7 @@ function valueHasAutoManagedChild(value: unknown, childPath: readonly PathSegmen
 }
 
 function operationClobbersAncestorChild(
-  operation: ConfigSetOperation,
+  operation: ParsedConfigSetOperation,
   managedPath: readonly PathSegment[],
   merge?: boolean,
 ): boolean {
@@ -90,7 +95,7 @@ function operationClobbersAncestorChild(
 }
 
 function findAutoManagedMetaTargets(
-  operations: readonly ConfigSetOperation[],
+  operations: readonly ParsedConfigSetOperation[],
   merge?: boolean,
 ): readonly PathSegment[][] {
   const matches: PathSegment[][] = [];
@@ -247,24 +252,47 @@ async function loadMutationSchema(): Promise<JsonSchemaRecord | undefined> {
 
 export async function runConfigOperations(params: {
   runtime: RuntimeEnv;
-  operations: ConfigSetOperation[];
+  operations: ParsedConfigSetOperation[];
   options: ConfigMutationOptions;
   successMode: "set" | "patch";
 }) {
-  const { runtime, operations, options } = params;
+  const { runtime, operations: parsedOperations, options } = params;
   if (
-    operations.some(({ requestedPath }) =>
+    parsedOperations.some(({ requestedPath }) =>
       pathStartsWith(requestedPath, PLUGIN_INSTALL_RECORD_PATH_PREFIX),
     )
   ) {
     throw new Error(formatPluginInstallConfigSetError());
   }
-  const autoManagedTargets = findAutoManagedMetaTargets(operations, options.merge);
+  const autoManagedTargets = findAutoManagedMetaTargets(parsedOperations, options.merge);
   if (autoManagedTargets.length > 0) {
     throw new Error(formatAutoManagedMetaError(autoManagedTargets));
   }
   const mutationStart = await loadValidConfigForWrite(runtime);
   const { snapshot } = mutationStart;
+  // Parsing stays metadata-free. Bind sibling refs and schema exemptions only to
+  // the same prepared collection that owns this mutation's validation and write.
+  const operations = withPluginMetadataCollectionScope(
+    expectDefined(mutationStart.writeOptions.basePluginMetadata, "config mutation plugin metadata"),
+    () =>
+      parsedOperations.map(({ validatedRef, ...operation }): ConfigSetOperation => {
+        const resolved = coerceSecretRef(operation.value)
+          ? resolveConfigSecretTargetByPath(operation.requestedPath, operation.pathTokens)
+          : undefined;
+        return Object.assign(operation, {
+          setPath:
+            resolved?.entry.secretShape === "sibling_ref" && resolved.refPathSegments
+              ? resolved.refPathSegments
+              : operation.requestedPath,
+          ...(validatedRef && resolved ? { schemaValidated: true } : {}),
+        });
+      }),
+    {
+      config: snapshot.sourceConfig,
+      compatibleConfigs: [snapshot.config, snapshot.runtimeConfig],
+      env: process.env,
+    },
+  );
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved);
@@ -321,7 +349,7 @@ export async function runConfigOperations(params: {
         if (!options.dryRun) {
           assertStrictConfigForMutation(
             currentConfig,
-            mutationStart.writeOptions.basePluginMetadataSnapshot,
+            mutationStart.writeOptions.basePluginMetadata,
           );
         }
         throw new Error(message);
@@ -360,7 +388,7 @@ export async function runConfigOperations(params: {
   if (options.dryRun) {
     nextConfig = prepareConfigWriteTopology({
       snapshot,
-      pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+      pluginMetadata: mutationStart.writeOptions.basePluginMetadata,
       nextConfig,
       options: { explicitSetPaths: normalizedExplicitSetPaths },
       unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
@@ -374,7 +402,7 @@ export async function runConfigOperations(params: {
     options,
     configPath: snapshot.path,
     unchanged: params.successMode === "set" && isDeepStrictEqual(currentConfig, nextConfig),
-    pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+    pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadata,
   });
   if (validation.kind === "dry-run") {
     printConfigDryRunResult(validation.result, runtime, options.json);

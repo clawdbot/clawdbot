@@ -25,7 +25,7 @@ export function prepareConfigWriteTopology(
     env: NodeJS.ProcessEnv;
   },
 ) {
-  const { snapshot, options, unsetPaths, env, pluginMetadataSnapshot } = params;
+  const { snapshot, options, unsetPaths, env, pluginMetadata } = params;
   let nextConfig = params.nextConfig;
   const sourceRosterMigration = migratePersistedImplicitMainRoster(
     snapshot.sourceConfigBeforeMigrations ?? snapshot.parsed,
@@ -97,7 +97,7 @@ export function prepareConfigWriteTopology(
         nextConfig,
         ownerAgentId,
         env,
-        pluginMetadataSnapshot?.manifestRegistry.plugins,
+        pluginMetadata?.manifestRegistry.plugins,
         { materializeSessionStore: sameFixedSessionStore, materializeWorkspace: true },
       )
     : { config: nextConfig, insertedPaths: [] };

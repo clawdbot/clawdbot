@@ -753,35 +753,54 @@ describe("parseSystemAgentOperation", () => {
         plugins: { enabled: false },
       }),
     },
-  ])(
-    "aborts when concurrent $field changes invalidate the verified route",
-    async ({ initial, change }) => {
-      const tempDir = opTempDirs.make("openclaw-route-conflict-");
-      setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-      mockConfig.setConfig(initial);
-      mockConfig.mutateConfigFile.mockClear();
-      const { runtime, lines } = createSystemAgentTestRuntime();
-      const verifyInferenceConfig = vi.fn(async () => {
-        mockConfig.setConfig(change(mockConfig.currentConfig()));
-        return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
-      });
-
-      await expect(
-        executeSystemAgentOperation(
-          { kind: "set-default-model", model: "openai/gpt-5.5" },
-          runtime,
-          {
-            approved: true,
-            deps: { verifyInferenceConfig },
+    {
+      field: "requested model alias",
+      requestedModel: "selected",
+      error: "model selection no longer resolves to the exact model",
+      initial: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: { "openai/gpt-5.5": { alias: "selected" } },
           },
-        ),
-      ).rejects.toThrow("inference route changed during verification");
-
-      expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
-      expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");
-      await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
+          entries: { main: { default: true } },
+        },
+      },
+      change: (config: TestConfig) => {
+        const next = structuredClone(config);
+        const defaults = requireRecord(requireRecord(next.agents, "agents").defaults, "defaults");
+        defaults.models = { "openai/gpt-5.4": { alias: "selected" } };
+        return next;
+      },
     },
-  );
+  ])("aborts when concurrent $field changes invalidate the verified route", async (testCase) => {
+    const { initial, change } = testCase;
+    const tempDir = opTempDirs.make("openclaw-route-conflict-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    mockConfig.setConfig(initial);
+    mockConfig.mutateConfigFile.mockClear();
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    const verifyInferenceConfig = vi.fn(async () => {
+      mockConfig.setConfig(change(mockConfig.currentConfig()));
+      return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
+    });
+
+    await expect(
+      executeSystemAgentOperation(
+        { kind: "set-default-model", model: testCase.requestedModel ?? "openai/gpt-5.5" },
+        runtime,
+        {
+          approved: true,
+          deps: { verifyInferenceConfig },
+        },
+      ),
+    ).rejects.toThrow(testCase.error ?? "inference route changed during verification");
+
+    expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
+    expect(mockConfig.currentConfig()).toEqual(change(initial));
+    expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");
+    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
+  });
 
   it("keeps the working model and writes no audit when live inference fails", async () => {
     const tempDir = opTempDirs.make("openclaw-rejected-model-");

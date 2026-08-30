@@ -351,7 +351,7 @@ async function resolveGatewayRunShellEnvFallbackPlan(
   const { resolveShellEnvExpectedKeys } = await import("../../config/shell-env-expected-keys.js");
   return {
     enabled: true,
-    expectedKeys: resolveShellEnvExpectedKeys(planEnv),
+    expectedKeys: resolveShellEnvExpectedKeys(planEnv, cfg),
     timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(planEnv),
   };
 }

@@ -2,6 +2,7 @@
  * Internal declaration anchor for parser and lookup exports consumed by the
  * public Plugin SDK barrel. Provider/model normalization lives in model-ref-shared.
  */
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { findNormalizedProviderValue as findNormalizedProviderValueCore } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -25,27 +26,26 @@ export function findNormalizedProviderValue<T>(
   return findNormalizedProviderValueCore(entries, provider);
 }
 
+/** Parse authored parts before provider policy can rewrite a literal model path. */
+export function parseModelRefParts(raw: string, defaultProvider: string): ModelRef | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (normalizeLowercaseStringOrEmpty(trimmed) === OPENROUTER_AUTO_COMPAT_ALIAS) {
+    return { provider: "openrouter", model: "auto" };
+  }
+  return trimmed.includes("/")
+    ? parseProviderModelRef(trimmed)
+    : { provider: defaultProvider, model: trimmed };
+}
+
 /** Parse `provider/model` or bare model text using a default provider. */
 export function parseModelRef(
   raw: string,
   defaultProvider: string,
   options?: ModelRefNormalizeOptions,
 ): ModelRef | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (normalizeLowercaseStringOrEmpty(trimmed) === OPENROUTER_AUTO_COMPAT_ALIAS) {
-    return normalizeModelRef("openrouter", "auto", options);
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash === -1) {
-    return normalizeModelRef(defaultProvider, trimmed, options);
-  }
-  const providerRaw = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  if (!providerRaw || !model) {
-    return null;
-  }
-  return normalizeModelRef(providerRaw, model, options);
+  const ref = parseModelRefParts(raw, defaultProvider);
+  return ref ? normalizeModelRef(ref.provider, ref.model, options) : null;
 }

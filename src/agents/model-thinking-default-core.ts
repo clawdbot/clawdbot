@@ -12,10 +12,11 @@ import {
   resolveThinkingDefaultForModelCore,
   type ThinkLevel,
 } from "../auto-reply/thinking.shared.js";
+import { resolveAgentModelConfigEntry } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderThinkingPolicySource } from "../plugins/provider-thinking.types.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { legacyModelKey, modelKey, normalizeProviderId } from "./model-ref-shared.js";
+import { normalizeProviderId } from "./model-ref-shared.js";
 import { normalizeModelSelection } from "./model-selection-resolve.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 
@@ -32,12 +33,12 @@ export function resolveConfiguredThinkingDefaultCore(params: {
   provider: string;
   model: string;
 }): ThinkLevel | undefined {
-  const configuredModels = params.cfg.agents?.defaults?.models;
-  const canonicalKey = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
-  const perModelThinking =
-    configuredModels?.[canonicalKey]?.params?.thinking ??
-    (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+  const { entry } = resolveAgentModelConfigEntry({
+    models: params.cfg.agents?.defaults?.models,
+    provider: params.provider,
+    model: params.model,
+  });
+  const perModelThinking = entry?.params?.thinking;
   if (
     perModelThinking === false ||
     perModelThinking === "disabled" ||
@@ -74,18 +75,19 @@ export function resolveThinkingDefaultCore(
   const catalogCandidate = catalog.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
-  const configuredModels = params.cfg.agents?.defaults?.models;
-  const canonicalKey = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
-  const normalizedCanonicalKey = normalizeLowercaseStringOrEmpty(canonicalKey);
-  const normalizedLegacyKey = normalizeOptionalLowercaseString(legacyKey);
+  const { key, equivalentKey, entry } = resolveAgentModelConfigEntry({
+    models: params.cfg.agents?.defaults?.models,
+    provider: params.provider,
+    model: params.model,
+  });
+  const normalizedCanonicalKey = normalizeLowercaseStringOrEmpty(key);
+  const normalizedEquivalentKey = normalizeOptionalLowercaseString(equivalentKey);
   const primarySelection = normalizeModelSelection(params.cfg.agents?.defaults?.model);
   const normalizedPrimarySelection = normalizeOptionalLowercaseString(primarySelection);
   const explicitModelConfigured =
-    (configuredModels ? canonicalKey in configuredModels : false) ||
-    Boolean(legacyKey && configuredModels && legacyKey in configuredModels) ||
+    Boolean(entry) ||
     normalizedPrimarySelection === normalizedCanonicalKey ||
-    Boolean(normalizedLegacyKey && normalizedPrimarySelection === normalizedLegacyKey) ||
+    Boolean(normalizedEquivalentKey && normalizedPrimarySelection === normalizedEquivalentKey) ||
     normalizedPrimarySelection === normalizeLowercaseStringOrEmpty(params.model);
   const configured = resolveConfiguredThinkingDefaultCore(params);
   if (configured) {

@@ -7,9 +7,11 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
+import { resolveAgentWorkspaceDirsById } from "../agents/workspace-dirs.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { loadCronJobsStore } from "../cron/store.js";
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
 import {
   OutboundDeliveryError,
@@ -283,6 +285,41 @@ type CronServiceOverrides = Partial<
   Omit<Parameters<typeof buildGatewayCronService>[0], "cfg" | "deps">
 >;
 
+function monitorReconciliationCandidate(config: OpenClawConfig) {
+  return {
+    config,
+    agentWorkspaceDirs: resolveAgentWorkspaceDirsById(config),
+    schedulerSeed: "test-seed",
+    isCurrent: () => true,
+  };
+}
+
+async function withServingCronConfig(
+  config: OpenClawConfig,
+  run: (runtime: typeof import("../config/io.js")) => Promise<void>,
+) {
+  const runtime = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  const previousConfig = runtime.getRuntimeConfigSnapshot();
+  const previousSource = runtime.getRuntimeConfigSourceSnapshot();
+  const previousLoad = loadConfigMock.getMockImplementation();
+  runtime.setRuntimeConfigSnapshot(config, config);
+  // Keep the suite's facade mocks, but make them read the real serving slot.
+  loadConfigMock.mockImplementation(runtime.getRuntimeConfig);
+  try {
+    await run(runtime);
+  } finally {
+    if (previousConfig) {
+      runtime.setRuntimeConfigSnapshot(previousConfig, previousSource ?? undefined);
+    } else {
+      runtime.clearRuntimeConfigSnapshot();
+    }
+    loadConfigMock.mockReset();
+    if (previousLoad) {
+      loadConfigMock.mockImplementation(previousLoad);
+    }
+  }
+}
+
 function createCronService(cfg: OpenClawConfig, overrides: CronServiceOverrides = {}) {
   return buildGatewayCronService({
     cfg,
@@ -493,12 +530,214 @@ describe("buildGatewayCronService", () => {
     });
   });
 
+  it("converges candidate agent monitors without granting ordinary cron access before publication", async () => {
+    const base = createCronConfig("server-cron-candidate-roster");
+    const fixtureDir = path.dirname((base.cron as { store: string }).store);
+    const configA = {
+      ...base,
+      agents: {
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { workspace: path.join(fixtureDir, "main"), heartbeat: { every: "1h" } },
+        },
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } satisfies OpenClawConfig;
+    const configB = {
+      ...configA,
+      agents: {
+        ...configA.agents,
+        entries: {
+          ...configA.agents.entries,
+          work: { workspace: path.join(fixtureDir, "work"), heartbeat: { every: "5m" } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    await withServingCronConfig(configA, async (runtime) => {
+      const state = createCronService(configA);
+      try {
+        await expect(
+          addAgentTurnJob(state, "before candidate", "run", { agentId: "work" }),
+        ).rejects.toThrow("cron job agent is unavailable: work");
+
+        await expect(
+          state.reconcileHeartbeatJobs(monitorReconciliationCandidate(configB)),
+        ).resolves.toBe("converged");
+
+        expect(runtime.getRuntimeConfigSnapshot()).toBe(configA);
+        const persisted = (await loadCronJobsStore(state.storePath)).jobs;
+        expect(
+          persisted
+            .map((job) => ({
+              declarationKey: job.declarationKey,
+              agentId: job.agentId,
+              kind: job.payload.kind,
+              enabled: job.enabled,
+              sessionTarget: job.sessionTarget,
+            }))
+            .toSorted((left, right) =>
+              (left.declarationKey ?? "").localeCompare(right.declarationKey ?? ""),
+            ),
+        ).toEqual([
+          {
+            declarationKey: "heartbeat:main",
+            agentId: "main",
+            kind: "heartbeat",
+            enabled: true,
+            sessionTarget: "main",
+          },
+          {
+            declarationKey: "heartbeat:work",
+            agentId: "work",
+            kind: "heartbeat",
+            enabled: true,
+            sessionTarget: "main",
+          },
+          {
+            declarationKey: "skill-collection-review:main",
+            agentId: "main",
+            kind: "skillCollectionReview",
+            enabled: true,
+            sessionTarget: "main",
+          },
+          {
+            declarationKey: "skill-collection-review:work",
+            agentId: "work",
+            kind: "skillCollectionReview",
+            enabled: true,
+            sessionTarget: "main",
+          },
+        ]);
+        expectHookContext(0, { config: configA, hasGetCron: true });
+        for (let index = 1; index < runCronChangedMock.mock.calls.length; index += 1) {
+          expectHookContext(index, { config: configA, hasGetCron: true });
+        }
+        await expect(
+          addAgentTurnJob(state, "after candidate", "run", { agentId: "work" }),
+        ).rejects.toThrow("cron job agent is unavailable: work");
+
+        const workHeartbeat = persisted.find((job) => job.declarationKey === "heartbeat:work");
+        if (!workHeartbeat) {
+          throw new Error("Expected a persisted work heartbeat monitor");
+        }
+        await expect(state.cron.run(workHeartbeat.id, "force")).resolves.toEqual({
+          ok: true,
+          ran: true,
+        });
+        expect(runHeartbeatOnceMock).not.toHaveBeenCalled();
+        expect(requestHeartbeatMock).not.toHaveBeenCalled();
+        expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+        expect(
+          (await loadCronJobsStore(state.storePath)).jobs.find(
+            (job) => job.id === workHeartbeat.id,
+          ),
+        ).toMatchObject({
+          state: {
+            lastRunStatus: "error",
+            lastError: expect.stringContaining("cron job agent is unavailable: work"),
+          },
+        });
+
+        runtime.setRuntimeConfigSnapshot(configB, configB);
+        const workJob = await addAgentTurnJob(state, "after publication", "run", {
+          agentId: "work",
+          schedule: { kind: "every", everyMs: 3_600_000 },
+        });
+        await expect(state.cron.run(workJob.id, "force")).resolves.toEqual({ ok: true, ran: true });
+        expectIsolatedRunFields({ cfg: configB, agentId: "work" });
+      } finally {
+        await state.cron.stopAndDrain?.();
+      }
+    });
+  });
+
+  it("rechecks candidate agent deletion after awaited channel validation before persisting monitors", async () => {
+    const base = createCronConfig("server-cron-candidate-deletion");
+    const fixtureDir = path.dirname((base.cron as { store: string }).store);
+    const config = {
+      ...base,
+      agents: {
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { workspace: path.join(fixtureDir, "main"), heartbeat: { every: "1h" } },
+          work: { workspace: path.join(fixtureDir, "work"), heartbeat: { every: "5m" } },
+        },
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } satisfies OpenClawConfig;
+
+    await withServingCronConfig(config, async (runtime) => {
+      const state = createCronService(config);
+      const deps = getCronState(state).deps;
+      const listConfiguredChannels = deps.listConfiguredChannels;
+      if (!listConfiguredChannels) {
+        throw new Error("Expected the Gateway channel validation dependency");
+      }
+      const inventoryStarted = createDeferred();
+      const releaseInventory = createDeferred();
+      let inventoryCall = 0;
+      // The ordered heartbeat plan reaches work after main's committed monitor.
+      deps.listConfiguredChannels = async () => {
+        inventoryCall += 1;
+        if (inventoryCall === 2) {
+          inventoryStarted.resolve();
+          await releaseInventory.promise;
+        }
+        return await listConfiguredChannels();
+      };
+      const reconciliation = state.reconcileHeartbeatJobs(monitorReconciliationCandidate(config));
+      try {
+        await inventoryStarted.promise;
+        expect(
+          (await loadCronJobsStore(state.storePath)).jobs.map((job) => job.declarationKey),
+        ).toEqual(["heartbeat:main"]);
+        isAgentDeletionBlockedMock.mockImplementation((agentId) => agentId === "work");
+        releaseInventory.resolve();
+
+        await expect(reconciliation).resolves.toBe("retry-scheduled");
+        expect(runtime.getRuntimeConfigSnapshot()).toBe(config);
+        const persisted = (await loadCronJobsStore(state.storePath)).jobs;
+        expect(persisted.filter((job) => job.agentId === "work")).toEqual([]);
+        expect(
+          persisted
+            .map((job) => job.declarationKey)
+            .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+        ).toEqual(["heartbeat:main", "skill-collection-review:main"]);
+        await expect(
+          addAgentTurnJob(state, "deleted owner", "run", { agentId: "work" }),
+        ).rejects.toThrow("cron job agent is unavailable: work");
+
+        isAgentDeletionBlockedMock.mockReturnValue(false);
+        await expect(
+          state.reconcileHeartbeatJobs(monitorReconciliationCandidate(config)),
+        ).resolves.toBe("converged");
+        expect(
+          (await loadCronJobsStore(state.storePath)).jobs
+            .filter((job) => job.agentId === "work")
+            .map((job) => job.declarationKey)
+            .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+        ).toEqual(["heartbeat:work", "skill-collection-review:work"]);
+      } finally {
+        releaseInventory.resolve();
+        await reconciliation.catch(() => undefined);
+        deps.listConfiguredChannels = listConfiguredChannels;
+        isAgentDeletionBlockedMock.mockReturnValue(false);
+        await state.cron.stopAndDrain?.();
+      }
+    });
+  });
+
   it.each([
-    { monitor: "heartbeat", blockedInventory: 1 },
-    { monitor: "skill review", blockedInventory: 2 },
-  ])(
-    "supersedes an in-flight $monitor reconciliation before mutation",
-    async ({ blockedInventory }) => {
+    { monitor: "heartbeat", blockedInventory: 1, invalidation: "replacement" },
+    { monitor: "skill review", blockedInventory: 2, invalidation: "replacement" },
+    { monitor: "heartbeat", blockedInventory: 1, invalidation: "external currentness" },
+    { monitor: "skill review", blockedInventory: 2, invalidation: "external currentness" },
+    { monitor: "heartbeat", blockedInventory: 1, invalidation: "already stale candidate" },
+    { monitor: "skill review", blockedInventory: 2, invalidation: "already stale candidate" },
+  ] as const)(
+    "preserves $monitor reconciliation ownership across $invalidation",
+    async ({ blockedInventory, invalidation }) => {
       const autoConfig = {
         ...createCronConfig("server-cron-monitor-reconcile-auto"),
         skills: { workshop: { autonomous: { mode: "auto" } } },
@@ -508,14 +747,19 @@ describe("buildGatewayCronService", () => {
         skills: { workshop: { autonomous: { mode: "off" } } },
       } satisfies OpenClawConfig;
       const state = loadCronService(autoConfig);
+      const inventoryStarted = createDeferred();
+      const releaseInventory = createDeferred();
+      let reconciliation: ReturnType<typeof state.reconcileHeartbeatJobs> | undefined;
+      let followup: ReturnType<typeof state.reconcileHeartbeatJobs> | undefined;
+      const listJobs = state.cron.list.bind(state.cron);
+      const listSpy = vi.spyOn(state.cron, "list");
 
       try {
-        await expect(state.reconcileHeartbeatJobs(autoConfig)).resolves.toBe("converged");
-        const inventoryStarted = createDeferred();
-        const releaseInventory = createDeferred();
-        const listJobs = state.cron.list.bind(state.cron);
+        await expect(
+          state.reconcileHeartbeatJobs(monitorReconciliationCandidate(autoConfig)),
+        ).resolves.toBe("converged");
         let inventoryCall = 0;
-        vi.spyOn(state.cron, "list").mockImplementation(async (options) => {
+        listSpy.mockImplementation(async (options) => {
           inventoryCall += 1;
           if (inventoryCall === blockedInventory) {
             inventoryStarted.resolve();
@@ -523,22 +767,41 @@ describe("buildGatewayCronService", () => {
           }
           return await listJobs(options);
         });
-        const addJob = vi.spyOn(state.cron, "add");
-        const removeJob = vi.spyOn(state.cron, "remove");
-
-        const disable = state.reconcileHeartbeatJobs(offConfig);
+        const persistedBefore = (await loadCronJobsStore(state.storePath)).jobs;
+        let current = true;
+        const staleCall = invalidation === "already stale candidate";
+        reconciliation = state.reconcileHeartbeatJobs({
+          ...monitorReconciliationCandidate(staleCall ? autoConfig : offConfig),
+          isCurrent: () => current,
+        });
         await inventoryStarted.promise;
-        const reenable = state.reconcileHeartbeatJobs(autoConfig);
+        if (invalidation === "external currentness") {
+          current = false;
+        } else {
+          followup = state.reconcileHeartbeatJobs({
+            ...monitorReconciliationCandidate(autoConfig),
+            isCurrent: () => !staleCall,
+          });
+        }
+        // Release before awaiting the stale call: a broken early guard must
+        // fail the active result assertion, not deadlock on the serialized tail.
         releaseInventory.resolve();
-
-        await expect(disable).resolves.toBe("superseded");
-        await expect(reenable).resolves.toBe("converged");
-        expect(addJob).not.toHaveBeenCalledWith(
-          expect.objectContaining({ enabled: false }),
-          expect.anything(),
-        );
-        expect(removeJob).not.toHaveBeenCalled();
+        await expect(reconciliation).resolves.toBe(staleCall ? "converged" : "superseded");
+        if (followup) {
+          await expect(followup).resolves.toBe(staleCall ? "superseded" : "converged");
+        }
+        expect((await loadCronJobsStore(state.storePath)).jobs).toEqual(persistedBefore);
+        if (invalidation === "external currentness") {
+          await expect(
+            state.reconcileHeartbeatJobs(monitorReconciliationCandidate(autoConfig)),
+          ).resolves.toBe("converged");
+          expect((await loadCronJobsStore(state.storePath)).jobs).toEqual(persistedBefore);
+        }
       } finally {
+        releaseInventory.resolve();
+        await reconciliation?.catch(() => undefined);
+        await followup?.catch(() => undefined);
+        listSpy.mockRestore();
         state.cron.stop();
       }
     },

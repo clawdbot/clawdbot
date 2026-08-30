@@ -4,11 +4,8 @@ import {
 } from "../../agents/subagents/registry/subagent-control.js";
 import { listSubagentRunsForController } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  abortChatRunById,
-  type ChatAbortControllerEntry,
-  type ChatAbortOps,
-} from "../chat-abort.js";
+import { abortChatRunById, type ChatAbortOps } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { abortQueuedChatTurns, listQueuedChatTurnsForSession } from "../chat-queued-turns.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 // Cancellation orchestration across active, queued, pending, and worker runs.

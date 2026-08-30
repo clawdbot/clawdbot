@@ -542,6 +542,7 @@ export async function executeSetDefaultModel(
       const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigModule();
       const { applySystemAgentModelSelection, createSystemAgentModelSelectionUpdater } =
         await import("./setup-model-selection.js");
+      const { resolveModelTarget } = await import("../commands/models/shared.js");
       const targetAgentId = operation.agentId;
       const snapshot = await readConfigFileSnapshot();
       // Route projection and the live probes below all take the same optional
@@ -550,7 +551,7 @@ export async function executeSetDefaultModel(
       const projectRoute = (config: OpenClawConfig) => projectInferenceRoute(config, targetAgentId);
       const stagedConfig = await applySystemAgentModelSelection({
         config: snapshot.sourceConfig,
-        model: operation.model,
+        model: resolveModelTarget({ raw: operation.model, cfg: snapshot.sourceConfig }),
         ...(targetAgentId ? { targetAgentId } : {}),
       });
       const beforeRoute = await projectRoute(snapshot.sourceConfig);
@@ -578,10 +579,9 @@ export async function executeSetDefaultModel(
       let persistedVerification = initialVerification;
       let persistedBinding: SystemAgentVerifiedInferenceBinding | undefined;
       let selectedRouteForCommit = verifiedRoute;
-      const selectModel = await createSystemAgentModelSelectionUpdater({
-        model: operation.model,
-        ...(targetAgentId ? { targetAgentId } : {}),
-      });
+      const selectModel = await createSystemAgentModelSelectionUpdater(
+        targetAgentId ? { targetAgentId } : {},
+      );
       const result = await mutateConfigFile({
         base: "source",
         writeOptions: {
@@ -642,7 +642,7 @@ export async function executeSetDefaultModel(
               "The default-agent inference route changed during verification, so the requested model was not saved. Review the current model/auth/runtime settings and retry.",
             );
           }
-          const selected = selectModel(cfg);
+          const selected = selectModel(cfg, resolveModelTarget({ raw: operation.model, cfg }));
           const selectedRoute = await projectRoute(selected);
           if (selectedRoute.route?.modelLabel !== verifiedModelRef) {
             throw new Error(

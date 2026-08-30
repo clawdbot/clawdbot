@@ -289,7 +289,6 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       configFingerprint: "",
       workspaceDir,
       index,
-      registryIndex: index,
       registryDiagnostics: [],
       manifestRegistry: { plugins: [], diagnostics: [] },
       plugins: [],
@@ -378,7 +377,6 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
         configFingerprint: "",
         workspaceDir,
         index,
-        registryIndex: index,
         registrySource: "derived",
         registryDiagnostics: [
           {
@@ -462,7 +460,6 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
         configFingerprint: "",
         workspaceDir,
         index: currentIndex,
-        registryIndex: currentIndex,
         registryDiagnostics: [],
         manifestRegistry: { plugins: [], diagnostics: [] },
         plugins: [],

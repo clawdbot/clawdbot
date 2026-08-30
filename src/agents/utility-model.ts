@@ -87,7 +87,13 @@ export function resolveUtilityModelRefForAgent(params: {
   }
   const provider =
     params.primaryProvider?.trim() ||
-    resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId }).provider;
+    // Utility routing needs only the provider; model hooks cannot change it.
+    resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      manifestPlugins: params.metadataSnapshot?.plugins,
+      allowPluginNormalization: false,
+    }).provider;
   if (!provider) {
     return undefined;
   }

@@ -29,6 +29,7 @@ import {
   startServerWithClient,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
+import { sendWhatsAppMock } from "./test-helpers.runtime-state.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -709,7 +710,7 @@ describe("gateway server models + voicewake", () => {
         ]);
         expect(auth.ok, JSON.stringify(auth)).toBe(true);
         expect(emptyAuth.ok, JSON.stringify(emptyAuth)).toBe(true);
-        expect(skills.payload).toMatchObject({
+        expect(skills.payload, JSON.stringify(skills.error)).toMatchObject({
           agentId: "ops",
           workspaceDir: path.join(workspaceRoot, "ops-workspace"),
         });
@@ -943,22 +944,13 @@ describe("gateway server models + voicewake", () => {
 
 describe("gateway server misc", () => {
   test("send dedupes by idempotencyKey", { timeout: 15_000 }, async () => {
-    let dedicatedServer: Awaited<ReturnType<typeof startServerWithClient>>["server"] | undefined;
-    let dedicatedWs: WebSocket | undefined;
     const idem = "same-key";
     try {
       setTestPluginRegistry(whatsappRegistry);
-      const started = await startConnectedServerWithClient();
-      dedicatedServer = started.server;
-      dedicatedWs = started.ws;
-      const socket = dedicatedWs;
-      if (!socket) {
-        throw new Error("Missing test websocket");
-      }
-      const res1P = onceMessage(socket, (o) => o.type === "res" && o.id === "a1");
-      const res2P = onceMessage(socket, (o) => o.type === "res" && o.id === "a2");
+      const res1P = onceMessage(ws, (o) => o.type === "res" && o.id === "a1");
+      const res2P = onceMessage(ws, (o) => o.type === "res" && o.id === "a2");
       const sendReq = (id: string) =>
-        socket.send(
+        ws.send(
           JSON.stringify({
             type: "req",
             id,
@@ -976,15 +968,11 @@ describe("gateway server misc", () => {
 
       const res1 = await res1P;
       const res2 = await res2P;
-      expect(res2.ok).toBe(res1.ok);
-      if (res1.ok) {
-        expect(res2.payload).toEqual(res1.payload);
-      } else {
-        expect(res2.error).toEqual(res1.error);
-      }
+      expect(res1.ok, JSON.stringify(res1)).toBe(true);
+      expect(res2.ok, JSON.stringify(res2)).toBe(true);
+      expect(res2.payload).toEqual(res1.payload);
+      expect(sendWhatsAppMock).toHaveBeenCalledTimes(1);
     } finally {
-      dedicatedWs?.close();
-      await dedicatedServer?.close();
       resetTestPluginRegistry();
     }
   });

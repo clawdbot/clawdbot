@@ -4,6 +4,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntry,
@@ -14,8 +15,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { createModelManifestPluginContext } from "./model-selection-shared.js";
 import {
-  normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
@@ -76,28 +77,25 @@ function resolveSelectionFromSessionEntry(params: {
 }): LiveSessionModelSelection {
   const { cfg, entry } = params;
   const agentId = normalizeOptionalString(params.agentId);
+  const manifestPluginContext = createModelManifestPluginContext({ cfg, agentId });
   const defaultModelRef = agentId
     ? resolveDefaultModelForAgent({
         cfg,
         agentId,
+        manifestPluginContext,
       })
     : { provider: params.defaultProvider, model: params.defaultModel };
-  const normalizedSelection = normalizeStoredOverrideModel({
-    providerOverride: entry?.providerOverride,
-    modelOverride: entry?.modelOverride,
-  });
   const persisted = resolvePersistedSelectedModelRef({
+    ...manifestPluginContext.getContext(),
     defaultProvider: defaultModelRef.provider,
     runtimeProvider: entry?.modelProvider,
     runtimeModel: entry?.model,
-    overrideProvider: normalizedSelection.providerOverride,
-    overrideModel: normalizedSelection.modelOverride,
+    overrideProvider: entry?.providerOverride,
+    overrideModel: entry?.modelOverride,
+    overrideRouteResolution: resolveSessionModelOverrideRouteResolution(entry),
   });
   const provider =
-    persisted?.provider ??
-    normalizedSelection.providerOverride ??
-    entry?.providerOverride?.trim() ??
-    defaultModelRef.provider;
+    persisted?.provider ?? entry?.providerOverride?.trim() ?? defaultModelRef.provider;
   const model = persisted?.model ?? defaultModelRef.model;
   const agentRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
     provider,

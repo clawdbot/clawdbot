@@ -2,7 +2,10 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { createPluginCliLoadSession } from "./cli-registry-loader.js";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
 const mocks = vi.hoisted(() => ({
   memoryRegister: vi.fn(),
@@ -12,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn(),
   resolveManifestActivationPluginIds: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
-  resolvePluginMetadataSnapshot: vi.fn(),
+  getPreparedMetadataSnapshot: vi.fn<() => PluginMetadataSnapshot>(),
   loadConfig: vi.fn(),
   getRuntimeConfigSnapshot: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
@@ -35,18 +38,26 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => mocks.applyPluginAutoEnable(...args),
 }));
 
-vi.mock("../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginMetadataSnapshot: (...args: unknown[]) =>
-    mocks.resolvePluginMetadataSnapshot(...args),
-}));
-
 vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
-  isPluginMetadataSnapshotCompatible: () => true,
-  rebasePluginMetadataSnapshotManifestRegistry: <T>(snapshot: T) => snapshot,
-  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
-    mocks.resolvePluginMetadataSnapshot(...args),
+  // CLI sessions prepare their snapshot before entering the shared load context.
+  resolvePluginMetadataSnapshot: () => mocks.getPreparedMetadataSnapshot(),
 }));
+
+vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime/load-context.resolve.js")>();
+  return {
+    ...actual,
+    // Supply operation-owned metadata while retaining real auto-enable and load options.
+    resolvePluginRuntimeLoadContext: (
+      options: Parameters<typeof actual.resolvePluginRuntimeLoadContext>[0],
+    ) =>
+      actual.resolvePluginRuntimeLoadContext({
+        ...options,
+        metadataSnapshot: mocks.getPreparedMetadataSnapshot(),
+      }),
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: (...args: unknown[]) => mocks.loadConfig(...args),
@@ -121,51 +132,72 @@ function createAutoEnabledCliFixture() {
   return { rawConfig, autoEnabledConfig };
 }
 
-function createCliMetadataSnapshot() {
-  const plugin = {
-    id: "matrix",
-    origin: "bundled",
-    format: "openclaw",
-    cliCommands: [
-      {
-        name: "matrix",
-        description: "Matrix channel utilities",
-        hasSubcommands: true,
-      },
-    ],
-  };
+function createCliMetadataSnapshotForPlugins<T extends PluginManifestRecord>(plugins: T[]) {
+  const snapshot = createPluginMetadataSnapshot({
+    manifestRegistry: { plugins, diagnostics: [] },
+  });
   return {
-    policyHash: "test",
+    ...snapshot,
     index: {
-      installRecords: {},
-      plugins: [{ pluginId: "matrix", enabled: true, enabledByDefault: true, origin: "bundled" }],
+      ...snapshot.index,
+      plugins: plugins.map((plugin) => ({
+        pluginId: plugin.id,
+        manifestPath: plugin.manifestPath,
+        manifestHash: "test",
+        rootDir: plugin.rootDir,
+        origin: plugin.origin,
+        enabled: true,
+        enabledByDefault: plugin.enabledByDefault,
+        startup: { sidecar: false, memory: false, agentHarnesses: [] },
+        compat: [],
+      })),
     },
-    manifestRegistry: { plugins: [plugin], diagnostics: [] },
-    plugins: [plugin],
-    diagnostics: [],
-    byPluginId: new Map([[plugin.id, plugin]]),
-    owners: {},
+    plugins,
   };
 }
 
-function createLegacyExternalCliMetadataSnapshot() {
-  const plugin = {
-    id: "legacy-cli",
-    origin: "config",
-    format: "openclaw",
-  };
-  return {
-    policyHash: "test",
-    index: {
-      installRecords: {},
-      plugins: [{ pluginId: plugin.id, enabled: true, origin: plugin.origin }],
+function createCliMetadataSnapshot() {
+  return createCliMetadataSnapshotForPlugins([
+    {
+      id: "matrix",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/fake/matrix",
+      source: "/fake/matrix/index.js",
+      manifestPath: "/fake/matrix/openclaw.plugin.json",
+      enabledByDefault: true,
+      format: "openclaw",
+      cliCommands: [
+        {
+          name: "matrix",
+          description: "Matrix channel utilities",
+          hasSubcommands: true,
+        },
+      ],
     },
-    manifestRegistry: { plugins: [plugin], diagnostics: [] },
-    plugins: [plugin],
-    diagnostics: [],
-    byPluginId: new Map([[plugin.id, plugin]]),
-    owners: {},
-  };
+  ]);
+}
+
+function createLegacyExternalCliMetadataSnapshot() {
+  return createCliMetadataSnapshotForPlugins([
+    {
+      id: "legacy-cli",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "config",
+      rootDir: "/fake/legacy-cli",
+      source: "/fake/legacy-cli/index.js",
+      manifestPath: "/fake/legacy-cli/openclaw.plugin.json",
+      format: "openclaw",
+    },
+  ]);
 }
 
 function getMockCallObject(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
@@ -224,8 +256,8 @@ describe("registerPluginCliCommands", () => {
     mocks.resolveManifestActivationPluginIds.mockReset();
     mocks.resolveManifestActivationPluginIds.mockReturnValue([]);
     mocks.applyPluginAutoEnable.mockReset();
-    mocks.resolvePluginMetadataSnapshot.mockReset();
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue(undefined);
+    mocks.getPreparedMetadataSnapshot.mockReset();
+    mocks.getPreparedMetadataSnapshot.mockReturnValue(createCliMetadataSnapshotForPlugins([]));
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({
       config,
       changes: [],
@@ -352,7 +384,7 @@ describe("registerPluginCliCommands", () => {
         demo: ["demo configured"],
       },
     });
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue(createCliMetadataSnapshot());
+    mocks.getPreparedMetadataSnapshot.mockReturnValue(createCliMetadataSnapshot());
 
     await expect(getPluginCliCommandDescriptors(rawConfig)).resolves.toEqual([
       {
@@ -381,7 +413,7 @@ describe("registerPluginCliCommands", () => {
       logger.error?.("[plugins] stale failed to load from /tmp/stale: boom");
       throw new Error("boom");
     });
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue(createLegacyExternalCliMetadataSnapshot());
+    mocks.getPreparedMetadataSnapshot.mockReturnValue(createLegacyExternalCliMetadataSnapshot());
 
     await expect(
       getPluginCliCommandDescriptors({
@@ -405,7 +437,7 @@ describe("registerPluginCliCommands", () => {
       })),
       ...legacySnapshot.plugins,
     ];
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+    mocks.getPreparedMetadataSnapshot.mockReturnValue({
       ...healthySnapshot,
       index: {
         ...healthySnapshot.index,
@@ -441,7 +473,7 @@ describe("registerPluginCliCommands", () => {
         entries: { "legacy-cli": { enabled: true } },
       },
     } as OpenClawConfig;
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue(createLegacyExternalCliMetadataSnapshot());
+    mocks.getPreparedMetadataSnapshot.mockReturnValue(createLegacyExternalCliMetadataSnapshot());
     mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
       cliRegistrars: [
         {

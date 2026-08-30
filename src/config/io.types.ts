@@ -1,6 +1,9 @@
 import type fs from "node:fs";
 import type JSON5 from "json5";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type {
+  PluginMetadataOwner,
+  PreparedPluginMetadata,
+} from "../plugins/plugin-metadata-collection.js";
 import type {
   ConfigWriteAfterWrite,
   RuntimeConfigSnapshotRefreshOptions,
@@ -52,7 +55,7 @@ export type ConfigWriteOptions = {
   /** Fresh snapshot fast path for an immediate write. */
   baseSnapshot?: ConfigFileSnapshot;
   /** Plugin metadata paired with baseSnapshot. */
-  basePluginMetadataSnapshot?: PluginMetadataSnapshot;
+  basePluginMetadata?: PreparedPluginMetadata;
   /** Skip the runtime refresh tail when no runtime snapshot is active. */
   skipRuntimeSnapshotRefresh?: boolean;
   /** Controls for the active runtime snapshot refresh. */
@@ -110,12 +113,14 @@ export type ConfigIoDeps = {
 export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
 
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
+  pluginMetadataOwner?: PluginMetadataOwner;
   pluginValidation?: "full" | "skip" | "core-only";
   preservedLegacyRootKeys?: readonly string[];
   shellEnvFallback?: "load" | "defer";
 };
 
 export type ConfigSnapshotReadOptions = {
+  pluginMetadataOwner?: PluginMetadataOwner;
   measure?: ConfigSnapshotReadMeasure;
   observe?: boolean;
   isolateEnv?: boolean;
@@ -138,12 +143,12 @@ export type ReadConfigFileSnapshotInternalResult = {
   envSnapshotForRestore?: Record<string, string | undefined>;
   includeFileHashesForWrite?: Record<string, string>;
   includeFileTargetsForWrite?: Record<string, string>;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  pluginMetadata?: PreparedPluginMetadata;
 };
 
 export type ReadConfigFileSnapshotWithPluginMetadataResult = {
   snapshot: ConfigFileSnapshot;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  pluginMetadata?: PreparedPluginMetadata;
 };
 
 export type BestEffortConfigSnapshot = {

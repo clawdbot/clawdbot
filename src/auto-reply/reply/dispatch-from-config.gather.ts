@@ -369,6 +369,7 @@ export async function gatherDispatchRequest(
   const preparedReplyDispatchAgentId = boundAcpDispatchSessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
     : sessionAgentId;
+  const abortSignal = params.replyOptions?.abortSignal;
   let preparedReplyDispatchRuntime: PreparedReplyDispatchRuntime | undefined;
   try {
     preparedReplyDispatchRuntime = params.usePublishedModelRuntime
@@ -376,12 +377,12 @@ export async function gatherDispatchRequest(
           const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
           return await loadPublishedGatewayReplyDispatchRuntime({
             agentId: preparedReplyDispatchAgentId,
-            abortSignal: params.replyOptions?.abortSignal,
+            abortSignal,
           });
         })
       : undefined;
   } catch (error) {
-    if (params.replyOptions?.abortSignal?.aborted && isAbortError(error)) {
+    if (abortSignal?.aborted && (error === abortSignal.reason || isAbortError(error))) {
       return finishReplyOperationAborted();
     }
     throw error;

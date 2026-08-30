@@ -5,13 +5,16 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import {
   buildPluginCapabilityConsentReview,
   type PluginCapabilityConsentHandler,
 } from "../plugins/capability-consent.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { getInstalledPluginIndexInstallRecordsCacheGeneration } from "../plugins/installed-plugin-index-record-cache.js";
+import type { PreparedPluginMetadata } from "../plugins/plugin-metadata-collection.js";
+import { resolvePluginMetadataEnvFingerprint } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
@@ -2061,7 +2064,7 @@ describe("doctor config flow", () => {
     });
 
     expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ preparePluginMetadataSnapshot: true }),
+      expect.objectContaining({ includePluginMetadata: true }),
     );
     expect(result.runWithPluginMetadataSnapshot).toEqual(expect.any(Function));
     expect(result.invalidatePluginMetadataSnapshot).toEqual(expect.any(Function));
@@ -2073,16 +2076,26 @@ describe("doctor config flow", () => {
   });
 
   it("exposes cleanup-refreshed plugin metadata to later Doctor scopes", async () => {
-    const refreshedSnapshot = {
-      plugins: [],
-      index: { installRecords: {} },
-    } as unknown as PluginMetadataSnapshot;
+    const refreshedSnapshot = createPluginMetadataSnapshot({
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    const refreshedMetadata: PreparedPluginMetadata = {
+      ...refreshedSnapshot,
+      unionSnapshot: refreshedSnapshot,
+      selectedSnapshot: refreshedSnapshot,
+      workspaces: new Map([[undefined, refreshedSnapshot]]),
+      configWorkspaceDirs: [undefined],
+      agentWorkspaceDirs: new Map(),
+      installRecordsGeneration: getInstalledPluginIndexInstallRecordsCacheGeneration(),
+      envFingerprint: resolvePluginMetadataEnvFingerprint(),
+      channelCatalog: { read: () => [] },
+    };
     runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
       state: params.state,
       changeNotes: ['Removed stale managed install record for bundled plugin "google-meet".'],
       warningNotes: [],
       authProfilesRepaired: false,
-      pluginMetadataSnapshot: refreshedSnapshot,
+      pluginMetadata: refreshedMetadata,
     }));
 
     const result = await runDoctorConfigWithInput({
@@ -2091,14 +2104,16 @@ describe("doctor config flow", () => {
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
-    expect(result.pluginMetadataSnapshot).toBe(refreshedSnapshot);
+    expect(result.pluginMetadata).toBe(refreshedMetadata);
     const scopeParams = createDoctorPluginMetadataSnapshotScopeParamsMock.mock.lastCall?.[0] as {
-      getBaseSnapshot: () => PluginMetadataSnapshot | undefined;
+      getBaseMetadata: () => PreparedPluginMetadata | undefined;
     };
-    expect(scopeParams.getBaseSnapshot()).toBe(refreshedSnapshot);
-    expect(scopeParams.getBaseSnapshot()?.index.installRecords).not.toHaveProperty("google-meet");
+    expect(scopeParams.getBaseMetadata()).toBe(refreshedMetadata);
+    expect(scopeParams.getBaseMetadata()?.selectedSnapshot.index.installRecords).not.toHaveProperty(
+      "google-meet",
+    );
     result.invalidatePluginMetadataSnapshot();
-    expect(scopeParams.getBaseSnapshot()).toBeUndefined();
+    expect(scopeParams.getBaseMetadata()).toBeUndefined();
   });
 
   it("does not treat noninteractive doctor fix as plugin capability consent", async () => {

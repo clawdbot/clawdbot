@@ -4,7 +4,9 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import { createImageRuntimeGenerationFixture } from "./image.runtime-test-support.js";
 
 const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
@@ -192,11 +194,10 @@ describe("describeImageWithModelCore", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
     acquireAgentRunPreparedModelRuntimeMock.mockImplementation(
-      async (input: { agentDir: string; config: object; workspaceDir?: string }) => ({
+      async (input: { agentDir: string; config: OpenClawConfig; workspaceDir?: string }) => ({
         snapshot: {
           agentDir: input.agentDir,
-          config: input.config,
-          workspaceDir: input.workspaceDir,
+          ...createImageRuntimeGenerationFixture(input.config, input.workspaceDir),
           createStores: () => ({
             authStorage: preparedAuthStorage,
             modelRegistry: {},

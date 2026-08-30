@@ -1,5 +1,6 @@
 import type { Message, User } from "grammy/types";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramQuestionCallback } from "./question-callback-data.js";
@@ -132,6 +133,47 @@ export function createTelegramCallbackMessageActions(params: {
     replyToCallbackChat,
   };
 }
+
+/** Confirms a terminal result without replaying its action after a delivery failure. */
+export async function sendTelegramCallbackTerminalReceipt(params: {
+  actions: TelegramCallbackMessageActions;
+  text: string;
+  extra?: Parameters<TelegramCallbackMessageActions["editCallbackMessageWithButtons"]>[2];
+  reportError?: (message: string) => void;
+}): Promise<void> {
+  const { actions, text, extra, reportError = logVerbose } = params;
+  try {
+    await actions.editCallbackMessage(text, {
+      reply_markup: { inline_keyboard: [] },
+      ...extra,
+    });
+    return;
+  } catch (editErr) {
+    const errStr = String(editErr);
+    const alreadyTerminal = errStr.includes("message is not modified");
+    if (!alreadyTerminal) {
+      reportError(`telegram: failed to render terminal callback receipt: ${errStr}`);
+    }
+    // Retire stale controls even when another surface committed the terminal result.
+    // Delivery failure must not replay an action whose outcome is already authoritative.
+    await actions.clearCallbackButtons().catch((error: unknown) => {
+      const message = String(error);
+      if (
+        !message.includes("message is not modified") &&
+        !message.includes("there is no text in the message to edit")
+      ) {
+        reportError(`telegram: failed to clear terminal callback buttons: ${message}`);
+      }
+    });
+    if (alreadyTerminal) {
+      return;
+    }
+  }
+  await actions.replyToCallbackChat(text, extra).catch((error: unknown) => {
+    reportError(`telegram: failed to send terminal callback receipt: ${String(error)}`);
+  });
+}
+
 type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
 type QuestionResolver = (
   params: ResolveQuestionParams,

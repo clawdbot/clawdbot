@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatModelRefForConfig } from "../../agents/model-selection-shared.js";
 
 const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "models-list-configured-test-empty-plugin-metadata",
@@ -265,6 +266,7 @@ describe("configured model list rows", () => {
       entries,
       context: {
         cfg,
+        formatModelRef: (ref) => formatModelRefForConfig(ref, { cfg, manifestPlugins: [] }),
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth },
         canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,
@@ -274,17 +276,17 @@ describe("configured model list rows", () => {
       },
     });
 
-    expect(rows.map((row) => row.key)).toEqual(["zai/glm-4.7", "zai/glm-4.8"]);
+    expect(rows.map((row) => row.key)).toEqual(["zai/z.ai/glm-4.7", "zai/z.ai/glm-4.8"]);
     expect(rows[0]).toMatchObject({ name: "GLM 4.7", available: true });
     expect(rows[1]).toMatchObject({ name: "GLM 4.8", available: true });
     expect(mocks.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(evaluateModelAuth).toHaveBeenCalledWith(
       "z.ai",
-      expect.objectContaining({ modelId: "glm-4.7" }),
+      expect.objectContaining({ modelId: "z.ai/glm-4.7" }),
     );
     expect(evaluateModelAuth).toHaveBeenCalledWith(
       "z.ai",
-      expect.objectContaining({ modelId: "glm-4.8" }),
+      expect.objectContaining({ modelId: "z.ai/glm-4.8" }),
     );
   });
 
@@ -319,6 +321,7 @@ describe("configured model list rows", () => {
       entries,
       context: {
         cfg,
+        formatModelRef: (ref) => formatModelRefForConfig(ref, { cfg, manifestPlugins: [] }),
         agentDir: "/tmp/openclaw-agent",
         authIndex: {
           evaluateModelAuth: () => ({ availability: true, routeResolution: null }),
@@ -393,6 +396,7 @@ describe("configured model list rows", () => {
       entries,
       context: {
         cfg,
+        formatModelRef: (ref) => formatModelRefForConfig(ref, { cfg, manifestPlugins: [] }),
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth: () => ({ availability: true, routeResolution: null }) },
         canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,

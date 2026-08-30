@@ -2,6 +2,7 @@ import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import type { CodexCliApiKeyCredential } from "../agents/cli-credentials.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { resolveModelTarget } from "../commands/models/shared.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -124,7 +125,11 @@ export async function buildTestPlan(params: {
     ) {
       return { error: `${modelRef} is not compatible with the ${kind} inference route.` };
     }
-    return modelRef;
+    const ref = resolveModelTarget({ raw: modelRef, cfg });
+    if (normalizeProviderId(ref.provider) !== normalizeProviderId(expected.provider)) {
+      return { error: `${modelRef} is not compatible with the ${kind} inference route.` };
+    }
+    return `${ref.provider}/${ref.model}`;
   };
   const providerAutoChoiceId = parseProviderAutoSetupChoiceId(kind);
   if (providerAutoChoiceId) {
@@ -182,38 +187,30 @@ export async function buildTestPlan(params: {
         config: enableResult.config,
         result,
       });
+      const inference = projectManualInferenceConfig({
+        baseConfig: enableResult.config,
+        preparedConfig,
+        modelRef,
+        providerId: ref.provider,
+        pluginId: choice.pluginId,
+        agentId: routeAgentId,
+      });
       const matchingProfile = result.profiles.find(
         (profile) =>
-          normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
+          normalizeProviderId(profile.credential.provider) ===
+          normalizeProviderId(inference.provider),
       );
       if (result.profiles.length > 0 && !matchingProfile) {
         return {
           error: `${choice.choiceLabel} did not return credentials for its detected model.`,
         };
       }
-      const prepared = matchingProfile
-        ? prepareManualAuthForActivation({
-            baseConfig: enableResult.config,
-            preparedConfig,
-            profiles: result.profiles,
-            selectedProfileId: matchingProfile.profileId,
-            modelRef,
-            providerId: ref.provider,
-            pluginId: choice.pluginId,
-            agentId: routeAgentId,
-          })
-        : {
-            config: projectManualInferenceConfig({
-              baseConfig: enableResult.config,
-              preparedConfig,
-              modelRef,
-              providerId: ref.provider,
-              pluginId: choice.pluginId,
-              agentId: routeAgentId,
-            }),
-            profiles: [] as ProviderAuthResult["profiles"],
-            selectedProfileId: undefined,
-          };
+      const prepared = prepareManualAuthForActivation({
+        config: inference.config,
+        preparedConfig,
+        profiles: result.profiles,
+        selectedProfileId: matchingProfile?.profileId,
+      });
       return {
         runner: "embedded",
         ...ref,
@@ -283,31 +280,24 @@ export async function buildTestPlan(params: {
         ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
       };
     }
-    case "claude-cli": {
-      const modelRef = resolveRouteModelRef(CLAUDE_CLI_DEFAULT_MODEL_REF);
+    case "claude-cli":
+    case "gemini-cli":
+    case "openai-api-key":
+    case "anthropic-api-key": {
+      const routes = {
+        "claude-cli": { runner: "cli", modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF },
+        "gemini-cli": { runner: "cli", modelRef: GEMINI_CLI_DEFAULT_MODEL_REF },
+        "openai-api-key": { runner: "embedded", modelRef: OPENAI_API_DEFAULT_MODEL_REF },
+        "anthropic-api-key": { runner: "embedded", modelRef: ANTHROPIC_API_DEFAULT_MODEL_REF },
+      } as const;
+      const route = routes[kind];
+      const modelRef = resolveRouteModelRef(route.modelRef);
       if (typeof modelRef !== "string") {
         return modelRef;
       }
-      const ref = parseRef(modelRef);
       return {
-        runner: "cli",
-        ...ref,
-        modelRef,
-        config: cfg,
-        agentId: "openclaw",
-        routeAgentId,
-        persistModelRef: modelRef,
-      };
-    }
-    case "gemini-cli": {
-      const modelRef = resolveRouteModelRef(GEMINI_CLI_DEFAULT_MODEL_REF);
-      if (typeof modelRef !== "string") {
-        return modelRef;
-      }
-      const ref = parseRef(modelRef);
-      return {
-        runner: "cli",
-        ...ref,
+        runner: route.runner,
+        ...parseRef(modelRef),
         modelRef,
         config: cfg,
         agentId: "openclaw",
@@ -323,7 +313,7 @@ export async function buildTestPlan(params: {
       const ref = parseRef(modelRef);
       if (params.codexCliApiKey) {
         const preparedAuth = prepareManualAuthForActivation({
-          baseConfig: cfg,
+          config: cfg,
           preparedConfig: cfg,
           profiles: [
             {
@@ -332,9 +322,6 @@ export async function buildTestPlan(params: {
             },
           ],
           selectedProfileId: "openai:codex-cli-api-key",
-          modelRef,
-          providerId: ref.provider,
-          agentId: routeAgentId,
         });
         return {
           runner: "embedded",
@@ -366,38 +353,6 @@ export async function buildTestPlan(params: {
         routeAgentId,
         agentDir: params.agentDir,
         cleanupBundleMcpOnRunEnd: true,
-        persistModelRef: modelRef,
-      };
-    }
-    case "openai-api-key": {
-      const modelRef = resolveRouteModelRef(OPENAI_API_DEFAULT_MODEL_REF);
-      if (typeof modelRef !== "string") {
-        return modelRef;
-      }
-      const ref = parseRef(modelRef);
-      return {
-        runner: "embedded",
-        ...ref,
-        modelRef,
-        config: cfg,
-        agentId: "openclaw",
-        routeAgentId,
-        persistModelRef: modelRef,
-      };
-    }
-    case "anthropic-api-key": {
-      const modelRef = resolveRouteModelRef(ANTHROPIC_API_DEFAULT_MODEL_REF);
-      if (typeof modelRef !== "string") {
-        return modelRef;
-      }
-      const ref = parseRef(modelRef);
-      return {
-        runner: "embedded",
-        ...ref,
-        modelRef,
-        config: cfg,
-        agentId: "openclaw",
-        routeAgentId,
         persistModelRef: modelRef,
       };
     }
@@ -580,42 +535,37 @@ export async function buildTestPlan(params: {
           error: `${resolved.provider.label} returned an invalid starter model.`,
         };
       }
+      const inference = projectManualInferenceConfig({
+        baseConfig: enableResult.config,
+        preparedConfig,
+        modelRef,
+        providerId: ref.provider,
+        ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
+        agentId: routeAgentId,
+        workspaceDir: params.pluginWorkspaceDir,
+        ...(interactive && choice.appGuidedDiscovery === true
+          ? {}
+          : { normalizeWithProvider: resolved.provider }),
+      });
       const matchingProfile = result.profiles.find(
         (profile) =>
-          normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
+          normalizeProviderId(profile.credential.provider) ===
+          normalizeProviderId(inference.provider),
       );
       if (result.profiles.length > 0 && !matchingProfile) {
         return {
           error: `${resolved.provider.label} did not return credentials for its starter model.`,
         };
       }
-      const preparedAuth = matchingProfile
-        ? prepareManualAuthForActivation({
-            baseConfig: enableResult.config,
-            preparedConfig,
-            profiles: result.profiles,
-            selectedProfileId: matchingProfile.profileId,
-            modelRef,
-            providerId: ref.provider,
-            ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
-            agentId: routeAgentId,
-          })
-        : {
-            config: projectManualInferenceConfig({
-              baseConfig: enableResult.config,
-              preparedConfig,
-              modelRef,
-              providerId: ref.provider,
-              ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
-              agentId: routeAgentId,
-            }),
-            profiles: [] as ProviderAuthResult["profiles"],
-            selectedProfileId: undefined,
-          };
+      const preparedAuth = prepareManualAuthForActivation({
+        config: inference.config,
+        preparedConfig,
+        profiles: result.profiles,
+        selectedProfileId: matchingProfile?.profileId,
+      });
       return {
         runner: "embedded",
-        ...ref,
-        modelRef,
+        ...inference,
         agentDir: params.agentDir,
         config: preparedAuth.config,
         agentId: "openclaw",
@@ -623,7 +573,7 @@ export async function buildTestPlan(params: {
         ...(preparedAuth.selectedProfileId
           ? { authProfileId: preparedAuth.selectedProfileId }
           : {}),
-        persistModelRef: modelRef,
+        persistModelRef: inference.modelRef,
         manualAuth: {
           profiles: preparedAuth.profiles,
           runtimeConfigBase: enableResult.config,

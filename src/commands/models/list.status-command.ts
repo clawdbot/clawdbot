@@ -1,6 +1,10 @@
 /** Implementation of `openclaw models status`. */
 import path from "node:path";
 import {
+  buildModelCatalogRef,
+  parseProviderModelRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
@@ -43,6 +47,7 @@ import {
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
+  formatModelRefForConfig,
   modelCatalogLogicalKey,
   resolveConfiguredModelPolicyAllow,
 } from "../../agents/model-selection-shared.js";
@@ -626,7 +631,7 @@ export async function modelsStatusCommand(
       cfg,
       catalog: catalog.entries,
       defaultProvider: resolved.provider,
-      defaultModel: resolved.model,
+      defaultModel: buildModelCatalogRef(resolved.provider, resolved.model),
       agentId: workspaceAgentId,
       ...DISPLAY_MODEL_PARSE_OPTIONS,
     });
@@ -634,7 +639,9 @@ export async function modelsStatusCommand(
       ? []
       : [
           ...new Set([
-            ...visibilityPolicy.allowedCatalog.map((entry) => modelKey(entry.provider, entry.id)),
+            ...visibilityPolicy.allowedCatalog.map((entry) =>
+              buildModelCatalogRef(entry.provider, entry.id),
+            ),
             ...configuredAllowRefs.flatMap((raw) => {
               const wildcard = parseModelPolicyWildcardRef(raw);
               if (!wildcard) {
@@ -642,12 +649,21 @@ export async function modelsStatusCommand(
               }
               const prefix = wildcard.key.slice(0, -1);
               const hasCatalogMatch = catalog.entries.some((entry) =>
-                modelKey(entry.provider, entry.id).startsWith(prefix),
+                buildModelCatalogRef(entry.provider, entry.id).startsWith(prefix),
               );
               return hasCatalogMatch ? [] : [wildcard.key];
             }),
           ]),
-        ].toSorted();
+        ]
+          .map((key) =>
+            parseModelPolicyWildcardRef(key)
+              ? key
+              : formatModelRefForConfig(parseProviderModelRef(key)!, {
+                  cfg,
+                  manifestPlugins: metadataSnapshot.plugins,
+                }),
+          )
+          .toSorted();
     const routeSourcesByModel = new Map<
       string,
       Array<{ api?: (typeof catalog.routeVariants)[number]["api"]; baseUrl?: string }>

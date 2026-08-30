@@ -1,6 +1,14 @@
 // Isolated agent model formatting tests cover model metadata in cron prompts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveAmbientOwnerAgentId,
+} from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
+import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { AgentConfig } from "../config/types.agents.js";
 
 const {
@@ -13,7 +21,10 @@ const {
   resolveHooksGmailModelMock,
 } = vi.hoisted(() => ({
   loadFullModelCatalogMock: vi.fn(),
-  loadModelCatalogMock: vi.fn(),
+  loadModelCatalogMock:
+    vi.fn<
+      (params: LoadPreparedModelCatalogParams) => Promise<ResolvedPublishedModelCatalogOwner>
+    >(),
   getModelRefStatusMock: vi.fn(),
   normalizeModelSelectionMock: vi.fn((value: unknown) => {
     if (typeof value === "string" && value.trim()) {
@@ -136,6 +147,29 @@ function resolveConfiguredModelForTest(cfg: Record<string, unknown>): {
   return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
 }
 
+function createModelCatalogOwner(
+  params: LoadPreparedModelCatalogParams,
+): ResolvedPublishedModelCatalogOwner {
+  const config = params.config ?? {};
+  const agentId = params.agentId ?? resolveAmbientOwnerAgentId(config);
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId, params.env);
+  return {
+    catalogOwner: { agentId, workspaceDir },
+    agentId,
+    agentDir: params.agentDir ?? resolveAgentDir(config, agentId, params.env),
+    workspaceDir,
+    config,
+    authModes: {},
+    authStore: { version: 1, profiles: {} },
+    metadataSnapshot: createPluginMetadataSnapshot({
+      config,
+      workspaceDir,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    }),
+    modelCatalog: { entries: [], routeVariants: [] },
+  };
+}
+
 function defaultPayload(): AgentTurnPayload {
   return {
     kind: "agentTurn",
@@ -172,26 +206,12 @@ async function expectDefaultSelectedModel(options: SelectModelOptions = {}) {
 describe("cron model formatting and precedence edge cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadModelCatalogMock.mockImplementation(
-      async (params: {
-        config: Record<string, unknown>;
-        agentId?: string;
-        agentDir: string;
-        readOnly?: boolean;
-        workspaceDir: string;
-      }) => {
-        if (params.readOnly !== true) {
-          await loadFullModelCatalogMock();
-        }
-        return {
-          agentId: params.agentId ?? "main",
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          config: params.config,
-          modelCatalog: { entries: [], routeVariants: [] },
-        };
-      },
-    );
+    loadModelCatalogMock.mockImplementation(async (params) => {
+      if (params.readOnly !== true) {
+        await loadFullModelCatalogMock();
+      }
+      return createModelCatalogOwner(params);
+    });
     loadFullModelCatalogMock.mockRejectedValue(
       new Error("cron model selection must not materialize the full model catalog"),
     );
@@ -385,10 +405,12 @@ describe("cron model formatting and precedence edge cases", () => {
       };
       const ownerCatalog = [{ id: "owner-model", name: "Owner Model", provider: "openai" }];
       loadModelCatalogMock.mockResolvedValueOnce({
-        agentId: "main",
-        agentDir: "/tmp/owner-agent",
-        workspaceDir: "/tmp/owner-workspace",
-        config: ownerConfig,
+        ...createModelCatalogOwner({
+          agentId: "main",
+          agentDir: "/tmp/owner-agent",
+          workspaceDir: "/tmp/owner-workspace",
+          config: ownerConfig,
+        }),
         modelCatalog: { entries: ownerCatalog, routeVariants: [] },
       });
 

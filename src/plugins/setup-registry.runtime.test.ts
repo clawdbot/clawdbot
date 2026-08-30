@@ -3,14 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   projectPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
+import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 
 const loadPluginRegistrySnapshotMock = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndexMock = vi.hoisted(() => vi.fn());
@@ -57,52 +58,40 @@ function createCurrentSnapshot(params: {
   workspaceDir?: string;
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
-  const index: InstalledPluginIndex = {
-    version: 1,
-    hostContractVersion: "test-host",
-    compatRegistryVersion: "test-compat",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 0,
-    installRecords: {},
+  const snapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {
-        pluginId: "openai",
-        manifestPath: `/tmp/openai-${params.manifestHash}/openclaw.plugin.json`,
-        manifestHash: params.manifestHash,
-        source: `/tmp/openai-${params.manifestHash}/index.ts`,
+        id: "openai",
         rootDir: `/tmp/openai-${params.manifestHash}`,
-        origin: "bundled",
-        enabled: true,
-        enabledByDefault: true,
-        startup: {
-          sidecar: false,
-          memory: false,
-          agentHarnesses: [],
-        },
-        compat: [],
+        cliBackends: params.cliBackends,
       },
     ],
-    diagnostics: [],
-  };
-  const plugins = [
-    {
-      id: "openai",
-      origin: "bundled",
-      cliBackends: params.cliBackends,
-    },
-  ];
+  });
   return {
+    ...snapshot,
     policyHash,
     configFingerprint: params.manifestHash,
     workspaceDir: params.workspaceDir,
-    index,
-    plugins,
-    manifestRegistry: { plugins, diagnostics: [] },
-  } as unknown as PluginMetadataSnapshot;
+    index: { ...snapshot.index, policyHash },
+  };
 }
 
 describe("setup-registry descriptor lookup", () => {
+  it("keeps CLI backend descriptors inside the selected metadata scope", async () => {
+    const { resolvePluginSetupCliBackendIds } = await import("./setup-registry.runtime.js");
+    const full = createCurrentSnapshot({
+      manifestHash: "shared-scope",
+      cliBackends: ["example-cli"],
+    });
+    const finite = projectPluginMetadataSnapshot(full, []);
+    const ids = [full, finite, full].map((metadataSnapshot) =>
+      withPluginRuntimeGenerationScope({ config: {}, metadataSnapshot }, () =>
+        resolvePluginSetupCliBackendIds(),
+      ),
+    );
+    expect(ids).toEqual([["example-cli"], [], ["example-cli"]]);
+  });
+
   it("keeps descriptors inside a narrower view of the same metadata generation", async () => {
     const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
     const snapshot = createCurrentSnapshot({ manifestHash: "scoped", cliBackends: ["Scoped-CLI"] });

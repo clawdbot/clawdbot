@@ -769,7 +769,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       .mockImplementation(async () => persistedSnapshot());
     mocks.readVerifiedSnapshotWithPluginMetadata.mockImplementation(async () => ({
       snapshot: persistedSnapshot(),
-      pluginMetadataSnapshot,
+      pluginMetadata: pluginMetadataSnapshot,
     }));
     await applySystemAgentSetup(
       baseParams({

@@ -8,7 +8,7 @@ import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.j
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { preparePluginMetadata } from "../plugins/plugin-metadata-collection.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
@@ -26,7 +26,6 @@ export async function resolveAgentRuntimeConfig(
   loadedRaw: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   cfg: OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }> {
   const loadedRaw = getRuntimeConfig();
   const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
@@ -42,7 +41,7 @@ export async function resolveAgentRuntimeConfig(
     { config: loadedRaw },
   );
   const activeSecretsRuntimeSnapshot = secretsRuntime.getActiveSecretsRuntimeSnapshot();
-  let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+  let pluginMetadata: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry"> | undefined;
   const sourceConfig = activeSecretsRuntimeSnapshot
     ? activeSecretsRuntimeSnapshot.sourceConfig
     : await measureAgentStartup(
@@ -51,13 +50,13 @@ export async function resolveAgentRuntimeConfig(
           try {
             const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
             if (snapshot.valid) {
-              pluginMetadataSnapshot = writeOptions.basePluginMetadataSnapshot;
+              pluginMetadata = writeOptions.basePluginMetadata;
               return snapshot.resolved;
             }
           } catch {
             // Fall back to runtime-loaded config when source snapshot is unavailable.
           }
-          pluginMetadataSnapshot = resolvePluginMetadataSnapshot({ config: loadedRaw });
+          pluginMetadata = preparePluginMetadata({ config: loadedRaw });
           return loadedRaw;
         },
         { config: loadedRaw },
@@ -101,7 +100,7 @@ export async function resolveAgentRuntimeConfig(
           config: sourceConfig,
           assignmentConfig: cfg,
           includeConfigRefs: false,
-          ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+          ...(pluginMetadata ? { pluginMetadataSnapshot: pluginMetadata } : {}),
         }),
       { config: cfg },
     );
@@ -111,7 +110,6 @@ export async function resolveAgentRuntimeConfig(
     loadedRaw,
     sourceConfig,
     cfg,
-    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };
 }
 

@@ -35,7 +35,7 @@ import {
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
-import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
+import type { ModelManifestNormalizationContext, ModelRef } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
@@ -87,6 +87,7 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
 export type PreparedAgentCommandRuntimeContext = Readonly<{
   config: OpenClawConfig;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
+  expectedInitialModel?: Readonly<ModelRef>;
 }>;
 
 export async function prepareAgentCommandExecution(
@@ -285,6 +286,9 @@ export async function prepareAgentCommandExecution(
       resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir }))
     : undefined;
   const modelManifestContext = {
+    config: cfg,
+    workspaceDir,
+    pluginMetadataSnapshot: manifestMetadataSnapshot,
     manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
   } satisfies ModelManifestNormalizationContext;
   const configuredModel = resolveConfiguredModelRef({
@@ -297,7 +301,6 @@ export async function prepareAgentCommandExecution(
   });
   const configuredThinkingCatalog = buildConfiguredModelCatalog({
     cfg,
-    workspaceDir,
     ...modelManifestContext,
   });
   const configuredThinkingRuntime = resolveEffectiveAgentRuntime({

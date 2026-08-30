@@ -15,7 +15,6 @@ import {
 } from "../secrets/runtime.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayConfigReloadTransactionOwnership } from "./config-reload.js";
-import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
 import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 
@@ -74,18 +73,16 @@ function expectAuthoredSource(source: OpenClawConfig) {
   ).toBe("none");
 }
 
-async function createReload(canonicalActivator: boolean, commit: () => Promise<void>) {
+async function createReload(commit: () => Promise<void>) {
   const initial = configPair("openclaw");
   activateSecretsRuntimeSnapshotWithSource(await prepare(initial.config), initial.source);
   expectAuthoredSource(initial.source);
-  const activator = createRuntimeSecretsActivator({
+  const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     emitStateEvent: vi.fn(),
     prepareRuntimeSecretsSnapshot: ({ config }) => prepare(config),
     activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshot,
   });
-  const activateRuntimeSecrets: ManagedGatewayConfigReloaderParams["activateRuntimeSecrets"] =
-    canonicalActivator ? activator : (config, options) => activator(config, options);
   // Only secret publication is exercised here; the service tail is injected at its existing seam.
   const params = {
     activateRuntimeSecrets,
@@ -107,6 +104,7 @@ async function createReload(canonicalActivator: boolean, commit: () => Promise<v
         async () => {
           await commit();
           committed = true;
+          publication!.onCommitted?.();
         },
         () => committed,
       );
@@ -129,37 +127,34 @@ async function createReload(canonicalActivator: boolean, commit: () => Promise<v
   return { initial, next, run: () => onHotReload(plan, next.config, ownership, next.source) };
 }
 
-describe.each([true, false])(
-  "managed reload authored source (canonical activator: %s)",
-  (canonical) => {
-    it("preserves generated model metadata across a successful hot reload", async () => {
-      const { next, run } = await createReload(canonical, async () => {});
-      await expect(run()).resolves.toBe("applied");
-      expect(
-        getRuntimeConfigSnapshot()?.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime
-          ?.id,
-      ).toBe("codex");
-      expectAuthoredSource(next.source);
-    });
+describe("managed reload authored source", () => {
+  it("preserves generated model metadata across a successful hot reload", async () => {
+    const { next, run } = await createReload(async () => {});
+    await expect(run()).resolves.toBe("applied");
+    expect(
+      getRuntimeConfigSnapshot()?.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime
+        ?.id,
+    ).toBe("codex");
+    expectAuthoredSource(next.source);
+  });
 
-    it("restores the predecessor's authored source when runtime commit fails", async () => {
-      const { initial, run } = await createReload(canonical, async () => {
-        throw new Error("commit failed");
-      });
-      await expect(run()).rejects.toThrow("commit failed");
-      expectAuthoredSource(initial.source);
+  it("restores the predecessor's authored source when runtime commit fails", async () => {
+    const { initial, run } = await createReload(async () => {
+      throw new Error("commit failed");
     });
+    await expect(run()).rejects.toThrow("commit failed");
+    expectAuthoredSource(initial.source);
+  });
 
-    it("does not roll back a newer publication's authored source", async () => {
-      const newer = configPair("codex");
-      newer.source.models.providers.openai.models[0]!.name = "Newer model";
-      newer.config.models!.providers!.openai!.models[0]!.name = "Newer model";
-      const { run } = await createReload(canonical, async () => {
-        activateSecretsRuntimeSnapshotWithSource(await prepare(newer.config), newer.source);
-        throw new Error("superseded commit failed");
-      });
-      await expect(run()).rejects.toThrow("superseded commit failed");
-      expectAuthoredSource(newer.source);
+  it("does not roll back a newer publication's authored source", async () => {
+    const newer = configPair("codex");
+    newer.source.models.providers.openai.models[0]!.name = "Newer model";
+    newer.config.models!.providers!.openai!.models[0]!.name = "Newer model";
+    const { run } = await createReload(async () => {
+      activateSecretsRuntimeSnapshotWithSource(await prepare(newer.config), newer.source);
+      throw new Error("superseded commit failed");
     });
-  },
-);
+    await expect(run()).rejects.toThrow("superseded commit failed");
+    expectAuthoredSource(newer.source);
+  });
+});

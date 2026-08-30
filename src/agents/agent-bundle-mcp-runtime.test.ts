@@ -2275,7 +2275,7 @@ process.on("SIGINT", shutdown);`,
         other = runtime.callTool("shared", "slow_tool", {});
         controller.abort(reason);
         await vi.waitFor(() => expect(cancelled).toBe(true));
-        expect(failure).toMatchObject({ name: "AbortError", cause: reason });
+        expect(failure).toBe(reason);
         expect(await fs.readFile(logPath, "utf8")).not.toContain("recv notifications/cancelled");
         await fs.writeFile(releasePath, "release");
         await expect(other).resolves.toMatchObject({ isError: false });

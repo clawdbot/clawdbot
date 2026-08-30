@@ -174,7 +174,6 @@ export function buildGatewaySessionRow(params: {
   const sessionAgentId = normalizeAgentId(
     parsedAgent?.agentId ?? params.agentId ?? resolveSessionStoreAgentId(cfg, key),
   );
-  const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const rowContext = params.rowContext;
   const subagentRun = rowContext
     ? rowContext.subagentRuns.getDisplaySubagentRun(key)
@@ -237,38 +236,40 @@ export function buildGatewaySessionRow(params: {
     rowContext,
     allowPluginNormalization: !lightweight,
   });
-  const resolvedModel = resolveSessionModelIdentityRef(
-    cfg,
-    entry,
-    sessionAgentId,
-    subagentRun?.model,
-    { allowPluginNormalization: !lightweight },
-  );
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
-  const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
-  const needsTranscriptEstimatedCostUsd =
-    !skipTranscriptUsage &&
-    resolveEstimatedSessionCostUsd({
+  let transcriptUsage: ReturnType<typeof resolveTranscriptUsageFallback> = null;
+  if (params.skipTranscriptUsageFallback !== true) {
+    // Historical identity only serves transcript usage, never lightweight row metadata.
+    const resolvedModel = resolveSessionModelIdentityRef(
       cfg,
-      provider: resolvedModel.provider,
-      model: resolvedModel.model ?? DEFAULT_MODEL,
       entry,
-      rowContext,
-    }) === undefined;
-  const transcriptUsage =
-    !skipTranscriptUsage && (needsTranscriptTotalTokens || needsTranscriptEstimatedCostUsd)
-      ? resolveTranscriptUsageFallback({
-          cfg,
-          key,
-          entry,
-          storePath,
-          fallbackProvider: resolvedModel.provider,
-          fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
-          maxTranscriptBytes: params.transcriptUsageMaxBytes,
-          rowContext: params.rowContext,
-          agentId: sessionAgentId,
-        })
-      : null;
+      sessionAgentId,
+      subagentRun?.model,
+      { allowPluginNormalization: !lightweight },
+    );
+    const needsTranscriptEstimatedCostUsd =
+      resolveEstimatedSessionCostUsd({
+        cfg,
+        agentId: sessionAgentId,
+        provider: resolvedModel.provider,
+        model: resolvedModel.model ?? DEFAULT_MODEL,
+        entry,
+        rowContext,
+      }) === undefined;
+    if (freshSessionTotalTokens === undefined || needsTranscriptEstimatedCostUsd) {
+      transcriptUsage = resolveTranscriptUsageFallback({
+        cfg,
+        key,
+        entry,
+        storePath,
+        fallbackProvider: resolvedModel.provider,
+        fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
+        maxTranscriptBytes: params.transcriptUsageMaxBytes,
+        rowContext,
+        agentId: sessionAgentId,
+      });
+    }
+  }
   const totalTokens =
     freshSessionTotalTokens ?? asNonNegativeFiniteNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
@@ -325,6 +326,7 @@ export function buildGatewaySessionRow(params: {
     ? asNonNegativeFiniteNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({
         cfg,
+        agentId: sessionAgentId,
         provider: rowModelProvider,
         model: rowModel,
         entry,

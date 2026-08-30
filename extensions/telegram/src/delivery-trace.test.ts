@@ -178,13 +178,19 @@ function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
     dispatchReplyWithBufferedBlockDispatcher: (() => {
       throw new Error("trace dispatch bypassed the core runtime mock");
     }) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
-    buildModelsProviderData: (async () => ({
+    buildModelsProviderData: async () => ({
       byProvider: new Map<string, Set<string>>(),
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-test" },
       modelNames: new Map<string, string>(),
       modelCatalog: [],
-    })) as unknown as TelegramBotDeps["buildModelsProviderData"],
+      modelPolicy: { allows: () => true },
+      modelNormalization: {
+        manifestPlugins: [],
+        allowManifestNormalization: false,
+        allowPluginNormalization: false,
+      },
+    }),
     listSkillCommandsForAgents:
       (() => []) as unknown as TelegramBotDeps["listSkillCommandsForAgents"],
     wasSentByBot: (() => false) as TelegramBotDeps["wasSentByBot"],

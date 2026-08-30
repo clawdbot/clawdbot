@@ -20,7 +20,7 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,

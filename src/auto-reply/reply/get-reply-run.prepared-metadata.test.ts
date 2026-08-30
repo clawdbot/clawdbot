@@ -3,7 +3,7 @@ import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-m
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
-import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 

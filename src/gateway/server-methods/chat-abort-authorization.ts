@@ -1,7 +1,7 @@
 // Authorization and pending-run state transitions for chat cancellation.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { createChatAbortMarker } from "../server-chat-state.js";

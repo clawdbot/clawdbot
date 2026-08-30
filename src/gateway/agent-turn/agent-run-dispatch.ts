@@ -32,7 +32,7 @@ import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registr
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import {
   tryFinalizeTrackedAgentTask,
   type GatewayAgentTaskTrackingMode,

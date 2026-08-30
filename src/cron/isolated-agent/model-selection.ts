@@ -2,6 +2,13 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
+import { resolvePublishedModelCatalogOwner } from "../../agents/prepared-model-catalog-owner.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  loadPublishedGatewayReplyDispatchRuntime,
+} from "../../agents/prepared-model-runtime.js";
+import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
 import {
   hasResolvedThinkingCatalogEntry,
   normalizeThinkingCatalogProviders,
@@ -11,6 +18,7 @@ import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { CronJob } from "../types.js";
 import { resolveCronAgentConfig } from "./run-config.js";
 import {
@@ -88,7 +96,7 @@ function formatCronPayloadModelRejection(params: {
   return `automation model override '${modelOverride}' rejected: ${error}`;
 }
 
-export async function resolveCronModelSelectionOwner(params: {
+async function resolveCronModelSelectionOwner(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   requiredAgentId?: string;
@@ -103,15 +111,94 @@ export async function resolveCronModelSelectionOwner(params: {
     readOnly: true,
     allowGatewaySubagentBinding: true,
   });
-  if (
-    params.requiredAgentId &&
-    !publishedModelCatalogOwnerMatchesAgent(owner, params.requiredAgentId)
-  ) {
-    throw new Error(
-      `cron model catalog owner changed from ${params.requiredAgentId} to ${owner.agentId}`,
-    );
+  return assertCronModelSelectionOwner(owner, params.requiredAgentId);
+}
+
+function assertCronModelSelectionOwner(
+  owner: ResolvedPublishedModelCatalogOwner,
+  requiredAgentId?: string,
+): ResolvedPublishedModelCatalogOwner {
+  if (requiredAgentId && !publishedModelCatalogOwnerMatchesAgent(owner, requiredAgentId)) {
+    throw new Error(`cron model catalog owner changed from ${requiredAgentId} to ${owner.agentId}`);
   }
   return owner;
+}
+
+export type CronModelSelectionOwnerLease = {
+  owner: ResolvedPublishedModelCatalogOwner;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  run<T>(operation: () => T): T;
+  release(): void;
+};
+
+/** Captures the executable owner before asynchronous cron preparation can cross a reload. */
+export async function acquireCronModelSelectionOwner(
+  params: Parameters<typeof resolveCronModelSelectionOwner>[0] & {
+    agentId: string;
+    abortSignal?: AbortSignal;
+  },
+): Promise<CronModelSelectionOwnerLease> {
+  const dispatch = await loadPublishedGatewayReplyDispatchRuntime({
+    agentId: params.agentId,
+    abortSignal: params.abortSignal,
+  });
+  if (!dispatch) {
+    const owner = await resolveCronModelSelectionOwner(params);
+    return {
+      owner,
+      run: (operation) => operation(),
+      release: () => {},
+    };
+  }
+  // Borrowing after reload requires the exact executable config. Model precedence still
+  // reads the captured source config so flattening defaults cannot change fallback inheritance.
+  const { cfgWithAgentDefaults } = resolveCronAgentConfig({
+    config: dispatch.config,
+    agentConfigOverride: params.requiredAgentId
+      ? resolveAgentConfig(dispatch.config, dispatch.agentId)
+      : undefined,
+  });
+  const lease = await acquireAgentRunPreparedModelRuntime(
+    {
+      config: cfgWithAgentDefaults,
+      agentId: dispatch.agentId,
+      agentDir: dispatch.agentDir,
+      allowGatewaySubagentBinding: true,
+      workspaceDir: dispatch.workspaceDir,
+    },
+    {
+      catalogMode: "static",
+      pluginGeneration: dispatch.pluginGeneration,
+      abortSignal: params.abortSignal,
+    },
+  );
+  try {
+    const owner = assertCronModelSelectionOwner(
+      Object.freeze({
+        ...resolvePublishedModelCatalogOwner(lease.snapshot),
+        config: dispatch.config,
+      }),
+      params.requiredAgentId,
+    );
+    let active = true;
+    return {
+      owner,
+      pluginGeneration: lease.pluginGeneration,
+      run: (operation) =>
+        withPreparedModelRuntimePluginGenerationScope(
+          lease.pluginGeneration,
+          () => withPluginRuntimeGenerationScope(lease.snapshot, operation),
+          () => (active ? lease.snapshot : undefined),
+        ),
+      release: () => {
+        active = false;
+        lease.release();
+      },
+    };
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
 }
 
 async function resolveCronThinkingCatalog(params: {
@@ -207,8 +294,16 @@ export async function resolveCronModelSelection(
     config: owner.config,
     agentConfigOverride: ownerAgentConfigOverride,
   });
-  const catalog = owner.modelCatalog.entries;
+  // Every precedence branch retains the captured owner's workspace metadata,
+  // including when isolated defaults derive a distinct config object.
+  const modelContext = {
+    cfg: owner.config,
+    catalog: owner.modelCatalog.entries,
+    workspaceDir: owner.workspaceDir,
+    pluginMetadataSnapshot: owner.metadataSnapshot,
+  };
   const resolvedDefault = resolveConfiguredModelRef({
+    ...modelContext,
     cfg: cfgWithAgentDefaults,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
@@ -232,8 +327,7 @@ export async function resolveCronModelSelection(
     // Subagent/agent model config is advisory here: invalid refs fall back to
     // defaults so an agent config typo does not prevent unrelated cron runs.
     const resolvedSubagent = resolveAllowedModelRefCore({
-      cfg: owner.config,
-      catalog,
+      ...modelContext,
       raw: subagentModelRaw,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
@@ -250,7 +344,7 @@ export async function resolveCronModelSelection(
   let hooksGmailModelApplied = false;
   const hooksGmailModelRef = params.isGmailHook
     ? resolveHooksGmailModel({
-        cfg: owner.config,
+        ...modelContext,
         defaultProvider: DEFAULT_PROVIDER,
       })
     : null;
@@ -258,8 +352,7 @@ export async function resolveCronModelSelection(
     // Gmail hook models are specialized defaults: apply them only when the
     // configured ref is allowed, otherwise keep the broader cron default.
     const status = getModelRefStatus({
-      cfg: owner.config,
-      catalog,
+      ...modelContext,
       ref: hooksGmailModelRef,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
@@ -282,8 +375,7 @@ export async function resolveCronModelSelection(
     // Payload model overrides are explicit cron config, so reject disallowed
     // refs instead of silently falling back to defaults.
     const resolvedOverride = resolveAllowedModelRefCore({
-      cfg: owner.config,
-      catalog,
+      ...modelContext,
       raw: modelOverride,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
@@ -314,8 +406,7 @@ export async function resolveCronModelSelection(
       const sessionProviderOverride =
         params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
       const resolvedSessionOverride = resolveAllowedModelRefCore({
-        cfg: owner.config,
-        catalog,
+        ...modelContext,
         raw: `${sessionProviderOverride}/${sessionModelOverride}`,
         defaultProvider: resolvedDefault.provider,
         defaultModel: resolvedDefault.model,

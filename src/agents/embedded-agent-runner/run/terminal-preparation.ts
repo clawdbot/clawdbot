@@ -93,7 +93,9 @@ export function prepareEmbeddedRunTerminal(input: {
       provider: reportedModelRef.provider,
       model: reportedModelRef.model,
       config: runParams.config,
+      agentId: runParams.agentId,
       agentDir: runParams.agentDir,
+      workspaceDir: runParams.workspaceDir,
     }),
   });
   // Attempt normalization already folded every attempt (terminal included)

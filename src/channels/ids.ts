@@ -6,11 +6,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
-
-/**
- * Canonical chat channel id used by core routing, plugin config, and channel catalogs.
- */
-export type ChatChannelId = string;
+import type { ChatChannelId } from "./plugins/channel-id.types.js";
 
 type BundledChatChannelEntry = {
   id: ChatChannelId;

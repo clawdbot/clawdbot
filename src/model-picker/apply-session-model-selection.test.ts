@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import {
@@ -754,6 +755,75 @@ describe("applySessionModelSelection", () => {
     expect(sessionEntry).toEqual(initial);
     expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { boundary: "allowlist", allowed: ["model"], catalog: ["model", "custom/model"] },
+    { boundary: "off-catalog selection", allowed: ["model", "custom/model"], catalog: ["model"] },
+    {
+      boundary: "accepted selection",
+      allowed: ["model", "custom/model"],
+      catalog: ["model", "custom/model"],
+    },
+  ])(
+    "keeps exact model namespaces distinct at $boundary",
+    async ({ boundary, allowed, catalog: catalogKeys }) => {
+      const sessionEntry = createEntry();
+      const initial = structuredClone(sessionEntry);
+      const modelCatalog = catalogKeys.map((id) => ({
+        provider: "custom",
+        id,
+        name: id,
+        contextTokens: id === "model" ? 8_000 : 16_000,
+      }));
+      const result = await applySessionModelSelection(
+        createParams({
+          cfg: {
+            agents: {
+              defaults: { modelPolicy: { allow: allowed.map((id) => `custom/${id}`) } },
+            },
+            models: {
+              providers: {
+                custom: {
+                  api: "openai-responses",
+                  baseUrl: "https://models.example.test",
+                  models: [],
+                },
+              },
+            },
+          },
+          sessionEntry,
+          defaultProvider: "custom",
+          defaultModel: "model",
+          currentProvider: "custom",
+          currentModel: "model",
+          modelCatalog,
+          thinkingCatalog: modelCatalog,
+          request: {
+            provider: "custom",
+            model: "custom/model",
+            isDefault: false,
+            runtime: { kind: "unchanged" },
+          },
+        }),
+      );
+
+      if (boundary !== "allowlist") {
+        expect(result).toMatchObject({
+          status: "applied",
+          effectiveModelRef: "custom/custom/model",
+          contextTokens: boundary === "accepted selection" ? 16_000 : DEFAULT_CONTEXT_TOKENS,
+        });
+        expect(sessionEntry).toMatchObject({
+          providerOverride: "custom",
+          modelOverride: "custom/model",
+        });
+      } else {
+        expect(result).toMatchObject({ status: "rejected", reason: "not-allowed" });
+        expect(sessionEntry).toEqual(initial);
+        expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("remaps unsupported thinking and reasserts live switching", async () => {
     const sessionEntry = createEntry({ thinkingLevel: "adaptive" });

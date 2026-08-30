@@ -33,6 +33,42 @@ export class CronService implements CronServiceContract {
     this.state = createCronServiceState(deps);
   }
 
+  static createWithMonitorReconciliation(deps: CronServiceDeps) {
+    const cron = new CronService(deps);
+    return {
+      cron,
+      // The creator keeps candidate validation off the service exposed to plugins.
+      // Every operation still uses this scheduler's normal locked mutation owner.
+      withSystemMonitorReconciliation: async <T>(
+        owner: {
+          assertCurrent: () => void;
+          assertAgentAvailable: (agentId: string) => void;
+        },
+        run: (addMonitor: CronServiceContract["add"]) => Promise<T>,
+      ): Promise<T> => {
+        const generation = cron.state.lifecycleGeneration;
+        let active = true;
+        const assertCurrent = () => {
+          owner.assertCurrent();
+          if (!active || cron.state.stopped || generation !== cron.state.lifecycleGeneration) {
+            throw new Error("cron monitor reconciliation is no longer active");
+          }
+        };
+        try {
+          return await run(async (input, options) => {
+            assertCurrent();
+            return await mutationOps.add(cron.state, input, options, (agentId) => {
+              assertCurrent();
+              owner.assertAgentAvailable(agentId);
+            });
+          });
+        } finally {
+          active = false;
+        }
+      },
+    };
+  }
+
   async start() {
     const generation = this.state.lifecycleGeneration;
     const pending = this.startState;

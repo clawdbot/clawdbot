@@ -5,11 +5,12 @@ import {
 } from "../config/io.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
-import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type {
+  PluginMetadataOwner,
+  PreparedPluginMetadata,
+} from "../plugins/plugin-metadata-collection.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
-import { completeDoctorPluginMetadataSnapshot } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
 const loadInstalledPluginIndexStoreWrite = createLazyRuntimeModule(
   () => import("../plugins/installed-plugin-index-store-write.js"),
@@ -18,7 +19,7 @@ const loadInstalledPluginIndexStoreWrite = createLazyRuntimeModule(
 export type DoctorConfigPreflightPluginSnapshotRead = {
   snapshot: ConfigFileSnapshot;
   pluginMigrationFingerprint: string | null;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  pluginMetadata?: PreparedPluginMetadata;
 };
 
 type MeasurePreflightStep = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
@@ -34,48 +35,40 @@ export async function readDoctorConfigPreflightSnapshot(params: {
   includePluginMetadata: boolean;
   measure?: ConfigSnapshotReadMeasure;
   observe?: boolean;
-  preparePluginMetadataSnapshot: boolean;
+  pluginMetadataOwner: PluginMetadataOwner;
   skipPluginValidation: boolean;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
-  // Explicit management rereads cross a lease or mutation boundary. A resolver's
-  // allowCurrent:false still reuses facts within an existing operation generation.
-  const cache = params.allowCurrentPluginMetadata ? getPluginCache() : createPluginCache();
-  return withPluginCache(cache, async () => {
-    const sharedOptions = {
-      ...(params.observe === false ? { observe: false } : {}),
-      ...(params.measure ? { measure: params.measure } : {}),
-      ...(params.allowCurrentPluginMetadata ? {} : { allowCurrentPluginMetadata: false }),
-    };
-    if (params.includePluginMetadata && !params.skipPluginValidation) {
-      const result = await readConfigFileSnapshotWithPluginMetadata(sharedOptions);
-      const pluginMetadataSnapshot = params.preparePluginMetadataSnapshot
-        ? completeDoctorPluginMetadataSnapshot({
-            snapshot: result.pluginMetadataSnapshot,
-            config: result.snapshot.sourceConfig ?? result.snapshot.config ?? {},
-          })
-        : result.pluginMetadataSnapshot;
-      return {
-        snapshot: addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot),
-        pluginMigrationFingerprint: pluginMetadataSnapshot?.configFingerprint?.trim() || null,
-        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-      };
-    }
+  const sharedOptions = {
+    pluginMetadataOwner: params.pluginMetadataOwner,
+    ...(params.observe === false ? { observe: false } : {}),
+    ...(params.measure ? { measure: params.measure } : {}),
+    ...(params.allowCurrentPluginMetadata ? {} : { allowCurrentPluginMetadata: false }),
+  };
+  if (params.includePluginMetadata && !params.skipPluginValidation) {
+    const result = await readConfigFileSnapshotWithPluginMetadata(sharedOptions);
+    const pluginMetadata = result.pluginMetadata;
     return {
-      snapshot: addDoctorLegacyIssues(
-        await readConfigFileSnapshot({
-          ...sharedOptions,
-          skipPluginValidation: params.skipPluginValidation,
-        }),
-      ),
-      pluginMigrationFingerprint: null,
+      snapshot: addDoctorLegacyIssues(result.snapshot, pluginMetadata),
+      pluginMigrationFingerprint:
+        pluginMetadata?.selectedSnapshot.configFingerprint?.trim() || null,
+      ...(pluginMetadata ? { pluginMetadata } : {}),
     };
-  });
+  }
+  return {
+    snapshot: addDoctorLegacyIssues(
+      await readConfigFileSnapshot({
+        ...sharedOptions,
+        skipPluginValidation: params.skipPluginValidation,
+      }),
+    ),
+    pluginMigrationFingerprint: null,
+  };
 }
 
 export function needsRefreshedPluginIndexPersistence(
   snapshotRead: DoctorConfigPreflightPluginSnapshotRead,
 ): boolean {
-  return snapshotRead.pluginMetadataSnapshot?.registrySource === "derived";
+  return snapshotRead.pluginMetadata?.selectedSnapshot.registrySource === "derived";
 }
 
 export async function persistRefreshedPluginIndex(params: {
@@ -85,7 +78,7 @@ export async function persistRefreshedPluginIndex(params: {
   snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
   lease: StartupMigrationLease | undefined;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
-  const derivedPluginMetadataSnapshot = params.snapshotRead.pluginMetadataSnapshot;
+  const derivedPluginMetadataSnapshot = params.snapshotRead.pluginMetadata?.selectedSnapshot;
   if (!derivedPluginMetadataSnapshot || !params.snapshotRead.pluginMigrationFingerprint) {
     throwPluginRegistryPersistenceFailed("derived metadata was incomplete");
   }
@@ -98,15 +91,15 @@ export async function persistRefreshedPluginIndex(params: {
     loadInstalledPluginIndexStoreWrite,
   );
   // The checkpoint certifies the persisted inventory, not a process-local replacement.
-  // Persist the original workspace scope; a config-wide union cannot pass scoped freshness checks.
+  // Persist the selected workspace index; the validation union cannot pass scoped freshness checks.
   await params.measure("plugin-index-persistence", () =>
-    writePersistedInstalledPluginIndexWithLeaseSync(derivedPluginMetadataSnapshot.registryIndex, {
+    writePersistedInstalledPluginIndexWithLeaseSync(derivedPluginMetadataSnapshot.index, {
       env: params.env,
       lease,
     }),
   );
   const persistedSnapshotRead = await params.readPersistedSnapshot();
-  const persistedPluginMetadataSnapshot = persistedSnapshotRead.pluginMetadataSnapshot;
+  const persistedPluginMetadataSnapshot = persistedSnapshotRead.pluginMetadata?.selectedSnapshot;
   // The registry selector owns freshness and returns "persisted" only after accepting the
   // durable index. Persisted parsing intentionally canonicalizes non-runtime package metadata.
   if (persistedPluginMetadataSnapshot?.registrySource !== "persisted") {

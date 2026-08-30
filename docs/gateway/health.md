@@ -32,6 +32,11 @@ once in its aggregate. The top-level health session summary represents the
 default agent, or the first configured agent when there is no default; it is not
 a fleet total.
 
+Status displays up to ten recent sessions per agent; health displays up to five.
+Both count visible sessions using lightweight row metadata instead of copying
+the full session history. Opening a cold store still validates its canonical
+session data, so the first inspection of a large store can take longer.
+
 ## Deep diagnostics
 
 - Creds on disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).

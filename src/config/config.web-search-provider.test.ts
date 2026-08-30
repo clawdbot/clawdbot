@@ -1,5 +1,6 @@
 // Covers web-search provider config parsing and provider defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -116,7 +117,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => {
   };
 });
 
-vi.mock("../plugins/manifest-registry.js", () => {
+function createWebSearchManifestRegistry(): PluginManifestRegistry {
   const buildSchema = () => ({
     type: "object",
     additionalProperties: false,
@@ -162,28 +163,28 @@ vi.mock("../plugins/manifest-registry.js", () => {
   });
 
   return {
-    loadPluginManifestRegistryCore: () => ({
-      plugins: [
-        {
-          id: "brave",
-          origin: "bundled",
-          channels: [],
-          providers: [],
-          contracts: {
-            webSearchProviders: ["brave"],
-          },
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          rootDir: "/tmp/plugins/brave",
-          source: "test",
-          manifestPath: "/tmp/plugins/brave/openclaw.plugin.json",
-          schemaCacheKey: "test:brave",
-          configSchema: buildSchema(),
+    plugins: [
+      {
+        id: "brave",
+        origin: "bundled",
+        channels: [],
+        providers: [],
+        contracts: {
+          webSearchProviders: ["brave"],
         },
-        ...mockWebSearchProviders
-          .filter((provider) => provider.pluginId !== "brave")
-          .map((provider) => ({
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        rootDir: "/tmp/plugins/brave",
+        source: "test",
+        manifestPath: "/tmp/plugins/brave/openclaw.plugin.json",
+        schemaCacheKey: "test:brave",
+        configSchema: buildSchema(),
+      },
+      ...mockWebSearchProviders
+        .filter((provider) => provider.pluginId !== "brave")
+        .map(
+          (provider): PluginManifestRecord => ({
             id: provider.pluginId,
             origin: "bundled",
             channels: [],
@@ -199,40 +200,39 @@ vi.mock("../plugins/manifest-registry.js", () => {
             manifestPath: `/tmp/plugins/${provider.pluginId}/openclaw.plugin.json`,
             schemaCacheKey: `test:${provider.pluginId}`,
             configSchema: buildSchema(),
-          })),
-        {
-          id: "acme-search",
-          origin: "installed",
-          channels: [],
-          providers: [],
-          contracts: {
-            webSearchProviders: ["acme-search"],
-          },
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          rootDir: "/tmp/plugins/acme-search",
-          source: "test",
-          manifestPath: "/tmp/plugins/acme-search/openclaw.plugin.json",
-          schemaCacheKey: "test:acme-search",
-          configSchema: buildSchema(),
+          }),
+        ),
+      {
+        id: "acme-search",
+        origin: "global",
+        channels: [],
+        providers: [],
+        contracts: {
+          webSearchProviders: ["acme-search"],
         },
-      ],
-      diagnostics: [],
-    }),
-    resolveManifestContractPluginIds: (params?: { contract?: string; origin?: string }) =>
-      params?.contract === "webSearchProviders" && params.origin === "bundled"
-        ? mockWebSearchProviders
-            .map((provider) => provider.pluginId)
-            .filter((value, index, array) => array.indexOf(value) === index)
-            .toSorted((left, right) => left.localeCompare(right))
-        : [],
-    resolveManifestContractOwnerPluginId: (params?: { contract?: string; value?: string }) =>
-      params?.contract === "webSearchProviders"
-        ? mockWebSearchProviders.find((provider) => provider.id === params.value)?.pluginId
-        : undefined,
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        rootDir: "/tmp/plugins/acme-search",
+        source: "test",
+        manifestPath: "/tmp/plugins/acme-search/openclaw.plugin.json",
+        schemaCacheKey: "test:acme-search",
+        configSchema: buildSchema(),
+      },
+    ],
+    diagnostics: [],
   };
-});
+}
+
+function validateWebSearchConfig(
+  raw: Parameters<typeof validateConfigObjectWithPlugins>[0],
+  options?: Parameters<typeof validateConfigObjectWithPlugins>[1],
+) {
+  return validateConfigObjectWithPlugins(raw, {
+    pluginMetadataSnapshot: { manifestRegistry: createWebSearchManifestRegistry() },
+    ...options,
+  });
+}
 
 const resolveSearchProvider = (
   search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"],
@@ -262,7 +262,7 @@ function expectAllowedValuesInclude(message: ValidationMessage, values: string[]
 
 describe("web search provider config", () => {
   it("does not warn for brave plugin config when bundled web search allowlist compat applies", () => {
-    const res = validateConfigObjectWithPlugins({
+    const res = validateWebSearchConfig({
       plugins: {
         allow: ["imessage", "memory-core"],
         entries: {
@@ -299,7 +299,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts perplexity provider and config", () => {
-    const res = validateConfigObjectWithPlugins(
+    const res = validateWebSearchConfig(
       buildWebSearchProviderConfig({
         enabled: true,
         provider: "perplexity",
@@ -315,7 +315,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts gemini provider and config", () => {
-    const res = validateConfigObjectWithPlugins(
+    const res = validateWebSearchConfig(
       buildWebSearchProviderConfig({
         enabled: true,
         provider: "gemini",
@@ -330,7 +330,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts firecrawl provider and config", () => {
-    const res = validateConfigObjectWithPlugins(
+    const res = validateWebSearchConfig(
       buildWebSearchProviderConfig({
         enabled: true,
         provider: "firecrawl",
@@ -345,7 +345,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts tavily provider config on the plugin-owned path", () => {
-    const res = validateConfigObjectWithPlugins(
+    const res = validateWebSearchConfig(
       buildWebSearchProviderConfig({
         enabled: true,
         provider: "tavily",
@@ -364,7 +364,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts minimax provider config on the plugin-owned path", () => {
-    const res = validateConfigObjectWithPlugins(
+    const res = validateWebSearchConfig(
       buildWebSearchProviderConfig({
         enabled: true,
         provider: "minimax",
@@ -382,7 +382,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts searxng provider config on the plugin-owned path", () => {
-    const res = validateConfigObjectWithPlugins(
+    const res = validateWebSearchConfig(
       buildWebSearchProviderConfig({
         enabled: true,
         provider: "searxng",
@@ -400,7 +400,7 @@ describe("web search provider config", () => {
   });
 
   it("rejects legacy scoped Tavily config", () => {
-    const res = validateConfigObjectWithPlugins({
+    const res = validateWebSearchConfig({
       tools: {
         web: {
           search: {
@@ -417,7 +417,7 @@ describe("web search provider config", () => {
   });
 
   it("detects legacy scoped provider config for bundled providers", () => {
-    const res = validateConfigObjectWithPlugins({
+    const res = validateWebSearchConfig({
       tools: {
         web: {
           search: {
@@ -434,7 +434,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts gemini provider with no extra config", () => {
-    const res = validateConfigObjectWithPlugins(
+    const res = validateWebSearchConfig(
       buildWebSearchProviderConfig({
         provider: "gemini",
       }),
@@ -444,7 +444,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts provider ids registered by installed plugin manifests", () => {
-    const res = validateConfigObjectWithPlugins(
+    const res = validateWebSearchConfig(
       buildWebSearchProviderConfig({
         provider: "acme-search",
       }),
@@ -454,7 +454,7 @@ describe("web search provider config", () => {
   });
 
   it("rejects installable provider ids when the plugin is not active", () => {
-    const res = validateConfigObjectWithPlugins(
+    const res = validateWebSearchConfig(
       buildWebSearchProviderConfig({
         provider: "brave",
       }),
@@ -480,7 +480,7 @@ describe("web search provider config", () => {
   });
 
   it("warns for installable provider ids when stale plugin config is present", () => {
-    const res = validateConfigObjectWithPlugins(
+    const res = validateWebSearchConfig(
       {
         ...buildWebSearchProviderConfig({
           provider: "brave",
@@ -515,7 +515,7 @@ describe("web search provider config", () => {
   });
 
   it("rejects unknown provider ids without plugin evidence", () => {
-    const res = validateConfigObjectWithPlugins({
+    const res = validateWebSearchConfig({
       tools: {
         web: {
           search: {
@@ -535,7 +535,7 @@ describe("web search provider config", () => {
   });
 
   it("warns for unknown provider ids when stale plugin config is present", () => {
-    const res = validateConfigObjectWithPlugins({
+    const res = validateWebSearchConfig({
       tools: {
         web: {
           search: {

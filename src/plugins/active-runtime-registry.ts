@@ -1,12 +1,16 @@
 // Stores active runtime plugin registry state and activation metadata.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import { resolveCompatibleRuntimePluginRegistry } from "./loader-cache.js";
+import type { PluginLoadOptions } from "./loader-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
-import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import {
+  getActivePluginRegistryWorkspaceDirFromState,
+  getPluginRegistryState,
+} from "./runtime-state.js";
 
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
-  return getActivePluginRegistry();
+  return getPluginRegistryState()?.activeRegistry ?? null;
 }
 
 function isRuntimePluginRecordLoaded(plugin: PluginRecord): boolean {
@@ -21,7 +25,7 @@ export function listRuntimePluginIdsFromRegistry(registry: PluginRegistry): stri
 }
 
 export function listLoadedRuntimePluginIds(): string[] {
-  const registry = getActivePluginRegistry();
+  const registry = getActiveRuntimePluginRegistry();
   return registry ? listRuntimePluginIdsFromRegistry(registry) : [];
 }
 
@@ -128,12 +132,12 @@ export function getLoadedRuntimePluginRegistry(
     }
   }
 
-  const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
+  const activeWorkspaceDir = getActivePluginRegistryWorkspaceDirFromState();
   const requestedWorkspaceDir = params.workspaceDir ?? params.loadOptions?.workspaceDir;
   if (requestedWorkspaceDir !== undefined && activeWorkspaceDir !== requestedWorkspaceDir) {
     return undefined;
   }
-  const registry = getActivePluginRegistry();
+  const registry = getActiveRuntimePluginRegistry();
   if (!registry) {
     return undefined;
   }

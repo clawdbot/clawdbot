@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { withPluginRuntimeRegistryScope } from "openclaw/plugin-sdk/channel-test-helpers";
+import { parseModelRef } from "openclaw/plugin-sdk/model-ref-parse";
+import { createEmptyPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 
 describe("llm-task doctor contract", () => {
@@ -42,6 +45,47 @@ describe("llm-task doctor contract", () => {
       config: { defaultModel: "gpt-5.6-sol" },
     });
     expect(result.changes).toHaveLength(2);
+  });
+
+  it("keeps literal migration policy independent of executable provider normalization", () => {
+    const registry = createEmptyPluginRegistry();
+    const normalizeModelId = vi.fn(() => "rewritten");
+    registry.providers.push({
+      pluginId: "doctor-policy-fixture",
+      source: import.meta.url,
+      provider: {
+        id: "doctor-policy-fixture",
+        label: "Doctor policy fixture",
+        auth: [],
+        normalizeModelId,
+      },
+    });
+    withPluginRuntimeRegistryScope(registry, () => {
+      expect(
+        parseModelRef("doctor-policy-fixture/literal", "", {
+          allowManifestNormalization: false,
+        }),
+      ).toEqual({ provider: "doctor-policy-fixture", model: "rewritten" });
+      expect(normalizeModelId).toHaveBeenCalledOnce();
+      normalizeModelId.mockClear();
+
+      const result = normalizeCompatibilityConfig({
+        cfg: {
+          plugins: {
+            entries: {
+              "llm-task": {
+                config: { allowedModels: ["doctor-policy-fixture/literal"] },
+              },
+            },
+          },
+        },
+      });
+
+      expect(normalizeModelId).not.toHaveBeenCalled();
+      expect(result.config.plugins?.entries?.["llm-task"]?.llm?.allowedCompletionModels).toEqual([
+        "doctor-policy-fixture/literal",
+      ]);
+    });
   });
 
   it("keeps shipped override policy and migrates legacy completion policy separately", () => {

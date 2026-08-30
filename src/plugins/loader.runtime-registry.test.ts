@@ -1,5 +1,5 @@
 // Verifies plugin loader runtime registry behavior.
-import fs, { writeFileSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +40,15 @@ import {
   writePlugin,
 } from "./loader.test-fixtures.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
+import {
+  preparePluginMetadata,
+  withPluginMetadataCollectionScope,
+} from "./plugin-metadata-collection.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import {
+  normalizeProviderModelIdWithPlugin,
+  resolveProviderRuntimePlugin,
+} from "./provider-runtime.js";
 import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -53,6 +61,7 @@ import {
   setActivePluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
+import { createRuntimeSystem } from "./runtime/runtime-system.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import * as sdkAlias from "./sdk-alias.js";
 
@@ -216,12 +225,16 @@ it("keeps an empty scoped handle load from replacing the root registry", () => {
   expect(getActivePluginRegistry()).toBe(root);
 });
 
-it("keeps version and injected instance surfaces independent of the broad runtime module", () => {
+it("keeps version and instance system commands independent of the broad runtime module", async () => {
   const gateway = {} as PluginRuntime["gateway"];
   const nodes = {} as PluginRuntime["nodes"];
   const subagent = {} as PluginRuntime["subagent"];
+  const runtimeModule: { value?: typeof import("./runtime/index.js") } = {};
   const loadPluginModule = vi.fn((_modulePath: string): unknown => {
-    throw new Error("broad runtime should stay lazy");
+    if (!runtimeModule.value) {
+      throw new Error("broad runtime should stay lazy");
+    }
+    return runtimeModule.value;
   });
   const runtime = createLazyPluginRuntime({
     loadPluginModule,
@@ -233,8 +246,63 @@ it("keeps version and injected instance surfaces independent of the broad runtim
   expect(runtime.gateway).toBe(gateway);
   expect(runtime.nodes).toBe(nodes);
   expect(runtime.subagent).toBe(subagent);
+  const system = runtime.system;
+  const otherRuntime = createLazyPluginRuntime({ loadPluginModule });
+  expect(otherRuntime.system).not.toBe(system);
+  await expect(
+    system.runCommandWithTimeout(
+      [process.execPath, "-e", "process.stdout.write('lazy-system-marker')"],
+      { timeoutMs: 1_000 },
+    ),
+  ).resolves.toMatchObject({ code: 0, stdout: "lazy-system-marker", stderr: "" });
+  const formatHint = () => "instance-owned-hint";
+  system.formatNativeDependencyHint = formatHint;
+  expect(otherRuntime.system.formatNativeDependencyHint).not.toBe(formatHint);
+  const descriptor = Object.getOwnPropertyDescriptor(runtime, "system");
+  expect(descriptor).toMatchObject({
+    configurable: true,
+    enumerable: true,
+    get: expect.any(Function),
+    set: expect.any(Function),
+  });
+  expect(Object.keys(runtime)).toContain("system");
   expect(loadPluginModule).not.toHaveBeenCalled();
+
+  runtimeModule.value = await import("./runtime/index.js");
+  expect(runtime.channel.text.chunkText("broad runtime ready", 100)).toEqual([
+    "broad runtime ready",
+  ]);
+  expect(runtime.system).toBe(system);
+  expect(runtime.system.formatNativeDependencyHint({ packageName: "fixture" })).toBe(
+    "instance-owned-hint",
+  );
+  expect(descriptor?.get?.call(runtime)).toBe(system);
+  expect(loadPluginModule).toHaveBeenCalledOnce();
 });
+
+it.each(["define", "delete"] as const)(
+  "preserves a system property %s before its first lazy read",
+  async (operation) => {
+    const runtimeModule = await import("./runtime/index.js");
+    const loadPluginModule = vi.fn((_modulePath: string): unknown => runtimeModule);
+    const runtime = createLazyPluginRuntime({ loadPluginModule });
+    const replacement = createRuntimeSystem();
+    if (operation === "define") {
+      expect(
+        Reflect.defineProperty(runtime, "system", {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: replacement,
+        }),
+      ).toBe(true);
+    } else {
+      expect(Reflect.deleteProperty(runtime, "system")).toBe(true);
+    }
+    expect(runtime.system).toBe(operation === "define" ? replacement : undefined);
+    expect(loadPluginModule).toHaveBeenCalledOnce();
+  },
+);
 
 describe("cached plugin load failures", () => {
   it.each([
@@ -557,6 +625,138 @@ describe("resolvePluginLoadCacheContext", () => {
 });
 
 describe("resolveRuntimePluginRegistry", () => {
+  it("loads only the runtime hook owner for an opaque nested model ID", () => {
+    const provider = "fixture-provider";
+    const modelId = "fixture-nested-provider/model-legacy";
+    useNoBundledPlugins();
+    const selected = writePlugin({
+      id: "fixture-hook-owner",
+      body: `module.exports = {
+  id: "fixture-hook-owner",
+  register(api) {
+    api.registerProvider({
+      id: "fixture-provider", label: "Fixture", auth: [],
+      normalizeModelId: ({ modelId }) => modelId.replace("-legacy", "-current"),
+    });
+  },
+};`,
+    });
+    const nestedDir = makePluginLoaderTempDir();
+    const nestedMarker = path.join(nestedDir, "runtime-loaded.txt");
+    const nested = writePlugin({
+      id: "fixture-nested-owner",
+      dir: nestedDir,
+      body: `require("node:fs").writeFileSync(${JSON.stringify(nestedMarker)}, "loaded");
+module.exports = {
+  id: "fixture-nested-owner",
+  register(api) {
+    api.registerProvider({ id: "fixture-nested-provider", label: "Nested", auth: [] });
+  },
+};`,
+    });
+    for (const [plugin, providers] of [
+      [selected, ["fixture-provider"]],
+      [nested, ["fixture-nested-provider"]],
+    ] as const) {
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: plugin.id,
+          providers,
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+        }),
+      );
+    }
+    const config: OpenClawConfig = {
+      plugins: {
+        allow: [selected.id, nested.id],
+        entries: { [selected.id]: { enabled: true }, [nested.id]: { enabled: true } },
+        load: { paths: [selected.file, nested.file] },
+        slots: { memory: "none" },
+      },
+    };
+    const metadata = preparePluginMetadata({
+      config,
+      workspaceDir: selected.dir,
+      allowCurrent: false,
+    });
+    const lookup = {
+      provider,
+      modelId,
+      config,
+      workspaceDir: selected.dir,
+      pluginMetadataSnapshot: metadata.selectedSnapshot,
+    };
+
+    expect(resolveProviderRuntimePlugin(lookup)?.id).toBe("fixture-provider");
+    expect(normalizeProviderModelIdWithPlugin({ ...lookup, context: { provider, modelId } })).toBe(
+      "fixture-nested-provider/model-current",
+    );
+    expect(fs.existsSync(nestedMarker)).toBe(false);
+  });
+
+  it.each(["current", "captured"] as const)(
+    "reuses registration for cold hook aliases and repeated provider misses with %s metadata",
+    (metadataSource) => {
+      const plugin = writePlugin({
+        id: "cold-alias-fixture",
+        body: `let registrations = 0;
+module.exports = {
+  id: "cold-alias-fixture",
+  register(api) {
+    const instance = ++registrations;
+    api.registerProvider({
+      id: "fixture-provider", label: "Fixture", auth: [],
+      hookAliases: ["fixture-runtime-alias"],
+      normalizeModelId: ({ modelId }) => modelId + ":registration-" + instance,
+    });
+  },
+};`,
+      });
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: plugin.id,
+          providers: ["fixture-provider"],
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+        }),
+      );
+      const config: OpenClawConfig = {
+        plugins: {
+          allow: [plugin.id],
+          entries: { [plugin.id]: { enabled: true } },
+          load: { paths: [plugin.file] },
+          slots: { memory: "none" },
+        },
+      };
+      const metadata = preparePluginMetadata({
+        config,
+        workspaceDir: plugin.dir,
+        allowCurrent: false,
+      });
+      const normalize = (provider: string) =>
+        normalizeProviderModelIdWithPlugin({
+          provider,
+          config,
+          workspaceDir: plugin.dir,
+          ...(metadataSource === "captured"
+            ? { pluginMetadataSnapshot: metadata.selectedSnapshot }
+            : {}),
+          context: { provider, modelId: "model" },
+        });
+      withPluginMetadataCollectionScope(
+        metadata,
+        () => {
+          expect(normalize("fixture-runtime-alias")).toBe("model:registration-1");
+          expect(normalize("missing-one")).toBeUndefined();
+          expect(normalize("missing-two")).toBeUndefined();
+          expect(normalize("missing-one")).toBeUndefined();
+          expect(normalize("fixture-runtime-alias")).toBe("model:registration-1");
+        },
+        { config, workspaceDir: plugin.dir },
+      );
+    },
+  );
   it("falls back to the current active runtime when no explicit load context is provided", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry, "startup-registry");
@@ -620,7 +820,7 @@ describe("clearPluginRegistryLoadCache", () => {
           },
         };`,
       });
-      writeFileSync(
+      fs.writeFileSync(
         path.join(plugin.dir, "openclaw.plugin.json"),
         JSON.stringify({
           id: plugin.id,

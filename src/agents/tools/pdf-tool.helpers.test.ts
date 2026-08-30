@@ -1,40 +1,13 @@
 // PDF tool helper tests cover page ranges, PDF input normalization, provider
 // capability checks, and assistant text coercion.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-
-const pdfMetadataPlugins = vi.hoisted(() => [
-  {
-    contracts: {
-      mediaUnderstandingProviders: ["anthropic", "google", "openai"],
-    },
-    mediaUnderstandingProviderMetadata: {
-      anthropic: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
-      google: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
-      openai: { capabilities: ["image"], nativeDocumentInputs: [] },
-    },
-  },
-]);
-
-vi.mock("../../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({
-    plugins: pdfMetadataPlugins,
-    diagnostics: [],
-  }),
-  loadPluginRegistrySnapshotWithMetadata: () => ({
-    source: "derived",
-    snapshot: { plugins: [] },
-    diagnostics: [],
-  }),
-}));
-
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: () => ({
-    plugins: pdfMetadataPlugins,
-  }),
-}));
-
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { freezePluginMetadataValue } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   coercePdfAssistantText,
   coercePdfModelConfig,
@@ -45,6 +18,18 @@ import {
 } from "./pdf-tool.helpers.js";
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-7";
+const pdfManifestRegistry = makeRegistry([{ id: "pdf-metadata", channels: [] }]);
+pdfManifestRegistry.plugins[0]!.contracts = {
+  mediaUnderstandingProviders: ["anthropic", "google", "openai"],
+};
+pdfManifestRegistry.plugins[0]!.mediaUnderstandingProviderMetadata = {
+  anthropic: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
+  google: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
+  openai: { capabilities: ["image"], nativeDocumentInputs: [] },
+};
+const pdfMetadata = freezePluginMetadataValue(
+  createPluginMetadataSnapshot({ manifestRegistry: pdfManifestRegistry }),
+);
 
 describe("parsePageRange", () => {
   it("parses a single page number", () => {
@@ -109,27 +94,17 @@ describe("parsePageRange", () => {
 });
 
 describe("providerSupportsNativePdf", () => {
-  it("returns true for anthropic", () => {
-    // Native PDF support is derived from plugin metadata, not a hard-coded
-    // provider allowlist in the helper.
-    expect(providerSupportsNativePdf("anthropic")).toBe(true);
-  });
-
-  it("returns true for google", () => {
-    expect(providerSupportsNativePdf("google")).toBe(true);
-  });
-
-  it("returns false for openai", () => {
-    expect(providerSupportsNativePdf("openai")).toBe(false);
-  });
-
-  it("returns false for minimax", () => {
-    expect(providerSupportsNativePdf("minimax")).toBe(false);
-  });
-
-  it("is case-insensitive", () => {
-    expect(providerSupportsNativePdf("Anthropic")).toBe(true);
-    expect(providerSupportsNativePdf("GOOGLE")).toBe(true);
+  it.each([
+    ["anthropic", true],
+    ["google", true],
+    ["openai", false],
+    ["minimax", false],
+    ["Anthropic", true],
+    ["GOOGLE", true],
+  ] as const)("resolves %s support as %s from the current metadata scope", (provider, expected) => {
+    withPluginMetadataSnapshotScope(pdfMetadata, () => {
+      expect(providerSupportsNativePdf(provider)).toBe(expected);
+    });
   });
 });
 

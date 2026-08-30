@@ -22,14 +22,9 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
-  patchCodexNativeWebSearchPayload,
-  resolveCodexNativeSearchActivation,
-} from "../../../agents/codex-native-web-search-core.js";
-import {
   resolveOpenAITextVerbosity,
   type OpenAITextVerbosity,
 } from "../../../agents/openai-text-verbosity.js";
-import { createOpenAIResponsesTransportStreamFn } from "../../../agents/openai-transport-stream.js";
 import {
   getModelProviderRequestRouteFacts,
   resolveProviderRequestPolicyConfig,
@@ -43,12 +38,21 @@ import {
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
 import { streamSimple } from "../../stream.js";
 import type { SimpleStreamOptions } from "../../types.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
+// Registration only builds stream hooks; auth and transport host policy load
+// when a stream executes, before any native request can reach the transport.
+const loadNativeSearchRuntime = createLazyRuntimeModule(
+  () => import("../../../agents/codex-native-web-search-core.js"),
+);
+const loadOpenAITransportRuntime = createLazyRuntimeModule(
+  () => import("../../../agents/openai-transport-stream.js"),
+);
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type DynamicFastMode = boolean | (() => boolean | undefined);
@@ -611,7 +615,9 @@ export function createCodexNativeWebSearchWrapper(
   },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
+  return async (model, context, options) => {
+    const { patchCodexNativeWebSearchPayload, resolveCodexNativeSearchActivation } =
+      await loadNativeSearchRuntime();
     // Under `tools.codeMode.enabled: "auto"` the config alone cannot prove the
     // surface; the run-level wrapper passes it down via stream options so the
     // provider-family wrapper stays aligned for the same request.
@@ -811,10 +817,8 @@ export function createOpenAIAttributionHeadersWrapper(
     const shouldCreateCodexTransport =
       shouldUseCodexNativeTransport(model) &&
       (baseStreamFn === undefined || baseStreamFn === streamSimple);
-    const streamFn = shouldCreateCodexTransport
-      ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())
-      : underlying;
-    return streamFn(model, context, {
+    const streamFn = shouldCreateCodexTransport ? opts?.codexNativeTransportStreamFn : underlying;
+    const nextOptions = {
       ...options,
       headers: resolveProviderRequestPolicyConfig({
         provider: attributionProvider,
@@ -826,7 +830,13 @@ export function createOpenAIAttributionHeadersWrapper(
         callerHeaders: options?.headers,
         precedence: "defaults-win",
       }).headers,
-    });
+    };
+    if (streamFn) {
+      return streamFn(model, context, nextOptions);
+    }
+    return loadOpenAITransportRuntime().then(({ createOpenAIResponsesTransportStreamFn }) =>
+      createOpenAIResponsesTransportStreamFn()(model, context, nextOptions),
+    );
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

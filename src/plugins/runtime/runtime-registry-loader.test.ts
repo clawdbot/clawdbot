@@ -1,5 +1,11 @@
 // Runtime registry loader tests cover the surviving process-root load scopes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
+import type { InstalledPluginIndexRecord } from "../installed-plugin-index-types.js";
+import { createEmptyPluginRegistry } from "../registry-empty.js";
 
 const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../loader.js").loadOpenClawPlugins>(),
@@ -13,26 +19,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       typeof import("../gateway-startup-plugin-ids.js").collectConfiguredMemoryEmbeddingProviderIds
     >(),
-  applyPluginAutoEnable:
-    vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
-  resolvePluginMetadataSnapshot:
-    vi.fn<typeof import("../plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot>(),
-  listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
-  resolveAgentWorkspaceDir: vi.fn<
-    typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
-  >(() => "/resolved-workspace"),
-  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
-    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
-  >(() => "/resolved-workspace"),
-  resolvePluginControlPlaneWorkspace: vi.fn<
-    typeof import("../control-plane-workspace.js").resolvePluginControlPlaneWorkspace
-  >((params) => ({
-    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
-    workspaceScope: "selected",
-  })),
-  resolveDefaultAgentId: vi.fn<typeof import("../../agents/agent-scope.js").resolveDefaultAgentId>(
-    () => "default",
-  ),
+  resolvePluginRuntimeLoadContext:
+    vi.fn<typeof import("./load-context.resolve.js").resolvePluginRuntimeLoadContext>(),
 }));
 
 vi.mock("../loader.js", () => ({
@@ -59,102 +47,97 @@ vi.mock("../gateway-startup-plugin-ids.js", () => ({
   ) => mocks.collectConfiguredMemoryEmbeddingProviderIds(...args),
 }));
 
-vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (...args: Parameters<typeof mocks.applyPluginAutoEnable>) =>
-    mocks.applyPluginAutoEnable(...args),
-}));
-
-vi.mock("../../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginMetadataSnapshot: (
-    ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
-  ) => mocks.resolvePluginMetadataSnapshot(...args),
-}));
-
-vi.mock("../plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugin-metadata-snapshot.js")>()),
-  resolvePluginMetadataSnapshot: (
-    ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
-  ) => mocks.resolvePluginMetadataSnapshot(...args),
-}));
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentEntries: (...args: Parameters<typeof mocks.listAgentEntries>) =>
-    mocks.listAgentEntries(...args),
-  resolveAgentWorkspaceDir: (...args: Parameters<typeof mocks.resolveAgentWorkspaceDir>) =>
-    mocks.resolveAgentWorkspaceDir(...args),
-  tryResolveConfiguredAgentWorkspaceDir: (
-    ...args: Parameters<typeof mocks.tryResolveConfiguredAgentWorkspaceDir>
-  ) => mocks.tryResolveConfiguredAgentWorkspaceDir(...args),
-  resolveDefaultAgentId: (...args: Parameters<typeof mocks.resolveDefaultAgentId>) =>
-    mocks.resolveDefaultAgentId(...args),
-}));
-
-vi.mock("../control-plane-workspace.js", () => ({
-  resolvePluginControlPlaneWorkspace: (
-    ...args: Parameters<typeof mocks.resolvePluginControlPlaneWorkspace>
-  ) => mocks.resolvePluginControlPlaneWorkspace(...args),
+vi.mock("./load-context.resolve.js", () => ({
+  resolvePluginRuntimeLoadContext: mocks.resolvePluginRuntimeLoadContext,
 }));
 
 import { ensurePluginRegistryLoaded } from "./runtime-registry-loader.js";
+
+let installedPlugins: InstalledPluginIndexRecord[];
+
+function createInstalledPlugin(
+  pluginId: string,
+  contracts?: Record<string, readonly string[]>,
+): InstalledPluginIndexRecord {
+  return {
+    pluginId,
+    manifestPath: `/fake/${pluginId}/openclaw.plugin.json`,
+    manifestHash: "test",
+    rootDir: `/fake/${pluginId}`,
+    origin: "config",
+    enabled: true,
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    compat: [],
+    contributions: contracts
+      ? {
+          channels: [],
+          channelConfigs: [],
+          providers: [],
+          modelCatalogProviders: [],
+          modelSupportPrefixes: [],
+          modelSupportPatterns: [],
+          autoEnableProviderIds: [],
+          commandAliases: [],
+          contracts,
+        }
+      : undefined,
+  };
+}
 
 function useMemoryProviderOwner(params: {
   adapterId: string;
   contract: "embeddingProviders";
   pluginId: string;
 }): void {
-  mocks.resolvePluginMetadataSnapshot.mockReturnValue({
-    policyHash: "test",
-    index: {
-      installRecords: {},
-      plugins: [
-        {
-          pluginId: params.pluginId,
-          startup: { sidecar: false, memory: false, agentHarnesses: [] },
-          contributions: {
-            contracts: { [params.contract]: [params.adapterId] },
-          },
-        },
-      ],
-    },
-    manifestRegistry: { plugins: [], diagnostics: [] },
-  } as never);
+  installedPlugins = [
+    createInstalledPlugin(params.pluginId, { [params.contract]: [params.adapterId] }),
+  ];
 }
 
-function requireLoadOptions(): Record<string, unknown> {
+function requireLoadOptions() {
   const options = mocks.loadOpenClawPlugins.mock.calls[0]?.[0];
   if (!options) {
     throw new Error("expected plugin load options");
   }
-  return options as Record<string, unknown>;
+  return options;
 }
 
 describe("ensurePluginRegistryLoaded", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolvePluginMetadataSnapshot.mockReset().mockReturnValue({
-      index: {
+    installedPlugins = [createInstalledPlugin("openai")];
+    mocks.resolvePluginRuntimeLoadContext.mockImplementation((options) => {
+      const config = options?.config ?? {};
+      const workspaceDir = options?.workspaceDir ?? "/resolved-workspace";
+      const metadataSnapshot = createPluginMetadataSnapshot({
+        config,
+        workspaceDir,
+        manifestRegistry: makeRegistry(
+          installedPlugins.map(({ pluginId }) => ({ id: pluginId, channels: [] })),
+        ),
+      });
+      metadataSnapshot.index.plugins = installedPlugins;
+      return {
+        rawConfig: config,
+        config,
+        activationSourceConfig: options?.activationSourceConfig ?? config,
+        autoEnabledReasons: {},
+        workspaceDir,
+        env: options?.env ?? process.env,
+        logger: { info() {}, warn() {}, error() {} },
+        manifestRegistry: metadataSnapshot.manifestRegistry,
+        metadataSnapshot,
         installRecords: {},
-        plugins: [
-          {
-            pluginId: "openai",
-            startup: { sidecar: false, memory: false, agentHarnesses: [] },
-          },
-        ],
-      },
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    } as never);
-    mocks.applyPluginAutoEnable.mockImplementation((params) => ({
-      config: params.config ?? {},
-      changes: [],
-      autoEnabledReasons: {},
-    }));
+        preferBuiltPluginArtifacts: false,
+      };
+    });
   });
 
   it("loads configured channel owners through the canonical root loader", () => {
     const config = { channels: { demo: { enabled: true } } };
     mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel"]);
 
-    ensurePluginRegistryLoaded({ scope: "configured-channels", config: config as never });
+    ensurePluginRegistryLoaded({ scope: "configured-channels", config });
 
     expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({ config, workspaceDir: "/resolved-workspace" }),
@@ -209,21 +192,14 @@ describe("ensurePluginRegistryLoaded", () => {
         },
       },
     };
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
-      index: {
-        installRecords: {},
-        plugins: ["sandbox-owner", "research-owner", "broken-plugin"].map((pluginId) => ({
-          pluginId,
-          startup: { sidecar: false, memory: false, agentHarnesses: [] },
-        })),
-      },
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    } as never);
+    installedPlugins = ["sandbox-owner", "research-owner", "broken-plugin"].map((pluginId) =>
+      createInstalledPlugin(pluginId),
+    );
     mocks.loadOpenClawPlugins.mockImplementationOnce((options) => {
       if (options?.onlyPluginIds?.includes("broken-plugin")) {
         throw new Error("unrelated plugin failed to initialize");
       }
-      return undefined as never;
+      return createEmptyPluginRegistry();
     });
 
     expect(() => ensurePluginRegistryLoaded({ scope: "sandbox-backends", config })).not.toThrow();
@@ -241,16 +217,9 @@ describe("ensurePluginRegistryLoaded", () => {
         },
       },
     };
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
-      index: {
-        installRecords: {},
-        plugins: ["openshell", "broken-plugin"].map((pluginId) => ({
-          pluginId,
-          startup: { sidecar: false, memory: false, agentHarnesses: [] },
-        })),
-      },
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    } as never);
+    installedPlugins = ["openshell", "broken-plugin"].map((pluginId) =>
+      createInstalledPlugin(pluginId),
+    );
 
     ensurePluginRegistryLoaded({
       scope: "sandbox-backends",
@@ -264,16 +233,9 @@ describe("ensurePluginRegistryLoaded", () => {
   it.each([undefined, "docker", "podman", "ssh"])(
     "does not activate plugins for the built-in sandbox backend %s",
     (backend) => {
-      mocks.resolvePluginMetadataSnapshot.mockReturnValue({
-        index: {
-          installRecords: {},
-          plugins: ["docker", "podman", "ssh"].map((pluginId) => ({
-            pluginId,
-            startup: { sidecar: false, memory: false, agentHarnesses: [] },
-          })),
-        },
-        manifestRegistry: { plugins: [], diagnostics: [] },
-      } as never);
+      installedPlugins = ["docker", "podman", "ssh"].map((pluginId) =>
+        createInstalledPlugin(pluginId),
+      );
 
       ensurePluginRegistryLoaded({
         scope: "sandbox-backends",
@@ -286,18 +248,7 @@ describe("ensurePluginRegistryLoaded", () => {
   );
 
   it("does not guess a differently named sandbox backend owner", () => {
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
-      index: {
-        installRecords: {},
-        plugins: [
-          {
-            pluginId: "actual-owner",
-            startup: { sidecar: false, memory: false, agentHarnesses: [] },
-          },
-        ],
-      },
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    } as never);
+    installedPlugins = [createInstalledPlugin("actual-owner")];
 
     ensurePluginRegistryLoaded({
       scope: "sandbox-backends",

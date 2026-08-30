@@ -21,20 +21,24 @@ export async function requireValidConfigFileSnapshot(
     includeCompatibilityAdvisory?: boolean;
     observe?: boolean;
     skipPluginValidation?: boolean;
-    adoptPluginMetadata?: boolean;
   },
 ): Promise<ConfigFileSnapshot | null> {
   const readOptions = {
     ...(opts?.observe === false ? { observe: false } : {}),
     ...(opts?.skipPluginValidation ? { skipPluginValidation: true } : {}),
   };
-  const snapshot = opts?.adoptPluginMetadata
-    ? (
-        await (
-          await import("../cli/command-config-snapshot.js")
-        ).readCommandConfigSnapshot(readOptions)
-      ).snapshot
-    : await readConfigFileSnapshot(Object.keys(readOptions).length > 0 ? readOptions : undefined);
+  const snapshot = await readConfigFileSnapshot(
+    Object.keys(readOptions).length > 0 ? readOptions : undefined,
+  );
+  return validateCommandConfigSnapshot(snapshot, runtime, opts);
+}
+
+/** Validate an already-read command snapshot without repeating config or plugin discovery. */
+export function validateCommandConfigSnapshot(
+  snapshot: ConfigFileSnapshot,
+  runtime: RuntimeEnv,
+  opts?: { includeCompatibilityAdvisory?: boolean },
+): ConfigFileSnapshot | null {
   if (snapshot.exists && !snapshot.valid) {
     const issues =
       snapshot.issues.length > 0
@@ -76,7 +80,6 @@ export async function requireValidConfig(
     includeCompatibilityAdvisory?: boolean;
     observe?: boolean;
     skipPluginValidation?: boolean;
-    adoptPluginMetadata?: boolean;
   },
 ): Promise<OpenClawConfig | null> {
   return (await requireValidConfigFileSnapshot(runtime, opts))?.config ?? null;

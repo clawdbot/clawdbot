@@ -11,6 +11,7 @@ import {
 } from "../../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import {
+  loadPluginMetadataSnapshot,
   rebasePluginMetadataSnapshotManifestRegistry,
   resolvePluginMetadataSnapshot,
   restorePluginMetadataSnapshot,
@@ -385,7 +386,10 @@ module.exports = {
       capabilities: { chatTypes: ["direct"] },
       config: {
         listAccountIds: () => ["default"],
-        resolveAccount: () => ({ accountId: "default", token: "configured" }),
+        resolveAccount: (cfg) => ({
+          accountId: "default",
+          token: cfg.channels?.[${JSON.stringify(channelId)}]?.token ?? "configured",
+        }),
       },
       outbound: { deliveryMode: "direct" },
     };
@@ -573,29 +577,41 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
   });
 
-  it("reuses setup modules for the same config without importing full runtime", () => {
-    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin();
-    const cfg = createExternalChannelTestConfig({ pluginDir });
+  it.each(["external", "bundled"] as const)(
+    "reuses %s setup metadata while account config changes",
+    (origin) => {
+      const { pluginDir, fullMarker, setupMarker } =
+        origin === "bundled" ? writeBundledSetupChannelPlugin() : writeExternalSetupChannelPlugin();
+      const channelId = origin === "bundled" ? "bundled-chat" : "external-chat";
+      const cfg = {
+        channels: { [channelId]: { token: "configured" } },
+        plugins: {
+          allow: [channelId],
+          ...(origin === "external" ? { load: { paths: [pluginDir] } } : {}),
+        },
+      };
+      const options = {
+        metadataSnapshot: loadPluginMetadataSnapshot({ config: cfg }),
+        includePersistedAuthState: false,
+        includeSetupFallbackPlugins: true,
+      };
 
-    const first = listReadOnlyChannelPluginsForConfig(cfg, {
-      includePersistedAuthState: false,
-      includeSetupFallbackPlugins: true,
-    });
-    expect(fs.existsSync(setupMarker)).toBe(true);
-    fs.rmSync(setupMarker, { force: true });
+      const first = listReadOnlyChannelPluginsForConfig(cfg, options);
+      expect(fs.existsSync(setupMarker)).toBe(true);
+      fs.rmSync(setupMarker, { force: true });
+      const nextConfig = { ...cfg, channels: { [channelId]: { token: "updated" } } };
+      const second = listReadOnlyChannelPluginsForConfig(nextConfig, options);
 
-    const second = listReadOnlyChannelPluginsForConfig(cfg, {
-      includePersistedAuthState: false,
-      includeSetupFallbackPlugins: true,
-    });
+      expect(pluginIds(first)).toContain(channelId);
+      expect(
+        second.find((plugin) => plugin.id === channelId)?.config.resolveAccount(nextConfig).token,
+      ).toBe("updated");
+      expect(fs.existsSync(setupMarker)).toBe(false);
+      expect(fs.existsSync(fullMarker)).toBe(false);
+    },
+  );
 
-    expect(pluginIds(first)).toContain("external-chat");
-    expect(pluginIds(second)).toContain("external-chat");
-    expect(fs.existsSync(setupMarker)).toBe(false);
-    expect(fs.existsSync(fullMarker)).toBe(false);
-  });
-
-  it("refreshes cached read-only channel plugins when the active channel registry changes", () => {
+  it("uses current active channel plugins on every read", () => {
     const cfg = { channels: { "external-chat": { token: "configured" } } } as never;
     const createRegistryPlugin = (blurb: string) => {
       const base = createChannelTestPluginBase({ id: "external-chat" as never });
@@ -630,7 +646,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(second.find((plugin) => plugin.id === "external-chat")?.meta.blurb).toBe("second");
   });
 
-  it("refreshes cached read-only channel plugins when ambient env changes", () => {
+  it("rechecks channel configuration when ambient env changes", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
       manifestChannelConfig: true,
     });
@@ -651,7 +667,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expectExternalChatSetupOnlyPluginLoaded({ plugins: second, setupMarker, fullMarker });
   });
 
-  it("clears cached read-only channel plugin resolution with plugin metadata lifecycle caches", () => {
+  it("reloads channel metadata after an explicit lifecycle reset", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin();
     const cfg = createExternalChannelTestConfig({ pluginDir });
 
@@ -1387,6 +1403,53 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
         }),
       ]);
       expect(fs.existsSync(setupMarker)).toBe(false);
+      expect(fs.existsSync(fullMarker)).toBe(false);
+    },
+  );
+
+  it.each(["failed", "empty"] as const)(
+    "retries a %s setup registration on the next read",
+    (outcome) => {
+      const { pluginDir, fullMarker } = writeExternalSetupChannelPlugin();
+      const setupPath = path.join(pluginDir, "setup-entry.cjs");
+      const setupSource = fs.readFileSync(setupPath, "utf8");
+      const firstResult =
+        outcome === "failed" ? 'throw new Error("temporary setup failure");' : "return undefined;";
+      fs.writeFileSync(
+        setupPath,
+        `${setupSource}
+const setupPlugin = module.exports.plugin;
+let firstLoad = true;
+module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin() {
+    if (firstLoad) {
+      firstLoad = false;
+      ${firstResult}
+    }
+    return setupPlugin;
+  },
+};`,
+        "utf8",
+      );
+      const cfg = createExternalChannelTestConfig({ pluginDir });
+      const options = {
+        env: { ...process.env },
+        metadataSnapshot: loadPluginMetadataSnapshot({ config: cfg }),
+        includeSetupFallbackPlugins: true,
+      };
+
+      const first = resolveReadOnlyChannelPluginsForConfig(cfg, options);
+      const second = resolveReadOnlyChannelPluginsForConfig(cfg, options);
+
+      expect(first.plugins.find((plugin) => plugin.id === "external-chat")?.meta.blurb).not.toBe(
+        "setup entry",
+      );
+      expect(first.loadFailures).toHaveLength(outcome === "failed" ? 1 : 0);
+      expect(second.plugins.find((plugin) => plugin.id === "external-chat")?.meta.blurb).toBe(
+        "setup entry",
+      );
+      expect(second.loadFailures).toEqual([]);
       expect(fs.existsSync(fullMarker)).toBe(false);
     },
   );

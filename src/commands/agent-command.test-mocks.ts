@@ -75,7 +75,9 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   })),
 }));
 
-vi.mock("../agents/model-selection.js", () => {
+vi.mock("../agents/model-selection.js", async () => {
+  const { normalizeBuiltInProviderModelId, stripSelfProviderModelPrefix } =
+    await import("@openclaw/model-catalog-core/provider-model-id-normalization");
   type ConfigWithModels = {
     meta?: { migrations?: { modelPolicyAllowlist?: boolean } };
     agents?: {
@@ -97,18 +99,18 @@ vi.mock("../agents/model-selection.js", () => {
     }
     const slash = value.indexOf("/");
     if (slash >= 0) {
-      return {
-        provider: value.slice(0, slash).trim(),
-        model: value.slice(slash + 1).trim(),
-      };
+      return normalizeModelRef(value.slice(0, slash).trim(), value.slice(slash + 1).trim());
     }
-    return { provider: defaultProvider, model: value };
+    return normalizeModelRef(defaultProvider, value);
   };
   const parseModelRef = vi.fn(parseModelRefImpl);
   const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const normalizeModelRef = (provider: string, model: string): ModelRef => ({
     provider: normalizeProviderId(provider),
-    model: model.trim(),
+    model: normalizeBuiltInProviderModelId(
+      provider,
+      stripSelfProviderModelPrefix(provider, model.trim()),
+    ),
   });
   const modelKey = (provider: string, model: string) =>
     `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;

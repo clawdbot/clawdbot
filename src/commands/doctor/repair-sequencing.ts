@@ -9,9 +9,9 @@ import { repairObsoleteGeneratedExecApprovals } from "../../infra/exec-approvals
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
-  loadPluginMetadataSnapshot,
-  type PluginMetadataSnapshot,
-} from "../../plugins/plugin-metadata-snapshot.js";
+  createPluginMetadataOwner,
+  type PreparedPluginMetadata,
+} from "../../plugins/plugin-metadata-collection.js";
 import { migrateLegacyTailscaleProfileIdentities } from "../../state/user-profiles-tailscale-migration.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
@@ -45,10 +45,7 @@ import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sen
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
-import {
-  resolveConfigWideDoctorPluginMetadataSnapshot,
-  type DoctorPluginMetadataSnapshotState,
-} from "./shared/plugin-metadata-snapshot-scope.js";
+import type { DoctorPluginMetadataState } from "./shared/plugin-metadata-snapshot-scope.js";
 import { repairStaleAgentModelRefs } from "./shared/stale-agent-model-ref-repair.js";
 import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.js";
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
@@ -62,7 +59,7 @@ export async function runDoctorRepairSequence(params: {
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
-  pluginMetadataSnapshotState?: DoctorPluginMetadataSnapshotState;
+  pluginMetadataState?: DoctorPluginMetadataState;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<{
@@ -74,10 +71,10 @@ export async function runDoctorRepairSequence(params: {
   warningNotes: string[];
   authProfilesRepaired: boolean;
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  pluginMetadata?: PreparedPluginMetadata;
 }> {
   let state = params.state;
-  const pluginMetadataSnapshotState = params.pluginMetadataSnapshotState ?? {};
+  const pluginMetadataState = params.pluginMetadataState ?? {};
   const changeNotes: string[] = [];
   const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
@@ -110,6 +107,15 @@ export async function runDoctorRepairSequence(params: {
       return run();
     }
     return params.runWithPluginMetadataSnapshot(resolveCurrentPluginMetadataScope(), run);
+  };
+  const refreshPluginMetadata = () => {
+    // Replace the shared base immediately after inventory repair, before any
+    // later contract lookup can reuse pre-repair records through nested scopes.
+    pluginMetadataState.current = createPluginMetadataOwner().prepare({
+      ...resolveCurrentPluginMetadataScope(),
+      env,
+      allowCurrent: false,
+    });
   };
 
   const removedExecApprovals = repairObsoleteGeneratedExecApprovals();
@@ -174,6 +180,9 @@ export async function runDoctorRepairSequence(params: {
     env,
     prompter: { shouldRepair: true },
   });
+  if (staleManagedNpmBundledPluginRepair || repairedPluginOpenClawHostLinks) {
+    refreshPluginMetadata();
+  }
   const codexRouteRepair = runWithCurrentPluginMetadata(() =>
     maybeRepairCodexRoutes({
       cfg: state.candidate,
@@ -218,23 +227,8 @@ export async function runDoctorRepairSequence(params: {
     }),
   );
   const repairedPluginIds = missingConfiguredPluginInstallRepair.repairedPluginIds ?? [];
-  if (
-    staleManagedNpmBundledPluginRepair ||
-    repairedPluginOpenClawHostLinks ||
-    missingConfiguredPluginInstallRepair.pluginInventoryChanged
-  ) {
-    // Inventory repair changes the authoritative plugin generation. Replace the
-    // shared Doctor base before later discovery so nested scopes cannot reuse stale metadata.
-    const currentScope = resolveCurrentPluginMetadataScope();
-    pluginMetadataSnapshotState.current = resolveConfigWideDoctorPluginMetadataSnapshot({
-      snapshot: loadPluginMetadataSnapshot({
-        config: currentScope.config,
-        env,
-        workspaceDir: currentScope.workspaceDir,
-      }),
-      config: currentScope.config,
-      env,
-    });
+  if (missingConfiguredPluginInstallRepair.pluginInventoryChanged) {
+    refreshPluginMetadata();
   }
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     appendNotes(changeNotes, missingConfiguredPluginInstallRepair.changes);
@@ -242,7 +236,7 @@ export async function runDoctorRepairSequence(params: {
       applyPluginAutoEnable({
         config: state.candidate,
         env,
-        manifestRegistry: pluginMetadataSnapshotState.current?.manifestRegistry,
+        manifestRegistry: pluginMetadataState.current?.manifestRegistry,
       }),
     );
     if (repairedPluginIds.length > 0) {
@@ -250,7 +244,7 @@ export async function runDoctorRepairSequence(params: {
         materializePluginAutoEnableCandidates({
           config: state.candidate,
           env,
-          manifestRegistry: pluginMetadataSnapshotState.current?.manifestRegistry,
+          manifestRegistry: pluginMetadataState.current?.manifestRegistry,
           candidates: repairedPluginIds.map((pluginId) => ({
             pluginId,
             kind: "configured-plugin-repaired" as const,
@@ -294,7 +288,7 @@ export async function runDoctorRepairSequence(params: {
     applyMutation(
       repairStaleAgentModelRefs(state.candidate, {
         env,
-        pluginMetadataSnapshot: pluginMetadataSnapshotState.current,
+        pluginMetadata: pluginMetadataState.current,
       }),
     );
   }
@@ -376,8 +370,6 @@ export async function runDoctorRepairSequence(params: {
     warningNotes,
     authProfilesRepaired,
     ...(openAICodexAuthProfileIdMap.size > 0 ? { openAICodexAuthProfileIdMap } : {}),
-    ...(pluginMetadataSnapshotState.current
-      ? { pluginMetadataSnapshot: pluginMetadataSnapshotState.current }
-      : {}),
+    ...(pluginMetadataState.current ? { pluginMetadata: pluginMetadataState.current } : {}),
   };
 }

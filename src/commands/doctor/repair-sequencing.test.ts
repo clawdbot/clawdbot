@@ -1,7 +1,14 @@
 // Doctor repair sequencing tests cover ordered repair execution and dependency handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
+import { getInstalledPluginIndexInstallRecordsCacheGeneration } from "../../plugins/installed-plugin-index-record-cache.js";
+import type { PreparedPluginMetadata } from "../../plugins/plugin-metadata-collection.js";
+import { resolvePluginMetadataEnvFingerprint } from "../../plugins/plugin-metadata-snapshot.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 const mocks = vi.hoisted(() => ({
@@ -28,7 +35,6 @@ const mocks = vi.hoisted(() => ({
   repairStaleOAuthProfileShadows: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
   repairStaleAgentModelRefs: vi.fn(),
-  resolveConfigWidePluginManifestRegistry: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveProviderInstallCatalogEntries: vi.fn(),
   resolveProfileUnusableUntilForDisplay: vi.fn(),
@@ -37,10 +43,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
   materializePluginAutoEnableCandidates: mocks.materializePluginAutoEnableCandidates,
-}));
-
-vi.mock("../../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginManifestRegistry: mocks.resolveConfigWidePluginManifestRegistry,
 }));
 
 vi.mock("../doctor-plugin-host-links.js", () => ({
@@ -262,9 +264,13 @@ describe("doctor repair sequencing", () => {
     mocks.getInstalledPluginRecord.mockReturnValue(undefined);
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    });
+    mocks.loadPluginMetadataSnapshot.mockImplementation(
+      (params: { config: OpenClawConfig; workspaceDir?: string }) =>
+        createPluginMetadataSnapshot({
+          ...params,
+          manifestRegistry: { plugins: [], diagnostics: [] },
+        }),
+    );
     mocks.maybeRepairGroupAllowFromFallback.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
@@ -311,10 +317,6 @@ describe("doctor repair sequencing", () => {
     mocks.collectChannelDoctorCompatibilityMutations.mockReturnValue([]);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([]);
-    mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
     mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
     mocks.maybeRepairStalePluginConfig.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
@@ -499,10 +501,16 @@ describe("doctor repair sequencing", () => {
 
   it("repairs managed npm plugin drift before missing plugin install repair", async () => {
     const events: string[] = [];
-    const refreshedSnapshot = {
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    };
-    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce(refreshedSnapshot);
+    const refreshedManifestRegistry = { plugins: [], diagnostics: [] };
+    mocks.loadPluginMetadataSnapshot.mockImplementation(
+      (params: { config: OpenClawConfig; workspaceDir?: string }) => {
+        events.push("metadata-refresh");
+        return createPluginMetadataSnapshot({
+          ...params,
+          manifestRegistry: refreshedManifestRegistry,
+        });
+      },
+    );
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockImplementation(() => {
       events.push("bundled-shadow-cleanup");
       return { installRecords: {}, removedPluginIds: ["google-meet"] };
@@ -538,7 +546,13 @@ describe("doctor repair sequencing", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(events).toEqual(["bundled-shadow-cleanup", "openclaw-peer-links", "missing-installs"]);
+    expect(events).toEqual([
+      "bundled-shadow-cleanup",
+      "openclaw-peer-links",
+      "metadata-refresh",
+      "metadata-refresh",
+      "missing-installs",
+    ]);
     expect(mocks.maybeRepairStaleManagedNpmBundledPlugins).toHaveBeenCalledOnce();
     const cleanupCall = mocks.maybeRepairStaleManagedNpmBundledPlugins.mock.calls[0]?.[0];
     expect(cleanupCall?.config.plugins?.entries?.["google-meet"]).toEqual({ enabled: true });
@@ -558,9 +572,14 @@ describe("doctor repair sequencing", () => {
     const peerLinkCall = mocks.maybeRepairPluginOpenClawHostLinks.mock.calls[0]?.[0];
     expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
     expect(peerLinkCall?.env).toBe(process.env);
-    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-    expect(result.pluginMetadataSnapshot).toMatchObject({
-      manifestRegistry: refreshedSnapshot.manifestRegistry,
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.loadPluginMetadataSnapshot.mock.calls.map(([params]) => params.workspaceDir),
+    ).toEqual(
+      expect.arrayContaining([undefined, resolveAgentWorkspaceDir({}, "main", process.env)]),
+    );
+    expect(result.pluginMetadata).toMatchObject({
+      manifestRegistry: refreshedManifestRegistry,
       plugins: [],
     });
   });
@@ -729,18 +748,17 @@ describe("doctor repair sequencing", () => {
   });
 
   it("uses plugins from every agent workspace after inventory repair", async () => {
-    const researchPlugin = {
-      id: "research-channel",
-      source: "/srv/research/.openclaw/extensions/research-channel/openclaw.plugin.json",
-    };
-    const manifestRegistry = { plugins: [researchPlugin], diagnostics: [] };
-    mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue(manifestRegistry);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      manifestRegistry: { plugins: [], diagnostics: [] },
-      plugins: [],
-      diagnostics: [],
-      byPluginId: new Map(),
-    });
+    const manifestRegistry = makeRegistry([{ id: "research-channel", channels: ["research"] }]);
+    mocks.loadPluginMetadataSnapshot.mockImplementation(
+      (params: { config: OpenClawConfig; workspaceDir?: string }) =>
+        createPluginMetadataSnapshot({
+          ...params,
+          manifestRegistry:
+            params.workspaceDir === "/srv/research"
+              ? manifestRegistry
+              : { plugins: [], diagnostics: [] },
+        }),
+    );
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
       changes: ['Installed missing configured plugin "research-channel".'],
       warnings: [],
@@ -1002,7 +1020,12 @@ describe("doctor repair sequencing", () => {
       manifestRegistry: { plugins: [], diagnostics: [] },
       candidates: [{ pluginId: "exa", kind: "configured-plugin-repaired" }],
     });
-    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.loadPluginMetadataSnapshot.mock.calls.map(([params]) => params.workspaceDir),
+    ).toEqual(
+      expect.arrayContaining([undefined, resolveAgentWorkspaceDir({}, "main", process.env)]),
+    );
     expect(result.state.candidate.plugins?.entries?.exa).toEqual({ enabled: true });
     expect(result.changeNotes).toStrictEqual([
       'Installed missing configured plugin "exa" from @openclaw/exa-plugin.',
@@ -1015,40 +1038,33 @@ describe("doctor repair sequencing", () => {
   it("refreshes retained default-workspace metadata after cleanup-only inventory repairs", async () => {
     const workspaceDir = "/tmp/openclaw-doctor-workspace";
     const workspaceProvider = "workspace-provider";
-    const staleSnapshot = {
-      manifestRegistry: {
-        plugins: [{ id: "google-meet" }],
-        diagnostics: [],
-      },
+    const staleSnapshot = createPluginMetadataSnapshot({
+      manifestRegistry: makeRegistry([{ id: "google-meet", channels: [] }]),
+      workspaceDir,
+    });
+    const staleMetadata: PreparedPluginMetadata = {
+      ...staleSnapshot,
+      unionSnapshot: staleSnapshot,
+      selectedSnapshot: staleSnapshot,
+      workspaces: new Map([[workspaceDir, staleSnapshot]]),
+      configWorkspaceDirs: [workspaceDir],
+      agentWorkspaceDirs: new Map([["main", workspaceDir]]),
+      installRecordsGeneration: getInstalledPluginIndexInstallRecordsCacheGeneration(),
+      envFingerprint: resolvePluginMetadataEnvFingerprint(),
+      channelCatalog: { read: () => [] },
     };
-    const createRefreshedSnapshot = (includeWorkspaceProvider: boolean) =>
-      ({
-        diagnostics: [],
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        owners: {
-          providers: new Map(
-            includeWorkspaceProvider ? [[workspaceProvider, ["workspace-plugin"]]] : [],
-          ),
-          modelCatalogProviders: new Map(),
-          setupProviders: new Map(),
-          cliBackends: new Map(),
-        },
-      }) as unknown as PluginMetadataSnapshot;
-    const refreshedSnapshot = createRefreshedSnapshot(true);
-    const configWideManifestRegistry = {
-      plugins: [
-        {
-          id: "workspace-plugin",
-          source:
-            "/tmp/openclaw-doctor-workspace/.openclaw/extensions/workspace-plugin/openclaw.plugin.json",
-          providers: [workspaceProvider],
-        },
-      ],
-      diagnostics: [],
-    };
-    mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue(configWideManifestRegistry);
-    mocks.loadPluginMetadataSnapshot.mockImplementationOnce((params: { workspaceDir?: string }) =>
-      params.workspaceDir === workspaceDir ? refreshedSnapshot : createRefreshedSnapshot(false),
+    const configWideManifestRegistry = makeRegistry([
+      { id: "workspace-plugin", channels: [], providers: [workspaceProvider] },
+    ]);
+    mocks.loadPluginMetadataSnapshot.mockImplementation(
+      (params: { config: OpenClawConfig; workspaceDir?: string }) =>
+        createPluginMetadataSnapshot({
+          ...params,
+          manifestRegistry:
+            params.workspaceDir === workspaceDir
+              ? configWideManifestRegistry
+              : { plugins: [], diagnostics: [] },
+        }),
     );
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
       changes: ['Removed stale managed install record for bundled plugin "google-meet".'],
@@ -1068,15 +1084,15 @@ describe("doctor repair sequencing", () => {
           persistedProviderIdsByAgentId: new Map([["main", new Set()]]),
         }),
     );
-    const pluginMetadataSnapshotState = {
-      current: staleSnapshot as unknown as PluginMetadataSnapshot,
+    const pluginMetadataState = {
+      current: staleMetadata,
     };
-    const scopedSnapshots: Array<PluginMetadataSnapshot | undefined> = [];
+    const scopedMetadata: Array<PreparedPluginMetadata | undefined> = [];
     const runWithPluginMetadataSnapshot = <T>(
       _scope: { config: OpenClawConfig; workspaceDir?: string },
       run: () => T,
     ): T => {
-      scopedSnapshots.push(pluginMetadataSnapshotState.current);
+      scopedMetadata.push(pluginMetadataState.current);
       return run();
     };
 
@@ -1102,22 +1118,29 @@ describe("doctor repair sequencing", () => {
         fixHints: [],
       },
       doctorFixCommand: "openclaw doctor --fix",
-      pluginMetadataSnapshotState,
+      pluginMetadataState,
       runWithPluginMetadataSnapshot,
     });
 
-    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: {
-        agents: {
-          defaults: {
-            model: `${workspaceProvider}/model`,
-            workspace: workspaceDir,
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {
+          agents: {
+            defaults: {
+              model: `${workspaceProvider}/model`,
+              workspace: workspaceDir,
+            },
           },
         },
-      },
-      env: process.env,
-      workspaceDir,
-    });
+        env: process.env,
+        workspaceDir,
+        allowCurrent: false,
+      }),
+    );
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.loadPluginMetadataSnapshot.mock.calls.map(([params]) => params.workspaceDir),
+    ).toEqual(expect.arrayContaining([undefined, workspaceDir]));
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {
         agents: {
@@ -1130,7 +1153,7 @@ describe("doctor repair sequencing", () => {
       env: process.env,
       manifestRegistry: configWideManifestRegistry,
     });
-    const currentPluginMetadataSnapshot = pluginMetadataSnapshotState.current;
+    const currentPluginMetadata = pluginMetadataState.current;
     expect(mocks.repairStaleAgentModelRefs).toHaveBeenCalledWith(
       {
         agents: {
@@ -1142,19 +1165,19 @@ describe("doctor repair sequencing", () => {
       },
       {
         env: process.env,
-        pluginMetadataSnapshot: currentPluginMetadataSnapshot,
+        pluginMetadata: currentPluginMetadata,
       },
     );
-    expect(currentPluginMetadataSnapshot).toMatchObject({
+    expect(currentPluginMetadata).toMatchObject({
       manifestRegistry: configWideManifestRegistry,
       plugins: configWideManifestRegistry.plugins,
       owners: {
         providers: new Map([[workspaceProvider, ["workspace-plugin"]]]),
       },
     });
-    expect(scopedSnapshots[0]).toBe(staleSnapshot);
-    expect(scopedSnapshots).toContain(currentPluginMetadataSnapshot);
-    expect(result.pluginMetadataSnapshot).toBe(currentPluginMetadataSnapshot);
+    expect(scopedMetadata[0]).toBe(staleMetadata);
+    expect(scopedMetadata).toContain(currentPluginMetadata);
+    expect(result.pluginMetadata).toBe(currentPluginMetadata);
     expect(result.state.candidate.agents?.defaults?.model).toBe(`${workspaceProvider}/model`);
     expect(result.changeNotes).not.toContain(
       expect.stringContaining(`provider "${workspaceProvider}" is unavailable`),

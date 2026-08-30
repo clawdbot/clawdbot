@@ -15,11 +15,8 @@ import * as secretsRuntimeState from "../../secrets/runtime-state.js";
 import { listSecretStoreEntries, readSecretStoreValue } from "../../secrets/store/secret-store.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  abortChatRunById,
-  registerChatAbortController,
-  type ChatAbortControllerEntry,
-} from "../chat-abort.js";
+import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayWsClient } from "../server/ws-types.js";

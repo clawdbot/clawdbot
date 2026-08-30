@@ -1,5 +1,10 @@
 // Normalizes model input config into provider and model references.
-import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  buildModelCatalogRef,
+  normalizeModelCatalogProviderId,
+  parseModelCatalogRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeBuiltInProviderModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import {
   normalizeGooglePreviewModelId,
   normalizeTogetherModelId,
@@ -9,7 +14,7 @@ import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { modelKey } from "../shared/model-key.js";
+import type { AgentModelEntryConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
@@ -73,7 +78,29 @@ export function normalizeAgentModelRefForConfig(model: string): string {
       : provider === "together"
         ? normalizeTogetherModelId(modelSuffix)
         : modelSuffix;
-  return modelKey(provider, normalizedModel);
+  return buildModelCatalogRef(provider, normalizedModel);
+}
+
+/** Resolves an exact model record or its provably equivalent built-in short ref. */
+export function resolveAgentModelConfigEntry(params: {
+  models: Record<string, AgentModelEntryConfig> | undefined;
+  provider: string;
+  model: string;
+}) {
+  const provider = normalizeModelCatalogProviderId(params.provider);
+  const model = params.model.trim();
+  const key = buildModelCatalogRef(provider, model);
+  const shortRef = parseModelCatalogRef(model);
+  // A provider's static rule must reconstruct the complete model ID. Prefix
+  // similarity alone would borrow settings from an unrelated custom model.
+  const equivalentKey =
+    shortRef?.provider === provider &&
+    normalizeBuiltInProviderModelId(provider, shortRef.modelId) === model
+      ? buildModelCatalogRef(provider, shortRef.modelId)
+      : undefined;
+  const entry =
+    params.models?.[key] ?? (equivalentKey ? params.models?.[equivalentKey] : undefined);
+  return { key, equivalentKey, entry };
 }
 
 /** Normalizes primary/fallback refs without replacing unchanged config values. */

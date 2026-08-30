@@ -27,6 +27,7 @@ import {
   buildInboundUserContextPrefix,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
+import { createFastTestModelSelectionState } from "./model-selection.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   createReplyOperation,
@@ -145,27 +146,19 @@ vi.mock("../../agents/harness/selection.js", () => ({
   selectAgentHarness: selectAgentHarnessMock,
 }));
 
-vi.mock("../../agents/model-selection.js", () => ({
-  buildModelAliasIndex: vi.fn(
-    (params: { cfg: { agents?: { defaults?: { models?: unknown } } } }) => {
-      if (params.cfg.agents?.defaults?.models) {
-        preparedReplyMockState.unexpectedCalls.push("buildModelAliasIndex");
-      }
-      return { byAlias: new Map(), byKey: new Map() };
-    },
-  ),
+// This orchestration fixture supplies one default; authored model and alias
+// selection must use the real owners in their focused suites.
+vi.mock("../../agents/model-selection-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection-config.js")>()),
   resolveDefaultModelForAgent: vi.fn(
-    (params: { cfg: { agents?: { defaults?: { model?: unknown } } } }) => {
-      if (params.cfg.agents?.defaults?.model) {
+    (params: { cfg: { agents?: { defaults?: { model?: unknown; models?: unknown } } } }) => {
+      const defaults = params.cfg.agents?.defaults;
+      if (defaults?.model || defaults?.models) {
         preparedReplyMockState.unexpectedCalls.push("resolveDefaultModelForAgent");
       }
       return { provider: "anthropic", model: "claude-opus-4-1" };
     },
   ),
-  resolveModelRefFromString: vi.fn(() => {
-    preparedReplyMockState.unexpectedCalls.push("resolveModelRefFromString");
-    return undefined;
-  }),
 }));
 
 const resolveSessionRuntimeOverrideForProviderMock = vi.hoisted(() =>
@@ -414,10 +407,11 @@ function baseParams(
     elevatedAllowed: false,
     blockStreamingEnabled: false,
     resolvedBlockStreamingBreak: "message_end",
-    modelState: {
-      resolveDefaultThinkingLevel: async () => "medium",
-      resolveThinkingCatalog: async () => [],
-    } as never,
+    modelState: createFastTestModelSelectionState({
+      agentCfg: { thinkingDefault: "medium" },
+      provider: "anthropic",
+      model: "claude-opus-4-1",
+    }),
     provider: "anthropic",
     model: "claude-opus-4-1",
     typing: {
@@ -707,7 +701,11 @@ describe("runPreparedReply media-only handling", () => {
       model: "chat-latest",
       resolvedThinkLevel: "high",
       modelState: {
-        resolveDefaultThinkingLevel: async () => "high",
+        ...createFastTestModelSelectionState({
+          agentCfg: { thinkingDefault: "high" },
+          provider: "openai",
+          model: "chat-latest",
+        }),
         resolveThinkingCatalog,
         allowedModelCatalog: [
           {
@@ -738,7 +736,11 @@ describe("runPreparedReply media-only handling", () => {
       resolvedThinkLevel: "xhigh",
       opts: { thinkingLevelOverride: "xhigh" },
       modelState: {
-        resolveDefaultThinkingLevel: async () => "high",
+        ...createFastTestModelSelectionState({
+          agentCfg: { thinkingDefault: "high" },
+          provider: "openai",
+          model: "chat-latest",
+        }),
         resolveThinkingCatalog: async () => [
           {
             provider: "openai",
@@ -781,7 +783,11 @@ describe("runPreparedReply media-only handling", () => {
       sessionStore,
       storePath: "/tmp/openclaw-sessions.json",
       modelState: {
-        resolveDefaultThinkingLevel: async () => "high",
+        ...createFastTestModelSelectionState({
+          agentCfg: { thinkingDefault: "high" },
+          provider: "openai",
+          model: "chat-latest",
+        }),
         resolveThinkingCatalog: async () => [
           {
             provider: "openai",

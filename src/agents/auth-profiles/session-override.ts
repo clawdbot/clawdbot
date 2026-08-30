@@ -3,6 +3,7 @@ import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/a
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../../plugin-sdk/provider-model-types.js";
+import type { PluginMetadataRegistryView } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
@@ -18,6 +19,7 @@ import {
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
+import type { ProviderAuthAliasLookupParams } from "../provider-auth-aliases.js";
 import { resolveProviderModelRouteAuthRequirement } from "../provider-model-route-auth.js";
 
 const sessionAccessorLoader = createLazyImportLoader(
@@ -39,6 +41,22 @@ type SessionAuthProfileOverrideSnapshot = SessionAuthProfileOverrideState &
 type SessionAuthProfileOverrideResult = {
   profileId: string | undefined;
   store: ReturnType<typeof ensureAuthProfileStore> | undefined;
+};
+
+type SessionAuthSelectionParams = {
+  cfg: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  configuredProfileId?: string;
+  harnessRuntime?: string;
+  agentDir: string;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  isNewSession: boolean;
 };
 
 function profileAuthRequirement(params: {
@@ -159,7 +177,7 @@ async function persistSessionAuthProfileOverrideState(params: {
 // Current session overrides are only valid when the selected provider can use
 // that profile, including configured aws-sdk profiles without stored secrets.
 function isProfileForProvider(params: {
-  cfg: OpenClawConfig;
+  authAliasLookupParams: ProviderAuthAliasLookupParams;
   providers: readonly string[];
   profileId: string;
   store: ReturnType<typeof ensureAuthProfileStore>;
@@ -171,7 +189,8 @@ function isProfileForProvider(params: {
     }
     return params.providers.some((provider) =>
       isStoredCredentialCompatibleWithAuthProvider({
-        cfg: params.cfg,
+        cfg: params.authAliasLookupParams.config,
+        authAliasLookupParams: params.authAliasLookupParams,
         provider,
         credential: entry,
       }),
@@ -179,7 +198,8 @@ function isProfileForProvider(params: {
   }
   return params.providers.some((provider) =>
     isConfiguredAwsSdkAuthProfileForProvider({
-      cfg: params.cfg,
+      cfg: params.authAliasLookupParams.config,
+      authAliasLookupParams: params.authAliasLookupParams,
       provider,
       profileId: params.profileId,
     }),
@@ -242,18 +262,9 @@ export async function clearSessionAuthProfileOverride(params: {
   });
 }
 
-async function resolveSessionAuthProfileOverride(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  agentDir: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-  isNewSession: boolean;
-  acceptedProviderIds?: string[];
-}): Promise<SessionAuthProfileOverrideResult> {
+async function resolveSessionAuthProfileOverride(
+  params: SessionAuthSelectionParams & { acceptedProviderIds?: string[] },
+): Promise<SessionAuthProfileOverrideResult> {
   const {
     cfg,
     provider,
@@ -279,35 +290,33 @@ async function resolveSessionAuthProfileOverride(params: {
     return { profileId: undefined, store: undefined };
   }
 
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  // Selection and post-persistence pin checks must keep the prepared workspace owner.
+  const authAliasLookupParams: ProviderAuthAliasLookupParams = {
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+    metadataSnapshot: params.pluginMetadataSnapshot?.manifestRegistry,
+  };
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+  });
   const providers = uniqueProviders(provider, params.acceptedProviderIds);
   const order = [
     ...new Set(
       providers.flatMap((candidateProvider) =>
-        resolveAuthProfileOrder({ cfg, store, provider: candidateProvider }),
+        resolveAuthProfileOrder({ cfg, store, provider: candidateProvider, authAliasLookupParams }),
       ),
     ),
   ];
   let current = sessionEntry.authProfileOverride?.trim();
   const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
 
-  const currentProfileId = current;
   if (
-    currentProfileId &&
-    !store.profiles[currentProfileId] &&
-    !providers.some((candidateProvider) =>
-      isConfiguredAwsSdkAuthProfileForProvider({
-        cfg,
-        provider: candidateProvider,
-        profileId: currentProfileId,
-      }),
-    )
+    current &&
+    !isProfileForProvider({ authAliasLookupParams, providers, profileId: current, store })
   ) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
-    current = undefined;
-  }
-
-  if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
@@ -353,7 +362,12 @@ async function resolveSessionAuthProfileOverride(params: {
         profileId:
           latestProfileId &&
           latestSource === "user" &&
-          isProfileForProvider({ cfg, providers, profileId: latestProfileId, store })
+          isProfileForProvider({
+            authAliasLookupParams,
+            providers,
+            profileId: latestProfileId,
+            store,
+          })
             ? latestProfileId
             : undefined,
         store,
@@ -435,19 +449,9 @@ type SessionAuthSelection = {
 };
 
 /** Resolves the session credential and its prepared route facts. */
-export async function resolveSessionAuthSelection(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  configuredProfileId?: string;
-  harnessRuntime?: string;
-  agentDir: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-  isNewSession: boolean;
-}): Promise<SessionAuthSelection | undefined> {
+export async function resolveSessionAuthSelection(
+  params: SessionAuthSelectionParams,
+): Promise<SessionAuthSelection | undefined> {
   const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
     provider: params.provider,
     harnessRuntime: params.harnessRuntime,
@@ -468,13 +472,22 @@ export async function resolveSessionAuthSelection(params: {
   const authStore =
     store ??
     (configuredProfileId
-      ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
+      ? ensureAuthProfileStore(params.agentDir, {
+          allowKeychainPrompt: false,
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+        })
       : undefined);
   if (
     configuredProfileId &&
     (!authStore ||
       !isProfileForProvider({
-        cfg: params.cfg,
+        authAliasLookupParams: {
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          metadataSnapshot: params.pluginMetadataSnapshot?.manifestRegistry,
+        },
         providers: uniqueProviders(params.provider, acceptedProviderIds),
         profileId: configuredProfileId,
         store: authStore,

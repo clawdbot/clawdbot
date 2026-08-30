@@ -111,7 +111,11 @@ export function createAgentsListTool(opts?: {
         .toSorted((a, b) => a.localeCompare(b));
       const ordered = all.includes(requesterAgentId) ? [requesterAgentId, ...rest] : rest;
       const agents: AgentListEntry[] = ordered.map((id) => {
-        const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+        const resolvedModel = resolveDefaultModelForAgent({
+          cfg,
+          agentId: id,
+          allowPluginNormalization: false,
+        });
         // Publish the resolved identity (aliases are routing-only) so the model
         // field matches the agentRuntime derived from the same resolvedModel.
         const model = `${resolvedModel.provider}/${resolvedModel.model}`;

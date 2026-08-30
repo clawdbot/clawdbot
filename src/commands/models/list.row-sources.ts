@@ -49,16 +49,13 @@ export async function appendAllModelRowSources(params: AllModelRowSources): Prom
   if (params.context.filter.provider && params.entries && params.entries.length > 0) {
     const missingEntries = params.entries.filter((entry) => !seenKeys.has(entry.key));
     if (missingEntries.length > 0) {
-      const appendedRowsStart = params.rows.length;
       await appendConfiguredRows({
         rows: params.rows,
         entries: missingEntries,
         modelRegistry: params.modelRegistry,
         context: params.context,
+        seenKeys,
       });
-      for (const row of params.rows.slice(appendedRowsStart)) {
-        seenKeys.add(row.key);
-      }
     }
   }
 }
@@ -84,8 +81,8 @@ export async function appendConfiguredModelRowSources(params: {
   // same committed generation the catalog rows below use; otherwise a ref that
   // only exists in a plugin catalog renders default placeholder metadata.
   const catalogSnapshot = await loadListModelCatalogSnapshot(params.context);
-  await appendConfiguredRows({ ...params, catalogSnapshot });
-  const seenKeys = new Set(params.rows.map((row) => row.key));
+  const seenKeys = new Set<string>();
+  await appendConfiguredRows({ ...params, catalogSnapshot, seenKeys });
   await appendConfiguredProviderRows({
     rows: params.rows,
     context: params.context,

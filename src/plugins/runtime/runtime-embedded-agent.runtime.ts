@@ -22,6 +22,7 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
   if (
     "admittedRunContext" in params ||
     "preparedRunAdmission" in params ||
+    "expectedInitialModel" in params ||
     "compactionCountOwner" in params ||
     "onCompactionAccounting" in params ||
     "onContextAccountingEvent" in params ||

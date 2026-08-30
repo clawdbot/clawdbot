@@ -1,7 +1,8 @@
-import { getRuntimeConfig } from "../../config/io.js";
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { hasNonzeroUsage } from "../usage.js";
+import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { AgentCommandIngressOpts } from "./types.js";
 
 type AgentCommandUsage = {
@@ -19,6 +20,7 @@ type AgentCommandResult = {
       model?: string;
       sessionId?: string;
       usage?: AgentCommandUsage;
+      costUsd?: number;
       diagnosticUsage?: AgentCommandUsage;
       lastCallUsage?: AgentCommandUsage;
       contextTokens?: number;
@@ -37,10 +39,12 @@ function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
 export function emitIngressModelUsageDiagnostic(
   result: AgentCommandResult,
   opts: AgentCommandIngressOpts,
-  agentDir: string,
+  pricing: Pick<
+    PreparedAgentCommandExecution,
+    "cfg" | "sessionAgentId" | "agentDir" | "workspaceDir" | "manifestMetadataSnapshot"
+  >,
 ): void {
-  const cfg = getRuntimeConfig();
-  if (!isDiagnosticsEnabled(cfg)) {
+  if (!isDiagnosticsEnabled(pricing.cfg)) {
     return;
   }
   const agentMeta = result.meta?.agentMeta;
@@ -62,14 +66,22 @@ export function emitIngressModelUsageDiagnostic(
     usage.output !== undefined ||
     usage.cacheRead !== undefined ||
     usage.cacheWrite !== undefined;
-  const costConfig = resolveModelCostConfig({
-    provider: providerUsed,
-    model: modelUsed,
-    config: cfg,
-    agentDir,
-  });
+  const recordedCostUsd =
+    usage === agentMeta.usage ? asNonNegativeFiniteNumber(agentMeta.costUsd) : undefined;
   const costUsd = hasBillableUsageBuckets
-    ? estimateUsageCost({ usage, cost: costConfig })
+    ? (recordedCostUsd ??
+      estimateUsageCost({
+        usage,
+        cost: resolveModelCostConfig({
+          config: pricing.cfg,
+          agentId: pricing.sessionAgentId,
+          agentDir: pricing.agentDir,
+          workspaceDir: pricing.workspaceDir,
+          pluginMetadataSnapshot: pricing.manifestMetadataSnapshot,
+          provider: providerUsed,
+          model: modelUsed,
+        }),
+      }))
     : undefined;
 
   emitTrustedDiagnosticEvent({

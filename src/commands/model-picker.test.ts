@@ -16,6 +16,16 @@ import {
 } from "./model-picker.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
+// Picker policy stays real; executable provider normalization is a separate runtime port.
+const normalizeProviderModelIdWithRuntime = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../agents/provider-model-normalization.runtime.js").normalizeProviderModelIdWithRuntime
+  >(),
+);
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime,
+}));
+
 const loadModelCatalog = vi.hoisted(() => vi.fn());
 const modelCatalogRouteVariants = vi.hoisted(() => ({
   value: undefined as readonly ModelCatalogEntry[] | undefined,
@@ -351,6 +361,7 @@ beforeEach(() => {
   // Route hints exercise source policy even when a prior local build left stale dist artifacts.
   vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
   vi.clearAllMocks();
+  normalizeProviderModelIdWithRuntime.mockReset();
   modelCatalogRouteVariants.value = undefined;
   providerAuthRoute.value = undefined;
   providerAuthEvaluations.clear();
@@ -420,6 +431,53 @@ afterEach(() => {
 });
 
 describe("promptDefaultModel", () => {
+  it.each(["default", "allowlist"] as const)(
+    "keeps exact configured model namespaces distinct in the %s picker",
+    async (surface) => {
+      const config: OpenClawConfig = {
+        models: {
+          mode: "replace",
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://custom.example/v1",
+              models: [
+                configuredTextModel("model", "Plain"),
+                configuredTextModel("custom/model", "Nested"),
+              ],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "custom/model" },
+            models: {
+              "custom/model": { alias: "plain" },
+              "custom/custom/model": { alias: "nested" },
+            },
+          },
+        },
+      };
+      const select = vi.fn(async (params) => params.options.at(-1)?.value);
+      const multiselect = createSelectAllMultiselect();
+      const prompter = makePrompter({ select, multiselect });
+      const result =
+        surface === "default"
+          ? await promptDefaultPicker({ config, prompter })
+          : await promptModelAllowlist({ config, prompter });
+      const options = pickerOptions(surface === "default" ? select : multiselect);
+
+      expect(optionValues(options)).toEqual(["custom/model", "custom/custom/model"]);
+      expect(requireOption(options, "custom/model").hint).toContain("alias: plain");
+      expect(requireOption(options, "custom/custom/model").hint).toContain("alias: nested");
+      expect(result).toEqual(
+        surface === "default"
+          ? { model: "custom/custom/model" }
+          : { models: ["custom/model", "custom/custom/model"] },
+      );
+    },
+  );
+
   it("adds runtime-route hints for canonical OpenAI models", async () => {
     loadModelCatalog.mockResolvedValue([
       {
@@ -552,17 +610,35 @@ describe("promptDefaultModel", () => {
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
     ]);
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "anthropic/picker-current" } } },
+    };
+    const workspaceDir = path.resolve("test/fixtures");
+    normalizeProviderModelIdWithRuntime.mockImplementation((params) =>
+      params.provider === "anthropic" &&
+      params.context.modelId === "picker-current" &&
+      params.config === config &&
+      params.workspaceDir === workspaceDir
+        ? "claude-sonnet-4-6"
+        : undefined,
+    );
 
     const select = vi.fn(async (params) => params.initialValue as never);
     const prompter = makePrompter({ select });
 
-    await promptDefaultPicker({
-      config: { agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } } },
-      prompter,
-    });
+    const result = await promptDefaultPicker({ config, workspaceDir, prompter });
 
     const values = optionValues(pickerOptions(select as MockCallSource));
     expect(values).toEqual(["anthropic/claude-sonnet-4-6"]);
+    expect(result).toEqual({ model: "anthropic/claude-sonnet-4-6" });
+    const selectedNormalization = normalizeProviderModelIdWithRuntime.mock.calls
+      .map(([params]) => params)
+      .find((params) => params.context.modelId === "picker-current");
+    expect({
+      configMatches: selectedNormalization?.config === config,
+      workspaceDir: selectedNormalization?.workspaceDir,
+      snapshotWorkspaceDir: selectedNormalization?.pluginMetadataSnapshot?.workspaceDir,
+    }).toEqual({ configMatches: true, workspaceDir, snapshotWorkspaceDir: workspaceDir });
   });
 
   it("does not offer an OpenAI row with a conflicting API and endpoint", async () => {
@@ -671,10 +747,10 @@ describe("promptDefaultModel", () => {
       { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
-      { provider: "google-gemini-cli", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
+      { provider: "google-gemini-cli", id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
-      { provider: "google", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
+      { provider: "google", id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
     ]);
 
@@ -694,9 +770,9 @@ describe("promptDefaultModel", () => {
     ]);
   });
 
-  it("normalizes retired Google Gemini catalog rows before saving config", async () => {
+  it("preserves prepared Google Gemini catalog rows when saving config", async () => {
     loadModelCatalog.mockResolvedValue([
-      { provider: "google", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
+      { provider: "google", id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
     ]);
 
     const select = vi.fn(async (params) => params.options[0]?.value as never);
@@ -2242,10 +2318,10 @@ describe("runtime model picker visibility", () => {
     loadModelCatalog.mockResolvedValue([
       { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
-      { provider: "google-gemini-cli", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
+      { provider: "google-gemini-cli", id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
-      { provider: "google", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
+      { provider: "google", id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
     ]);
 
     const multiselect = createSelectAllMultiselect();
@@ -2307,6 +2383,67 @@ describe("router model filtering", () => {
 });
 
 describe("applyModelAllowlist", () => {
+  it.each([undefined, {}])("keeps empty selections unchanged without a policy (%j)", (defaults) => {
+    const config: OpenClawConfig = { agents: { defaults } };
+    expect(applyModelAllowlist(config, [])).toBe(config);
+  });
+
+  it.each<{
+    name: string;
+    models: string[];
+    allow?: string[];
+    scopeKeys?: string[];
+    expectedPolicy?: { allow: string[] };
+  }>([
+    {
+      name: "an unscoped explicit policy",
+      models: ["custom/model"],
+      allow: ["custom/model"],
+    },
+    {
+      name: "the last scoped explicit restriction",
+      models: ["custom/model"],
+      allow: ["custom/model"],
+      scopeKeys: ["custom/model"],
+    },
+    {
+      name: "only the scoped explicit restriction",
+      models: ["custom/model", "other/model"],
+      allow: ["custom/model", "other/model"],
+      scopeKeys: ["custom/model"],
+      expectedPolicy: { allow: ["other/model"] },
+    },
+    {
+      name: "the last scoped legacy restriction",
+      models: ["custom/model"],
+      scopeKeys: ["custom/model"],
+      expectedPolicy: { allow: [] },
+    },
+    {
+      name: "only the scoped legacy restriction",
+      models: ["custom/model", "other/model"],
+      scopeKeys: ["custom/model"],
+      expectedPolicy: { allow: ["other/model"] },
+    },
+  ])(
+    "clears $name without changing model metadata",
+    ({ models, allow, scopeKeys, expectedPolicy }) => {
+      const defaults = {
+        models: Object.fromEntries(models.map((key) => [key, { alias: key }])),
+        ...(allow ? { modelPolicy: { allow } } : {}),
+      };
+      const config: OpenClawConfig = { agents: { defaults } };
+      const before = structuredClone(config);
+      const next = applyModelAllowlist(config, [], { scopeKeys });
+
+      expect(next.agents?.defaults).toEqual({
+        models: defaults.models,
+        ...(expectedPolicy ? { modelPolicy: expectedPolicy } : {}),
+      });
+      expect(config).toEqual(before);
+    },
+  );
+
   it("preserves existing entries for selected models", () => {
     const config = {
       agents: {

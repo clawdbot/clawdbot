@@ -17,8 +17,11 @@ import {
   stripSelfProviderModelPrefix,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import { modelKey } from "../shared/model-key.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 export { modelKey } from "../shared/model-key.js";
@@ -30,11 +33,17 @@ export type ModelRef = {
 
 export type ModelManifestNormalizationContext = {
   manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  providerPlugin?: ProviderPlugin;
 };
 
 export type ProviderModelIdNormalizationOptions = {
   allowManifestNormalization?: boolean;
   manifestPlugins?: readonly ManifestModelIdNormalizationRecord[];
+  config?: OpenClawConfig;
+  workspaceDir?: string;
 };
 
 /** Normalize a provider ID using the shared catalog rules. */
@@ -75,6 +84,8 @@ export function normalizeStaticProviderModelId(
   const manifestModelId =
     normalizeProviderModelIdWithManifest({
       provider: normalizedProvider,
+      config: options.config,
+      workspaceDir: options.workspaceDir,
       context: {
         provider: normalizedProvider,
         modelId: model,
@@ -143,6 +154,10 @@ function normalizeProviderModelId(
   return (
     normalizeProviderModelIdWithRuntime({
       provider,
+      config: options?.config,
+      workspaceDir: options?.workspaceDir,
+      pluginMetadataSnapshot: options?.pluginMetadataSnapshot,
+      providerPlugin: options?.providerPlugin,
       ...(options?.manifestPlugins ? { plugins: options.manifestPlugins } : {}),
       context: {
         provider,

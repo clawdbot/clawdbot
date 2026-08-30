@@ -13,8 +13,9 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../defaults.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
+import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import {
-  buildModelAliasIndex,
+  buildModelAliasIndexCore as buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
   listModelAliasCandidates,
 } from "../model-selection-shared.js";
@@ -42,24 +43,25 @@ type EmbeddedCompactionRuntimeContextParams = Omit<
   | "senderId"
   | "provider"
   | "model"
-> & {
-  workspaceDir: string;
-  sessionKey?: string | null;
-  messageChannel?: string | null;
-  messageProvider?: string | null;
-  chatType?: ChatType | null;
-  agentAccountId?: string | null;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  authProfileId?: string | null;
-  cwd?: string | null;
-  senderId?: string | null;
-  provider?: string | null;
-  modelId?: string | null;
-  harnessRuntime?: string | null;
-  activeProcessSessions?: ActiveProcessSessionReference[];
-};
+> &
+  ModelManifestNormalizationContext & {
+    workspaceDir: string;
+    sessionKey?: string | null;
+    messageChannel?: string | null;
+    messageProvider?: string | null;
+    chatType?: ChatType | null;
+    agentAccountId?: string | null;
+    currentChannelId?: string | null;
+    currentThreadTs?: string | null;
+    currentMessageId?: string | number | null;
+    authProfileId?: string | null;
+    cwd?: string | null;
+    senderId?: string | null;
+    provider?: string | null;
+    modelId?: string | null;
+    harnessRuntime?: string | null;
+    activeProcessSessions?: ActiveProcessSessionReference[];
+  };
 
 /** Resolve the configured compaction override against the actual model/runtime candidate. */
 export function resolveEmbeddedCompactionThinkingLevel(params: {
@@ -99,16 +101,18 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
  * Resolve the effective compaction target from config, falling back to the
  * caller-supplied provider/model and optionally applying runtime defaults.
  */
-export function resolveEmbeddedCompactionTarget(params: {
-  config?: OpenClawConfig;
-  provider?: string | null;
-  modelId?: string | null;
-  authProfileId?: string | null;
-  harnessRuntime?: string | null;
-  modelSelectionLocked?: boolean;
-  defaultProvider?: string;
-  defaultModel?: string;
-}): {
+export function resolveEmbeddedCompactionTarget(
+  params: ModelManifestNormalizationContext & {
+    provider?: string | null;
+    modelId?: string | null;
+    authProfileId?: string | null;
+    harnessRuntime?: string | null;
+    modelSelectionLocked?: boolean;
+    defaultProvider?: string;
+    defaultModel?: string;
+    allowPluginNormalization?: boolean;
+  },
+): {
   provider: string | undefined;
   runtimeProvider?: string;
   contextProvider?: string;
@@ -198,7 +202,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   const alias = listModelAliasCandidates(config).some(
     ({ alias: candidate }) => normalizeCompactionConfigKey(candidate) === aliasKey,
   )
-    ? buildModelAliasIndex({ cfg: config, defaultProvider }).byAlias.get(aliasKey)
+    ? buildModelAliasIndex({ ...params, cfg: config, defaultProvider }).byAlias.get(aliasKey)
     : undefined;
   if (alias) {
     return assembleTarget(alias.ref.provider, alias.ref.model);
@@ -305,14 +309,7 @@ export function resolveCompactionContextTokenBudget(params: {
 export function buildEmbeddedCompactionRuntimeContext(
   params: EmbeddedCompactionRuntimeContextParams,
 ) {
-  const resolved = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    authProfileId: params.authProfileId,
-    harnessRuntime: params.harnessRuntime,
-    modelSelectionLocked: params.modelSelectionLocked,
-  });
+  const resolved = resolveEmbeddedCompactionTarget(params);
   const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const runtimeAuthPlan =
     params.runtimeAuthPlan &&

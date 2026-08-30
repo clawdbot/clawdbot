@@ -46,14 +46,16 @@ export async function withSpeechProviders<T>(
   speechProviders: NonNullable<ReturnType<typeof createEmptyPluginRegistry>["speechProviders"]>,
   run: () => Promise<T>,
 ): Promise<T> {
-  const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
-  setActivePluginRegistry({
-    ...createEmptyPluginRegistry(),
-    speechProviders,
-  });
+  const registry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
+  const previousProviders = registry.speechProviders;
+  // Gateway requests retain this registry object; replacing the global pointer
+  // would leave their speech resolver on the old fixture.
+  registry.speechProviders = speechProviders;
+  setActivePluginRegistry(registry);
   try {
     return await run();
   } finally {
-    setActivePluginRegistry(previousRegistry);
+    registry.speechProviders = previousProviders;
+    setActivePluginRegistry(registry);
   }
 }

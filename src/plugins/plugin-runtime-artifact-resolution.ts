@@ -6,13 +6,9 @@ import { getPluginCacheRoot } from "./plugin-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePreferredBuiltRuntimeArtifact } from "./plugin-runtime-artifact-selection.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { getActivePluginRegistry, requireActivePluginRegistry } from "./runtime.js";
+import { requireActivePluginRegistry } from "./runtime.js";
 
 type PluginRuntimeArtifactEntryKind = "runtime" | "setup";
-
-export function clearPluginRuntimeArtifactResolutionMemo(): void {
-  getActivePluginRegistry()?.pluginRuntimeArtifacts.clear();
-}
 
 /** Canonical packaged runtime replaces staging-only dist-runtime artifacts. */
 export function resolveCanonicalDistRuntimeSource(source: string): string {

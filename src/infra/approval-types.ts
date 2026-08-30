@@ -1,5 +1,5 @@
 // Approval kind is shared by exec and plugin approval routing surfaces.
-import type { ExecApprovalRequest } from "./exec-approvals.js";
+import type { ExecApprovalRequest } from "./exec-approvals-core.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 export type ChannelApprovalKind = "exec" | "plugin";

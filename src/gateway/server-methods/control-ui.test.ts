@@ -1,8 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import * as providerModelNormalization from "../../agents/provider-model-normalization.runtime.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { ControlUiGitHubPreview, ControlUiSessionPreview } from "../control-ui-contract.js";
 import { ControlUiGitHubError } from "../control-ui-github-api.js";
+import * as sessionTranscriptTitleReader from "../session-transcript-title-reader.js";
 import { createControlUiHandlers } from "./control-ui.js";
 import type { RespondFn } from "./types.js";
 
@@ -173,6 +181,87 @@ describe("controlUi.sessionPreview", () => {
     expect(payload.title).toHaveLength(200);
     expect(payload.lastMessagePreview?.length).toBeLessThanOrEqual(200);
     expect(payload.lastMessagePreview).not.toContain(secret);
+  });
+
+  it("projects stored session previews without executing provider normalization", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { model: { primary: "preview-provider/legacy-model" } },
+          entries: { main: {} },
+        },
+      };
+      const sessionKey = "agent:main:dashboard:preview";
+      const updatedAt = 1_786_000_000_000;
+      const storedEntry = expectDefined(
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "session-preview",
+            updatedAt,
+            label: "Research notes",
+            archivedAt: updatedAt + 1,
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "preview-chat" },
+            }),
+          },
+        ),
+        "preview session persisted",
+      );
+      const metadata = createPluginMetadataSnapshot({
+        config: cfg,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
+      const normalize = vi
+        .spyOn(providerModelNormalization, "normalizeProviderModelIdWithRuntime")
+        .mockImplementation(() => {
+          throw new Error("Session previews must not execute provider normalization");
+        });
+      const titleFields = vi
+        .spyOn(sessionTranscriptTitleReader, "readSessionTitleFieldsFromTranscript")
+        .mockReturnValue({
+          firstUserMessage: "First request",
+          lastMessagePreview: "Latest response",
+        });
+      try {
+        const respond = vi.fn<RespondFn>();
+        await withPluginMetadataSnapshotScope(
+          metadata,
+          () =>
+            expectDefined(
+              createControlUiHandlers()["controlUi.sessionPreview"],
+              'handlers["controlUi.sessionPreview"] test invariant',
+            )(
+              requestOptions({ sessionKey }, respond, {
+                context: { getRuntimeConfig: () => cfg },
+              }),
+            ),
+          { config: cfg, trustConfigIdentity: true },
+        );
+
+        expect(normalize).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            status: "ok",
+            sessionKey,
+            agentId: "main",
+            title: "Research notes",
+            derivedTitle: "Research notes",
+            kind: "direct",
+            channel: "telegram",
+            updatedAt: storedEntry.updatedAt,
+            lastMessagePreview: "Latest response",
+            archived: true,
+          },
+          undefined,
+        );
+      } finally {
+        titleFields.mockRestore();
+        normalize.mockRestore();
+      }
+    });
   });
 
   it("returns unavailable for an unknown session", async () => {

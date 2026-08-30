@@ -210,4 +210,42 @@ describe("secret target registry fast path", () => {
     expect(target?.entry.id).toBe("auth-profiles.api_key.key");
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
+
+  it("replaces compiled targets when the same channel receives a new contract", () => {
+    const channelId = "replacement-channel";
+    const contract = (field: string) => ({
+      secretTargetRegistryEntries: [
+        {
+          id: `channels.${channelId}.${field}`,
+          targetType: `channels.${channelId}.${field}`,
+          configFile: "openclaw.json",
+          pathPattern: `channels.${channelId}.${field}`,
+          secretShape: "secret_input",
+          expectedResolvedValue: "string",
+          includeInPlan: true,
+          includeInConfigure: true,
+          includeInAudit: true,
+        },
+      ],
+    });
+    const originalLoad = loadBundledPublicArtifactMock.getMockImplementation()!;
+    let currentContract = contract("oldToken");
+    loadBundledPublicArtifactMock.mockImplementation((params) =>
+      params.dirName === channelId ? currentContract : originalLoad(params),
+    );
+    try {
+      expect(resolveConfigSecretTargetByPath(["channels", channelId, "oldToken"])?.entry.id).toBe(
+        `channels.${channelId}.oldToken`,
+      );
+
+      currentContract = contract("newToken");
+      expect({
+        added: resolveConfigSecretTargetByPath(["channels", channelId, "newToken"])?.entry.id,
+        removed: resolveConfigSecretTargetByPath(["channels", channelId, "oldToken"]),
+      }).toEqual({ added: `channels.${channelId}.newToken`, removed: null });
+      expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+    } finally {
+      loadBundledPublicArtifactMock.mockImplementation(originalLoad);
+    }
+  });
 });

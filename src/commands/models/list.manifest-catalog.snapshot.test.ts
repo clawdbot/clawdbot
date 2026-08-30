@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
@@ -13,11 +14,13 @@ import {
   createSyncSuiteTempRootTracker,
   mkdirSafeDir,
 } from "../../plugins/test-helpers/fs-fixtures.js";
+import { resolveConfiguredEntries } from "./list.configured.js";
 import {
   loadManifestCatalogRowsForList,
   loadStaticManifestCatalogRowsForList,
   resolveManifestCatalogCoverageForList,
 } from "./list.manifest-catalog.js";
+import { inspectConfiguredModelReferences } from "./model-reference-validation.js";
 
 const tempRoots = createSyncSuiteTempRootTracker("manifest-catalog");
 
@@ -49,6 +52,9 @@ function prepareFixture() {
         channels: [],
         channelConfigs: {},
         providerAuthChoices: [],
+        modelIdNormalization: {
+          providers: { [providerId]: { aliases: { "old-model": "tiny-model" } } },
+        },
         modelCatalog: {
           providers: {
             [providerId]: {
@@ -199,6 +205,52 @@ const expectedCoverage = {
 };
 
 describe("model-list prepared manifest snapshot", () => {
+  it("uses prepared workspace model aliases for configured rows and Doctor references", () => {
+    const fixture = prepareFixture();
+    const cfg: OpenClawConfig = {
+      ...fixture.cfg,
+      agents: {
+        defaults: {
+          model: "fixture-workspace/old-model",
+          models: { "fixture-workspace/old-model": { alias: "Workspace model" } },
+        },
+      },
+    };
+    const configWideSnapshot = loadPluginMetadataSnapshot({
+      config: cfg,
+      env: fixture.env,
+      allowCurrent: false,
+      preferPersisted: false,
+    });
+    expect(configWideSnapshot.byPluginId.has("workspace-owner")).toBe(false);
+    const { entries, inspections } = withPluginMetadataSnapshotScope(
+      configWideSnapshot,
+      () =>
+        withoutManifestIo(fixture, () => ({
+          entries: resolveConfiguredEntries(cfg, fixture.metadataSnapshot).entries,
+          inspections: inspectConfiguredModelReferences({ ...fixture, cfg }),
+        })),
+      { config: cfg },
+    );
+
+    expect.soft(entries).toMatchObject([
+      {
+        key: "fixture-workspace/tiny-model",
+        tags: new Set(["default", "configured"]),
+        aliases: ["Workspace model"],
+      },
+    ]);
+    expect(inspections).toEqual([
+      {
+        ref: "fixture-workspace/tiny-model",
+        provider: "fixture-workspace",
+        model: "tiny-model",
+        status: "known",
+        active: true,
+      },
+    ]);
+  });
+
   it("resolves coverage from the prepared snapshot without manifest I/O", () => {
     const fixture = prepareFixture();
     expect(withoutManifestIo(fixture, () => coverage(fixture))).toEqual(expectedCoverage);

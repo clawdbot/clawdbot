@@ -29,10 +29,10 @@ import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
 import {
   abortChatRunById,
-  type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import type { QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { HealthSummary } from "./health/types.js";

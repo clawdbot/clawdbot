@@ -2,11 +2,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { selectAgentHarness } from "../../agents/harness/selection.js";
 import {
-  buildModelAliasIndex,
   resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-  type ModelAliasIndex,
-} from "../../agents/model-selection.js";
+  resolveDefaultModelProviderForAgent,
+} from "../../agents/model-selection-config.js";
+import {
+  createModelManifestPluginContext,
+  resolveModelRefWithConfiguredAliases,
+  type ModelManifestPluginContext,
+} from "../../agents/model-selection-shared.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -27,6 +30,16 @@ import {
 } from "./dispatch-from-config.runtime.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
+
+type HarnessDefaultParams = {
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  sessionAgentId: string;
+  sessionKey?: string;
+  sessionStore?: Record<string, SessionEntry>;
+  turnModelOverride?: string;
+};
 
 type HarnessDefaultCandidate = {
   provider: string;
@@ -105,14 +118,12 @@ export function resolveTurnModelOverride(
   return normalizeOptionalString(replyOptions.heartbeatModelOverride);
 }
 
-function resolveChannelModelCandidate(params: {
-  aliasIndex: ModelAliasIndex;
+function resolveChannelModelInput(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
-  defaultProvider: string;
   entry?: SessionEntry;
   parentSessionKey?: string;
-}): HarnessDefaultCandidate | undefined {
+}): string | undefined {
   if (!params.cfg.channels?.modelByChannel) {
     return undefined;
   }
@@ -121,7 +132,7 @@ function resolveChannelModelCandidate(params: {
     ctx: params.ctx,
     entry: params.entry,
   });
-  const channelModelOverride = resolveChannelModelOverride({
+  return resolveChannelModelOverride({
     cfg: params.cfg,
     channel,
     groupId: params.entry?.groupId,
@@ -137,21 +148,12 @@ function resolveChannelModelCandidate(params: {
       params.ctx.From,
       params.ctx.SenderId,
     ],
-  });
-  if (!channelModelOverride) {
-    return undefined;
-  }
-
-  return resolveModelRefFromString({
-    raw: channelModelOverride.model,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-  })?.ref;
+  })?.model;
 }
 
 function resolveStoredModelCandidate(params: {
   cfg: OpenClawConfig;
-  defaultProvider: string;
+  manifestPluginContext: ModelManifestPluginContext;
   entry?: SessionEntry;
   parentSessionKey?: string;
   sessionAgentId: string;
@@ -159,6 +161,9 @@ function resolveStoredModelCandidate(params: {
   sessionStore?: Record<string, SessionEntry>;
 }): HarnessDefaultCandidate | undefined {
   const storedModelRef = resolveStoredModelOverride({
+    config: params.cfg,
+    agentId: params.sessionAgentId,
+    manifestPluginContext: params.manifestPluginContext,
     loadSessionEntry: (sessionKey) => {
       const agentId = resolveSessionAgentId({
         sessionKey,
@@ -178,30 +183,20 @@ function resolveStoredModelCandidate(params: {
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     parentSessionKey: params.parentSessionKey,
-    defaultProvider: params.defaultProvider,
   });
   if (!storedModelRef) {
     return undefined;
   }
   return {
-    provider: storedModelRef.provider ?? params.defaultProvider,
+    provider:
+      storedModelRef.provider ??
+      resolveDefaultModelProviderForAgent({
+        cfg: params.cfg,
+        agentId: params.sessionAgentId,
+        manifestPluginContext: params.manifestPluginContext,
+      }),
     model: storedModelRef.model,
   };
-}
-
-function resolveModelOverrideCandidate(params: {
-  aliasIndex: ModelAliasIndex;
-  defaultProvider: string;
-  modelOverride?: string;
-}): HarnessDefaultCandidate | undefined {
-  if (!params.modelOverride) {
-    return undefined;
-  }
-  return resolveModelRefFromString({
-    raw: params.modelOverride,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-  })?.ref;
 }
 
 /**
@@ -210,16 +205,7 @@ function resolveModelOverrideCandidate(params: {
  * derive the same session-stable delivery mode or CLI session bindings
  * ping-pong across turn kinds (#121485).
  */
-export function resolveVisibleRepliesPolicy(params: {
-  cfg: OpenClawConfig;
-  chatType?: string;
-  ctx: FinalizedMsgContext;
-  entry?: SessionEntry;
-  sessionAgentId: string;
-  sessionKey?: string;
-  sessionStore?: Record<string, SessionEntry>;
-  turnModelOverride?: string;
-}): {
+export function resolveVisibleRepliesPolicy(params: HarnessDefaultParams & { chatType?: string }): {
   configuredVisibleReplies?: "automatic" | "message_tool";
   harnessDefaultVisibleReplies?: "automatic" | "message_tool";
 } {
@@ -231,65 +217,38 @@ export function resolveVisibleRepliesPolicy(params: {
     configuredVisibleReplies === undefined &&
     params.chatType !== "group" &&
     params.chatType !== "channel"
-      ? resolveHarnessSourceVisibleRepliesDefault({
-          cfg: params.cfg,
-          ctx: params.ctx,
-          entry: params.entry,
-          sessionAgentId: params.sessionAgentId,
-          sessionKey: params.sessionKey,
-          sessionStore: params.sessionStore,
-          turnModelOverride: params.turnModelOverride,
-        })
+      ? resolveHarnessSourceVisibleRepliesDefault(params)
       : undefined;
   return { configuredVisibleReplies, harnessDefaultVisibleReplies };
 }
 
-function resolveHarnessSourceVisibleRepliesDefault(params: {
-  cfg: OpenClawConfig;
-  ctx: FinalizedMsgContext;
-  entry?: SessionEntry;
-  sessionAgentId: string;
-  sessionKey?: string;
-  sessionStore?: Record<string, SessionEntry>;
-  turnModelOverride?: string;
-}): HarnessSourceVisibleRepliesDefault | undefined {
+function resolveHarnessSourceVisibleRepliesDefault(
+  params: HarnessDefaultParams,
+): HarnessSourceVisibleRepliesDefault | undefined {
   if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return undefined;
   }
   try {
-    const defaultModelRef = resolveDefaultModelForAgent({
+    const modelContext = {
       cfg: params.cfg,
       agentId: params.sessionAgentId,
-    });
-    const aliasIndex = buildModelAliasIndex({
-      cfg: params.cfg,
-      agentId: params.sessionAgentId,
-      defaultProvider: defaultModelRef.provider,
-    });
+      manifestPluginContext: createModelManifestPluginContext({
+        cfg: params.cfg,
+        agentId: params.sessionAgentId,
+      }),
+    };
+    let defaultProvider: string | undefined;
+    const resolveModelInput = (raw: string | undefined) =>
+      raw
+        ? resolveModelRefWithConfiguredAliases({
+            ...modelContext,
+            raw,
+            defaultProvider: (defaultProvider ??=
+              resolveDefaultModelProviderForAgent(modelContext)),
+          })
+        : null;
     const parentSessionKey = resolveHarnessDefaultParentSessionKey(params);
-    const channelModelCandidate = resolveChannelModelCandidate({
-      aliasIndex,
-      cfg: params.cfg,
-      ctx: params.ctx,
-      defaultProvider: defaultModelRef.provider,
-      entry: params.entry,
-      parentSessionKey,
-    });
-    const storedModelCandidate = resolveStoredModelCandidate({
-      cfg: params.cfg,
-      defaultProvider: defaultModelRef.provider,
-      entry: params.entry,
-      parentSessionKey,
-      sessionAgentId: params.sessionAgentId,
-      sessionKey: params.sessionKey,
-      sessionStore: params.sessionStore,
-    });
-    const turnModelCandidate = resolveModelOverrideCandidate({
-      aliasIndex,
-      defaultProvider: defaultModelRef.provider,
-      modelOverride: params.turnModelOverride,
-    });
-    const resolveCandidateDefault = (candidate: { provider: string; model?: string }) => {
+    const resolveCandidateDefault = (candidate: HarnessDefaultCandidate) => {
       const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
         provider: candidate.provider,
         entry: params.entry,
@@ -309,8 +268,16 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
         harness.deliveryDefaults?.visibleReplies ?? harness.deliveryDefaults?.sourceVisibleReplies
       );
     };
+    // Resolve in priority order. Unselected model hooks can be expensive or fail,
+    // and must not suppress the delivery policy owned by the winning model.
     const selectedModelCandidate =
-      turnModelCandidate ?? storedModelCandidate ?? channelModelCandidate;
+      resolveModelInput(params.turnModelOverride) ??
+      resolveStoredModelCandidate({
+        ...params,
+        parentSessionKey,
+        manifestPluginContext: modelContext.manifestPluginContext,
+      }) ??
+      resolveModelInput(resolveChannelModelInput({ ...params, parentSessionKey }));
     if (selectedModelCandidate) {
       return resolveCandidateDefault(selectedModelCandidate);
     }
@@ -323,7 +290,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
         return sourceDefault;
       }
     }
-    return resolveCandidateDefault(defaultModelRef);
+    return resolveCandidateDefault(resolveDefaultModelForAgent(modelContext));
   } catch (error) {
     logVerbose(
       `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,

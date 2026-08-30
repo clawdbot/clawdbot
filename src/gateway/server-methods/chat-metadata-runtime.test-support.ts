@@ -7,6 +7,7 @@ import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -19,6 +20,7 @@ export function createChatMetadataOwner(
   api?: ModelCatalogEntry["api"],
 ): PreparedModelRuntimeSnapshot {
   const model = { id, name: id, provider, ...(api ? { api } : {}) };
+  const workspaceDir = `/tmp/${id}/workspace`;
   const authStore: AuthProfileStore = {
     version: 1,
     profiles: Object.fromEntries(
@@ -32,11 +34,15 @@ export function createChatMetadataOwner(
     catalogOwner: { agentId: "main", workspaceDir: `/tmp/${id}/workspace` },
     agentId: "main",
     agentDir: `/tmp/${id}/agent`,
-    workspaceDir: `/tmp/${id}/workspace`,
+    workspaceDir,
     activeProjectKeys: [],
     config,
     authModes: resolveUsableAgentCredentialModes(credentials),
-    metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+    metadataSnapshot: createPluginMetadataSnapshot({
+      config,
+      workspaceDir,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    }),
     allowGatewaySubagentBinding: false,
     modelCatalog: {
       entries: [model],

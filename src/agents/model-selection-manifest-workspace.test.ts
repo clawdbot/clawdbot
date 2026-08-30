@@ -1,10 +1,12 @@
 // Verifies configured model selection uses manifest policy only in scoped contexts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
-  buildModelAliasIndex,
+  buildModelAliasIndexCore as buildModelAliasIndex,
+  inferUniqueProviderFromConfiguredModels,
   resolveConfiguredModelRef,
 } from "./model-selection-shared.js";
 
@@ -78,30 +80,71 @@ describe("configured model manifest workspace scope", () => {
     expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
-  it("uses manifest policies when the workspace context is explicit", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            models: [{ id: "fast-model" }],
+  it.each(["workspace", "snapshot"] as const)(
+    "uses manifest policies from explicit %s context",
+    (source) => {
+      const cfg = {
+        models: {
+          providers: {
+            custom: {
+              models: [{ id: "fast-model" }],
+            },
           },
         },
-      },
-    } as unknown as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
-    expect(buildConfiguredModelCatalog({ cfg, workspaceDir: "/workspace/a" })).toMatchObject([
-      {
-        provider: "custom",
-        id: "workspace-custom/fast-model",
-      },
-    ]);
-    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledWith({
-      config: cfg,
-      workspaceDir: "/workspace/a",
-      env: process.env,
-    });
-    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-  });
+      const pluginMetadataSnapshot = createPluginMetadataSnapshot({
+        config: cfg,
+        workspaceDir: "/workspace/a",
+        manifestRegistry: {
+          diagnostics: [],
+          plugins: [
+            {
+              id: "workspace-normalizer",
+              origin: "workspace",
+              rootDir: "/workspace/a",
+              source: "/workspace/a/index.js",
+              manifestPath: "/workspace/a/openclaw.plugin.json",
+              channels: [],
+              providers: ["custom"],
+              cliBackends: [],
+              skills: [],
+              hooks: [],
+              modelIdNormalization: {
+                providers: { custom: { prefixWhenBare: "workspace-custom" } },
+              },
+            },
+          ],
+        },
+      });
+      const context = {
+        cfg,
+        ...(source === "snapshot" ? { pluginMetadataSnapshot } : { workspaceDir: "/workspace/a" }),
+      };
+      expect(buildConfiguredModelCatalog(context)).toMatchObject([
+        {
+          provider: "custom",
+          id: "workspace-custom/fast-model",
+        },
+      ]);
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          ...context,
+          model: "workspace-custom/fast-model",
+        }),
+      ).toBe("custom");
+      if (source === "workspace") {
+        expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledWith({
+          config: cfg,
+          workspaceDir: "/workspace/a",
+          env: process.env,
+        });
+        expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+      } else {
+        expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("uses an unscoped current snapshot without falling back to a metadata scan", () => {
     getCurrentPluginMetadataSnapshotMock.mockReturnValue({
@@ -260,29 +303,47 @@ describe("configured model manifest workspace scope", () => {
     expect(normalizeProviderModelIdWithRuntimeMock.mock.calls.length).toBe(0);
   });
 
-  it.each(["current", "supplied"] as const)(
+  it.each(["current", "supplied", "snapshot"] as const)(
     "preserves %s prepared manifest policy for default-provider aliases",
     (source) => {
-      const manifestPlugins = [
-        {
-          modelIdNormalization: {
-            providers: {
-              openai: { aliases: { legacy: "normalized" } },
-            },
-          },
-        },
-      ];
+      const modelIdNormalization = {
+        providers: { openai: { aliases: { legacy: "normalized" } } },
+      };
+      const manifestPlugins = [{ modelIdNormalization }];
       if (source === "current") {
         getCurrentPluginMetadataSnapshotMock.mockReturnValue({ plugins: manifestPlugins });
       }
       const cfg = {
         agents: { defaults: { models: { "openai/legacy": { alias: "Legacy" } } } },
       } as unknown as OpenClawConfig;
+      const pluginMetadataSnapshot = createPluginMetadataSnapshot({
+        config: cfg,
+        workspaceDir: "/workspace/a",
+        manifestRegistry: {
+          diagnostics: [],
+          plugins: [
+            {
+              id: "workspace-normalizer",
+              origin: "workspace",
+              rootDir: "/workspace/a",
+              source: "/workspace/a/index.js",
+              manifestPath: "/workspace/a/openclaw.plugin.json",
+              channels: [],
+              providers: ["openai"],
+              cliBackends: [],
+              skills: [],
+              hooks: [],
+              modelIdNormalization,
+            },
+          ],
+        },
+      });
 
       const aliases = buildModelAliasIndex({
         cfg,
         defaultProvider: "openai",
         ...(source === "supplied" ? { manifestPlugins } : {}),
+        ...(source === "snapshot" ? { pluginMetadataSnapshot } : {}),
       });
 
       expect(aliases.byAlias.get("legacy")?.ref).toEqual({

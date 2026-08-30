@@ -8,7 +8,17 @@ import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-mod
 import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { markPreparedModelCatalogFull } from "../agents/prepared-model-runtime.full-catalog.js";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { buildModelsListResult } from "./server-methods/models-list-result.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   loadDeferredCatalog,
   registerGatewayModelCatalogPrivateAccess,
@@ -64,6 +74,196 @@ function ownerSnapshot(
 }
 
 describe("gateway prepared model catalog", () => {
+  it.each(["live", "read-only"] as const)(
+    "keeps the %s catalog generation when the ambient registry changes",
+    async (mode) => {
+      const provider = "catalog-generation";
+      const config = ownerConfig("main", {
+        meta: { migrations: { modelPolicyAllowlist: true } },
+        agents: {
+          defaults: {
+            model: { primary: `${provider}/legacy` },
+            modelPolicy: { allow: [`${provider}/legacy`] },
+            models: {
+              [`${provider}/legacy`]: { alias: "friendly" },
+              [`${provider}/*`]: { agentRuntime: { id: "catalog-generation-harness" } },
+            },
+          },
+        },
+      });
+      const metadataSnapshot = createPluginMetadataSnapshot({
+        config,
+        manifestRegistry: {
+          plugins: [
+            {
+              id: provider,
+              origin: "config",
+              rootDir: "/fixture/catalog-generation",
+              source: "/fixture/catalog-generation/index.js",
+              manifestPath: "/fixture/catalog-generation/openclaw.plugin.json",
+              channels: [],
+              providers: [provider],
+              cliBackends: [],
+              skills: [],
+              hooks: [],
+              modelIdNormalization: {
+                providers: { [provider]: { aliases: { legacy: "manifest-model" } } },
+              },
+            },
+          ],
+          diagnostics: [],
+        },
+      });
+      let releaseOwner!: () => void;
+      let reportOwnerStarted!: () => void;
+      const ownerStarted = new Promise<void>((resolve) => {
+        reportOwnerStarted = resolve;
+      });
+      const ownerRelease = new Promise<void>((resolve) => {
+        releaseOwner = resolve;
+      });
+      const createRegistry = (name: string) => {
+        const registry = createEmptyPluginRegistry();
+        registry.plugins.push(
+          createPluginRecord({
+            id: provider,
+            name: provider,
+            origin: "config",
+            rootDir: "/fixture/catalog-generation",
+            source: "/fixture/catalog-generation/index.js",
+            status: "loaded",
+            imported: true,
+            enabled: true,
+          }),
+        );
+        registry.providers.push({
+          pluginId: provider,
+          source: "/fixture/catalog-generation/index.js",
+          provider: {
+            id: provider,
+            label: provider,
+            auth: [],
+            normalizeModelId: ({ modelId }) =>
+              modelId === "manifest-model" ? `${name}-model` : undefined,
+            resolveThinkingProfile: () =>
+              name === "owned"
+                ? { levels: [{ id: "low", label: "Owned thinking" }], defaultLevel: "low" }
+                : { levels: [{ id: "high", label: "Ambient thinking" }], defaultLevel: "high" },
+          },
+        });
+        registry.agentHarnesses.push({
+          pluginId: provider,
+          source: "/fixture/catalog-generation/index.js",
+          harness: {
+            id: "catalog-generation-harness",
+            label: "Catalog generation harness",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => {
+              throw new Error("catalog fixture cannot execute a turn");
+            },
+            loadModelCatalog: async () => {
+              await Promise.resolve();
+              return [
+                { provider, id: `${name}-model`, name: `${name} harness model`, reasoning: true },
+              ];
+            },
+          },
+        });
+        return registry;
+      };
+      const ownedRegistry = createRegistry("owned");
+      const ambientRegistry = createRegistry("ambient");
+      const id = mode === "live" ? "owned-model" : "manifest-model";
+      const candidate = {
+        ...ownerSnapshot(config, {
+          entries: [{ provider, id, name: "Prepared model", reasoning: true }],
+          routeVariants: [],
+        }),
+        metadataSnapshot,
+        pluginRegistry: mode === "live" ? ownedRegistry : undefined,
+        authModes: { [provider]: "api_key" as const },
+        authStore: {
+          version: 1 as const,
+          profiles: {
+            [`${provider}:owned`]: {
+              type: "api_key" as const,
+              provider,
+              key: "catalog-owner-key-not-real",
+            },
+          },
+        },
+      };
+      const loadOwner = async () => {
+        if (mode === "live") {
+          reportOwnerStarted();
+          await ownerRelease;
+        }
+        return candidate;
+      };
+      const loadPublic = () =>
+        loadGatewayModelCatalogSnapshot({
+          getConfig: () => config,
+          loadPublishedPreparedModelCatalogOwnerSnapshot: loadOwner,
+        });
+      registerGatewayModelCatalogPrivateAccess(loadPublic, {
+        loadDeferred: (params) =>
+          loadPreparedGatewayModelCatalogSnapshot({
+            ...params,
+            getConfig: () => config,
+            loadPublishedPreparedModelCatalogOwnerSnapshot: loadOwner,
+          }),
+        readPrepared: async () => undefined,
+      });
+      const context = {
+        getRuntimeConfig: () => config,
+        loadGatewayModelCatalogSnapshot: loadPublic,
+        logGateway: { debug: vi.fn() },
+      } as unknown as GatewayRequestContext;
+      const previousRegistry = captureActivePluginRegistrySnapshot();
+      try {
+        stageActivePluginRegistry(
+          mode === "live" ? ownedRegistry : ambientRegistry,
+          null,
+          "default",
+        );
+        const pending = buildModelsListResult({
+          context,
+          agentId: "main",
+          params: { view: "configured" },
+        });
+        if (mode === "live") {
+          await ownerStarted;
+          stageActivePluginRegistry(ambientRegistry, null, "default");
+          releaseOwner();
+        }
+        const result = await pending;
+        expect(result.models).toEqual([
+          expect.objectContaining({
+            id,
+            provider,
+            alias: "friendly",
+            name: mode === "live" ? "owned harness model" : "Prepared model",
+            available: true,
+          }),
+        ]);
+        if (mode === "live") {
+          expect(result.models[0]).toMatchObject({
+            thinkingLevels: [{ id: "low", label: "Owned thinking" }],
+            thinkingDefault: "low",
+          });
+        } else {
+          expect(result.models[0]?.thinkingLevels).not.toContainEqual(
+            expect.objectContaining({ label: "Ambient thinking" }),
+          );
+        }
+        expect(await loadPublic()).not.toHaveProperty("pluginRegistry");
+      } finally {
+        releaseOwner();
+        rollbackStagedPluginRegistry(previousRegistry);
+      }
+    },
+  );
+
   it("keeps raw pre-roster input distinct from an explicitly empty roster", () => {
     const input = {
       config: {},

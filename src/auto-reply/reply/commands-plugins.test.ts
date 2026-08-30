@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginCapabilityConsentReview } from "../../plugins/capability-consent.js";
 import { recordInstalledPluginIndexInstallOwner } from "../../plugins/installed-plugin-index-install-owner.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
-import { createInstalledPluginIndexSnapshot } from "../../plugins/status.test-fixtures.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
 import { buildPluginsCommandParams, type ConfigSnapshotMock } from "./commands.test-harness.js";
 
@@ -210,9 +210,7 @@ function expectLastRegistryRefresh(enabled: boolean) {
 describe("handlePluginsCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadPluginMetadataSnapshotMock.mockReturnValue({
-      index: createInstalledPluginIndexSnapshot([]),
-    });
+    loadPluginMetadataSnapshotMock.mockReturnValue(createPluginMetadataSnapshotFixture());
     resolvePluginCapabilityConsentMock.mockReset().mockResolvedValue(undefined);
     resolvePendingPluginCapabilityReviewMock.mockReset();
     readConfigFileSnapshotMock.mockResolvedValue({
@@ -297,7 +295,7 @@ describe("handlePluginsCommand", () => {
 
   it("reports package-owned provenance for child inspection and all aliases", async () => {
     const install = {
-      source: "npm",
+      source: "npm" as const,
       spec: "@example/pack@1.2.3",
       version: "1.2.3",
       installPath: "/plugins/pack",
@@ -308,18 +306,14 @@ describe("handlePluginsCommand", () => {
       compatibility: [],
       tools: [{ name: "runtime_tool" }],
     }));
-    const index = {
-      ...createInstalledPluginIndexSnapshot(
-        reports.map(({ plugin }) =>
-          recordInstalledPluginIndexInstallOwner(
-            { pluginId: plugin.id, rootDir: install.installPath },
-            "pack",
-          ),
-        ),
-      ),
-      installRecords: { pack: install },
-    };
-    loadPluginMetadataSnapshotMock.mockReturnValue({ index });
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: reports.map(({ plugin }) => ({ id: plugin.id, rootDir: install.installPath })),
+    });
+    metadata.index.installRecords = { pack: install };
+    metadata.index.plugins.forEach((plugin) =>
+      recordInstalledPluginIndexInstallOwner(plugin, "pack"),
+    );
+    loadPluginMetadataSnapshotMock.mockReturnValue(metadata);
     buildAllPluginInspectReportsMock.mockReturnValue(reports);
 
     for (const action of ["inspect", "show", "get"]) {
@@ -380,20 +374,21 @@ describe("handlePluginsCommand", () => {
     "does not attribute chat install metadata when ownership is %s",
     async (ownership) => {
       const inspect = { plugin: { id: "pack/one" }, compatibility: [] };
-      const index = {
-        ...createInstalledPluginIndexSnapshot([
-          recordInstalledPluginIndexInstallOwner(
-            { pluginId: inspect.plugin.id, rootDir: "/plugins/pack" },
-            ownership === "conflicting" ? "pack" : undefined,
-            ownership === "ambiguous",
-          ),
-        ]),
-        installRecords: {
-          pack: { source: "npm", installPath: "/plugins/pack" },
-          "pack/one": { source: "npm", installPath: "/plugins/unrelated" },
-        },
+      const metadata = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: inspect.plugin.id, rootDir: "/plugins/pack" }],
+      });
+      metadata.index.plugins.forEach((plugin) =>
+        recordInstalledPluginIndexInstallOwner(
+          plugin,
+          ownership === "conflicting" ? "pack" : undefined,
+          ownership === "ambiguous",
+        ),
+      );
+      metadata.index.installRecords = {
+        pack: { source: "npm", installPath: "/plugins/pack" },
+        "pack/one": { source: "npm", installPath: "/plugins/unrelated" },
       };
-      loadPluginMetadataSnapshotMock.mockReturnValue({ index });
+      loadPluginMetadataSnapshotMock.mockReturnValue(metadata);
       buildPluginInspectReportMock.mockReturnValue(inspect);
       buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
       for (const name of [inspect.plugin.id, "all"]) {

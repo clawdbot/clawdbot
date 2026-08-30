@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   validateWorkerInferenceTerminalOutcome,
   type WorkerInferenceStartParams,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
@@ -28,7 +32,11 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
@@ -39,6 +47,12 @@ import {
   type WorkerInferenceExecutionParams,
 } from "./inference-runtime.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
+import { placementTurnOwner, type WorkerSessionTurnClaim } from "./placement-record.js";
+import {
+  createWorkerSessionPlacementStore,
+  type WorkerSessionPlacementStore,
+} from "./placement-store.js";
+import { bindWorkerTurnAdmission } from "./placement-turn-claim-events.js";
 
 type Deps = {
   applyStreamPolicy: typeof applyExtraParamsToAgent;
@@ -95,13 +109,7 @@ const identity: WorkerConnectionIdentity = {
   bundleHash: "bundle-hash-runtime-test",
   sessionId: SESSION_ID,
   runId: "run-runtime-test",
-  turnClaim: {
-    sessionId: SESSION_ID,
-    claimId: "claim-runtime-test",
-    runId: "run-runtime-test",
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
-  },
+  turnClaim: null,
   ownerEpoch: 3,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
@@ -171,6 +179,20 @@ function finalMessage(): AssistantMessage {
   };
 }
 
+function finalMessageWithReplay(data: string) {
+  return {
+    ...finalMessage(),
+    providerReplay: {
+      v: 1,
+      type: "openai-responses-compaction",
+      data,
+      provider: "openai",
+      api: "openai-responses",
+      model: MODEL,
+    },
+  } satisfies AssistantMessage;
+}
+
 function providerStream(message = finalMessage(), options: { omitToolEnd?: boolean } = {}) {
   const stream = createAssistantMessageEventStream();
   const fragmented = {
@@ -203,7 +225,6 @@ function setup(
     agentDir?: string;
     agentRuntime?: string;
     authProfile?: string;
-    catalogWorkspace?: string;
     preparedModelRuntime?: boolean;
     prepareWorkspace?: string;
   } = {};
@@ -283,7 +304,6 @@ function setup(
   const releaseRuntime = vi.fn();
   const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
     scope.agentDir = runtimeParams.agentDir;
-    scope.catalogWorkspace = WORKSPACE;
     const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
     leasedPreparedModelRuntime = leased;
     return {
@@ -342,7 +362,7 @@ function params(
     request: inferenceRequest,
     signal: new AbortController().signal,
     emit,
-    isCurrent: () => true,
+    isCurrent: () => placements.validateTurnClaim(turnClaim),
     config: runtimeConfig,
   };
 }
@@ -353,7 +373,64 @@ const MODEL_ERROR = {
   message: "Model is not approved for this agent.",
 };
 
+let root: string;
+let placements: WorkerSessionPlacementStore;
+let turnClaim: WorkerSessionTurnClaim;
+let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
+
 describe("worker inference provider runtime", () => {
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-inference-"));
+    placements = createWorkerSessionPlacementStore({
+      database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
+    });
+    const session = { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "runtime-agent" };
+    let placement = placements.startDispatch({ ...session, executionMode: "worker-turn" });
+    for (const [to, patch] of [
+      ["provisioning", { environmentId: identity.environmentId }],
+      ["syncing", { workerBundleHash: "a".repeat(64) }],
+      [
+        "starting",
+        { workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`, remoteWorkspaceDir: WORKSPACE },
+      ],
+      ["active", { activeOwnerEpoch: identity.ownerEpoch }],
+    ] as const) {
+      placement = placements.transition({
+        sessionId: SESSION_ID,
+        from: placement.state,
+        to,
+        expectedGeneration: placement.generation,
+        patch,
+      });
+    }
+    if (placement.state !== "active") {
+      throw new Error("expected active worker placement");
+    }
+    turnClaim = placements.claimTurn({
+      ...session,
+      owner: placementTurnOwner(placement),
+      runId: "run-runtime-test",
+      claimId: "claim-runtime-test",
+    });
+    identity.turnClaim = turnClaim;
+    admission = prepareSystemAgentRunAdmission(
+      config,
+      turnClaim.runId,
+      session.agentId,
+      "test.worker-inference",
+    );
+    const admitted = await admission.admit("worker", identity.environmentId);
+    bindWorkerTurnAdmission(placements, turnClaim, admitted.operationalRunInstance);
+  });
+
+  afterEach(async () => {
+    admission?.close();
+    if (placements?.validateTurnClaim(turnClaim)) {
+      placements.releaseTurn(turnClaim);
+    }
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(root, { recursive: true, force: true });
+  });
   it("prepares an approved model available only from the bundled static catalog", async () => {
     const runtime = setup(sessionEntry, { catalogOnlyModel: true });
 
@@ -386,6 +463,50 @@ describe("worker inference provider runtime", () => {
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
+  it("rejects a current placement without its admitted run binding", async () => {
+    const runtime = setup();
+    placements.releaseTurn(turnClaim);
+    turnClaim = placements.claimTurn({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "runtime-agent",
+      owner: turnClaim.owner,
+      runId: turnClaim.runId,
+      claimId: "claim-without-admission",
+    });
+    identity.turnClaim = turnClaim;
+
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "error",
+      reason: "cancelled",
+    });
+    expect(runtime.acquireRuntimeLease).not.toHaveBeenCalled();
+  });
+
+  it.each(["auth", "preparation"] as const)(
+    "fences inference when the admitted run closes during %s",
+    async (stage) => {
+      const runtime = setup(sessionEntry, {
+        afterModelPreparation: stage === "preparation" ? () => admission.close() : undefined,
+      });
+      if (stage === "auth") {
+        runtime.resolveAuthSelection.mockImplementationOnce(async () => {
+          await Promise.resolve();
+          admission.close();
+          return undefined;
+        });
+      }
+
+      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+        type: "error",
+        reason: "cancelled",
+      });
+      expect(runtime.prepareModel).toHaveBeenCalledTimes(stage === "auth" ? 0 : 1);
+      expect(runtime.stream).not.toHaveBeenCalled();
+      expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+    },
+  );
+
   it("keeps provider construction and execution on the leased generation", async () => {
     const generationA = createEmptyPluginRegistry();
     const generationB = createEmptyPluginRegistry();
@@ -413,34 +534,21 @@ describe("worker inference provider runtime", () => {
   });
 
   it("projects the gateway-owned auth profile onto the provider route", async () => {
-    const oauthRuntime = setup();
-    oauthRuntime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
-      source: "user",
-      routeRequirement: "subscription",
-    });
-    await oauthRuntime.executor(params(request(), vi.fn()));
-    const oauth = oauthRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
-
-    const apiKeyRuntime = setup();
-    apiKeyRuntime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
-      source: "user",
-      routeRequirement: "api-key",
-    });
-    await apiKeyRuntime.executor(params(request(), vi.fn()));
-    const apiKey = apiKeyRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
-
-    expect(oauth.models?.providers?.openai).toMatchObject({
-      auth: "oauth",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
-    expect(apiKey.models?.providers?.openai).toMatchObject({
-      auth: "api-key",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
+    const projectedConfigs: OpenClawConfig[] = [];
+    for (const routeRequirement of ["subscription", "api-key"] as const) {
+      const runtime = setup();
+      runtime.resolveAuthSelection.mockResolvedValue({
+        profileId: PROFILE,
+        source: "user",
+        routeRequirement,
+      });
+      await runtime.executor(params(request(), vi.fn()));
+      projectedConfigs.push(runtime.prepareModel.mock.calls[0]?.[0].cfg ?? {});
+    }
+    expect(projectedConfigs.map((cfg) => cfg.models?.providers?.openai)).toMatchObject([
+      { auth: "oauth", api: "openai-chatgpt-responses", baseUrl: ENDPOINT },
+      { auth: "api-key", api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+    ]);
   });
 
   it("prepares the selected model against its gateway-owned OAuth route", async () => {
@@ -515,7 +623,6 @@ describe("worker inference provider runtime", () => {
       agentDir: prepared?.agentDir,
       agentRuntime: "openclaw",
       authProfile: PROFILE,
-      catalogWorkspace: WORKSPACE,
       preparedModelRuntime: true,
       prepareWorkspace: WORKSPACE,
     });
@@ -588,20 +695,14 @@ describe("worker inference provider runtime", () => {
 
   it("projects provider terminal messages onto the closed worker schema", async () => {
     const runtime = setup();
-    const message = finalMessage();
-    message.providerReplay = {
-      v: 1,
-      type: "openai-responses-compaction",
+    const message = finalMessageWithReplay("opaque-worker-terminal");
+    Object.assign(message.providerReplay, {
       id: "cmp_worker_terminal",
-      data: "opaque-worker-terminal",
       replayIndex: 1,
-      provider: "openai",
-      api: "openai-responses",
-      model: MODEL,
       baseUrlHash: "ozhevd1smnk8s",
       sessionHash: "171dzdv17gum5g",
       authProfileHash: "oe8bkr3r8947",
-    };
+    });
     Object.assign(message.content[0]!, { providerScratch: "text-state" });
     Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
     Object.assign(message.usage, { providerScratch: { requestId: "private" } });
@@ -630,15 +731,7 @@ describe("worker inference provider runtime", () => {
 
   it("returns a typed error when authoritative replay cannot be persisted", async () => {
     const runtime = setup();
-    const message = finalMessage();
-    message.providerReplay = {
-      v: 1,
-      type: "openai-responses-compaction",
-      data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1),
-      provider: "openai",
-      api: "openai-responses",
-      model: MODEL,
-    };
+    const message = finalMessageWithReplay("x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1));
     runtime.stream.mockImplementation(() => providerStream(message));
     const payloadEvents: unknown[] = [];
     const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
@@ -670,16 +763,8 @@ describe("worker inference provider runtime", () => {
 
   it("keeps a maximum fitting replay exact through the terminal projection", async () => {
     const runtime = setup();
-    const message = finalMessage();
     const ciphertext = `cipher-${"x".repeat(60 * 1024)}-€`;
-    message.providerReplay = {
-      v: 1,
-      type: "openai-responses-compaction",
-      data: ciphertext,
-      provider: "openai",
-      api: "openai-responses",
-      model: MODEL,
-    };
+    const message = finalMessageWithReplay(ciphertext);
     runtime.stream.mockImplementation(() => providerStream(message));
 
     const outcome = await runtime.executor(params(request(), vi.fn()));
@@ -692,21 +777,71 @@ describe("worker inference provider runtime", () => {
     expect(isWorkerTranscriptMessageFrameSafe(outcome.message)).toBe(true);
   });
 
-  it("rejects an incomplete final argument stream", async () => {
+  it.each([
+    {
+      name: "rejects an incomplete final argument stream",
+      terminal: "incomplete",
+      ended: false,
+    },
+    {
+      name: "rejects a terminal tool call whose identity changed",
+      terminal: "changed",
+      ended: false,
+    },
+    {
+      name: "revalidates a normally ended tool call against the terminal message",
+      terminal: "changed",
+      ended: true,
+    },
+    {
+      name: "rejects tool-call deltas after the end event",
+      terminal: "late-delta",
+      ended: true,
+    },
+    {
+      name: "rejects a normally ended tool call omitted from the terminal message",
+      terminal: "missing",
+      ended: true,
+    },
+    {
+      name: "rejects unresolved pre-identity tool deltas omitted from the terminal message",
+      terminal: "unresolved",
+      ended: false,
+    },
+  ] as const)("$name", async ({ terminal: scenario, ended }) => {
     const runtime = setup();
     runtime.stream.mockImplementation(() => {
       const stream = createAssistantMessageEventStream();
-      const message = finalMessage();
-      const completeToolCall = { ...TOOL_CALL, arguments: { query: "alpha" } };
-      message.content = [...message.content.slice(0, -1), completeToolCall];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
+      const partial = finalMessage();
+      const terminal = scenario === "incomplete" ? partial : finalMessage();
+      if (scenario === "incomplete") {
+        terminal.content = [
+          ...terminal.content.slice(0, -1),
+          { ...TOOL_CALL, arguments: { query: "alpha" } },
+        ];
+      } else if (scenario === "changed") {
+        terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
+      } else if (scenario === "missing" || scenario === "unresolved") {
+        terminal.content = terminal.content.slice(0, 1);
+      }
+      if (scenario === "unresolved") {
+        partial.content = [...terminal.content, { ...TOOL_CALL, id: "", name: "" }];
+      } else {
+        stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+      }
+      const delta = scenario === "incomplete" ? '{"query":' : "{}";
+      stream.push({ type: "toolcall_delta", contentIndex: 1, delta, partial });
+      if (ended) {
+        stream.push({ type: "toolcall_end", contentIndex: 1, toolCall: TOOL_CALL, partial });
+      }
+      if (scenario === "late-delta") {
+        stream.push({ type: "toolcall_delta", contentIndex: 1, delta: " ", partial });
+      }
       stream.push({
-        type: "toolcall_delta",
-        contentIndex: 1,
-        delta: '{"query":',
-        partial: message,
+        type: "done",
+        reason: scenario === "missing" || scenario === "unresolved" ? "stop" : "toolUse",
+        message: terminal,
       });
-      stream.push({ type: "done", reason: "toolUse", message });
       return stream;
     });
     const emitted: Parameters<Execution["emit"]>[0][] = [];
@@ -714,128 +849,16 @@ describe("worker inference provider runtime", () => {
     await expect(
       runtime.executor(params(request(), (event) => emitted.push(event))),
     ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
+    expect(emitted.map((event) => event.type)).toEqual(
+      scenario === "unresolved"
+        ? []
+        : ended
+          ? ["toolcall_start", "toolcall_delta", "toolcall_end"]
+          : ["toolcall_start", "toolcall_delta"],
+    );
     expect(
       emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
-    ).toEqual(['{"query":']);
-    expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
-  });
-
-  it("rejects a terminal tool call whose identity changed", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({ type: "done", reason: "toolUse", message: terminal });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
-  });
-
-  it("revalidates a normally ended tool call against the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({
-        type: "toolcall_end",
-        contentIndex: 1,
-        toolCall: TOOL_CALL,
-        partial,
-      });
-      stream.push({ type: "done", reason: "toolUse", message: terminal });
-      return stream;
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
-  });
-
-  it("rejects tool-call deltas after the end event", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const message = finalMessage();
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: message });
-      stream.push({
-        type: "toolcall_end",
-        contentIndex: 1,
-        toolCall: TOOL_CALL,
-        partial: message,
-      });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: " ", partial: message });
-      stream.push({ type: "done", reason: "toolUse", message });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    expect(
-      emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
-    ).toEqual(["{}"]);
-  });
-
-  it("rejects a normally ended tool call omitted from the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = terminal.content.slice(0, 1);
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({
-        type: "toolcall_end",
-        contentIndex: 1,
-        toolCall: TOOL_CALL,
-        partial,
-      });
-      stream.push({ type: "done", reason: "stop", message: terminal });
-      return stream;
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
-  });
-
-  it("rejects unresolved pre-identity tool deltas omitted from the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const terminal = finalMessage();
-      terminal.content = terminal.content.slice(0, 1);
-      const partial = {
-        ...terminal,
-        content: [...terminal.content, { ...TOOL_CALL, id: "", name: "" }],
-      } satisfies AssistantMessage;
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({ type: "done", reason: "stop", message: terminal });
-      return stream;
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
+    ).toEqual(scenario === "unresolved" ? [] : [scenario === "incomplete" ? '{"query":' : "{}"]);
   });
 
   it("rejects retained tool arguments above the stream bound", async () => {
@@ -923,33 +946,23 @@ describe("worker inference provider runtime", () => {
     ]);
   });
 
-  it("fences terminal tool-call synthesis after owner rotation", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => providerStream(finalMessage(), { omitToolEnd: true }));
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-    let current = true;
-    const execution = params(request(), (event) => {
-      emitted.push(event);
-      if (event.type === "toolcall_delta") {
-        current = false;
-      }
-    });
-    execution.isCurrent = () => current;
-
-    await expect(runtime.executor(execution)).resolves.toMatchObject({
-      type: "error",
-      reason: "cancelled",
-    });
-    expect(emitted.map((event) => event.type)).toEqual([
-      "text_delta",
-      "toolcall_start",
-      "toolcall_delta",
-    ]);
-  });
-
-  it("stops terminal synthesis when its start event rotates ownership", async () => {
+  it.each([
+    {
+      name: "fences terminal tool-call synthesis after owner rotation",
+      rotateOn: "toolcall_delta",
+      expectedEvents: ["text_delta", "toolcall_start", "toolcall_delta"],
+    },
+    {
+      name: "stops terminal synthesis when its start event rotates ownership",
+      rotateOn: "toolcall_start",
+      expectedEvents: ["toolcall_start"],
+    },
+  ] as const)("$name", async ({ rotateOn, expectedEvents }) => {
     const runtime = setup();
     runtime.stream.mockImplementation(() => {
+      if (rotateOn === "toolcall_delta") {
+        return providerStream(finalMessage(), { omitToolEnd: true });
+      }
       const stream = createAssistantMessageEventStream();
       const message = finalMessage();
       const fragmented = {
@@ -961,20 +974,18 @@ describe("worker inference provider runtime", () => {
       return stream;
     });
     const emitted: Parameters<Execution["emit"]>[0][] = [];
-    let current = true;
     const execution = params(request(), (event) => {
       emitted.push(event);
-      if (event.type === "toolcall_start") {
-        current = false;
+      if (event.type === rotateOn) {
+        placements.releaseTurn(turnClaim);
       }
     });
-    execution.isCurrent = () => current;
 
     await expect(runtime.executor(execution)).resolves.toMatchObject({
       type: "error",
       reason: "cancelled",
     });
-    expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
+    expect(emitted.map((event) => event.type)).toEqual(expectedEvents);
   });
 
   it("records usage before rejecting a dangling streamed tool call", async () => {

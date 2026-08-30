@@ -106,12 +106,39 @@ describe("sessionsCommand model resolution", () => {
     expect(model).toBe("gpt-5.4");
   });
 
-  it("preserves nested override models when their provider is recorded separately", async () => {
-    const model = await resolveSubagentModel(
-      { providerOverride: "clawrouter", modelOverride: "openai/gpt-5.6" },
+  it.each([
+    {
+      name: "a nested router model",
+      provider: "clawrouter",
+      model: "openai/gpt-5.6",
+      configured: false,
+      expected: "openai/gpt-5.6",
+    },
+    {
+      name: "a literal configured self-prefix",
+      provider: "literal-provider",
+      model: "literal-provider/model",
+      configured: true,
+      expected: "literal-provider/model",
+    },
+    {
+      name: "an unconfigured legacy provider prefix",
+      provider: "literal-provider",
+      model: "literal-provider/model",
+      configured: false,
+      expected: "model",
+    },
+  ])("preserves $name in session JSON", async ({ provider, model, configured, expected }) => {
+    if (configured) {
+      setMockSessionsConfig(() => ({
+        models: { providers: { [provider]: { models: [{ id: model }] } } },
+      }));
+    }
+    const displayedModel = await resolveSubagentModel(
+      { providerOverride: provider, modelOverride: model },
       "subagent-router-override",
     );
-    expect(model).toBe("openai/gpt-5.6");
+    expect(displayedModel).toBe(expected);
   });
 
   it("separates Claude CLI runtime from canonical model provider in JSON output", async () => {

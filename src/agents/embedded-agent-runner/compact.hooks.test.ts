@@ -10,6 +10,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock }
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
@@ -30,7 +31,6 @@ import { SettingsManager } from "../sessions/settings-manager.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
   attemptServerEndpointCompactionMock,
-  getCurrentPluginMetadataSnapshotMock,
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildEmbeddedExtensionFactoriesMock,
@@ -1499,36 +1499,43 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
     const toolName = "profiled_plugin_tool";
-    const metadataSnapshot = {
-      ...getCurrentPluginMetadataSnapshotMock(),
+    const config = { tools: { profile: "coding" as const } };
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config,
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
-      plugins: [
-        {
-          id: "profiled-plugin",
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "workspace",
-          rootDir: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin"),
-          source: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin/index.js"),
-          manifestPath: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin/openclaw.plugin.json"),
-          contracts: { tools: [toolName] },
-          toolMetadata: { [toolName]: { profiles: ["coding"] } },
-        } satisfies PluginManifestRecord,
-      ],
-    };
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [
+          {
+            id: "profiled-plugin",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "workspace",
+            rootDir: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin"),
+            source: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin/index.js"),
+            manifestPath: join(
+              TEST_WORKSPACE_DIR,
+              "workspace/profiled-plugin/openclaw.plugin.json",
+            ),
+            contracts: { tools: [toolName] },
+            toolMetadata: { [toolName]: { profiles: ["coding"] } },
+          } satisfies PluginManifestRecord,
+        ],
+      },
+    });
     const preparedModelRuntime = {
       agentId: "main",
       agentDir: join(TEST_WORKSPACE_DIR, "agents/main/agent"),
-      config: { tools: { profile: "coding" } },
+      config,
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
       metadataSnapshot,
       configuredRuntimeModels: [],
       inlineProviderModels: [],
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
-    } as never;
+    };
     acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
       snapshot: preparedModelRuntime,
       release: vi.fn(),
@@ -1548,7 +1555,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       sessionKey: TEST_SESSION_KEY,
       sessionFile: TEST_SESSION_KEY,
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
-      config: { tools: { profile: "coding" } },
+      config,
     });
 
     expect(result.ok).toBe(true);
@@ -2016,67 +2023,169 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("plans direct compaction from the requested workspace metadata without ambient discovery", async () => {
-    const baseMetadataSnapshot = expectDefined(
-      getCurrentPluginMetadataSnapshotMock(),
-      "default plugin metadata snapshot",
-    );
-    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
-      params?.workspaceDir === TEST_WORKSPACE_DIR
-        ? {
-            ...baseMetadataSnapshot,
-            configFingerprint: "workspace-compaction-normalization",
-            plugins: [
-              {
-                id: "compaction-normalizer",
-                channels: [],
-                providers: ["anthropic"],
-                cliBackends: [],
-                skills: [],
-                hooks: [],
-                origin: "workspace",
-                rootDir: TEST_WORKSPACE_DIR,
-                source: `${TEST_WORKSPACE_DIR}/index.js`,
-                manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
-                modelIdNormalization: {
-                  providers: {
-                    anthropic: {
-                      aliases: { legacy: "claude-modern" },
-                    },
-                  },
+    const metadata = await import("../../plugins/current-plugin-metadata-snapshot.js");
+    const getCurrentPluginMetadataSnapshot = vi.spyOn(metadata, "getCurrentPluginMetadataSnapshot");
+    const modelNormalization = await import("../provider-model-normalization.runtime.js");
+    const normalizeProviderModelId = vi
+      .spyOn(modelNormalization, "normalizeProviderModelIdWithRuntime")
+      .mockReturnValue(undefined);
+    const config = {};
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [
+          {
+            id: "compaction-normalizer",
+            channels: [],
+            providers: ["anthropic"],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "workspace",
+            rootDir: TEST_WORKSPACE_DIR,
+            source: `${TEST_WORKSPACE_DIR}/index.js`,
+            manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
+            modelIdNormalization: {
+              providers: {
+                anthropic: {
+                  aliases: { legacy: "claude-modern" },
                 },
-              } satisfies PluginManifestRecord,
-            ],
-          }
-        : undefined,
-    );
-
-    const result = await compactEmbeddedAgentSessionDirect({
-      ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
-      agentHarnessId: "codex",
-      modelFallbacksOverride: ["anthropic/legacy"],
-      config: {} as never,
+              },
+            },
+          } satisfies PluginManifestRecord,
+        ],
+      },
+    });
+    acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
+      snapshot: {
+        agentId: "main",
+        agentDir: join(TEST_WORKSPACE_DIR, "agents/main/agent"),
+        config,
+        workspaceDir: TEST_WORKSPACE_DIR,
+        metadataSnapshot,
+        configuredRuntimeModels: [],
+        inlineProviderModels: [],
+        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+      },
+      release: vi.fn(),
     });
 
-    expect(result.ok, JSON.stringify(result)).toBe(true);
-    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimePluginSelections: expect.arrayContaining([
-          expect.objectContaining({
-            provider: "anthropic",
-            modelId: "claude-modern",
-            runtime: "codex",
+    try {
+      const result = await metadata.withPluginMetadataSnapshotScope(
+        metadataSnapshot,
+        () =>
+          compactEmbeddedAgentSessionDirect({
+            ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
+            agentHarnessId: "codex",
+            modelFallbacksOverride: ["anthropic/legacy"],
+            config,
           }),
-        ]),
-      }),
-    );
-    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        workspaceDir: TEST_WORKSPACE_DIR,
-        allowWorkspaceScopedSnapshot: true,
-      }),
-    );
+        { config, workspaceDir: TEST_WORKSPACE_DIR },
+      );
+
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      const acquiredAt = expectDefined(
+        acquireAgentRunPreparedModelRuntimeMock.mock.invocationCallOrder[0],
+        "prepared compaction runtime acquisition",
+      );
+      expect(
+        normalizeProviderModelId.mock.invocationCallOrder.filter(
+          (calledAt) => calledAt < acquiredAt,
+        ),
+      ).toEqual([]);
+      expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePluginSelections: expect.arrayContaining([
+            expect.objectContaining({
+              provider: "anthropic",
+              modelId: "claude-modern",
+              runtime: "codex",
+            }),
+          ]),
+        }),
+      );
+      expect(getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: {},
+          workspaceDir: TEST_WORKSPACE_DIR,
+          allowWorkspaceScopedSnapshot: true,
+        }),
+      );
+    } finally {
+      getCurrentPluginMetadataSnapshot.mockRestore();
+      normalizeProviderModelId.mockRestore();
+    }
   });
+
+  it.each(["direct", "queued"] as const)(
+    "normalizes an explicit %s compaction alias only after acquiring its runtime",
+    async (entryPoint) => {
+      const metadata = await import("../../plugins/current-plugin-metadata-snapshot.js");
+      const modelNormalization = await import("../provider-model-normalization.runtime.js");
+      const normalizeProviderModelId = vi
+        .spyOn(modelNormalization, "normalizeProviderModelIdWithRuntime")
+        .mockImplementation(({ provider, context }) =>
+          provider === "anthropic" && context.modelId === "claude-static"
+            ? "claude-runtime"
+            : undefined,
+        );
+      const config = {
+        agents: {
+          defaults: {
+            models: { "anthropic/claude-static": { alias: "summary" } },
+            compaction: { model: "summary" },
+          },
+        },
+      };
+      const metadataSnapshot = createPluginMetadataSnapshot({
+        config,
+        workspaceDir: TEST_WORKSPACE_DIR,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
+      const compact =
+        entryPoint === "direct" ? compactEmbeddedAgentSessionDirect : compactEmbeddedAgentSession;
+
+      try {
+        const result = await metadata.withPluginMetadataSnapshotScope(
+          metadataSnapshot,
+          () =>
+            compact({
+              ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
+              config,
+            }),
+          { config, workspaceDir: TEST_WORKSPACE_DIR },
+        );
+
+        expect(result.ok, JSON.stringify(result)).toBe(true);
+        const acquiredAt = expectDefined(
+          acquireAgentRunPreparedModelRuntimeMock.mock.invocationCallOrder[0],
+          "prepared compaction runtime acquisition",
+        );
+        expect(
+          normalizeProviderModelId.mock.invocationCallOrder.filter(
+            (calledAt) => calledAt < acquiredAt,
+          ),
+        ).toEqual([]);
+        expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runtimePluginSelections: expect.arrayContaining([
+              expect.objectContaining({ provider: "anthropic", modelId: "claude-static" }),
+            ]),
+          }),
+        );
+        expect(resolveModelMock).toHaveBeenCalledWith(
+          "anthropic",
+          "claude-runtime",
+          expect.any(String),
+          config,
+        );
+      } finally {
+        normalizeProviderModelId.mockRestore();
+      }
+    },
+  );
 
   it("keeps model-locked OpenClaw compaction on its exact model without fallbacks", async () => {
     sessionCompactImpl.mockRejectedValueOnce(

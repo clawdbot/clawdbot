@@ -1,16 +1,16 @@
 /** Row builders used by `openclaw models list` source orchestration. */
+import {
+  buildModelCatalogRef,
+  parseProviderModelRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
-import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   projectModelCatalogEntryForRoute,
   resolveConfiguredModelCatalogOverrides,
 } from "../../agents/model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import {
-  modelKey,
-  normalizeConfiguredProviderCatalogModelId,
-} from "../../agents/model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../../agents/model-ref-shared.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import { shouldSuppressBuiltInModelCore } from "../../agents/model-suppression.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
@@ -177,7 +177,7 @@ function buildRow(params: {
   const configured = params.configuredEntry ?? params.context.configuredByKey.get(params.key);
   return toModelRow({
     model: params.model,
-    key: params.key,
+    key: params.context.formatModelRef(parseProviderModelRef(params.key)!),
     tags: configured ? Array.from(configured.tags) : [],
     aliases: configured?.aliases ?? [],
     availableKeys: params.context.availableKeys,
@@ -390,7 +390,7 @@ function indexModelCatalogEntriesByKey(
 ): ReadonlyMap<string, ModelCatalogEntry> {
   const byKey = new Map<string, ModelCatalogEntry>();
   for (const entry of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
-    const key = modelKey(entry.provider, entry.id);
+    const key = buildModelCatalogRef(entry.provider, entry.id);
     if (!byKey.has(key)) {
       byKey.set(key, entry);
     }
@@ -420,7 +420,7 @@ export async function appendDiscoveredRows(params: {
     return a.id.localeCompare(b.id);
   });
   const preparedModels = sorted.map((model) => {
-    const key = modelKey(model.provider, model.id);
+    const key = buildModelCatalogRef(model.provider, model.id);
     const resolvedModel =
       params.modelRegistry && modelResolver
         ? modelResolver({
@@ -432,7 +432,7 @@ export async function appendDiscoveredRows(params: {
           })
         : undefined;
     const rowModel =
-      resolvedModel && modelKey(resolvedModel.provider, resolvedModel.id) === key
+      resolvedModel && buildModelCatalogRef(resolvedModel.provider, resolvedModel.id) === key
         ? resolvedModel
         : model;
     return { key, model, rowModel };
@@ -476,21 +476,16 @@ export async function appendConfiguredProviderRows(params: {
       ) {
         continue;
       }
-      // Strip a self-prefix against the source provider before display aliasing.
-      // Auth stays on the source provider so alias-backed profiles remain valid.
+      // Auth stays on the source provider; model ids remain exact before display aliasing.
       const modelId = replaceMode
-        ? normalizeConfiguredProviderCatalogModelId(
-            provider,
-            stripSelfProviderModelPrefix(provider, configuredModel.id),
-            {
-              manifestPlugins: params.context.metadataSnapshot?.manifestRegistry.plugins,
-            },
-          )
+        ? normalizeConfiguredProviderCatalogModelId(provider, configuredModel.id, {
+            manifestPlugins: params.context.metadataSnapshot?.manifestRegistry.plugins,
+          })
         : configuredModel.id;
       const displayProvider = replaceMode
         ? params.context.canonicalizeProvider(provider)
         : provider;
-      const key = modelKey(displayProvider, modelId);
+      const key = buildModelCatalogRef(displayProvider, modelId);
       const model = toConfiguredProviderListModel({
         provider,
         providerConfig,
@@ -537,7 +532,7 @@ export async function appendAuthenticatedCatalogRows(params: {
     if (authEvaluation.availability !== true && !hasRunnableSyntheticAuth) {
       continue;
     }
-    const key = modelKey(entry.provider, entry.id);
+    const key = buildModelCatalogRef(entry.provider, entry.id);
     await appendVisibleRow({
       rows: params.rows,
       model,
@@ -582,12 +577,12 @@ export async function appendPreparedModelCatalogRows(params: {
     await appendVisibleRow({
       rows: params.rows,
       model: toPreparedCatalogListModel(entry),
-      key: modelKey(entry.provider, entry.id),
+      key: buildModelCatalogRef(entry.provider, entry.id),
       context: params.context,
       seenKeys: params.seenKeys,
       routeIndex,
       allowAuthAvailabilityOverride: !params.context.discoveredKeys.has(
-        modelKey(entry.provider, entry.id),
+        buildModelCatalogRef(entry.provider, entry.id),
       ),
     });
   }
@@ -599,6 +594,7 @@ export async function appendConfiguredRows(params: {
   entries: ConfiguredEntry[];
   modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
+  seenKeys?: Set<string>;
   catalogSnapshot?: ModelCatalogSnapshot;
 }): Promise<void> {
   const resolveModelWithRegistry = params.modelRegistry
@@ -631,13 +627,14 @@ export async function appendConfiguredRows(params: {
       if (!params.context.filter.local) {
         params.rows.push(
           toModelRow({
-            key: entry.key,
+            key: params.context.formatModelRef(entry.ref),
             tags: Array.from(entry.tags),
             aliases: entry.aliases,
             availableKeys: params.context.availableKeys,
             authAvailability: undefined,
           }),
         );
+        params.seenKeys?.add(entry.key);
       }
       continue;
     }
@@ -646,11 +643,12 @@ export async function appendConfiguredRows(params: {
       model: resolvedModel,
       key: entry.key,
       context: params.context,
+      seenKeys: params.seenKeys,
       ...(routeIndex ? { routeIndex } : {}),
       configuredEntry: entry,
       normalizeWithProviderPlugin: true,
       allowAuthAvailabilityOverride: !params.context.discoveredKeys.has(
-        modelKey(resolvedModel.provider, resolvedModel.id),
+        buildModelCatalogRef(resolvedModel.provider, resolvedModel.id),
       ),
     });
   }

@@ -5,9 +5,13 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const logger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn() }));
+const transportRuntime = vi.hoisted(() => ({ createStream: vi.fn() }));
 
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => logger,
+}));
+vi.mock("../../../agents/openai-transport-stream.js", () => ({
+  createOpenAIResponsesTransportStreamFn: transportRuntime.createStream,
 }));
 
 import {
@@ -49,6 +53,7 @@ const openaiModel = {
 afterEach(() => {
   logger.debug.mockReset();
   logger.info.mockReset();
+  transportRuntime.createStream.mockReset();
   vi.unstubAllEnvs();
 });
 
@@ -129,7 +134,7 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
 });
 
 describe("createCodexNativeWebSearchWrapper", () => {
-  it("keeps native_active web_search alongside the code mode tool surface", () => {
+  it("keeps native_active web_search alongside the code mode tool surface", async () => {
     vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", "1");
     const secretFixture = `sk-${"fixture".repeat(6)}`;
     let observedOptions: Parameters<StreamFn>[2];
@@ -166,7 +171,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
       },
     });
 
-    void wrapped(
+    await wrapped(
       {
         api: "openai-chatgpt-responses",
         provider: "gateway",
@@ -236,7 +241,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
       codeModeToolSurfaceEnabled: true,
     });
 
-    void wrapped(
+    await wrapped(
       codexModel,
       {
         messages: [],
@@ -273,7 +278,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
 
   it.each(["", "0", "false", "off", "no"])(
     "does not emit dedicated diagnostics for false-like flag %j",
-    (flag) => {
+    async (flag) => {
       vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", flag);
       const baseStreamFn: StreamFn = (model, _context, options) => {
         options?.onPayload?.(
@@ -292,7 +297,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
         codeModeToolSurfaceEnabled: true,
       });
 
-      void wrapped(
+      await wrapped(
         codexModel,
         {
           messages: [],
@@ -333,7 +338,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
       id: "gpt-5.5",
     } as Model<"openai-chatgpt-responses">;
 
-    void wrapped(
+    await wrapped(
       model,
       {
         messages: [],
@@ -383,7 +388,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
     ).toEqual(new Set(["web_search"]));
   });
 
-  it("does not authorize hosted search when runtime tool policy denies it in code mode", () => {
+  it("does not authorize hosted search when runtime tool policy denies it in code mode", async () => {
     let observedOptions: Parameters<StreamFn>[2];
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -414,7 +419,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
       },
     });
 
-    void wrapped(
+    await wrapped(
       codexModel,
       {
         messages: [],
@@ -436,7 +441,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
     ).toEqual(new Set());
   });
 
-  it("does not enable code-mode transport enforcement when config is on but controls are inactive", () => {
+  it("does not enable code-mode transport enforcement when config is on but controls are inactive", async () => {
     const observedOptions: Array<Record<string, unknown>> = [];
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (model, context, options) => {
@@ -454,7 +459,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
       },
     });
 
-    void wrapped(
+    await wrapped(
       {
         api: "openai-chatgpt-responses",
         provider: "gateway",
@@ -468,7 +473,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(payloads[0]).toEqual({ model: "gpt-5.5" });
   });
 
-  it("enforces the code-mode transport surface when the run enables it at agent scope", () => {
+  it("enforces the code-mode transport surface when the run enables it at agent scope", async () => {
     const observedOptions: Array<Record<string, unknown>> = [];
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (model, context, options) => {
@@ -494,7 +499,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
       codeModeToolSurfaceEnabled: true,
     });
 
-    void wrapped(
+    await wrapped(
       {
         api: "openai-chatgpt-responses",
         provider: "gateway",
@@ -523,7 +528,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
 
   it.each(["functionDeclarations", "function_declarations"] as const)(
     "keeps grouped %s when code mode filters the payload",
-    (declarationField) => {
+    async (declarationField) => {
       const payloads: Array<Record<string, unknown>> = [];
       const baseStreamFn: StreamFn = (model, context, options) => {
         const payload: Record<string, unknown> = {
@@ -552,7 +557,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
         codeModeToolSurfaceEnabled: true,
       });
 
-      void wrapped(
+      await wrapped(
         {
           api: "google-generative-ai",
           provider: "google",
@@ -583,7 +588,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
     },
   );
 
-  it("does not inject native web_search when agent policy denies web search", () => {
+  it("does not inject native web_search when agent policy denies web search", async () => {
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -616,7 +621,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
       },
     });
 
-    void wrapped(
+    await wrapped(
       {
         api: "openai-chatgpt-responses",
         provider: "gateway",
@@ -629,7 +634,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(payloads[0]?.tools).toEqual([{ type: "function", name: "read" }]);
   });
 
-  it("does not inject native web_search when runtime sender policy denies web search", () => {
+  it("does not inject native web_search when runtime sender policy denies web search", async () => {
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -658,7 +663,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
       },
     });
 
-    void wrapped(
+    await wrapped(
       {
         api: "openai-chatgpt-responses",
         provider: "gateway",
@@ -941,6 +946,32 @@ describe("createOpenAIThinkingLevelWrapper", () => {
 });
 
 describe("createOpenAIAttributionHeadersWrapper", () => {
+  it("creates the default native transport on invocation and preserves request options", async () => {
+    const stream = createAssistantMessageEventStream();
+    const transport = vi.fn<StreamFn>(() => stream);
+    transportRuntime.createStream.mockReturnValue(transport);
+    const wrapped = createOpenAIAttributionHeadersWrapper(undefined);
+    expect(transportRuntime.createStream).not.toHaveBeenCalled();
+    const model = { ...codexModel, baseUrl: "https://chatgpt.com/backend-api" };
+    const context = { messages: [] };
+
+    expect(
+      await wrapped(model, context, { apiKey: "test-key", headers: { "x-test": "kept" } }),
+    ).toBe(stream);
+    expect(transport).toHaveBeenCalledWith(
+      model,
+      context,
+      expect.objectContaining({
+        apiKey: "test-key",
+        headers: expect.objectContaining({
+          "x-test": "kept",
+          originator: "openclaw",
+          "User-Agent": expect.stringMatching(/^openclaw\//),
+        }),
+      }),
+    );
+  });
+
   it("routes native Codex traffic through the OpenClaw transport so attribution survives OpenClaw defaults", () => {
     let codexCalls = 0;
     let capturedHeaders: Record<string, string> | undefined;

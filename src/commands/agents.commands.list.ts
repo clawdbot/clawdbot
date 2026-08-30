@@ -2,7 +2,7 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { listRouteBindings } from "../config/bindings.js";
-import type { AgentRouteBinding } from "../config/types.js";
+import type { AgentRouteBinding, OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson, defaultRuntime } from "../runtime.js";
 import {
@@ -20,7 +20,7 @@ import {
   listProvidersForAgent,
   summarizeBindings,
 } from "./agents.providers.js";
-import { requireValidConfig } from "./config-validation.js";
+import { validateCommandConfigSnapshot } from "./config-validation.js";
 
 type AgentsListOptions = {
   json?: boolean;
@@ -126,11 +126,20 @@ export async function agentsListCommand(
   opts: AgentsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime, { adoptPluginMetadata: true });
-  if (!cfg) {
-    return;
-  }
+  const { withCommandConfigSnapshot } = await import("../cli/command-config-snapshot.js");
+  return await withCommandConfigSnapshot({}, async (snapshot) => {
+    const cfg = validateCommandConfigSnapshot(snapshot, runtime)?.config;
+    if (cfg) {
+      await printAgentSummaries(cfg, opts, runtime);
+    }
+  });
+}
 
+async function printAgentSummaries(
+  cfg: OpenClawConfig,
+  opts: AgentsListOptions,
+  runtime: RuntimeEnv,
+) {
   const summaries = buildAgentSummaries(cfg);
   const provenance = opts.tree ? listAgentProvenance() : [];
   if (opts.json) {

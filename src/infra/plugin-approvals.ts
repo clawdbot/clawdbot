@@ -1,7 +1,7 @@
 // Defines plugin approval request/resolution payloads and actions.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
-import type { ExecApprovalDecision } from "./exec-approvals.js";
+import type { ExecApprovalDecision } from "./exec-approvals-core.js";
 
 // Plugin approval types and renderers mirror exec approval decisions while
 // keeping plugin-facing request text and action metadata separate.

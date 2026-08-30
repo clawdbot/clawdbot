@@ -51,6 +51,7 @@ afterEach(() => {
   vi.resetModules();
   vi.doUnmock("../../plugins/channel-catalog-registry.js");
   vi.doUnmock("./bundled.js");
+  vi.doUnmock("./bundled-root.js");
 });
 
 describe("bundled root-aware plugin lookups", () => {
@@ -68,6 +69,11 @@ describe("bundled root-aware plugin lookups", () => {
           return [{ pluginId: "beta", channel: { id: "beta-chat" } }];
         }
         return [];
+      },
+    }));
+    vi.doMock("./bundled-root.js", () => ({
+      resolveBundledChannelRootScope: () => {
+        throw new Error("catalog reads must not resolve bundled roots again");
       },
     }));
 

@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -14,10 +15,21 @@ import {
   resolveWorkerPlacementSessionRuntime,
 } from "./placement-session-runtime.js";
 
+// Placement policy and harness ownership stay real; provider execution is a fixture port.
+const normalizeProviderModelIdWithRuntime = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../../agents/provider-model-normalization.runtime.js").normalizeProviderModelIdWithRuntime
+  >(),
+);
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime,
+}));
+
 const originalPluginRegistry = getActivePluginRegistry();
 
 describe("worker placement runtime capabilities", () => {
   beforeEach(() => {
+    normalizeProviderModelIdWithRuntime.mockReset();
     setActivePluginRegistry(createEmptyPluginRegistry(), "placement-runtime-test", "default");
   });
 
@@ -78,6 +90,40 @@ describe("worker placement runtime capabilities", () => {
         sessionKey: "agent:main:placement-runtime",
       }),
     ).toBe(expected);
+  });
+
+  it("uses the normalized selected model for placement runtime policy", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/placement-selected": { agentRuntime: { id: "selected-harness" } },
+          },
+        },
+      },
+    };
+    normalizeProviderModelIdWithRuntime.mockImplementation((params) =>
+      params.provider === "anthropic" &&
+      params.context.modelId === "placement-alias" &&
+      params.config === cfg
+        ? "placement-selected"
+        : undefined,
+    );
+
+    expect(
+      resolveWorkerPlacementSessionRuntime({
+        cfg,
+        entry: {
+          sessionId: "placement-runtime-session",
+          updatedAt: 0,
+          providerOverride: "anthropic",
+          modelOverride: "placement-alias",
+          agentHarnessId: "openclaw",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:placement-runtime",
+      }),
+    ).toBe("selected-harness");
   });
 
   it.each([

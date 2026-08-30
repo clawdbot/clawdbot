@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { ModelManifestNormalizationContext, ModelRef } from "../agents/model-ref-shared.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
@@ -89,6 +90,9 @@ function resolvePluginSubagentOverridePolicies(
   const policies: PluginSubagentOverridePolicies = {};
   for (const [pluginId, entry] of Object.entries(normalized.entries)) {
     const allowModelOverride = entry.subagent?.allowModelOverride === true;
+    if (!allowModelOverride) {
+      continue;
+    }
     const hasConfiguredAllowlist = entry.subagent?.hasAllowedModelsConfig === true;
     const configuredAllowedModels = entry.subagent?.allowedModels ?? [];
     const allowedModels = new Set<string>();
@@ -104,14 +108,6 @@ function resolvePluginSubagentOverridePolicies(
       }
       allowedModels.add(normalizedModelRef);
     }
-    if (
-      !allowModelOverride &&
-      !hasConfiguredAllowlist &&
-      allowedModels.size === 0 &&
-      !allowAnyModel
-    ) {
-      continue;
-    }
     policies[pluginId] = {
       allowModelOverride,
       allowAnyModel,
@@ -122,56 +118,49 @@ function resolvePluginSubagentOverridePolicies(
   return policies;
 }
 
-function authorizeFallbackModelOverride(params: {
-  policies: PluginSubagentOverridePolicies;
-  pluginId?: string;
-  provider?: string;
-  model?: string;
-}): { allowed: true } | { allowed: false; reason: string } {
+function authorizeFallbackModelOverride(
+  params: ModelManifestNormalizationContext & {
+    policies: PluginSubagentOverridePolicies;
+    pluginId?: string;
+    provider?: string;
+    model?: string;
+  },
+): Readonly<ModelRef> | undefined {
   const pluginId = params.pluginId?.trim();
   if (!pluginId) {
-    return {
-      allowed: false,
-      reason: "provider/model override requires plugin identity in fallback subagent runs.",
-    };
+    throw new Error("provider/model override requires plugin identity in fallback subagent runs.");
   }
   const policy = params.policies[pluginId];
   if (!policy?.allowModelOverride) {
-    return {
-      allowed: false,
-      reason:
-        `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
+    throw new Error(
+      `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
         "See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: " +
         "plugins.entries.<id>.subagent.allowModelOverride",
-    };
+    );
   }
-  if (policy.allowAnyModel) {
-    return { allowed: true };
-  }
-  if (policy.hasConfiguredAllowlist && policy.allowedModels.size === 0) {
-    return {
-      allowed: false,
-      reason: `plugin "${pluginId}" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.`,
-    };
+  if (policy.allowAnyModel || (!policy.hasConfiguredAllowlist && policy.allowedModels.size === 0)) {
+    return undefined;
   }
   if (policy.allowedModels.size === 0) {
-    return { allowed: true };
+    throw new Error(
+      `plugin "${pluginId}" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.`,
+    );
   }
   const requestedModelRef = resolvePluginSubagentRequestedModelRef(params);
   if (!requestedModelRef) {
-    return {
-      allowed: false,
-      reason:
-        "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
-    };
+    throw new Error(
+      "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
+    );
   }
-  if (policy.allowedModels.has(requestedModelRef)) {
-    return { allowed: true };
+  const requestedKey = `${requestedModelRef.provider}/${requestedModelRef.model}`;
+  if (!policy.allowedModels.has(requestedKey)) {
+    throw new Error(
+      `model override "${requestedKey}" is not allowlisted for plugin "${pluginId}".`,
+    );
   }
-  return {
-    allowed: false,
-    reason: `model override "${requestedModelRef}" is not allowlisted for plugin "${pluginId}".`,
-  };
+  // Keep the authored request intact; the receiving model owner must select
+  // this exact initial target even if its metadata generation has changed.
+  return Object.freeze({ ...requestedModelRef });
 }
 
 // ── Internal gateway dispatch for plugin runtime ────────────────────
@@ -238,6 +227,7 @@ const PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT = 1_000;
 export function createGatewaySubagentRuntime(
   resolveGatewayContext?: GatewayContextResolver,
   overridePolicies: PluginSubagentOverridePolicies = {},
+  normalization: ModelManifestNormalizationContext = {},
 ): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const scope = getPluginRuntimeGatewayRequestScope();
@@ -285,16 +275,15 @@ export function createGatewaySubagentRuntime(
       const hasRequestScopeClient = Boolean(scope?.client);
       let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
       let allowSyntheticModelOverride = false;
+      let expectedInitialModel: Readonly<ModelRef> | undefined;
       if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
-        const fallbackAuth = authorizeFallbackModelOverride({
+        expectedInitialModel = authorizeFallbackModelOverride({
+          ...normalization,
           policies: overridePolicies,
           pluginId: scope?.pluginId,
           provider: params.provider,
           model: params.model,
         });
-        if (!fallbackAuth.allowed) {
-          throw new Error(fallbackAuth.reason);
-        }
         allowOverride = true;
         allowSyntheticModelOverride = true;
       }
@@ -326,6 +315,7 @@ export function createGatewaySubagentRuntime(
         },
         {
           allowSyntheticModelOverride,
+          expectedInitialModel,
           agentRunTracking: "plugin_subagent",
           ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
@@ -496,6 +486,7 @@ export function createGatewayNodesRuntime(
 function createGatewayPluginRuntimeBindings(
   resolveGatewayContext: GatewayContextResolver | undefined,
   overridePolicies: PluginSubagentOverridePolicies,
+  normalization: ModelManifestNormalizationContext,
 ): {
   runtime: Pick<PluginRuntime, "gateway" | "hooks" | "nodes" | "subagent"> &
     Pick<CreatePluginRuntimeOptions, "dispatchReplyFromConfig">;
@@ -534,7 +525,11 @@ function createGatewayPluginRuntimeBindings(
       },
       hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, lifetime.signal),
-      subagent: createGatewaySubagentRuntime(resolveBoundGatewayContext, overridePolicies),
+      subagent: createGatewaySubagentRuntime(
+        resolveBoundGatewayContext,
+        overridePolicies,
+        normalization,
+      ),
     },
   };
 }
@@ -675,6 +670,11 @@ export function loadGatewayPlugins(params: {
   const gatewayRuntimeBindings = createGatewayPluginRuntimeBindings(
     params.resolveGatewayContext,
     resolvePluginSubagentOverridePolicies(resolvedConfig),
+    {
+      config: resolvedConfig,
+      workspaceDir: params.workspaceDir,
+      pluginMetadataSnapshot: metadataSnapshot,
+    },
   );
   const pluginRegistry = loadAndActivateRootPluginRegistry({
     ...buildPluginRuntimeLoadOptions(loadContext),

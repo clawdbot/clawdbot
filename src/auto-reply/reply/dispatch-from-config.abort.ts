@@ -26,7 +26,7 @@ export function runWithDispatchAbortSignal<T>(
   const work = Promise.resolve().then(run);
   onWorkStarted?.(work);
   return racePromiseWithAbortSignal(work, signal).catch((error: unknown) => {
-    if (signal?.aborted && isAbortError(error)) {
+    if (signal?.aborted && (error === signal.reason || isAbortError(error))) {
       throw new DispatchReplyOperationAbortedError();
     }
     throw error;

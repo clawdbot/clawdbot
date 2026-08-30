@@ -17,6 +17,7 @@ import {
   modelSupportsInput,
 } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
+import { createModelManifestPluginContext } from "../agents/model-selection-shared.js";
 import {
   findNormalizedProviderValue,
   inferUniqueProviderFromConfiguredModels,
@@ -308,7 +309,6 @@ export function getSessionDefaults(
   modelCatalog?: ModelCatalogEntry[],
   options?: {
     agentId?: string;
-    allowPluginNormalization?: boolean;
     providerPolicySource?: ThinkingProviderPolicySource;
   },
 ): GatewaySessionsDefaults {
@@ -319,13 +319,13 @@ export function getSessionDefaults(
     ? resolveDefaultModelForAgent({
         cfg,
         agentId,
-        allowPluginNormalization: options.allowPluginNormalization,
+        allowPluginNormalization: false,
       })
     : resolveConfiguredModelRef({
         cfg,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
-        allowPluginNormalization: options?.allowPluginNormalization,
+        allowPluginNormalization: false,
       });
   const catalogEntry = modelCatalog
     ? findModelCatalogEntry(modelCatalog, {
@@ -527,6 +527,18 @@ export async function resolveGatewayModelSupportsImages(params: {
         normalizeLowercaseStringOrEmpty(params.model),
         normalizeLowercaseStringOrEmpty(modelEntry?.name),
       ].filter(Boolean);
+      if (
+        normalizedProvider === "claude-cli" &&
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate === "opus" ||
+            candidate === "sonnet" ||
+            candidate === "haiku" ||
+            candidate.startsWith("claude-"),
+        )
+      ) {
+        return true;
+      }
       if (modelEntry) {
         if (modelSupportsInput(modelEntry, "image")) {
           return true;
@@ -547,18 +559,6 @@ export async function resolveGatewayModelSupportsImages(params: {
           return true;
         }
         if (
-          normalizedProvider === "claude-cli" &&
-          normalizedCandidates.some(
-            (candidate) =>
-              candidate === "opus" ||
-              candidate === "sonnet" ||
-              candidate === "haiku" ||
-              candidate.startsWith("claude-"),
-          )
-        ) {
-          return true;
-        }
-        if (
           readOnly &&
           !snapshot?.catalogComplete &&
           (!snapshot ||
@@ -571,18 +571,6 @@ export async function resolveGatewayModelSupportsImages(params: {
           continue;
         }
         return false;
-      }
-      if (
-        normalizedProvider === "claude-cli" &&
-        normalizedCandidates.some(
-          (candidate) =>
-            candidate === "opus" ||
-            candidate === "sonnet" ||
-            candidate === "haiku" ||
-            candidate.startsWith("claude-"),
-        )
-      ) {
-        return true;
       }
       if (readOnly && snapshot?.catalogComplete) {
         return false;
@@ -630,9 +618,19 @@ function resolveSessionDisplayModelIdentityRef(params: {
     return { provider, model };
   }
 
-  const defaultRef = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  const manifestPluginContext = createModelManifestPluginContext(params);
+  const normalization = {
+    ...manifestPluginContext.getContext(),
+    allowPluginNormalization: false,
+  };
+  const defaultRef = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    manifestPluginContext,
+    ...normalization,
+  });
   if (model.includes("/")) {
-    const parsedModel = parseModelRef(model, defaultRef.provider);
+    const parsedModel = parseModelRef(model, defaultRef.provider, normalization);
     if (parsedModel && !isCliProvider(parsedModel.provider, params.cfg)) {
       return parsedModel;
     }
@@ -642,12 +640,13 @@ function resolveSessionDisplayModelIdentityRef(params: {
     cfg: params.cfg,
     model,
     agentId: params.agentId,
+    manifestPluginContext,
   });
   if (inferredProvider && !isCliProvider(inferredProvider, params.cfg)) {
     return { provider: inferredProvider, model };
   }
 
-  const parsedModel = parseModelRef(model, defaultRef.provider);
+  const parsedModel = parseModelRef(model, defaultRef.provider, normalization);
   if (parsedModel && !isCliProvider(parsedModel.provider, params.cfg)) {
     return parsedModel;
   }

@@ -10,6 +10,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import { createPreparedPluginMetadataFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   createOpenClawTestState,
@@ -646,6 +651,32 @@ describe("prepared model runtime owner selection", () => {
     }
     mocks.configuredWorkspaces.set("agent-d", "/tmp/distinct-prepared-runtime-workspace");
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    const sharedMetadata = createPluginMetadataSnapshot({
+      config,
+      workspaceDir: "/tmp/shared-prepared-runtime-workspace",
+      manifestRegistry: makeRegistry([{ id: "shared-workspace-plugin", channels: [] }]),
+    });
+    const distinctMetadata = createPluginMetadataSnapshot({
+      config,
+      workspaceDir: "/tmp/distinct-prepared-runtime-workspace",
+      manifestRegistry: makeRegistry([{ id: "distinct-workspace-plugin", channels: [] }]),
+    });
+    const unionSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: {
+        plugins: [...sharedMetadata.plugins, ...distinctMetadata.plugins],
+        diagnostics: [],
+      },
+    });
+    const pluginMetadata = createPreparedPluginMetadataFixture({
+      unionSnapshot,
+      selectedSnapshot: sharedMetadata,
+      workspaces: new Map([
+        [sharedMetadata.workspaceDir, sharedMetadata],
+        [distinctMetadata.workspaceDir, distinctMetadata],
+      ]),
+      agentWorkspaceDirs: new Map(mocks.configuredWorkspaces),
+    });
     let stats:
       | {
           agentCount: number;
@@ -661,6 +692,7 @@ describe("prepared model runtime owner selection", () => {
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
       catalogMode: "static",
+      pluginMetadata,
       onBuildStats: (value) => {
         stats = value;
       },
@@ -682,6 +714,19 @@ describe("prepared model runtime owner selection", () => {
       runtimeRegistryCount: 2,
       fullCatalogConcurrencyLimit: 1,
     });
+    for (const agentId of mocks.configuredAgentIds) {
+      const workspaceDir = mocks.configuredWorkspaces.get(agentId)!;
+      const expectedMetadata = pluginMetadata.workspaces.get(workspaceDir);
+      const prepared = getPreparedModelRuntimeSnapshot({
+        agentId,
+        config,
+        agentDir: state.agentDir(agentId),
+        workspaceDir,
+      });
+      expect(prepared?.metadataSnapshot).toBe(expectedMetadata);
+      const dispatch = await loadPublishedGatewayReplyDispatchRuntime({ agentId });
+      expect(dispatch?.pluginGeneration.pluginMetadataSnapshot).toBe(expectedMetadata);
+    }
 
     const snapshot = getPreparedModelRuntimeSnapshot({
       agentId: "agent-a",

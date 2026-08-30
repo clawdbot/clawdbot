@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import * as providerModelNormalization from "../agents/provider-model-normalization.runtime.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -499,10 +500,19 @@ describe("config plugin validation", () => {
         },
       },
     ])("does not warn when $name keeps Codex unavailable", ({ config }) => {
-      const res = validateWithMissingCodexPlugin(config);
+      const normalizeRuntime = vi.spyOn(
+        providerModelNormalization,
+        "normalizeProviderModelIdWithRuntime",
+      );
+      try {
+        const res = validateWithMissingCodexPlugin(config);
 
-      expect(res.ok).toBe(true);
-      expectNoMissingCodexPluginWarning(res.warnings);
+        expect(res.ok).toBe(true);
+        expectNoMissingCodexPluginWarning(res.warnings);
+        expect(normalizeRuntime).not.toHaveBeenCalled();
+      } finally {
+        normalizeRuntime.mockRestore();
+      }
     });
 
     it("still warns when only one provider model route is pinned to OpenClaw", () => {

@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { parseModelRef } from "../../agents/model-selection-normalize.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
 import {
@@ -11,6 +12,9 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { createPluginRecord } from "../status.test-helpers.js";
+import { withPluginRuntimeRegistryScope } from "./gateway-request-scope.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 
 describe("plugin runtime session creation", () => {
@@ -64,6 +68,45 @@ describe("plugin runtime session creation", () => {
     ).toEqual({
       model: "anthropic/claude-opus-4-8",
       agentRuntime: "claude-cli",
+    });
+  });
+
+  it("keeps session catalog defaults independent of executable provider normalization", () => {
+    const registry = createEmptyPluginRegistry();
+    const normalizeModelId = vi.fn(() => "runtime-only-model");
+    registry.plugins.push(createPluginRecord({ id: "anthropic", origin: "bundled" }));
+    registry.providers.push({
+      pluginId: "anthropic",
+      source: import.meta.url,
+      provider: { id: "anthropic", label: "Anthropic fixture", auth: [], normalizeModelId },
+    });
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-8" },
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+
+    withPluginRuntimeRegistryScope(registry, () => {
+      expect(
+        parseModelRef("anthropic/claude-opus-4-8", "", { allowManifestNormalization: false }),
+      ).toEqual({ provider: "anthropic", model: "runtime-only-model" });
+      expect(normalizeModelId).toHaveBeenCalledOnce();
+      normalizeModelId.mockClear();
+
+      expect(
+        createRuntimeAgent().resolveSessionCatalogCreateTarget({
+          config,
+          provider: "anthropic",
+          modelIds: ["claude-opus-4-8"],
+          agentRuntime: "claude-cli",
+        }),
+      ).toEqual({ model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" });
+      expect(normalizeModelId).not.toHaveBeenCalled();
     });
   });
 

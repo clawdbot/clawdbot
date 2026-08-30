@@ -38,9 +38,15 @@ vi.mock("../../channels/registry.js", () => ({
   listChatChannels: () => listChatChannels(),
   normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
 }));
-vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistryCore: (...a: unknown[]) => loadPluginManifestRegistryCore(...a),
-}));
+vi.mock("../../plugins/manifest-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/manifest-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryCore: (...a: unknown[]) => loadPluginManifestRegistryCore(...a),
+    // Workspace manifests cannot supply the separately owned bundled fallback contracts.
+    loadBundledPluginManifestRegistry: () => ({ plugins: [], diagnostics: [] }),
+  };
+});
 vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
     loadPluginManifestRegistryCore(...args),

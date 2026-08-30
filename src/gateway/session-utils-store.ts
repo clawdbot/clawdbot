@@ -370,7 +370,11 @@ export function listAgentsForGateway(
       resolveSandboxConfigForAgent(cfg, id).mode === "off"
         ? resolvedPermissionLabel(execDefaults)
         : undefined;
-    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+    const resolvedModel = resolveDefaultModelForAgent({
+      cfg,
+      agentId: id,
+      allowPluginNormalization: false,
+    });
     const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
     const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: id });
     const agentRuntime = projectWorkerPlacementAgentRuntime(

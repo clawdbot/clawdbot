@@ -56,10 +56,10 @@ import {
 } from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
-  buildModelAliasIndex,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "./model-selection.js";
+  planModelRefWithConfiguredAliases,
+  resolveModelRefWithConfiguredAliases,
+} from "./model-selection-shared.js";
+import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "./openai-model-routes.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
 import {
@@ -131,16 +131,26 @@ type SimpleCompletionSelectionParams = {
 
 type SimpleCompletionSelectionRequest = {
   selection: AgentSimpleCompletionSelection;
+  runtimePluginSelections: AgentHarnessPluginSelection[];
   shorthandModelId?: string;
 };
 
 function resolveSimpleCompletionSelectionRequest(
   params: SimpleCompletionSelectionParams,
+  runtime?: PreparedSimpleCompletionResolverContext,
 ): SimpleCompletionSelectionRequest | null {
+  const metadataSnapshot = runtime?.preparedModelRuntime.metadataSnapshot;
+  const normalization = {
+    manifestPlugins: metadataSnapshot?.plugins ?? params.manifestPlugins,
+    ...(runtime
+      ? { workspaceDir: runtime.workspaceDir, pluginMetadataSnapshot: metadataSnapshot }
+      : {}),
+  };
   const fallbackRef = resolveDefaultModelForAgent({
+    ...normalization,
     cfg: params.cfg,
     agentId: params.agentId,
-    manifestPlugins: params.manifestPlugins,
+    allowPluginNormalization: false,
   });
   // Utility routing derives a provider-declared small model when unset and
   // treats an explicit empty utilityModel as "use the primary" (disabled).
@@ -151,31 +161,27 @@ function resolveSimpleCompletionSelectionRequest(
           cfg: params.cfg,
           agentId: params.agentId,
           primaryProvider: fallbackRef.provider,
-          ...(params.manifestPlugins
-            ? { metadataSnapshot: { plugins: params.manifestPlugins } }
+          ...(normalization.manifestPlugins
+            ? { metadataSnapshot: { plugins: normalization.manifestPlugins } }
             : {}),
         })
       : undefined) ||
     resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
-  const aliasIndex = buildModelAliasIndex({
+  const aliasParams = {
+    ...normalization,
     cfg: params.cfg,
     agentId: params.agentId,
+    raw: split?.model ?? "",
     defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
-    manifestPlugins: params.manifestPlugins,
-  });
-  const resolved = split
-    ? resolveModelRefFromString({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        raw: split.model,
-        defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
-        aliasIndex,
-        manifestPlugins: params.manifestPlugins,
-      })
-    : null;
-  const provider = resolved?.ref.provider ?? fallbackRef.provider;
-  const modelId = resolved?.ref.model ?? fallbackRef.model;
+    allowPluginNormalization: Boolean(runtime),
+  };
+  const aliasPlan = planModelRefWithConfiguredAliases(aliasParams);
+  // Planning cannot activate providers. Only the acquired generation may run
+  // normalization hooks, and only for aliases competing for the chosen operand.
+  const resolved = resolveModelRefWithConfiguredAliases(aliasParams, aliasPlan);
+  const provider = resolved?.provider ?? fallbackRef.provider;
+  const modelId = resolved?.model ?? fallbackRef.model;
   if (!provider || !modelId) {
     return null;
   }
@@ -193,6 +199,15 @@ function resolveSimpleCompletionSelectionRequest(
       profileId: split?.profile || undefined,
       agentDir: params.agentDir?.trim() || resolveAgentDir(params.cfg, params.agentId),
     },
+    // Runtime normalization can disable an alias and select a competing provider
+    // or the raw fallback. Acquire every possible owner before closing the generation.
+    runtimePluginSelections: [
+      { provider: runtimeProvider ?? provider, modelId },
+      ...aliasPlan.candidates.map(({ ref }) => ({ provider: ref.provider, modelId: ref.model })),
+      ...(aliasPlan.candidates.length > 0 && aliasPlan.fallbackRef
+        ? [{ provider: aliasPlan.fallbackRef.provider, modelId: aliasPlan.fallbackRef.model }]
+        : []),
+    ],
     ...(split && !split.model.includes("/") ? { shorthandModelId: split.model } : {}),
   };
 }
@@ -551,13 +566,10 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   const pluginIdScope = createAgentRuntimeMetadataPluginIdScope({
     config: params.cfg,
     workspaceDir,
-    selections: [
-      {
-        provider: tentativeSelection.runtimeProvider ?? tentativeSelection.provider,
-        modelId: tentativeSelection.modelId,
-        agentId: params.agentId,
-      },
-    ],
+    selections: tentativeRequest.runtimePluginSelections.map((selection) => ({
+      ...selection,
+      agentId: params.agentId,
+    })),
     ...(tentativeRequest.shorthandModelId
       ? { shorthandModelIds: [tentativeRequest.shorthandModelId] }
       : {}),
@@ -569,28 +581,25 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     pluginIdScope,
     allowWorkspaceScopedCurrent: true,
   });
-  const resolveSelection = () =>
-    resolveSimpleCompletionSelectionForAgent({
+  const resolveRequest = () =>
+    resolveSimpleCompletionSelectionRequest({
       ...selectionParams,
       manifestPlugins: metadataSnapshot.plugins,
     });
-  let selection = resolveSelection();
-  if (!selection) {
+  let request = resolveRequest();
+  if (!request) {
     return { error: `No model configured for agent ${params.agentId}.` };
   }
   const canonicalPluginIdScope = createAgentRuntimeMetadataPluginIdScope({
     config: params.cfg,
     workspaceDir,
-    selections: [
-      {
-        provider: selection.runtimeProvider ?? selection.provider,
-        modelId: selection.modelId,
-        agentId: params.agentId,
-      },
-    ],
+    selections: request.runtimePluginSelections.map((selection) => ({
+      ...selection,
+      agentId: params.agentId,
+    })),
     ...(tentativeRequest.shorthandModelId &&
-    selection.provider === tentativeSelection.provider &&
-    selection.modelId === tentativeSelection.modelId
+    request.selection.provider === tentativeSelection.provider &&
+    request.selection.modelId === tentativeSelection.modelId
       ? { shorthandModelIds: [tentativeRequest.shorthandModelId] }
       : {}),
   });
@@ -602,28 +611,34 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       pluginIdScope: canonicalPluginIdScope,
       allowWorkspaceScopedCurrent: true,
     });
-    selection = resolveSelection();
-    if (!selection) {
+    request = resolveRequest();
+    if (!request) {
       return { error: `No model configured for agent ${params.agentId}.` };
     }
   }
-  const selectedProvider = selection.runtimeProvider ?? selection.provider;
   return await withPreparedSimpleCompletionRuntime(
     {
       ...params,
-      agentDir: selection.agentDir,
+      agentDir: request.selection.agentDir,
       pluginMetadataSnapshot: metadataSnapshot,
     },
-    [{ provider: selectedProvider, modelId: selection.modelId }],
+    request.runtimePluginSelections,
     async (context) => {
+      const runtimeSelection = resolveSimpleCompletionSelectionRequest(
+        selectionParams,
+        context,
+      )?.selection;
+      if (!runtimeSelection) {
+        return { error: `No model configured for agent ${params.agentId}.` };
+      }
       const prepared = await prepareSimpleCompletionModelCore(
         {
           cfg: params.cfg,
           agentId: params.agentId,
-          provider: selectedProvider,
-          modelId: selection.modelId,
-          agentDir: selection.agentDir,
-          profileId: selection.profileId,
+          provider: runtimeSelection.runtimeProvider ?? runtimeSelection.provider,
+          modelId: runtimeSelection.modelId,
+          agentDir: runtimeSelection.agentDir,
+          profileId: runtimeSelection.profileId,
           preferredProfile: params.preferredProfile,
           allowMissingApiKeyModes: params.allowMissingApiKeyModes,
           ...(params.allowBundledStaticCatalogFallback !== undefined
@@ -634,7 +649,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
         },
         context,
       );
-      return { ...prepared, selection };
+      return { ...prepared, selection: runtimeSelection };
     },
   );
 }

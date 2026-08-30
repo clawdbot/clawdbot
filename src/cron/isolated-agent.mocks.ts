@@ -3,6 +3,8 @@
 // suite setup so first-test timings cover cron behavior rather than module initialization.
 import "../utils/usage-format.js";
 import { vi } from "vitest";
+import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
+import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
 
 const loadPreparedModelCatalog = vi.hoisted(() => vi.fn());
 
@@ -15,6 +17,9 @@ vi.mock("../agents/embedded-agent.js", () => ({
 vi.mock("../agents/prepared-model-catalog.js", async () => {
   const { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } =
     await vi.importActual<typeof import("../agents/agent-scope.js")>("../agents/agent-scope.js");
+  const { createPluginMetadataSnapshot } = await vi.importActual<
+    typeof import("../config/plugin-auto-enable.test-helpers.js")
+  >("../config/plugin-auto-enable.test-helpers.js");
   return {
     loadPreparedModelCatalog,
     loadPreparedModelCatalogSnapshot: vi.fn(async (params) => ({
@@ -28,19 +33,25 @@ vi.mock("../agents/prepared-model-catalog.js", async () => {
     publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
       owner.agentId === agentId.trim().toLowerCase(),
     loadResolvedPublishedModelCatalogOwner: vi.fn(
-      async (params: {
-        agentId?: string;
-        agentDir?: string;
-        config?: object;
-        workspaceDir?: string;
-      }) => {
+      async (
+        params: LoadPreparedModelCatalogParams = {},
+      ): Promise<ResolvedPublishedModelCatalogOwner> => {
         const config = params.config ?? {};
         const agentId = params.agentId ?? resolveDefaultAgentId(config);
+        const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
         return {
+          catalogOwner: { agentId, workspaceDir },
           agentId,
           agentDir: params.agentDir ?? resolveAgentDir(config, agentId),
-          workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId),
+          workspaceDir,
           config,
+          authModes: {},
+          authStore: { version: 1, profiles: {} },
+          metadataSnapshot: createPluginMetadataSnapshot({
+            config,
+            workspaceDir,
+            manifestRegistry: { plugins: [], diagnostics: [] },
+          }),
           modelCatalog: {
             entries: (await loadPreparedModelCatalog(params)) ?? [],
             routeVariants: [],

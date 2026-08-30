@@ -14,7 +14,13 @@ import {
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import {
+  createModelManifestPluginContext,
+  resolveModelRefWithConfiguredAliases,
+} from "../../agents/model-selection-shared.js";
+import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -78,6 +84,7 @@ import {
   hasInboundMediaForUnderstanding,
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
+import type { PreparedReplyModelRef } from "./model-runtime-normalization.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
@@ -375,6 +382,17 @@ export async function getReplyFromConfig(
   const preparedWorkspaceDir = preparedReplyDispatchRuntime?.workspaceDir;
   const preparedModelCatalog: ModelCatalogSnapshot | undefined =
     preparedReplyDispatchRuntime?.modelCatalog;
+  // Capture the admitted packet before awaited session work. Stored pins resolve
+  // this lazy context only when needed, without borrowing a later publication.
+  const runtimeModelNormalization = {
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    manifestPluginContext: createModelManifestPluginContext({
+      cfg,
+      agentId,
+      workspaceDir: preparedWorkspaceDir,
+      pluginMetadataSnapshot: preparedReplyDispatchRuntime?.pluginGeneration.pluginMetadataSnapshot,
+    }),
+  };
   const traceAttributes = resolverTiming.measureSync("reply.resolve_trace_context", () => ({
     surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
     hasSessionKey: Boolean(agentSessionKey),
@@ -432,6 +450,16 @@ export async function getReplyFromConfig(
   );
   let provider = defaultProvider;
   let model = defaultModel;
+  // Keep the authored default for executable preparation; static IDs may be literal
+  // or already manifest-normalized. Initial, primary, and probe share one result.
+  let preparedDefaultModel: ModelRef | undefined;
+  const prepareDefaultModel = () =>
+    (preparedDefaultModel ??= resolveDefaultModelForAgent({
+      cfg,
+      agentId,
+      manifestPluginContext: runtimeModelNormalization.manifestPluginContext,
+    }));
+  let preparedInitialModel: PreparedReplyModelRef = prepareDefaultModel;
   let hasResolvedHeartbeatModelOverride = false;
   if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
@@ -441,17 +469,17 @@ export async function getReplyFromConfig(
       normalizeOptionalString(agentCfg?.heartbeat?.model) ??
       "";
     const heartbeatRef = heartbeatRaw
-      ? resolveModelRefFromString({
+      ? resolveModelRefWithConfiguredAliases({
           cfg,
           agentId,
           raw: heartbeatRaw,
           defaultProvider,
-          aliasIndex,
+          manifestPluginContext: runtimeModelNormalization.manifestPluginContext,
         })
       : null;
     if (heartbeatRef) {
-      provider = heartbeatRef.ref.provider;
-      model = heartbeatRef.ref.model;
+      preparedInitialModel = heartbeatRef;
+      ({ provider, model } = preparedInitialModel);
       hasResolvedHeartbeatModelOverride = true;
     }
   }
@@ -492,6 +520,7 @@ export async function getReplyFromConfig(
     "reply.native_slash_command_fast_path",
     () =>
       maybeResolveNativeSlashCommandFastReply({
+        manifestPluginContext: runtimeModelNormalization.manifestPluginContext,
         ctx: finalized,
         cfg,
         agentId,
@@ -503,6 +532,9 @@ export async function getReplyFromConfig(
         aliasIndex,
         provider,
         model,
+        preparedDefaultModel: prepareDefaultModel,
+        preparedInitialModel,
+        preparedPrimaryModel: prepareDefaultModel,
         workspaceDir: workspaceDirForNativeCommand,
         typing,
         opts: optsWithSkillFilter,
@@ -700,6 +732,7 @@ export async function getReplyFromConfig(
     // model selection, so heartbeat.model must not retarget its AppServer turn.
     provider = defaultProvider;
     model = defaultModel;
+    preparedInitialModel = prepareDefaultModel;
     hasResolvedHeartbeatModelOverride = false;
   }
   // Utility-model narration is turn-local decoration. Initialize the durable
@@ -762,6 +795,7 @@ export async function getReplyFromConfig(
         agentId,
         agentDir,
         workspaceDir,
+        manifestPluginContext: runtimeModelNormalization.manifestPluginContext,
         resetTriggered,
         bodyStripped,
         sessionCtx,
@@ -816,21 +850,23 @@ export async function getReplyFromConfig(
     : null;
   const resolvedChannelModelOverride =
     channelModelOverride && !hasResolvedHeartbeatModelOverride && !sessionModelSelectionLocked
-      ? resolveModelRefFromString({
+      ? resolveModelRefWithConfiguredAliases({
           cfg,
           agentId,
           raw: channelModelOverride.model,
           defaultProvider,
-          aliasIndex,
+          manifestPluginContext: runtimeModelNormalization.manifestPluginContext,
         })
       : null;
-  const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
-  const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
+  const preparedPrimaryModel = resolvedChannelModelOverride ?? prepareDefaultModel;
+  const primaryProvider = resolvedChannelModelOverride?.provider ?? defaultProvider;
+  const primaryModel = resolvedChannelModelOverride?.model ?? defaultModel;
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
   );
   const storedModelOverride = resolveStoredModelOverride({
+    ...runtimeModelNormalization,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -848,9 +884,8 @@ export async function getReplyFromConfig(
       sessionEntry,
       storedOverride: storedModelOverride,
       defaultProvider,
-      defaultModel,
-      primaryProvider,
-      primaryModel,
+      preparedPrimaryModel,
+      normalization: runtimeModelNormalization,
     });
   const staleLegacyAutoFallbackWithoutOrigin =
     !sessionModelSelectionLocked &&
@@ -862,8 +897,11 @@ export async function getReplyFromConfig(
     !staleHeartbeatAutoFallbackOverride &&
     !staleLegacyAutoFallbackWithoutOrigin
   ) {
-    provider = storedModelOverride.provider ?? defaultProvider;
-    model = storedModelOverride.model;
+    preparedInitialModel = {
+      provider: storedModelOverride.provider ?? defaultProvider,
+      model: storedModelOverride.model,
+    };
+    ({ provider, model } = preparedInitialModel);
   }
   const canApplyAutoFallbackPrimaryProbe =
     !sessionModelSelectionLocked &&
@@ -886,8 +924,8 @@ export async function getReplyFromConfig(
     !hasEffectiveStoredModelOverride &&
     resolvedChannelModelOverride
   ) {
-    provider = resolvedChannelModelOverride.ref.provider;
-    model = resolvedChannelModelOverride.ref.model;
+    preparedInitialModel = resolvedChannelModelOverride;
+    ({ provider, model } = preparedInitialModel);
   }
 
   if (
@@ -1010,6 +1048,9 @@ export async function getReplyFromConfig(
       defaultModel,
       primaryProvider,
       primaryModel,
+      preparedDefaultModel: prepareDefaultModel,
+      preparedInitialModel,
+      preparedPrimaryModel,
       aliasIndex,
       provider,
       model,
@@ -1018,6 +1059,7 @@ export async function getReplyFromConfig(
       opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       skillFilter: mergedSkillFilter,
       preparedModelCatalog,
+      manifestPluginContext: runtimeModelNormalization.manifestPluginContext,
     }),
   );
   if (directiveResult.kind === "reply") {
@@ -1091,7 +1133,7 @@ export async function getReplyFromConfig(
     command.commandBodyNormalized.trim() === "/status";
   const statusThinkingCatalog = shouldPrepareStatusThinkingCatalog
     ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () =>
-        modelState.resolveThinkingCatalog(),
+        modelState.resolveThinkingCatalog({ provider, model }),
       )
     : undefined;
 
@@ -1133,7 +1175,8 @@ export async function getReplyFromConfig(
       resolvedElevatedLevel,
       blockReplyChunking,
       resolvedBlockStreamingBreak,
-      resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+      resolveDefaultThinkingLevel: () =>
+        modelState.resolveDefaultThinkingLevel({ provider, model }),
       provider,
       model,
       contextTokens,
@@ -1157,14 +1200,17 @@ export async function getReplyFromConfig(
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
     : autoFallbackPrimaryProbe;
-  const runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
-  const runModel = runAutoFallbackPrimaryProbe?.model ?? model;
+  let runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
+  let runModel = runAutoFallbackPrimaryProbe?.model ?? model;
   let runModelState = modelState;
   if (runAutoFallbackPrimaryProbe) {
     try {
       runModelState = await createModelSelectionState({
         cfg,
         agentId,
+        agentDir,
+        workspaceDir,
+        manifestPluginContext: runtimeModelNormalization.manifestPluginContext,
         agentCfg,
         sessionEntry,
         sessionStore,
@@ -1178,6 +1224,9 @@ export async function getReplyFromConfig(
         defaultModel,
         primaryProvider,
         primaryModel,
+        preparedDefaultModel: prepareDefaultModel,
+        preparedInitialModel: preparedPrimaryModel,
+        preparedPrimaryModel,
         provider: runProvider,
         model: runModel,
         hasModelDirective: false,
@@ -1186,6 +1235,7 @@ export async function getReplyFromConfig(
         isHeartbeat: opts?.isHeartbeat === true,
         preparedModelCatalog,
       });
+      ({ provider: runProvider, model: runModel } = runModelState);
     } catch (error) {
       if (error instanceof ModelSelectionLockedError) {
         typing.cleanup();

@@ -43,6 +43,8 @@ describe("resolveCliExecutionAuthProfileId", () => {
           authProfileProvider: "claude-cli",
           config: {},
           agentDir: "/tmp/unused-agent",
+          workspaceDir: undefined,
+          metadataSnapshot: undefined,
           ...(authProfileIdSource === "user"
             ? { selected: { authProfileId, authProfileIdSource } }
             : {}),
@@ -67,6 +69,8 @@ describe("resolveCliExecutionAuthProfileId", () => {
         authProfileProvider: "claude-cli",
         config: {},
         agentDir: "/tmp/unused-agent",
+        workspaceDir: undefined,
+        metadataSnapshot: undefined,
         selected: { authProfileId, authProfileIdSource: "user" },
       }),
     ).toBe(authProfileId);
@@ -85,6 +89,8 @@ describe("resolveCliExecutionAuthProfileId", () => {
         authProfileProvider: "openai",
         config: {},
         agentDir: "/tmp/unused-agent",
+        workspaceDir: undefined,
+        metadataSnapshot: undefined,
         selected: {
           authProfileId: "openai:work",
           authProfileIdSource: "user",
@@ -100,6 +106,8 @@ describe("resolveCliExecutionAuthProfileId", () => {
         authProfileProvider: "google-gemini-cli",
         config: {},
         agentDir: "/tmp/unused-agent",
+        workspaceDir: undefined,
+        metadataSnapshot: undefined,
         selected: {
           authProfileId: "google-gemini-cli:missing",
           authProfileIdSource: "user",
@@ -121,6 +129,8 @@ describe("resolveCliExecutionAuthProfileId", () => {
         authProfileProvider: "google",
         config: {},
         agentDir: "/tmp/unused-agent",
+        workspaceDir: undefined,
+        metadataSnapshot: undefined,
         selected: {
           authProfileId: "google:work",
           authProfileIdSource: "user",
@@ -141,6 +151,8 @@ describe("resolveCliExecutionAuthProfileId", () => {
         authProfileProvider: "google",
         config: {},
         agentDir: "/tmp/unused-agent",
+        workspaceDir: undefined,
+        metadataSnapshot: undefined,
         selected: {
           authProfileId: "google:work",
           authProfileIdSource: "user",
@@ -161,6 +173,8 @@ describe("resolveCliExecutionAuthProfileId", () => {
         authProfileProvider: "google-gemini-cli",
         config: {},
         agentDir: "/tmp/unused-agent",
+        workspaceDir: undefined,
+        metadataSnapshot: undefined,
         selected: {
           authProfileId: "google-gemini-cli:work",
           authProfileIdSource: "user",
@@ -194,6 +208,8 @@ describe("resolveCliExecutionAuthProfileId", () => {
         authProfileProvider: "google",
         config: {},
         agentDir: "/tmp/unused-agent",
+        workspaceDir: undefined,
+        metadataSnapshot: undefined,
         selected: {
           authProfileId: "google-gemini-cli:alice",
           authProfileIdSource: "user",

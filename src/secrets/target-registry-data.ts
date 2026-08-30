@@ -1,4 +1,5 @@
 /** Builds the static and plugin-derived registry of secret migration targets. */
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -446,28 +447,23 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   },
 ];
 
-let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
-
-function loadSecretTargetRegistryFromPluginMetadata(params: {
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  preferPersisted?: boolean;
-  throwOnLoadError?: boolean;
-}): SecretTargetRegistryEntry[] {
-  const plugins = resolvePluginMetadataSnapshot({
-    ...(params.config !== undefined ? { config: params.config } : {}),
-    env: params.env,
-    allowWorkspaceScopedCurrent: true,
-    ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
-  }).plugins;
-  return buildSecretTargetRegistryFromPlugins(plugins, params);
-}
+// Derived targets belong to their immutable manifest list, including retained
+// runtime scopes; publishing another generation must not reuse their targets.
+const secretTargetRegistriesByPlugins = new WeakMap<
+  readonly PluginManifestRecord[],
+  SecretTargetRegistryEntry[]
+>();
 
 /** Builds secret targets from one exact manifest-registry plugin set. */
 export function buildSecretTargetRegistryFromPlugins(
   plugins: readonly PluginManifestRecord[],
   options?: { throwOnLoadError?: boolean },
 ): SecretTargetRegistryEntry[] {
+  const cached = secretTargetRegistriesByPlugins.get(plugins);
+  // Runtime results may omit broken artifacts; source generation must still validate them.
+  if (cached && !options?.throwOnLoadError) {
+    return cached;
+  }
   const channelPlugins = plugins.filter(
     (record) =>
       record.channels.length > 0 ||
@@ -489,7 +485,7 @@ export function buildSecretTargetRegistryFromPlugins(
     ...listOfficialExternalChannelSecretTargetRegistryEntries(),
   ];
   const seen = new Set<string>();
-  return entries.filter((entry) => {
+  const registry = entries.filter((entry) => {
     const key = `${entry.configFile}:${entry.pathPattern}`;
     if (seen.has(key)) {
       return false;
@@ -497,15 +493,15 @@ export function buildSecretTargetRegistryFromPlugins(
     seen.add(key);
     return true;
   });
+  secretTargetRegistriesByPlugins.set(plugins, registry);
+  return registry;
 }
 
-/** Returns only core-owned secret target registry entries. */
 /** Returns static core secret target registry entries without plugin-derived targets. */
 export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return CORE_SECRET_TARGET_REGISTRY;
 }
 
-/** Returns the process-cached registry including bundled plugin/channel metadata. */
 /** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
 export function getSecretTargetRegistry(params?: {
   config?: OpenClawConfig;
@@ -514,28 +510,18 @@ export function getSecretTargetRegistry(params?: {
 }): SecretTargetRegistryEntry[] {
   if (params?.sourceTree) {
     // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
-    return loadSecretTargetRegistryFromPluginMetadata({
+    const snapshot = resolvePluginMetadataSnapshot({
       env: {
         ...process.env,
         OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
       },
       preferPersisted: false,
-      throwOnLoadError: true,
     });
+    return buildSecretTargetRegistryFromPlugins(snapshot.plugins, { throwOnLoadError: true });
   }
-  if (params?.config) {
-    // Config-scoped plugin roots and policy are not process-stable. Compile these registries per
-    // request so one config cannot poison discovery for a later config in the same process.
-    return loadSecretTargetRegistryFromPluginMetadata({
-      config: params.config,
-      env: params.env ?? process.env,
-    });
-  }
-  if (cachedSecretTargetRegistry) {
-    return cachedSecretTargetRegistry;
-  }
-  cachedSecretTargetRegistry = loadSecretTargetRegistryFromPluginMetadata({
-    env: process.env,
+  const registry = resolveConfigWidePluginManifestRegistry({
+    config: params?.config,
+    env: params?.env ?? process.env,
   });
-  return cachedSecretTargetRegistry;
+  return buildSecretTargetRegistryFromPlugins(registry.plugins);
 }

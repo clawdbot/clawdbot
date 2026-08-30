@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import { getOrCreatePluginMetadataOwner } from "../../plugins/plugin-metadata-collection.js";
 
 const counters = vi.hoisted(() => ({
   installedIndexPreparations: 0,
@@ -66,10 +67,17 @@ afterAll(() => {
 
 it("keeps status-all manifest preparation constant as missing repair rows increase", async () => {
   const runColdAndWarm = (channelIds: readonly string[]) =>
-    withPluginCache(createPluginCache(), async () => ({
-      cold: await runStatusChannels(channelIds),
-      warm: await runStatusChannels(channelIds),
-    }));
+    withPluginCache(createPluginCache(), async () => {
+      const owner = getOrCreatePluginMetadataOwner();
+      try {
+        return {
+          cold: await runStatusChannels(channelIds),
+          warm: await runStatusChannels(channelIds),
+        };
+      } finally {
+        owner.dispose();
+      }
+    });
   const one = await runColdAndWarm(OWNERLESS_CHANNEL_IDS.slice(0, 1));
   const four = await runColdAndWarm(OWNERLESS_CHANNEL_IDS);
 

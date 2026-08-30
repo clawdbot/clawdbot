@@ -1,3 +1,8 @@
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  buildModelAliasIndex as buildCoreModelAliasIndex,
+  resolveAllowedModelRef as resolveCoreAllowedModelRef,
+} from "../agents/model-selection.js";
 import {
   getPreparedModelCatalogSnapshot,
   loadPreparedModelCatalog,
@@ -8,6 +13,7 @@ import {
  * and avoid adding new imports here.
  */
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { modelKey } from "../shared/model-key.js";
 
 export {
   listAgentIds,
@@ -62,13 +68,39 @@ export async function loadModelCatalog(params: LoadModelCatalogCompatibilityPara
 }
 
 export {
-  buildModelAliasIndex,
   findNormalizedProviderValue,
   parseModelRef,
-  resolveAllowedModelRef,
   resolveModelRefFromString,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "../agents/model-selection.js";
+
+// v2026.7.1-2 exposed prefix-collapsing SDK keys. Preserve that representation
+// only on returned values; core alias resolution and authorization keep exact refs.
+function legacyModelSelectionKey(key: string): string {
+  const ref = parseProviderModelRef(key)!;
+  return modelKey(ref.provider, ref.model);
+}
+
+export function buildModelAliasIndex(params: Parameters<typeof buildCoreModelAliasIndex>[0]) {
+  const index = buildCoreModelAliasIndex(params);
+  const byKey = new Map<string, string[]>();
+  for (const [key, aliases] of index.byKey) {
+    const legacyKey = legacyModelSelectionKey(key);
+    byKey.set(legacyKey, [...(byKey.get(legacyKey) ?? []), ...aliases]);
+  }
+  return {
+    ...index,
+    byKey,
+    ...(index.disabledKeys
+      ? { disabledKeys: new Set([...index.disabledKeys].map(legacyModelSelectionKey)) }
+      : {}),
+  };
+}
+
+export function resolveAllowedModelRef(params: Parameters<typeof resolveCoreAllowedModelRef>[0]) {
+  const result = resolveCoreAllowedModelRef(params);
+  return "ref" in result ? { ...result, key: legacyModelSelectionKey(result.key) } : result;
+}
 
 export { EmbeddedBlockChunker } from "../agents/embedded-agent-block-chunker.js";
 export { formatReasoningMessage } from "../agents/embedded-agent-utils.js";

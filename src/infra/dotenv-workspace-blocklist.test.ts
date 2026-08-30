@@ -66,21 +66,19 @@ function createManifestBackedProviderSnapshot(
   plugin: PluginManifestRecord,
 ): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
   return {
     policyHash,
-    index,
-    registryIndex: index,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
     registryDiagnostics: [],
     manifestRegistry: { plugins: [plugin], diagnostics: [] },
     plugins: [plugin],

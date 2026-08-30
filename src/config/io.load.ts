@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { ConfigIoContext } from "./io.context.js";
+import { prepareObservedConfigState } from "./io.health-state.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
 import { maybeRecoverSuspiciousConfigReadSync } from "./io.observe-recovery.js";
 import {
@@ -41,7 +42,6 @@ export function loadConfigFromContext(
       // (compaction safeguard, session/cron defaults) silently diverges.
       const config = coerceConfig(migratePersistedImplicitMainRoster({}).config);
       const metadata = context.createValidationPluginMetadataSnapshotLoader({
-        effectiveConfigRaw: config,
         env: deps.env,
       });
       return context.finalizeLoadedRuntimeConfig(
@@ -95,13 +95,15 @@ export function loadConfigFromContext(
       }
     }
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw,
       env: deps.env,
     });
     const validated = validateConfigObjectWithPlugins(validationConfigRaw, {
       env: deps.env,
       pluginValidation: context.options.pluginValidation,
-      loadPluginMetadataSnapshot: pluginMetadata.load,
+      loadPluginMetadataSnapshot: (config) => {
+        prepareObservedConfigState(deps);
+        return pluginMetadata.load(config);
+      },
       sourceRaw: snapshotParsed,
       preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
     });
@@ -157,7 +159,9 @@ export function loadConfigFromContext(
       }
     }
     const cfg = materializeRuntimeConfig(validated.config, {
-      manifestRegistry: pluginMetadata.getManifestRegistry(),
+      manifestRegistry:
+        pluginMetadata.getManifestRegistry() ??
+        (context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined),
     });
     context.observeLoadConfigSnapshot(
       createConfigFileSnapshot({

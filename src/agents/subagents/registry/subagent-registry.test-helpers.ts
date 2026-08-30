@@ -65,14 +65,14 @@ type RegistryDeps = {
   resolveContextEngine?: typeof import("../../../context-engine/registry.js").resolveContextEngine;
 };
 
-function getRegistryTestApi(): RegistryTestApi {
-  return (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.subagentRegistryTestApi")
-  ] as RegistryTestApi;
-}
+// Keep fixture mutations on the same registry instance as the reader exports above.
+// A plugin source import can publish another test handle on the process global.
+const registryTestApi = (globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.subagentRegistryTestApi")
+] as RegistryTestApi;
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
-  getRegistryTestApi().resetSubagentRegistryForTests(opts);
+  registryTestApi.resetSubagentRegistryForTests(opts);
 }
 
 export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
@@ -82,11 +82,11 @@ export function addSubagentRunForTests(entry: SubagentRunRecordOverrides) {
     delete target[key];
   }
   Object.assign(target, canonical);
-  getRegistryTestApi().addSubagentRunForTests(entry as SubagentRunRecord);
+  registryTestApi.addSubagentRunForTests(entry as SubagentRunRecord);
 }
 
 export function releaseSubagentRun(runId: string) {
-  getRegistryTestApi().releaseSubagentRun(runId);
+  registryTestApi.releaseSubagentRun(runId);
 }
 
 export async function finalizeInterruptedSubagentRun(params: {
@@ -95,16 +95,16 @@ export async function finalizeInterruptedSubagentRun(params: {
   error: string;
   endedAt?: number;
 }) {
-  return await getRegistryTestApi().finalizeInterruptedSubagentRun(params);
+  return await registryTestApi.finalizeInterruptedSubagentRun(params);
 }
 
 export const testing = {
   failQueuedSubagentRun: (runId: string, error: string) =>
-    getRegistryTestApi().testing.failQueuedSubagentRun(runId, error),
-  sweepOnceForTests: () => getRegistryTestApi().testing.sweepOnceForTests(),
-  runSweeperTickForTests: () => getRegistryTestApi().testing.runSweeperTickForTests(),
+    registryTestApi.testing.failQueuedSubagentRun(runId, error),
+  sweepOnceForTests: () => registryTestApi.testing.sweepOnceForTests(),
+  runSweeperTickForTests: () => registryTestApi.testing.runSweeperTickForTests(),
   setDepsForTest: (overrides?: Partial<RegistryDeps>) =>
-    getRegistryTestApi().testing.setDepsForTest(overrides),
+    registryTestApi.testing.setDepsForTest(overrides),
 };
 
 export function listSessionMaintenanceProtectedSubagentSessionKeys() {

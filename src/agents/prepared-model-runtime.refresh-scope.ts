@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  getPluginMetadataWorkspaceSnapshot,
+  withPluginMetadataCollectionScope,
+} from "../plugins/plugin-metadata-collection.js";
+import {
   advancePreparedModelRuntimeOwnerConfig,
   listConfiguredOwnerInputs,
   normalizePreparedModelRuntimeInput,
@@ -53,27 +57,18 @@ export function listConfiguredRefreshInputs(
       workspacesByDir.set(agentDir, workspaceDir);
     }
   }
-  const inputs: PreparedModelRuntimeInput[] = [];
-  for (const rawInput of listConfiguredOwnerInputs(
-    config,
-    options.defaultWorkspaceDir,
-    options.allowGatewaySubagentBinding,
-  )) {
-    const input = normalizePreparedModelRuntimeInput(rawInput);
-    const preservedWorkspaceDir = input.agentId
-      ? preservedWorkspaceByAgentDir.get(input.agentId)?.get(input.agentDir)
-      : undefined;
-    inputs.push(
-      preservedWorkspaceDir
-        ? {
-            ...input,
-            workspaceDir: preservedWorkspaceDir,
-            preserveWorkspaceDirOnRefresh: true,
-          }
-        : input,
-    );
-  }
-  return inputs;
+  const listInputs = () =>
+    listConfiguredOwnerInputs(
+      config,
+      options.defaultWorkspaceDir,
+      options.allowGatewaySubagentBinding,
+      preservedWorkspaceByAgentDir,
+    ).map(normalizePreparedModelRuntimeInput);
+  // Input planning can precede publication; it must consume the same captured
+  // metadata as the build rather than the currently published Gateway generation.
+  return options.pluginMetadata
+    ? withPluginMetadataCollectionScope(options.pluginMetadata, listInputs, { config })
+    : listInputs();
 }
 
 /** Invalidates scoped owners and optionally advances retained owners to a new config stamp. */
@@ -141,8 +136,11 @@ export function resolveSafeRefreshAgentIds(
       !owner.snapshot ||
       owner.needsRefresh ||
       owner.catalogMode !== (options.catalogMode ?? "live") ||
-      (options.pluginMetadataSnapshot &&
-        owner.snapshot.metadataSnapshot !== options.pluginMetadataSnapshot) ||
+      (options.pluginMetadata &&
+        owner.snapshot.metadataSnapshot !==
+          getPluginMetadataWorkspaceSnapshot(options.pluginMetadata, {
+            workspaceDir: input.workspaceDir,
+          })) ||
       ownerKey({ ...owner.input, config: input.config }) !== ownerKey(input)
     ) {
       return undefined;

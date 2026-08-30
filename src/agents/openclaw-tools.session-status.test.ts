@@ -1,8 +1,11 @@
 // Verifies session status output across scoped stores, tasks, and runtime hooks.
 
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStoreEntryCore } from "../config/sessions/store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
 import {
@@ -2121,6 +2124,173 @@ describe("session_status tool", () => {
     }
   });
 
+  it("keeps spawned-workspace thinking facts when metadata reloads during the catalog read", async () => {
+    const currentMetadata = await import("../plugins/current-plugin-metadata-snapshot.js");
+    const actualCurrentMetadata = await vi.importActual<
+      typeof import("../plugins/current-plugin-metadata-snapshot.js")
+    >("../plugins/current-plugin-metadata-snapshot.js");
+    const metadataSnapshots = await import("../plugins/plugin-metadata-snapshot.js");
+    const actualMetadataSnapshots = await vi.importActual<
+      typeof import("../plugins/plugin-metadata-snapshot.js")
+    >("../plugins/plugin-metadata-snapshot.js");
+    const { createPluginCache } = await import("../plugins/plugin-cache.js");
+    const { createPluginMetadataOwner, getPluginMetadataWorkspaceSnapshot } =
+      await import("../plugins/plugin-metadata-collection.js");
+    const { installPluginMetadataOwner } =
+      await import("../plugins/current-plugin-metadata.test-support.js");
+    const { clearPluginMetadataLifecycleCaches } =
+      await import("../plugins/plugin-metadata-lifecycle.js");
+    const { createColdPluginFixture } =
+      await import("../plugins/test-helpers/cold-plugin-fixtures.js");
+    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+    const catalogs = await import("./prepared-model-catalog.js");
+    const currentSnapshotSpy = vi
+      .spyOn(currentMetadata, "getCurrentPluginMetadataSnapshot")
+      .mockImplementation(actualCurrentMetadata.getCurrentPluginMetadataSnapshot);
+    const compatibleSnapshotSpy = vi
+      .spyOn(metadataSnapshots, "isPluginMetadataSnapshotCompatible")
+      .mockImplementation(actualMetadataSnapshots.isPluginMetadataSnapshotCompatible);
+    const publishedCatalogSpy = vi.spyOn(catalogs, "loadPublishedPreparedModelCatalog");
+    try {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const spawnedWorkspaceDir = state.path("spawned-workspace");
+        const rootDir = path.join(
+          spawnedWorkspaceDir,
+          ".openclaw",
+          "extensions",
+          "thinking-policy",
+        );
+        await fs.mkdir(rootDir, { recursive: true });
+        const fixture = createColdPluginFixture({
+          rootDir,
+          pluginId: "status-thinking-policy",
+          providerId: "fixture-thinking",
+          manifest: {
+            channels: [],
+            channelConfigs: {},
+            providerAuthChoices: [],
+            modelIdNormalization: {
+              providers: { "fixture-thinking": { aliases: { legacy: "spawned-current" } } },
+            },
+          },
+        });
+        const cfg: OpenClawConfig = {
+          session: { mainKey: "main", scope: "per-sender" },
+          plugins: {
+            allow: [fixture.pluginId],
+            entries: { [fixture.pluginId]: { enabled: true } },
+          },
+          agents: {
+            ownership: "explicit",
+            defaults: {
+              systemAgent: { agentId: "main" },
+              model: { primary: "fixture-thinking/legacy" },
+            },
+            entries: {
+              main: { workspace: state.workspaceDir },
+              work: { workspace: state.path("work") },
+            },
+          },
+          models: {
+            providers: {
+              "fixture-thinking": {
+                baseUrl: "https://fixture.example/v1",
+                models: [
+                  {
+                    id: "other-model",
+                    name: "Other configured model",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    maxTokens: 1024,
+                  },
+                ],
+              },
+            },
+          },
+          tools: { agentToAgent: { enabled: false } },
+        };
+        const pluginCache = createPluginCache();
+        const owner = createPluginMetadataOwner(pluginCache);
+        const dispose = installPluginMetadataOwner(owner, pluginCache);
+        try {
+          const metadata = owner.prepare({
+            config: cfg,
+            additionalWorkspaceDirs: [spawnedWorkspaceDir],
+          });
+          owner.publish(metadata, { config: cfg });
+          resetSessionStore({
+            "agent:work:spawned": {
+              sessionId: "spawned-thinking",
+              updatedAt: 10,
+              spawnedWorkspaceDir,
+            },
+          });
+          mockConfig = cfg;
+          publishedCatalogSpy.mockImplementationOnce(async () => {
+            const replacement: OpenClawConfig = {
+              ...cfg,
+              agents: {
+                ...cfg.agents,
+                entries: {
+                  ...cfg.agents?.entries,
+                  main: { workspace: state.path("replacement-main") },
+                },
+              },
+            };
+            owner.publish(
+              owner.prepare({
+                config: replacement,
+                additionalWorkspaceDirs: [spawnedWorkspaceDir],
+              }),
+              { config: replacement },
+            );
+            return [
+              {
+                provider: "fixture-thinking",
+                id: "spawned-current",
+                name: "Spawned reasoning model",
+                reasoning: true,
+              },
+            ];
+          });
+
+          const result = await createSessionStatusTool({
+            agentSessionKey: "agent:work:spawned",
+            config: cfg,
+            metadataSnapshot: getPluginMetadataWorkspaceSnapshot(metadata, {
+              workspaceDir: spawnedWorkspaceDir,
+            }),
+          }).execute("spawned-thinking-reload", {});
+
+          expect(result.details).toMatchObject({
+            ok: true,
+            agentId: "work",
+            sessionKey: "agent:work:spawned",
+            changedModel: false,
+          });
+          expect(buildStatusMessageMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+              agent: {
+                model: { primary: "fixture-thinking/spawned-current" },
+                thinkingDefault: "medium",
+              },
+              workspaceDir: spawnedWorkspaceDir,
+            }),
+          );
+          expect(updateSessionStoreMock).not.toHaveBeenCalled();
+        } finally {
+          dispose();
+          clearPluginMetadataLifecycleCaches();
+        }
+      });
+    } finally {
+      publishedCatalogSpy.mockRestore();
+      compatibleSnapshotSpy.mockRestore();
+      currentSnapshotSpy.mockRestore();
+    }
+  });
+
   it("uses canonical delivery state when resolving queue settings", async () => {
     resetSessionStore({
       main: {
@@ -2719,6 +2889,61 @@ describe("session_status tool", () => {
     expect(result.details).toMatchObject({
       modelOverride: "anthropic/claude-sonnet-4-6",
       modelProvider: "anthropic",
+    });
+  });
+
+  it("preserves a configured provider namespace when selecting an allowed alias", async () => {
+    resetSessionStore({
+      main: { sessionId: "namespaced-model", updatedAt: 10 },
+    });
+    const cfg: OpenClawConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: { "fixture/fixture/model": { alias: "namespaced" } },
+          modelPolicy: { allow: ["fixture/fixture/model"] },
+        },
+      },
+      models: {
+        providers: {
+          fixture: {
+            baseUrl: "https://fixture.example/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "fixture/model",
+                name: "Namespaced fixture",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 4096,
+                maxTokens: 1024,
+              },
+            ],
+          },
+        },
+      },
+      tools: { agentToAgent: { enabled: false } },
+    };
+    mockConfig = cfg;
+
+    const result = await createSessionStatusTool({
+      agentSessionKey: "main",
+      config: cfg,
+    }).execute("namespaced-alias", { model: "namespaced" });
+
+    expect(result.details).toMatchObject({
+      changedModel: true,
+      modelProvider: "fixture",
+      model: "fixture/model",
+      modelOverride: "fixture/fixture/model",
+    });
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
+    expect(savedStore.main).toMatchObject({
+      providerOverride: "fixture",
+      modelOverride: "fixture/model",
+      liveModelSwitchPending: true,
     });
   });
 

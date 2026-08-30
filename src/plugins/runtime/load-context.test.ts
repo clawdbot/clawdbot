@@ -1,5 +1,9 @@
 // Load context tests cover agent and workspace context resolution for plugin runtimes.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
@@ -13,51 +17,17 @@ const resolvePluginControlPlaneWorkspaceMock = vi.fn(
     workspaceScope: "selected" as const,
   }),
 );
-const manifestRegistry = { diagnostics: [], plugins: [] };
-const index: PluginMetadataSnapshot["index"] = {
-  version: 1,
-  hostContractVersion: "test",
-  compatRegistryVersion: "test",
-  migrationVersion: 1,
-  generatedAtMs: 1,
-  installRecords: {},
-  plugins: [],
-  policyHash: "policy",
-  diagnostics: [],
-};
-const metadataSnapshot: PluginMetadataSnapshot = {
-  configFingerprint: "fingerprint",
-  diagnostics: [],
-  index,
-  registryIndex: index,
+const manifestRegistry: ReturnType<typeof makeRegistry> = { diagnostics: [], plugins: [] };
+const metadataSnapshot = createPluginMetadataSnapshot({
   manifestRegistry,
-  registryDiagnostics: [],
-  plugins: [],
-  byPluginId: new Map(),
-  normalizePluginId: (id) => id,
-  owners: {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-  },
-  metrics: {
-    registrySnapshotMs: 0,
-    manifestRegistryMs: 0,
-    ownerMapsMs: 0,
-    totalMs: 0,
-    indexPluginCount: 0,
-    manifestPluginCount: 0,
-  },
-  policyHash: "policy",
   workspaceDir: "/resolved-workspace",
-};
-const resolvePluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
-const resolveConfigWidePluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
+});
+const loadPluginMetadataSnapshotMock = vi.fn(
+  (_params?: unknown): PluginMetadataSnapshot => metadataSnapshot,
+);
+const resolveConfigWidePluginManifestRegistryMock = vi.fn<
+  typeof import("../../config/io.plugin-metadata.js").resolveConfigWidePluginManifestRegistry
+>(() => manifestRegistry);
 
 let resolvePluginRuntimeLoadContext: typeof import("./load-context.resolve.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
@@ -79,13 +49,30 @@ vi.mock("../control-plane-workspace.js", () => ({
 }));
 
 vi.mock("../../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginMetadataSnapshot: resolveConfigWidePluginMetadataSnapshotMock,
+  resolveConfigWidePluginManifestRegistry: resolveConfigWidePluginManifestRegistryMock,
 }));
 
 vi.mock("../plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugin-metadata-snapshot.js")>()),
-  resolvePluginMetadataSnapshot: resolvePluginMetadataSnapshotMock,
+  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+  resolvePluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
 }));
+
+vi.mock("../plugin-metadata-collection.js", async () => {
+  const { projectPluginMetadataSnapshot } = await import("../plugin-metadata-snapshot.js");
+  return {
+    getCurrentPluginMetadataOwner: () => undefined,
+    getScopedPluginMetadata: () => undefined,
+    withPluginMetadataCollectionScope: (_metadata: unknown, run: () => unknown) => run(),
+    preparePluginMetadata: (params: unknown) => ({
+      selectedSnapshot: loadPluginMetadataSnapshotMock(params),
+    }),
+    getPluginMetadataWorkspaceSnapshot: (
+      metadata: { selectedSnapshot: PluginMetadataSnapshot },
+      params: { pluginIds?: readonly string[] },
+    ) => projectPluginMetadataSnapshot(metadata.selectedSnapshot, params.pluginIds),
+  };
+});
 
 describe("resolvePluginRuntimeLoadContext", () => {
   beforeAll(async () => {
@@ -99,8 +86,8 @@ describe("resolvePluginRuntimeLoadContext", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
-    resolvePluginMetadataSnapshotMock.mockReset().mockReturnValue(metadataSnapshot);
-    resolveConfigWidePluginMetadataSnapshotMock.mockReset().mockReturnValue(metadataSnapshot);
+    loadPluginMetadataSnapshotMock.mockReset().mockReturnValue(metadataSnapshot);
+    resolveConfigWidePluginManifestRegistryMock.mockReset().mockReturnValue(manifestRegistry);
     resolvePluginControlPlaneWorkspaceMock.mockClear();
 
     loadConfigMock.mockReturnValue({ plugins: {} });
@@ -112,6 +99,8 @@ describe("resolvePluginRuntimeLoadContext", () => {
     clearRuntimeConfigSnapshot();
     clearPluginMetadataLifecycleCaches();
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it("builds the runtime plugin load context from the auto-enabled config", () => {
     const rawConfig = { plugins: {} };
@@ -152,25 +141,26 @@ describe("resolvePluginRuntimeLoadContext", () => {
       installRecords: {},
       preferBuiltPluginArtifacts: false,
     });
-    expect(resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      config: rawConfig,
+      env,
+      workspaceDir: "/resolved-workspace",
+    });
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
       config: rawConfig,
       env,
       manifestRegistry,
+      discovery: undefined,
     });
     expect(resolvePluginControlPlaneWorkspaceMock).toHaveBeenNthCalledWith(1, {
       config: rawConfig,
       env,
       workspaceDir: undefined,
     });
-    expect(resolvePluginControlPlaneWorkspaceMock).toHaveBeenNthCalledWith(2, {
-      config: resolvedConfig,
-      env,
-      workspaceDir: undefined,
-    });
-    expect(resolveConfigWidePluginMetadataSnapshotMock).toHaveBeenCalledExactlyOnceWith({
+    expect(resolveConfigWidePluginManifestRegistryMock).toHaveBeenCalledWith({
       config: rawConfig,
       env,
+      metadata: expect.anything(),
     });
   });
 
@@ -180,7 +170,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
     applyPluginAutoEnableMock.mockReturnValue({
       config: activatedConfig,
-      changes: [],
+      changes: ["demo configured"],
       autoEnabledReasons: { demo: ["demo configured"] },
     });
 
@@ -195,16 +185,40 @@ describe("resolvePluginRuntimeLoadContext", () => {
     expect(context.config).toBe(activatedConfig);
     expect(context.activationSourceConfig).toBe(config);
     expect(context.manifestRegistry).toBe(metadataSnapshot.manifestRegistry);
-    expect(resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(resolveConfigWidePluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(resolveConfigWidePluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps config-wide activation policy separate from the executable workspace inventory", () => {
+    const selectedRegistry = makeRegistry([{ id: "selected", channels: [] }]);
+    const wideRegistry = makeRegistry([
+      { id: "selected", channels: [] },
+      { id: "another-workspace", channels: [] },
+    ]);
+    const snapshot = {
+      ...metadataSnapshot,
+      manifestRegistry: selectedRegistry,
+      plugins: selectedRegistry.plugins,
+    };
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce(snapshot);
+    resolveConfigWidePluginManifestRegistryMock.mockReturnValueOnce(wideRegistry);
+
+    const context = resolvePluginRuntimeLoadContext({ config: {}, env: {} });
+
+    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith(
+      expect.objectContaining({ manifestRegistry: wideRegistry }),
+    );
+    expect(context.manifestRegistry).toBe(selectedRegistry);
+    expect(context.metadataSnapshot).toBe(snapshot);
+    expect(context.metadataSnapshot?.plugins.map((plugin) => plugin.id)).toEqual(["selected"]);
   });
 
   it("keeps derived metadata operation-local", () => {
-    const derivedSnapshot = { ...metadataSnapshot } as typeof metadataSnapshot & {
-      registrySource: "derived";
+    const derivedSnapshot: PluginMetadataSnapshot = {
+      ...metadataSnapshot,
+      registrySource: "derived",
     };
-    derivedSnapshot.registrySource = "derived";
-    resolveConfigWidePluginMetadataSnapshotMock.mockReturnValueOnce(derivedSnapshot);
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce(derivedSnapshot);
 
     const context = resolvePluginRuntimeLoadContext({
       config: { plugins: {} },
@@ -233,7 +247,35 @@ describe("resolvePluginRuntimeLoadContext", () => {
       config: runtimeConfig,
       env: process.env,
       manifestRegistry,
+      discovery: undefined,
     });
+  });
+
+  it("re-evaluates current environment selection without replacing the prepared inventory", async () => {
+    const rawConfig = { plugins: {} };
+    const env = process.env;
+    applyPluginAutoEnableMock.mockImplementation(({ env: currentEnv }) => ({
+      config: {
+        plugins: {
+          entries: { demo: { enabled: currentEnv?.OPENCLAW_TEST_RUNTIME_SELECTION === "enabled" } },
+        },
+      },
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    const options = { config: rawConfig, env, metadataSnapshot };
+    vi.stubEnv("OPENCLAW_TEST_RUNTIME_SELECTION", "disabled");
+    const first = resolvePluginRuntimeLoadContext(options);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    vi.stubEnv("OPENCLAW_TEST_RUNTIME_SELECTION", "enabled");
+    const second = resolvePluginRuntimeLoadContext(options);
+
+    expect(first.config.plugins?.entries?.demo?.enabled).toBe(false);
+    expect(second.config.plugins?.entries?.demo?.enabled).toBe(true);
+    expect(second.metadataSnapshot).toBe(first.metadataSnapshot);
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("applies auto-enable against each operation's exact prepared metadata", () => {
@@ -277,7 +319,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
         policyHash: "policy",
       },
     };
-    resolveConfigWidePluginMetadataSnapshotMock.mockReturnValueOnce(snapshotWithRecords);
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce(snapshotWithRecords);
 
     const context = resolvePluginRuntimeLoadContext({
       config: { plugins: {} },
@@ -295,19 +337,18 @@ describe("resolvePluginRuntimeLoadContext", () => {
   it.each([
     { scope: "explicit empty", pluginIds: [] },
     { scope: "explicit owner", pluginIds: ["demo"] },
-  ])("projects $scope metadata from the prepared config-wide inventory", ({ pluginIds }) => {
+  ])("keeps $scope plugin metadata scoped before activation", ({ pluginIds }) => {
     const config = { plugins: {} };
     const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
-
     const context = resolvePluginRuntimeLoadContext({ config, env, onlyPluginIds: pluginIds });
 
     expect(context.metadataSnapshot?.pluginIds).toEqual(pluginIds);
     expect(context.metadataSnapshot?.index).toBe(metadataSnapshot.index);
-    expect(resolveConfigWidePluginMetadataSnapshotMock).toHaveBeenCalledExactlyOnceWith({
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledExactlyOnceWith({
       config,
       env,
+      workspaceDir: "/resolved-workspace",
     });
-    expect(resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("builds plugin load options from the shared runtime context", () => {
@@ -318,13 +359,12 @@ describe("resolvePluginRuntimeLoadContext", () => {
       workspaceDir: "/explicit-workspace",
     });
 
-    expect(resolvePluginMetadataSnapshotMock).toHaveBeenCalledExactlyOnceWith({
-      allowWorkspaceScopedCurrent: true,
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledExactlyOnceWith({
       config: context.rawConfig,
       env: context.env,
       workspaceDir: "/explicit-workspace",
     });
-    expect(resolveConfigWidePluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(resolveConfigWidePluginManifestRegistryMock).not.toHaveBeenCalled();
     expect(
       buildPluginRuntimeLoadOptions(context, {
         cache: false,

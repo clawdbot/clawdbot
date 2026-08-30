@@ -2,7 +2,7 @@
 // It collects config, update, gateway, channel, and local agent state before specialized callers add details.
 
 import type { BestEffortConfigSnapshot } from "../config/io.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -107,8 +107,7 @@ export type StatusScanOverviewResult = {
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
 };
 
-/** Collects the common status scan data shared by text, JSON, and status-all commands. */
-export async function collectStatusScanOverview(params: {
+type StatusScanOverviewParams = {
   env?: NodeJS.ProcessEnv;
   commandName: string;
   opts: { timeoutMs?: number; all?: boolean };
@@ -144,14 +143,28 @@ export async function collectStatusScanOverview(params: {
     queryingChannelStatus?: string;
     summarizingChannels?: string;
   };
-}): Promise<StatusScanOverviewResult> {
-  const env = params.env ?? process.env;
+};
+
+/** Shares the scan's metadata with every follow-on summary and report consumer. */
+export async function withStatusScanOverview<T>(
+  params: StatusScanOverviewParams,
+  run: (overview: StatusScanOverviewResult, snapshot: ConfigFileSnapshot) => T | Promise<T>,
+): Promise<T> {
   if (params.labels?.loadingConfig) {
     params.progress?.setLabel(params.labels.loadingConfig);
   }
-  const { snapshot } = await (
-    await import("../cli/command-config-snapshot.js")
-  ).readCommandConfigSnapshot({ observe: false, skipPluginValidation: true });
+  const { withCommandConfigSnapshot } = await import("../cli/command-config-snapshot.js");
+  return await withCommandConfigSnapshot(
+    { observe: false, skipPluginValidation: true },
+    async (snapshot) => run(await collectStatusScanOverview(params, snapshot), snapshot),
+  );
+}
+
+async function collectStatusScanOverview(
+  params: StatusScanOverviewParams,
+  snapshot: ConfigFileSnapshot,
+): Promise<StatusScanOverviewResult> {
+  const env = params.env ?? process.env;
   const testRuntime =
     env.VITEST === "true" || env.VITEST_POOL_ID !== undefined || env.NODE_ENV === "test";
   const coldStart = !snapshot.exists && !(params.allowMissingConfigFastPath && testRuntime);

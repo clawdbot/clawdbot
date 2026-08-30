@@ -2049,15 +2049,8 @@ test("sessions.compact maxLines does not interrupt an active run when no transcr
 test("sessions.patch preserves nested model ids under provider overrides", async () => {
   await withTestDir({ prefix: "openclaw-gw-sessions-nested-" }, async (dir) => {
     const storePath = path.join(dir, "sessions.json");
-    const runtimeConfig = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-test-a" },
-        },
-        list: [{ id: "main", default: true, workspace: dir }],
-      },
-      session: { mainKey: "main", store: storePath },
-    };
+    testState.agentConfig = { model: { primary: "openai/gpt-test-a" }, workspace: dir };
+    testState.sessionConfig = { mainKey: "main", store: storePath };
     await seedSessionEntry({
       entry: sessionStoreEntry("sess-main"),
       sessionKey: "agent:main:main",
@@ -2069,7 +2062,6 @@ test("sessions.patch preserves nested model ids under provider overrides", async
       { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
     ];
 
-    const context = { getRuntimeConfig: () => runtimeConfig };
     const patched = await directSessionReq<{
       entry: {
         modelOverride?: string;
@@ -2078,15 +2070,11 @@ test("sessions.patch preserves nested model ids under provider overrides", async
         modelProvider?: string;
       };
       resolved?: { model?: string; modelProvider?: string };
-    }>(
-      "sessions.patch",
-      {
-        key: "agent:main:main",
-        model: "nvidia/moonshotai/kimi-k2.5",
-      },
-      { context },
-    );
-    expect(patched.ok).toBe(true);
+    }>("sessions.patch", {
+      key: "agent:main:main",
+      model: "nvidia/moonshotai/kimi-k2.5",
+    });
+    expect(patched.ok, JSON.stringify(patched)).toBe(true);
     expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.5");
     expect(patched.payload?.entry.providerOverride).toBe("nvidia");
     expect(patched.payload?.entry.model).toBeUndefined();
@@ -2096,7 +2084,7 @@ test("sessions.patch preserves nested model ids under provider overrides", async
 
     const listed = await directSessionReq<{
       sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
-    }>("sessions.list", {}, { context });
+    }>("sessions.list", {});
     expect(listed.ok).toBe(true);
     const mainSession = listed.payload?.sessions.find(
       (session) => session.key === "agent:main:main",

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { LegacyConfigIssue } from "../config/types.js";
+import type { PluginMetadataOwner } from "../plugins/plugin-metadata-collection.js";
 import {
   listActiveDegradedPlugins,
   setActiveDegradedPlugins,
@@ -134,20 +135,30 @@ const pluginMigrationFingerprint = vi.hoisted(() =>
 );
 type ConfigSnapshotWithPluginMetadataFixture = {
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  pluginMetadataSnapshot?: {
-    configFingerprint?: string;
+  pluginMetadata?: {
+    selectedSnapshot: {
+      configFingerprint?: string;
+    };
   };
 };
 const readConfigFileSnapshotWithPluginMetadata = vi.hoisted(() =>
   vi.fn<
     (options?: {
       allowCurrentPluginMetadata?: boolean;
+      pluginMetadataOwner?: PluginMetadataOwner;
     }) => Promise<ConfigSnapshotWithPluginMetadataFixture>
   >(async (options) => ({
     snapshot: await readConfigFileSnapshot(),
-    pluginMetadataSnapshot: {
-      configFingerprint: pluginMigrationFingerprint(options?.allowCurrentPluginMetadata),
+    pluginMetadata: {
+      selectedSnapshot: {
+        configFingerprint: pluginMigrationFingerprint(options?.allowCurrentPluginMetadata),
+      },
     },
+  })),
+);
+const preparePluginMetadata = vi.hoisted(() =>
+  vi.fn((_params: { config: unknown; env: NodeJS.ProcessEnv; allowCurrent: boolean }) => ({
+    selectedSnapshot: { configFingerprint: "plugin-migrations" },
   })),
 );
 const findDoctorLegacyConfigIssues = vi.hoisted(() => vi.fn((): LegacyConfigIssue[] => []));
@@ -211,6 +222,17 @@ vi.mock("../infra/startup-migration-checkpoint.js", () => ({
   recordSuccessfulStateMigrations,
   recordSuccessfulStartupMigrations,
 }));
+
+vi.mock("../plugins/plugin-metadata-collection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-collection.js")>();
+  return {
+    ...actual,
+    createPluginMetadataOwner: () => ({
+      ...actual.createPluginMetadataOwner(),
+      prepare: preparePluginMetadata,
+    }),
+  };
+});
 
 vi.mock("../cli/update-cli/active-plugin-payload-validation.js", () => ({
   runActivePluginPayloadSmokeCheck,
@@ -626,6 +648,13 @@ describe("runDoctorConfigPreflight state migration", () => {
       expect(prompter).toEqual({ shouldRepair: true });
       return true;
     });
+    preparePluginMetadata.mockImplementationOnce(({ config, env, allowCurrent }) => {
+      migrationOrder.push("metadata");
+      expect(config).toEqual({ gateway: { mode: "local", port: 19091 } });
+      expect(env).toBe(acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env);
+      expect(allowCurrent).toBe(false);
+      return { selectedSnapshot: { configFingerprint: "plugin-migrations" } };
+    });
     autoMigrateLegacyState.mockImplementationOnce(async () => {
       migrationOrder.push("state");
       return { migrated: true, skipped: false, changes: [], warnings: [] };
@@ -633,7 +662,7 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     await runDoctorConfigPreflight(startupCheckpointOptions);
 
-    expect(migrationOrder).toEqual(["host-links", "state"]);
+    expect(migrationOrder).toEqual(["host-links", "metadata", "state"]);
   });
 
   it("refuses startup when fresh plugin migration inputs change during convergence", async () => {

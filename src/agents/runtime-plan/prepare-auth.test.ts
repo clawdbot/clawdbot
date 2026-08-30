@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { makeRegistry } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
@@ -125,25 +126,43 @@ function allCooldownOpenAIStore(): AuthProfileStore {
 }
 
 describe("prepareAgentRuntimeAuthPlan", () => {
-  it("carries prepared provider aliases into generic auth planning", () => {
-    const plan = prepareAgentRuntimeAuthPlan({
-      provider: "legacy-provider",
-      modelId: "model",
-      env: {},
-      authProfileStore: authStore({}),
-      metadataSnapshot: {
-        plugins: [
-          {
-            id: "alias-owner",
-            origin: "bundled",
-            providerAuthAliases: { "legacy-provider": "canonical-provider" },
-          } as never,
-        ],
-      },
-    });
+  it.each(["unbound", "user", "automatic", "provider-entry"] as const)(
+    "carries prepared provider aliases through %s auth selection",
+    (selection) => {
+      const metadataSnapshot = makeRegistry([
+        { id: "alias-owner", channels: [], origin: "bundled" },
+      ]);
+      for (const plugin of metadataSnapshot.plugins) {
+        plugin.providerAuthAliases = { "legacy-provider": "canonical-provider" };
+      }
+      const bound = selection !== "unbound";
+      const profileId = "canonical-provider:work";
+      const plan = prepareAgentRuntimeAuthPlan({
+        provider: "legacy-provider",
+        modelId: "model",
+        config: providerConfig(
+          "legacy-provider",
+          selection === "provider-entry" ? { apiKey: profileId } : {},
+        ),
+        env: {},
+        workspaceDir: "/workspace/captured",
+        authProfileStore: authStore(
+          bound ? { [profileId]: apiKeyProfile("canonical-provider", "fixture-key") } : {},
+        ),
+        ...(selection === "user"
+          ? { sessionAuthProfileId: profileId, sessionAuthProfileSource: "user" as const }
+          : {}),
+        metadataSnapshot,
+      });
 
-    expect(plan.providerForAuth).toBe("canonical-provider");
-  });
+      expect(plan.providerForAuth).toBe("canonical-provider");
+      expect(plan.forwardedAuthProfileId).toBe(bound ? profileId : undefined);
+      if (bound) {
+        expect(plan.forwardedAuthProfileCandidateIds).toEqual([profileId]);
+        expect(plan.selectedAuthMode).toBe("api_key");
+      }
+    },
+  );
 
   it("keeps unknown no-observation models on the legacy auth plan", () => {
     const plan = prepareAgentRuntimeAuthPlan({

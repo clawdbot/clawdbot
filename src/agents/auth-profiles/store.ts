@@ -7,7 +7,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { isRecord } from "../../utils.js";
@@ -17,6 +16,7 @@ import {
   listRuntimeExternalAuthProfiles,
   overlayExternalAuthProfiles,
   syncPersistedExternalCliAuthProfiles,
+  type ExternalAuthProfileOptions,
 } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
@@ -105,16 +105,12 @@ import {
 import { buildPersistedAuthProfileState, loadPersistedAuthProfileState } from "./state.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
-type LoadAuthProfileStoreOptions = {
-  allowKeychainPrompt?: boolean;
-  config?: OpenClawConfig;
+type LoadAuthProfileStoreOptions = ExternalAuthProfileOptions & {
   database?: AuthProfileDatabase;
   externalCli?: ExternalCliAuthDiscovery;
   inheritedAuthDir?: string;
   readOnly?: boolean;
   syncExternalCli?: boolean;
-  externalCliProviderIds?: Iterable<string>;
-  externalCliProfileIds?: Iterable<string>;
 };
 
 type SaveAuthProfileStoreOptions = {
@@ -262,13 +258,6 @@ function preserveLegacyOAuthRefsOnSave(params: {
   }
   return nextProfiles ? { ...params.payload, profiles: nextProfiles } : params.payload;
 }
-
-type ResolvedExternalCliOverlayOptions = {
-  allowKeychainPrompt?: boolean;
-  config?: OpenClawConfig;
-  externalCliProviderIds?: Iterable<string>;
-  externalCliProfileIds?: Iterable<string>;
-};
 
 type ExternalCliSyncResult = {
   store: AuthProfileStore;
@@ -436,14 +425,19 @@ function resolveRuntimeAuthProfileStore(
 
 function resolveExternalCliOverlayOptions(
   options: LoadAuthProfileStoreOptions | undefined,
-): ResolvedExternalCliOverlayOptions {
+): ExternalAuthProfileOptions {
   const discovery = options?.externalCli;
+  const context = {
+    config: discovery?.config ?? options?.config,
+    workspaceDir: options?.workspaceDir,
+    pluginMetadataSnapshot: options?.pluginMetadataSnapshot,
+  };
   if (!discovery) {
     return {
+      ...context,
       ...(options?.allowKeychainPrompt !== undefined
         ? { allowKeychainPrompt: options.allowKeychainPrompt }
         : {}),
-      ...(options?.config ? { config: options.config } : {}),
       ...(options?.externalCliProviderIds
         ? { externalCliProviderIds: options.externalCliProviderIds }
         : {}),
@@ -453,33 +447,30 @@ function resolveExternalCliOverlayOptions(
     };
   }
   if (discovery.mode === "none") {
-    const config = discovery.config ?? options?.config;
     return {
+      ...context,
       allowKeychainPrompt: false,
-      ...(config ? { config } : {}),
       externalCliProviderIds: [],
       externalCliProfileIds: [],
     };
   }
   if (discovery.mode === "existing") {
     const allowKeychainPrompt = discovery.allowKeychainPrompt ?? options?.allowKeychainPrompt;
-    const config = discovery.config ?? options?.config;
     return {
+      ...context,
       ...(allowKeychainPrompt !== undefined ? { allowKeychainPrompt } : {}),
-      ...(config ? { config } : {}),
     };
   }
   const allowKeychainPrompt = discovery.allowKeychainPrompt ?? options?.allowKeychainPrompt;
-  const config = discovery.config ?? options?.config;
   return {
+    ...context,
     ...(allowKeychainPrompt !== undefined ? { allowKeychainPrompt } : {}),
-    ...(config ? { config } : {}),
     ...(discovery.providerIds ? { externalCliProviderIds: discovery.providerIds } : {}),
     ...(discovery.profileIds ? { externalCliProfileIds: discovery.profileIds } : {}),
   };
 }
 
-function hasScopedExternalCliOverlay(options: ResolvedExternalCliOverlayOptions): boolean {
+function hasScopedExternalCliOverlay(options: ExternalAuthProfileOptions): boolean {
   return (
     options.externalCliProviderIds !== undefined || options.externalCliProfileIds !== undefined
   );
@@ -1136,6 +1127,8 @@ export function loadAuthProfileStoreForSecretsRuntime(
   options?: Pick<
     LoadAuthProfileStoreOptions,
     | "config"
+    | "workspaceDir"
+    | "pluginMetadataSnapshot"
     | "externalCli"
     | "externalCliProviderIds"
     | "externalCliProfileIds"
@@ -1184,16 +1177,7 @@ export function loadAuthProfileStoreWithoutExternalProfiles(
 /** Ensure an auth store is available, including runtime/external profile overlays. */
 export function ensureAuthProfileStore(
   agentDir?: string,
-  options?: {
-    allowKeychainPrompt?: boolean;
-    config?: OpenClawConfig;
-    externalCli?: ExternalCliAuthDiscovery;
-    externalCliProviderIds?: Iterable<string>;
-    externalCliProfileIds?: Iterable<string>;
-    inheritedAuthDir?: string;
-    readOnly?: boolean;
-    syncExternalCli?: boolean;
-  },
+  options?: Omit<LoadAuthProfileStoreOptions, "database">,
 ): AuthProfileStore {
   if (isEnvOnlyAuthProfileRuntime()) {
     return createEmptyAuthProfileStore();

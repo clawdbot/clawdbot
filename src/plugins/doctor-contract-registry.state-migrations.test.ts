@@ -10,6 +10,10 @@ import {
 
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: (...args: unknown[]) =>
+    mocks.loadPluginManifestRegistry(...args),
+}));
 const doctorContractWarnMock = vi.hoisted(() => vi.fn());
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();

@@ -1,6 +1,6 @@
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import { modelKey } from "../agents/model-selection.js";
 import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
@@ -15,6 +15,8 @@ import { applyModelRuntimeDirective } from "../auto-reply/reply/directive-handli
 import {
   prepareModelSelectionRuntime,
   findSelectedCatalogEntry,
+  resolveRuntimeNormalization,
+  type RuntimeModelNormalization,
 } from "../auto-reply/reply/model-runtime-normalization.js";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import { refreshQueuedFollowupSession } from "../auto-reply/reply/queue.js";
@@ -59,7 +61,8 @@ export type ApplySessionModelSelectionParams = {
   defaultModel: string;
   currentProvider: string;
   currentModel: string;
-  modelPolicy?: ModelVisibilityPolicy;
+  modelPolicy?: Pick<ModelVisibilityPolicy, "allows">;
+  modelNormalization?: RuntimeModelNormalization;
   modelCatalog: readonly ModelCatalogEntry[];
   thinkingCatalog?: readonly ModelCatalogEntry[];
   canPersistStickyModelSelection?: boolean;
@@ -159,10 +162,14 @@ export async function applySessionModelSelection(
     return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
   }
 
-  const normalizedModelKey = modelKey(params.request.provider, params.request.model);
+  const normalizedModelKey = buildModelCatalogRef(params.request.provider, params.request.model);
+  const modelNormalization =
+    params.modelNormalization ?? resolveRuntimeNormalization(params.cfg, params.agentId);
   const policy =
     params.modelPolicy ??
     createModelVisibilityPolicy({
+      ...modelNormalization,
+      preparedDefaultModel: { provider: params.defaultProvider, model: params.defaultModel },
       cfg: params.cfg,
       catalog: [...params.modelCatalog],
       defaultProvider: params.defaultProvider,
@@ -174,10 +181,12 @@ export async function applySessionModelSelection(
   }
   const request: SessionModelSelectionRequest = {
     ...params.request,
-    isDefault: normalizedModelKey === modelKey(params.defaultProvider, params.defaultModel),
+    isDefault:
+      normalizedModelKey === buildModelCatalogRef(params.defaultProvider, params.defaultModel),
   };
 
   const prepared = await prepareModelSelectionRuntime({
+    ...modelNormalization,
     cfg: params.cfg,
     agentId: params.agentId,
     sessionEntry: startingEntry,

@@ -7,8 +7,8 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
   applyCliRuntimeModelAuthAvailability,
   createModelAuthAvailabilityResolver,
-  type ModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
+  type ModelAuthAvailabilityResolver,
 } from "../../agents/model-auth-availability.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
@@ -84,7 +84,8 @@ export function createModelsListEntryEvaluator(params: {
       return cached;
     }
     const next = Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
-      const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
+      const provider = normalizeProviderId(entry.provider);
+      let evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
         modelId: identity?.id ?? entry.id,
         ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
         ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
@@ -93,7 +94,7 @@ export function createModelsListEntryEvaluator(params: {
           baseUrl: variant.baseUrl,
         })),
       });
-      const resolved = applyCliRuntimeModelAuthAvailability({
+      evaluation = applyCliRuntimeModelAuthAvailability({
         authResolver: params.authResolver,
         evaluation,
         cfg: params.cfg,
@@ -102,7 +103,6 @@ export function createModelsListEntryEvaluator(params: {
         provider: entry.provider,
         modelId: entry.id,
       });
-      const provider = normalizeProviderId(entry.provider);
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
       // profile discovery tested; widening it would hide routes backed by another valid profile.
       return params.providerOutcomes?.some(
@@ -110,15 +110,15 @@ export function createModelsListEntryEvaluator(params: {
           outcome.status === "auth-rejected" &&
           outcome.rejectionScope !== "catalog" &&
           normalizeProviderId(outcome.provider) === provider &&
-          (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
+          (outcome.profileId === undefined || outcome.profileId === evaluation.selectedProfileId),
       )
         ? {
-            ...resolved,
+            ...evaluation,
             availability: false,
             unavailableReason: "auth-failed",
             unavailableUntil: undefined,
           }
-        : resolved;
+        : evaluation;
     });
     pending.set(cacheKey, next);
     return next;

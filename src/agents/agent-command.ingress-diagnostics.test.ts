@@ -14,7 +14,6 @@ import { emitIngressModelUsageDiagnostic as emitIngressModelUsageDiagnosticBase 
 const mocks = vi.hoisted(() => ({
   emitTrustedDiagnosticEvent: vi.fn(),
   isDiagnosticsEnabled: vi.fn(),
-  getRuntimeConfig: vi.fn(),
   hasNonzeroUsage: vi.fn(),
   resolveModelCostConfig: vi.fn(),
   estimateUsageCost: vi.fn(),
@@ -40,15 +39,10 @@ vi.mock("./usage.js", () => ({
   hasNonzeroUsage: (usage: unknown) => mocks.hasNonzeroUsage(usage),
 }));
 
-vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: () => mocks.getRuntimeConfig(),
-}));
-
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.isDiagnosticsEnabled.mockReturnValue(true);
   mocks.hasNonzeroUsage.mockReturnValue(true);
-  mocks.getRuntimeConfig.mockReturnValue({});
   mocks.resolveModelCostConfig.mockReturnValue({});
   mocks.estimateUsageCost.mockReturnValue(0.001);
 });
@@ -100,9 +94,15 @@ function makeOpts(overrides?: Record<string, unknown>) {
 function emitIngressModelUsageDiagnostic(
   result: Parameters<typeof emitIngressModelUsageDiagnosticBase>[0],
   opts: Parameters<typeof emitIngressModelUsageDiagnosticBase>[1],
-  agentDir = "/state/agents/main/agent",
+  pricing: Parameters<typeof emitIngressModelUsageDiagnosticBase>[2] = {
+    cfg: {},
+    sessionAgentId: "main",
+    agentDir: "/state/agents/main/agent",
+    workspaceDir: "/workspace/main",
+    manifestMetadataSnapshot: undefined,
+  },
 ) {
-  emitIngressModelUsageDiagnosticBase(result, opts, agentDir);
+  emitIngressModelUsageDiagnosticBase(result, opts, pricing);
 }
 
 describe("emitIngressModelUsageDiagnostic", () => {
@@ -110,7 +110,7 @@ describe("emitIngressModelUsageDiagnostic", () => {
     const result = makeResult();
     const opts = makeOpts();
 
-    emitIngressModelUsageDiagnostic(result, opts, "/state/agents/main/agent");
+    emitIngressModelUsageDiagnostic(result, opts);
 
     expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
     const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
@@ -137,6 +137,7 @@ describe("emitIngressModelUsageDiagnostic", () => {
   it("uses terminal cumulative usage only for the diagnostic event and cost", () => {
     const result = makeResult({
       agentMeta: {
+        costUsd: 0.125,
         diagnosticUsage: {
           input: 900,
           output: 300,
@@ -147,13 +148,21 @@ describe("emitIngressModelUsageDiagnostic", () => {
       },
     });
 
-    emitIngressModelUsageDiagnostic(result, makeOpts(), "/state/agents/marie/agent");
+    emitIngressModelUsageDiagnostic(result, makeOpts({ agentId: "marie" }), {
+      cfg: {},
+      sessionAgentId: "marie",
+      agentDir: "/state/agents/marie/agent",
+      workspaceDir: "/workspace/marie",
+      manifestMetadataSnapshot: undefined,
+    });
 
     expect(mocks.resolveModelCostConfig).toHaveBeenCalledWith({
       provider: "openai",
       model: "gpt-5.5",
       config: {},
+      agentId: "marie",
       agentDir: "/state/agents/marie/agent",
+      workspaceDir: "/workspace/marie",
     });
 
     expect(mocks.estimateUsageCost).toHaveBeenCalledWith({
@@ -262,7 +271,9 @@ describe("emitIngressModelUsageDiagnostic", () => {
       provider: "openai",
       model: "gpt-5.5",
       config: expect.any(Object) as unknown,
+      agentId: "main",
       agentDir: "/state/agents/main/agent",
+      workspaceDir: "/workspace/main",
     });
     expect(mocks.estimateUsageCost).toHaveBeenCalled();
     expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);

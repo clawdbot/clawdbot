@@ -13,7 +13,11 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
-import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
+import {
+  isAgentSessionModelPatchOrigin,
+  snapshotAgentModelFallback,
+} from "../../gateway/session-model-patch-origin.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
@@ -36,6 +40,11 @@ beforeEach(() => {
 });
 
 type AgentToolGatewayRequest = Parameters<AgentToolGatewayRequestCaller>[0];
+
+function withModelOverride(params: Parameters<typeof applyModelOverrideToSessionEntry>[0]) {
+  applyModelOverrideToSessionEntry({ ...params, markLiveSwitchPending: true });
+  return params.entry;
+}
 
 async function captureSessionDecisionWork<T>(run: () => Promise<T>): Promise<{
   result: T;
@@ -627,33 +636,23 @@ describe("sessions tool", () => {
         async (request: { method: string; params: Record<string, unknown> }) => {
           expect(request.method).toBe("sessions.patch");
           expect(isAgentSessionModelPatchOrigin()).toBe(true);
-          await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
-            label: request.params.label as string,
-            model: "bad",
-            modelProvider: "broken",
-            modelOverride: "bad",
-            providerOverride: "broken",
-            modelOverrideSource: "user",
-            modelOverrideFallbackOriginProvider: undefined,
-            modelOverrideFallbackOriginModel: undefined,
-            authProfileOverride: "bad-profile",
-            authProfileOverrideSource: "user",
-            thinkingLevel: "low",
-            modelFallback: {
-              prevModel: "good",
-              prevProvider: "openai",
-              prevModelOverride: "good",
-              prevProviderOverride: "openai",
-              prevModelOverrideSource: "auto",
-              prevModelOverrideFallbackOriginProvider: "openai",
-              prevModelOverrideFallbackOriginModel: "primary",
-              prevAuthProfileOverride: "good-profile",
-              prevAuthProfileOverrideSource: "user",
-              prevThinkingLevel: "high",
-              ts: Date.now(),
-              source: "agent-patch",
+          await patchSessionEntryCore(
+            { agentId: "main", sessionKey, storePath },
+            (entry) => {
+              const modelFallback = snapshotAgentModelFallback(cfg, entry, "main", Date.now());
+              return {
+                ...withModelOverride({
+                  entry,
+                  selection: { provider: "broken", model: "bad" },
+                  profileOverride: "bad-profile",
+                }),
+                label: request.params.label as string,
+                thinkingLevel: "low",
+                modelFallback,
+              };
             },
-          }));
+            { replaceEntry: true },
+          );
           return { ok: true };
         },
       );
@@ -751,16 +750,19 @@ describe("sessions tool", () => {
       const sessionKey = "agent:main:main";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          modelFallback: {
-            prevModel: "good",
-            prevProvider: "openai",
-            ts: 1,
-            source: "agent-patch",
+        withModelOverride({
+          entry: {
+            sessionId: "session-main",
+            updatedAt: 1,
+            modelFallback: {
+              prevModel: "good",
+              prevProvider: "openai",
+              ts: 1,
+              source: "agent-patch",
+            },
           },
-        },
+          selection: { provider: "openai", model: "better" },
+        }),
       );
 
       await createAgentPatchedSessionModelRunGuard({
@@ -802,20 +804,19 @@ describe("sessions tool", () => {
       const sessionKey = "agent:main:main";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          model: "bad",
-          modelProvider: "broken",
-          modelOverride: "bad",
-          providerOverride: "broken",
-          modelFallback: {
-            prevModel: "good",
-            prevProvider: "openai",
-            ts: 1,
-            source: "agent-patch",
+        withModelOverride({
+          entry: {
+            sessionId: "session-main",
+            updatedAt: 1,
+            modelFallback: {
+              prevModel: "good",
+              prevProvider: "openai",
+              ts: 1,
+              source: "agent-patch",
+            },
           },
-        },
+          selection: { provider: "broken", model: "bad" },
+        }),
       );
       const runGuard = createAgentPatchedSessionModelRunGuard({
         cfg: {},
@@ -852,20 +853,19 @@ describe("sessions tool", () => {
       };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          model: "b",
-          modelProvider: "openai",
-          modelOverride: "b",
-          providerOverride: "openai",
-          modelFallback: {
-            prevModel: "a",
-            prevProvider: "openai",
-            ts: 10,
-            source: "agent-patch",
+        withModelOverride({
+          entry: {
+            sessionId: "session-main",
+            updatedAt: 1,
+            modelFallback: {
+              prevModel: "a",
+              prevProvider: "openai",
+              ts: 10,
+              source: "agent-patch",
+            },
           },
-        },
+          selection: { provider: "openai", model: "b" },
+        }),
       );
       const runB = createAgentPatchedSessionModelRunGuard({
         cfg,
@@ -873,32 +873,28 @@ describe("sessions tool", () => {
         sessionKey,
         storePath,
       });
-      await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
-        model: "c",
-        modelOverride: "c",
-        modelFallback: {
-          prevModel: "a",
-          prevProvider: "openai",
-          ts: 20,
-          source: "agent-patch",
-        },
-      }));
+      await patchSessionEntryCore(
+        { agentId: "main", sessionKey, storePath },
+        (entry) => ({
+          ...withModelOverride({ entry, selection: { provider: "openai", model: "c" } }),
+          modelFallback: { ...entry.modelFallback!, ts: 20 },
+        }),
+        { replaceEntry: true },
+      );
       const runC = createAgentPatchedSessionModelRunGuard({
         cfg,
         agentId: "main",
         sessionKey,
         storePath,
       });
-      await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
-        model: "d",
-        modelOverride: "d",
-        modelFallback: {
-          prevModel: "a",
-          prevProvider: "openai",
-          ts: 30,
-          source: "agent-patch",
-        },
-      }));
+      await patchSessionEntryCore(
+        { agentId: "main", sessionKey, storePath },
+        (entry) => ({
+          ...withModelOverride({ entry, selection: { provider: "openai", model: "d" } }),
+          modelFallback: { ...entry.modelFallback!, ts: 30 },
+        }),
+        { replaceEntry: true },
+      );
       const runD = createAgentPatchedSessionModelRunGuard({
         cfg,
         agentId: "main",

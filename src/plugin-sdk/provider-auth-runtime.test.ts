@@ -13,7 +13,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
     expect(providerAuthRuntime.getRuntimeAuthForModel).toBeTypeOf("function");
   });
 
-  it("resolves non-secret provider auth profile metadata", async () => {
+  it("resolves profile metadata before loading async model auth", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "provider-auth-runtime-"));
     const agentDir = path.join(tempRoot, "agent");
     saveAuthProfileStore(
@@ -33,16 +33,53 @@ describe("plugin-sdk provider-auth-runtime", () => {
       agentDir,
     );
 
-    expect(
-      providerAuthRuntime.resolveProviderAuthProfileMetadata({
-        provider: "openai",
+    vi.resetModules();
+    const loadModelAuth = vi.fn(() =>
+      vi.importActual<typeof import("../agents/model-auth.js")>("../agents/model-auth.js"),
+    );
+    vi.doMock("../agents/model-auth.js", loadModelAuth);
+    try {
+      const auth = await import("./provider-auth-runtime.js");
+      expect(
+        auth.resolveProviderAuthProfileMetadata({
+          provider: "openai",
+          profileId: "openai:chatgpt",
+          agentDir,
+        }),
+      ).toEqual({
         profileId: "openai:chatgpt",
-        agentDir,
-      }),
-    ).toEqual({
-      profileId: "openai:chatgpt",
-      accountId: "acct-openai-workspace",
-    });
+        accountId: "acct-openai-workspace",
+      });
+      expect(loadModelAuth).not.toHaveBeenCalled();
+
+      await expect(
+        auth.resolveApiKeyForProvider({
+          provider: "fixture-provider",
+          agentDir,
+          store: { version: 1, profiles: {} },
+          cfg: {
+            models: {
+              providers: {
+                "fixture-provider": {
+                  auth: "api-key",
+                  apiKey: "fixture-runtime-key",
+                  baseUrl: "https://provider.example.test/v1",
+                  models: [],
+                },
+              },
+            },
+          },
+        }),
+      ).resolves.toEqual({
+        apiKey: "fixture-runtime-key",
+        source: "models.json",
+        mode: "api-key",
+      });
+      expect(loadModelAuth).toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("../agents/model-auth.js");
+      vi.resetModules();
+    }
   });
 
   it("generates random OAuth state tokens", () => {

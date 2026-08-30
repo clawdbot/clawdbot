@@ -1822,7 +1822,6 @@ src/agents/embedded-agent-runner/run/attempt.model-diagnostic-lifecycle.ts	3
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-observation.ts	1
 src/agents/embedded-agent-runner/run/attempt.tool-call-argument-repair.ts	11
 src/agents/embedded-agent-runner/run/auth-controller.ts	1
-src/agents/embedded-agent-runner/run/auth-plan.ts	1
 src/agents/embedded-agent-runner/run/auth-profile-success.ts	1
 src/agents/embedded-agent-runner/run/context-recovery-state.ts	2
 src/agents/embedded-agent-runner/run/helpers.ts	3
@@ -2132,7 +2131,6 @@ src/audit/execution-identity-context-build.ts	3
 src/auto-reply/chunk.ts	4
 src/auto-reply/command-auth.ts	5
 src/auto-reply/command-turn-context.ts	1
-src/auto-reply/commands-registry.ts	1
 src/auto-reply/heartbeat-filter.ts	4
 src/auto-reply/heartbeat-tool-response.ts	3
 src/auto-reply/reply-payload.ts	2
@@ -2919,7 +2917,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	7
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/chat.ts	2
 src/gateway/server-methods/config-write-flow.ts	1
-src/gateway/server-methods/config.ts	7
+src/gateway/server-methods/config.ts	6
 src/gateway/server-methods/cron.ts	17
 src/gateway/server-methods/device-scope-upgrade.ts	2
 src/gateway/server-methods/devices.ts	6
@@ -3413,7 +3411,7 @@ src/plugin-sdk/provider-auth-result.ts	4
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-live-runtime.ts	2
-src/plugin-sdk/provider-catalog-shared.ts	4
+src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-enable-config.ts	2
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	6
@@ -3545,7 +3543,7 @@ src/plugins/provider-auth-choice-helpers.ts	12
 src/plugins/provider-catalog-result.ts	8
 src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	2
-src/plugins/provider-hook-runtime.ts	4
+src/plugins/provider-hook-runtime.ts	2
 src/plugins/provider-model-compat.ts	7
 src/plugins/provider-model-helpers.ts	4
 src/plugins/provider-model-primary.ts	1
@@ -3570,7 +3568,7 @@ src/plugins/registry-runtime.ts	5
 src/plugins/registry.ts	4
 src/plugins/runtime-channel-state.ts	1
 src/plugins/runtime-state.ts	1
-src/plugins/runtime-workspace-state.ts	2
+src/plugins/runtime-workspace-state.ts	1
 src/plugins/runtime.ts	2
 src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/index.ts	1
@@ -3645,7 +3643,6 @@ src/secrets/runtime-web-tools.shared.ts	2
 src/secrets/runtime-web-tools.ts	4
 src/secrets/runtime.ts	4
 src/secrets/store/secret-store.ts	3
-src/secrets/target-registry-query.ts	1
 src/security/audit-channel.ts	4
 src/security/audit-extra.async.ts	2
 src/security/audit-extra.summary.ts	2
@@ -3767,7 +3764,6 @@ src/system-agent/setup-inference-activate-persist.ts	1
 src/system-agent/setup-inference-detection.ts	3
 src/system-agent/setup-inference-persist.ts	3
 src/system-agent/setup-inference-plan-helpers.ts	1
-src/system-agent/setup-inference-plan.ts	2
 src/system-agent/system-agent.ts	2
 src/system-agent/verified-inference.ts	1
 src/talk/agent-consult-tool.ts	2

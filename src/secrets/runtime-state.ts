@@ -21,6 +21,10 @@ import type {
   AuthProfileStore,
   RuntimeAuthProfileStore,
 } from "../agents/auth-profiles/types.js";
+import {
+  getRetainedLegacyDefaultAgentId,
+  setRetainedLegacyDefaultAgentId,
+} from "../config/legacy.default-agent-owner-state.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -1096,6 +1100,16 @@ export function restoreSecretsRuntimeSnapshotStateIfCurrent(
     restoredSourceConfig,
     activeSnapshot.sourceConfig,
   ) as OpenClawConfig;
+  // Same-lineage auth refreshes cannot replace roster ownership. JSON rollback
+  // must retain the predecessor's migration fact as well as its config fields.
+  setRetainedLegacyDefaultAgentId(
+    restoredSourceConfig,
+    getRetainedLegacyDefaultAgentId(params.snapshot.sourceConfig),
+  );
+  setRetainedLegacyDefaultAgentId(
+    restoredConfig,
+    getRetainedLegacyDefaultAgentId(params.snapshot.config),
+  );
   return activateSecretsRuntimeSnapshotStateIfCurrent({
     ...params,
     snapshot: {

@@ -13,6 +13,10 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveModelPricingContext,
+  type ModelPricingLookupContext,
+} from "../model-catalog/pricing.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { resolveModelCostConfigFingerprint } from "../utils/usage-format.js";
@@ -100,8 +104,9 @@ export function resolveUsageCostAgentDir(
 export function resolveUsageCostPricingFingerprint(
   config?: OpenClawConfig,
   agentDir?: string,
+  normalization?: ModelPricingLookupContext,
 ): string {
-  return resolveModelCostConfigFingerprint(config, agentDir);
+  return resolveModelCostConfigFingerprint(config, agentDir, normalization);
 }
 
 function normalizeUsageCostRollup(
@@ -591,7 +596,18 @@ export async function refreshCostUsageCacheForAgent(params: {
   }
   try {
     const agentDir = params.agentDir ?? resolveUsageCostAgentDir(params.config, params.agentId);
-    const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
+    // The cache key and every row in an async scan must use the same metadata generation.
+    const normalization = {
+      ...resolveModelPricingContext({ config: params.config, agentId: params.agentId })
+        .normalization,
+      agentId: params.agentId,
+    };
+    const pricingFingerprint = resolveUsageCostPricingFingerprint(
+      params.config,
+      agentDir,
+      normalization,
+    );
+    const resolveCost = createUsageCostResolver({ ...normalization, agentDir });
     const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
     const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {
@@ -637,8 +653,6 @@ export async function refreshCostUsageCacheForAgent(params: {
     const staleFiles = getUsageCostStaleRollupFiles({ rollups, files: refreshFiles })
       .toSorted((a, b) => a.size - b.size || a.filePath.localeCompare(b.filePath))
       .slice(0, maxFiles);
-    const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
-
     for (const file of staleFiles) {
       const previous = rollups.get(file.filePath);
       const entry = await scanUsageFileForRollup({

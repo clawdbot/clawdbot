@@ -7,7 +7,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import type { HealthSummary } from "./health/types.js";
 import { createChatAbortMarker } from "./server-chat-state.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS, TICK_INTERVAL_MS } from "./server-constants.js";

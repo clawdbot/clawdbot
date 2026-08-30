@@ -8,12 +8,13 @@ import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { createPluginMetadataOwner } from "../plugins/plugin-metadata-collection.js";
 import {
   activateSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import { deleteTestEnvValue } from "../test-utils/env.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -648,67 +649,67 @@ describe("gateway config methods", () => {
   it.each([false, true])(
     "keeps model ID patches source-owned (authored compat: %s)",
     async (authoredCompat) => {
-      await withEnvAsync(
-        {
+      const { resetConfigRuntimeState } = await import("../config/config.js");
+      const configIo = await import("../config/io.js");
+      const actualIo = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+      const original = await getCurrentConfigObject();
+      const pluginMetadataOwner = createPluginMetadataOwner();
+      const io = actualIo.createConfigIO({
+        pluginMetadataOwner,
+        env: {
+          ...process.env,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve(import.meta.dirname, "../../extensions"),
         },
-        async () => {
-          const { resetConfigRuntimeState } = await import("../config/config.js");
-          const configIo = await import("../config/io.js");
-          const actualIo =
-            await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
-          // The shared server fixture composes snapshots without catalog materialization.
-          // Exercise the real read/write owner so runtime defaults can reach the RPC merge.
-          const snapshotRead = vi
-            .spyOn(configIo, "readConfigFileSnapshotForWrite")
-            .mockImplementation(actualIo.readConfigFileSnapshotForWrite);
-          const original = await getCurrentConfigObject();
-          const textModel = {
-            id: "gpt-5.6-luna",
-            name: "Text model",
-            ...(authoredCompat ? { compat: { supportsStore: false } } : {}),
-          };
-          try {
-            await writeJsonFile(original.path, {
-              gateway: { reload: { mode: "off" } },
-              models: {
-                providers: {
-                  openai: { models: [textModel, { id: "gpt-image-1", name: "Image model" }] },
-                },
-              },
-            });
-            resetConfigRuntimeState();
-            const before = await actualIo.readConfigFileSnapshot();
-            expect(before.issues).toEqual([]);
-            const runtimeModel = before.config.models?.providers?.openai?.models[0];
-            expect(runtimeModel?.contextTokens).toBeGreaterThan(0);
-            expect(runtimeModel?.compat).toBeDefined();
+      });
+      // Materialize real catalog defaults without changing the serving Gateway's inventory.
+      const snapshotRead = vi
+        .spyOn(configIo, "readConfigFileSnapshotForWrite")
+        .mockImplementation(io.readConfigFileSnapshotForWrite);
+      try {
+        const textModel = {
+          id: "gpt-5.6-luna",
+          name: "Text model",
+          ...(authoredCompat ? { compat: { supportsStore: false } } : {}),
+        };
+        await writeJsonFile(original.path, {
+          gateway: { reload: { mode: "off" } },
+          models: {
+            providers: {
+              openai: { models: [textModel, { id: "gpt-image-1", name: "Image model" }] },
+            },
+          },
+        });
+        resetConfigRuntimeState();
+        const before = await io.readConfigFileSnapshot();
+        expect(before.issues).toEqual([]);
+        const runtimeModel = before.config.models?.providers?.openai?.models[0];
+        expect(runtimeModel?.contextTokens).toBeGreaterThan(0);
+        expect(runtimeModel?.compat).toBeDefined();
 
-            const imageModel = {
-              id: "gpt-image-1",
-              name: "Image model",
-              baseUrl: "http://127.0.0.1:44080/v1",
-            };
-            const res = await rpcReq(requireWs(), "config.patch", {
-              raw: JSON.stringify({ models: { providers: { openai: { models: [imageModel] } } } }),
-              baseHash: await getConfigHash(),
-            });
-            expect(res.error).toBeUndefined();
-            expect(res.ok).toBe(true);
-            const persisted = JSON.parse(await fs.readFile(original.path, "utf-8"));
-            expect(persisted.models.providers.openai.models).toEqual([textModel, imageModel]);
+        const imageModel = {
+          id: "gpt-image-1",
+          name: "Image model",
+          baseUrl: "http://127.0.0.1:44080/v1",
+        };
+        const res = await rpcReq(requireWs(), "config.patch", {
+          raw: JSON.stringify({ models: { providers: { openai: { models: [imageModel] } } } }),
+          baseHash: await getConfigHash(),
+        });
+        expect(res.error).toBeUndefined();
+        expect(res.ok).toBe(true);
+        const persisted = JSON.parse(await fs.readFile(original.path, "utf-8"));
+        expect(persisted.models.providers.openai.models).toEqual([textModel, imageModel]);
 
-            const after = await actualIo.readConfigFileSnapshot();
-            expect(after.valid).toBe(true);
-            expect(after.config.models?.providers?.openai?.models[0]).toEqual(runtimeModel);
-          } finally {
-            snapshotRead.mockRestore();
-            await restoreConfigFileForTest(original);
-            resetConfigRuntimeState();
-          }
-        },
-      );
+        const after = await io.readConfigFileSnapshot();
+        expect(after.valid).toBe(true);
+        expect(after.config.models?.providers?.openai?.models[0]).toEqual(runtimeModel);
+      } finally {
+        snapshotRead.mockRestore();
+        pluginMetadataOwner.dispose();
+        await restoreConfigFileForTest(original);
+        resetConfigRuntimeState();
+      }
     },
   );
 

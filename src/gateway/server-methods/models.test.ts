@@ -103,23 +103,21 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       manifestPath: "/test/github-copilot/openclaw.plugin.json",
     },
   ];
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "models-test-plugin-policy",
-    generatedAtMs: 0,
-    installRecords: {},
-    // A real isolated bundled snapshot has no installed-index rows; bundled
-    // manifest records remain the authoritative graph for this fixture.
-    plugins: [],
-    diagnostics: [],
-  };
   return {
     policyHash: "models-test-plugin-policy",
-    index,
-    registryIndex: index,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "models-test-plugin-policy",
+      generatedAtMs: 0,
+      installRecords: {},
+      // A real isolated bundled snapshot has no installed-index rows; bundled
+      // manifest records remain the authoritative graph for this fixture.
+      plugins: [],
+      diagnostics: [],
+    },
     registryDiagnostics: [],
     manifestRegistry: { plugins, diagnostics: [] },
     plugins,
@@ -289,6 +287,7 @@ function requestModelsList(params: {
       workspaceDir: agentDir,
       config,
       authModes: params.preparedAuthModes ?? {},
+      pluginRegistry: undefined,
       authStore:
         getPreparedRuntimeAuthProfileStoreSnapshot(agentDir) ??
         loadAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false }),

@@ -1,3 +1,4 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -58,11 +59,12 @@ type BoundWorkerTurnOwner = {
   capability?: WorkerTurnExecutionIdentityCapability;
   claim: WorkerSessionTurnClaim;
   claimKey: string;
-  runtime?: {
+  admission?: {
     delegatedAuthority: AgentRunDelegatedAuthority;
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     scope?: GatewayRootWorkAdmissionContinuationScope;
     store: WorkerTurnExecutionIdentityStore;
+    expectedInitialModel?: Readonly<ProviderModelRef>;
   };
 };
 
@@ -71,7 +73,7 @@ const workerTurnOwners = resolveGlobalMap<string, Map<string, BoundWorkerTurnOwn
   (ownersByPath) => {
     for (const owners of ownersByPath.values()) {
       for (const owner of owners.values()) {
-        owner.runtime?.scope?.release();
+        owner.admission?.scope?.release();
       }
     }
     ownersByPath.clear();
@@ -138,7 +140,7 @@ export function bindWorkerTurnExecutionIdentity(
   const existing = owners.get(claim.sessionId);
   const currentClaimKey = claimKey(claim);
   if (existing && existing.claimKey !== currentClaimKey) {
-    existing.runtime?.scope?.release();
+    existing.admission?.scope?.release();
   }
   owners.set(claim.sessionId, {
     ...(existing?.claimKey === currentClaimKey ? existing : {}),
@@ -160,17 +162,17 @@ export function getWorkerTurnExecutionIdentityCapability(
     : undefined;
 }
 
-/** Completion and transcript preparation follow the exact run, not optional audit provenance. */
-export function bindWorkerTurnAdmissionContinuation(
+/** Worker execution follows the exact admitted run, independent of audit or shutdown scope. */
+export function bindWorkerTurnAdmission(
   store: WorkerTurnExecutionIdentityStore,
   claim: WorkerSessionTurnClaim,
   operationalRunInstance: OperationalRunInstanceRef,
-  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
+  options?: {
+    expectedInitialModel?: Readonly<ProviderModelRef>;
+    prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+  },
 ): void {
   const scope = captureGatewayRootWorkAdmissionContinuationScope();
-  if (!scope && !prepareAssistantTranscriptMessage) {
-    return;
-  }
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
   if (!path || !store.validateTurnClaim(claim) || !delegatedAuthority) {
@@ -179,20 +181,28 @@ export function bindWorkerTurnAdmissionContinuation(
   }
   const owners = workerTurnOwners.get(path) ?? new Map();
   const existing = owners.get(claim.sessionId);
-  existing?.runtime?.scope?.release();
+  existing?.admission?.scope?.release();
   const currentClaimKey = claimKey(claim);
   owners.set(claim.sessionId, {
     ...(existing?.claimKey === currentClaimKey ? existing : {}),
     claim,
     claimKey: currentClaimKey,
-    runtime: { delegatedAuthority, prepareAssistantTranscriptMessage, scope, store },
+    admission: {
+      delegatedAuthority,
+      prepareAssistantTranscriptMessage: options?.prepareAssistantTranscriptMessage,
+      scope,
+      store,
+      expectedInitialModel: options?.expectedInitialModel
+        ? Object.freeze({ ...options.expectedInitialModel })
+        : undefined,
+    },
   });
   workerTurnOwners.set(path, owners);
 }
 
-function resolveWorkerTurnRuntime(
+function resolveWorkerTurnOwner(
   identity: WorkerConnectionIdentity,
-): BoundWorkerTurnOwner["runtime"] {
+): BoundWorkerTurnOwner | undefined {
   const claim = identity.turnClaim;
   if (
     !claim ||
@@ -216,23 +226,36 @@ function resolveWorkerTurnRuntime(
     }
     owner = candidate;
   }
-  const runtime = owner?.runtime;
+  const admission = owner?.admission;
   if (
     !owner ||
-    !runtime ||
-    !runtime.store.validateTurnClaim(owner.claim) ||
-    !validateAgentRunDelegatedAuthority(runtime.delegatedAuthority)
+    !admission ||
+    !admission.store.validateTurnClaim(owner.claim) ||
+    !validateAgentRunDelegatedAuthority(admission.delegatedAuthority)
   ) {
     return undefined;
   }
-  return runtime;
+  return owner;
+}
+
+export function resolveWorkerTurnInferenceAuthority(identity: WorkerConnectionIdentity) {
+  const owner = resolveWorkerTurnOwner(identity);
+  if (!owner) {
+    return undefined;
+  }
+  return {
+    expectedInitialModel: owner.admission?.expectedInitialModel,
+    // The captured owner, not a copied claim or replacement under the same key,
+    // must still own every privileged use after awaited preparation.
+    isCurrent: () => resolveWorkerTurnOwner(identity) === owner,
+  };
 }
 
 export function runWorkerTurnAdmissionContinuation<T>(
   identity: WorkerConnectionIdentity,
   run: () => Promise<T>,
 ): Promise<T> | null {
-  return resolveWorkerTurnRuntime(identity)?.scope?.run(run) ?? null;
+  return resolveWorkerTurnOwner(identity)?.admission?.scope?.run(run) ?? null;
 }
 
 /** Host-owned preparation runs at append time, after any awaited transcript admission. */
@@ -241,7 +264,7 @@ export function prepareWorkerTurnTranscriptMessage(
   message: AssistantMessage,
 ): AssistantMessage {
   return (
-    resolveWorkerTurnRuntime(identity)?.prepareAssistantTranscriptMessage?.(
+    resolveWorkerTurnOwner(identity)?.admission?.prepareAssistantTranscriptMessage?.(
       message,
       extractAssistantPhaseText(message),
     ) ?? message
@@ -320,7 +343,7 @@ export function signalWorkerTurnClaimClosed(path: string, claim: WorkerSessionTu
   const owners = workerTurnOwners.get(path);
   const owner = owners?.get(claim.sessionId);
   if (owner?.claimKey === claimKey(claim)) {
-    owner.runtime?.scope?.release();
+    owner.admission?.scope?.release();
     owners?.delete(claim.sessionId);
     if (owners?.size === 0) {
       workerTurnOwners.delete(path);

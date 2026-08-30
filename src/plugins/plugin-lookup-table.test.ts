@@ -1,6 +1,9 @@
 /** Tests plugin lookup table indexing for manifest-owned contribution ids. */
+import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
@@ -699,6 +702,68 @@ describe("loadPluginLookUpTable", () => {
     expect(table.metrics.totalMs).toBe(
       metadataSnapshot.metrics.totalMs + table.metrics.startupPlanMs,
     );
+  });
+
+  it("keeps retained lookup generations on their original manifest cache after an operation switch", async () => {
+    const { loadPluginManifest } = await import("./manifest.js");
+    const { createPluginCache, withPluginCache } = await import("./plugin-cache.js");
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+    const { withPluginRuntimeGenerationScope } = await import("./runtime/generation-scope.js");
+
+    await withTempDir("openclaw-lookup-cache-", async (dir) => {
+      const rootDir = fs.realpathSync(dir);
+      const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+      const writeManifest = (version: string) =>
+        fs.writeFileSync(
+          manifestPath,
+          JSON.stringify({ id: "lookup-fixture", version, configSchema: { type: "object" } }),
+        );
+      const config: OpenClawConfig = { plugins: { slots: { memory: "none" } } };
+      const plugins = [
+        createManifestRecord({
+          id: "lookup-fixture",
+          origin: "bundled",
+          rootDir,
+          manifestPath,
+          source: path.join(rootDir, "index.js"),
+          version: "1.0.0",
+        }),
+      ];
+      const index = createIndex(plugins, {
+        policyHash: resolveInstalledPluginIndexPolicyHash(config),
+      });
+      loadPluginManifestRegistryForInstalledIndex.mockReturnValue({ plugins, diagnostics: [] });
+      writeManifest("1.0.0");
+      const metadataSnapshot = withPluginCache(createPluginCache(), () => {
+        expect(loadPluginManifest(rootDir)).toMatchObject({
+          ok: true,
+          manifest: { version: "1.0.0" },
+        });
+        return loadPluginMetadataSnapshot({ config, env: {}, index, allowCurrent: false });
+      });
+
+      writeManifest("2.0.0");
+      await withPluginCache(createPluginCache(), async () => {
+        expect(loadPluginManifest(rootDir)).toMatchObject({
+          ok: true,
+          manifest: { version: "2.0.0" },
+        });
+        const table = loadPluginLookUpTable({ config, env: {}, metadataSnapshot });
+        const retainedManifest = await withPluginRuntimeGenerationScope(
+          { config, metadataSnapshot: table },
+          async () => {
+            await Promise.resolve();
+            return loadPluginManifest(rootDir);
+          },
+        );
+        expect(retainedManifest).toMatchObject({ ok: true, manifest: { version: "1.0.0" } });
+        expect(loadPluginManifest(rootDir)).toMatchObject({
+          ok: true,
+          manifest: { version: "2.0.0" },
+        });
+      });
+    });
   });
 
   it("applies current activation policy without replacing the startup inventory", async () => {

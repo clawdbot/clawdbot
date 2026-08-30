@@ -15,6 +15,7 @@ import {
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
+import type { ModelManifestPluginContext } from "../../agents/model-selection-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
@@ -68,13 +69,31 @@ export const resolveAuthLabel = async (
   agentDir?: string,
   mode: ModelAuthDetailMode = "compact",
   workspaceDir?: string,
-  options?: { acceptedProfileTypes?: readonly AuthProfileCredential["type"][] },
+  options?: {
+    acceptedProfileTypes?: readonly AuthProfileCredential["type"][];
+    manifestPluginContext?: ModelManifestPluginContext;
+  },
 ): Promise<{ label: string; source: string }> => {
   const formatPath = (value: string) => shortenHomePath(value);
+  const metadataSnapshot = options?.manifestPluginContext?.getContext().pluginMetadataSnapshot;
+  const authWorkspaceDir = metadataSnapshot ? metadataSnapshot.workspaceDir : workspaceDir;
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
+    config: cfg,
+    workspaceDir: authWorkspaceDir,
+    pluginMetadataSnapshot: metadataSnapshot,
   });
-  const rawOrder = resolveAuthProfileOrder({ cfg, store, provider });
+  const rawOrder = resolveAuthProfileOrder({
+    cfg,
+    store,
+    provider,
+    authAliasLookupParams: {
+      workspaceDir: authWorkspaceDir,
+      ...(metadataSnapshot
+        ? { metadataSnapshot: { plugins: metadataSnapshot.manifestRegistry.plugins } }
+        : {}),
+    },
+  });
   const acceptedProfileTypes = options?.acceptedProfileTypes
     ? new Set(options.acceptedProfileTypes)
     : undefined;
@@ -232,7 +251,10 @@ export const resolveAuthLabel = async (
   }
 
   // Auth profiles win over environment/config keys because they encode provider order.
-  const envKey = resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
+  const envKey = resolveEnvApiKey(provider, process.env, {
+    config: cfg,
+    workspaceDir: authWorkspaceDir,
+  });
   if (envKey) {
     const isOAuthEnv =
       envKey.source.includes("ANTHROPIC_OAUTH_TOKEN") ||

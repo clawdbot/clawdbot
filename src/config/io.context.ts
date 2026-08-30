@@ -10,12 +10,17 @@ import {
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  createPluginMetadataOwner,
+  getOrCreatePluginMetadataOwner,
+  getScopedPluginMetadata,
+  type PreparedPluginMetadata,
+} from "../plugins/plugin-metadata-collection.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { observeConfigSnapshotSync } from "./io.observe.js";
 import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
-import { resolveConfigWidePluginMetadataSnapshot } from "./io.plugin-metadata.js";
 import {
   coerceConfig,
   normalizeConfigIoDeps,
@@ -43,7 +48,7 @@ import { validateConfigObjectWithPlugins } from "./validation.js";
 type ValidationPluginMetadataSnapshotLoader = {
   load: (config: OpenClawConfig) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
   getManifestRegistry: () => PluginManifestRegistry | undefined;
-  getSnapshot: () => PluginMetadataSnapshot | undefined;
+  getMetadata: () => PreparedPluginMetadata | undefined;
 };
 
 export type ConfigIoContext = {
@@ -53,7 +58,6 @@ export type ConfigIoContext = {
   observeLoadConfigSnapshot: (snapshot: ConfigFileSnapshot) => ConfigFileSnapshot;
   finalizeLoadedRuntimeConfig: (config: OpenClawConfig) => OpenClawConfig;
   createValidationPluginMetadataSnapshotLoader: (params: {
-    effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
     allowCurrentPluginMetadata?: boolean;
   }) => ValidationPluginMetadataSnapshotLoader;
@@ -66,6 +70,10 @@ export type ConfigIoContext = {
 export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): ConfigIoContext {
   const deps = normalizeConfigIoDeps(options);
   const configPath = resolveConfigPathForDeps(deps);
+  const scopedMetadata = getScopedPluginMetadata(deps.env);
+  const metadataOwner =
+    options.pluginMetadataOwner ??
+    (scopedMetadata ? createPluginMetadataOwner() : getOrCreatePluginMetadataOwner());
 
   function observeLoadConfigSnapshot(snapshot: ConfigFileSnapshot): ConfigFileSnapshot {
     if (deps.observe) {
@@ -85,7 +93,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       loadShellEnvFallback({
         enabled: true,
         env: deps.env,
-        expectedKeys: resolveShellEnvExpectedKeys(deps.env),
+        expectedKeys: resolveShellEnvExpectedKeys(deps.env, cfg),
         logger: deps.logger,
         timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
       });
@@ -109,22 +117,22 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
   }
 
   function createValidationPluginMetadataSnapshotLoader(params: {
-    effectiveConfigRaw: unknown;
     env: NodeJS.ProcessEnv;
     allowCurrentPluginMetadata?: boolean;
   }): ValidationPluginMetadataSnapshotLoader {
-    let snapshot: PluginMetadataSnapshot | undefined;
+    let metadata: PreparedPluginMetadata | undefined;
     return {
       load: (config) => {
-        snapshot ??= resolveConfigWidePluginMetadataSnapshot({
+        metadata ??= metadataOwner.prepare({
           config,
           env: params.env,
           allowCurrent: params.allowCurrentPluginMetadata,
+          seed: scopedMetadata,
         });
-        return { manifestRegistry: snapshot.manifestRegistry };
+        return { manifestRegistry: metadata.manifestRegistry };
       },
-      getManifestRegistry: () => snapshot?.manifestRegistry,
-      getSnapshot: () => snapshot,
+      getManifestRegistry: () => metadata?.manifestRegistry,
+      getMetadata: () => metadata,
     };
   }
 
@@ -190,7 +198,6 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       const resolution = resolveConfigForRead(resolved, candidateEnv, deps.lowerPrecedenceEnv);
       const effectiveConfigRaw = resolution.resolvedConfigRaw;
       const pluginMetadata = createValidationPluginMetadataSnapshotLoader({
-        effectiveConfigRaw,
         env: candidateEnv,
       });
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, {
@@ -236,6 +243,8 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
   };
 }
 
-export function resolveModelIdNormalizationPolicies(snapshot: PluginMetadataSnapshot | undefined) {
+export function resolveModelIdNormalizationPolicies(
+  snapshot: Pick<PluginMetadataSnapshot, "plugins"> | undefined,
+) {
   return snapshot ? collectManifestModelIdNormalizationPolicies(snapshot.plugins) : undefined;
 }

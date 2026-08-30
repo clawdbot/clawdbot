@@ -76,23 +76,19 @@ vi.mock("openclaw/plugin-sdk/llm", () => {
   };
 });
 
-function createResolvedModel(provider: string, modelId: string) {
+function createSummaryModel(provider: string, modelId: string) {
   return {
-    model: {
-      provider,
-      id: modelId,
-      name: modelId,
-      api: "openai-completions",
-      baseUrl: "https://example.test/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 8192,
-    } satisfies Model<"openai-completions">,
-    authStorage: { profiles: {} },
-    modelRegistry: { find: vi.fn() },
-  };
+    provider,
+    id: modelId,
+    name: modelId,
+    api: "openai-completions",
+    baseUrl: "https://example.test/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+  } satisfies Model<"openai-completions">;
 }
 
 function asLegacyTtsConfig(value: unknown): OpenClawConfig {
@@ -449,7 +445,7 @@ const loadTtsCore = createLazyRuntimeModule(() => import("../../plugin-sdk/speec
 
 function createPrepareSimpleCompletionModelMock(): SummarizeTextDeps["prepareSimpleCompletionModel"] {
   return vi.fn(async ({ provider, modelId }) => ({
-    model: createResolvedModel(provider, modelId).model,
+    model: createSummaryModel(provider, modelId),
     auth: {
       apiKey: "test-api-key",
       source: "test",
@@ -852,6 +848,16 @@ export function describeTtsSummarizationContract() {
 
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://example.test/v1",
+            models: ["gpt-4o-mini", "gpt-4.1-mini"].map((modelId) =>
+              createSummaryModel("openai", modelId),
+            ),
+          },
+        },
+      },
       tts: {},
     };
 
@@ -915,6 +921,7 @@ export function describeTtsSummarizationContract() {
 
     it("uses summaryModel override when configured", async () => {
       const cfg: OpenClawConfig = {
+        ...baseCfg,
         agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
         tts: { summaryModel: "openai/gpt-4.1-mini" },
       };
@@ -930,7 +937,7 @@ export function describeTtsSummarizationContract() {
     it("keeps native completion APIs for direct summarization", async () => {
       vi.mocked(prepareSimpleCompletionModelMock).mockResolvedValue({
         model: {
-          ...createResolvedModel("local-summary", "demo-model").model,
+          ...createSummaryModel("local-summary", "demo-model"),
           baseUrl: "http://127.0.0.1:4000/v1",
         },
         auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },

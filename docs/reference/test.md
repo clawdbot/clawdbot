@@ -81,8 +81,10 @@ reconcile dependencies before the remote wrapper starts.
 
 Maintained JavaScript tooling wrappers and root package commands use tsx's
 in-process transform cache. They skip its shared disk cache before the loader
-starts, and child tooling inherits that policy. This cache policy does not clean
-existing temporary directories, Node or Vitest caches, or other global caches. Standalone
+starts, and child tooling inherits that policy. Owned POSIX Vitest groups instead
+reuse disk transforms inside their disposable temporary namespace described below.
+This policy does not clean existing temporary directories, Node or Vitest caches,
+or other global caches. Standalone
 `pnpm ui:build` keeps native startup and applies the same preload to its post-build
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
@@ -158,7 +160,7 @@ This does not detect descendants that deliberately leave the managed groups.
 On POSIX hosts, `run-vitest` (including project shards), plugin batches, `test-live`
 (including live shards), `run-vitest-profile`, and the TUI PTY watcher give each
 Vitest invocation an owned temporary namespace through `TMPDIR`, `TMP`, and `TEMP`.
-The namespace contains isolated homes, their JIT caches, SDK/shared-home allocation
+The namespace contains isolated homes, JIT and tsx caches, SDK/shared-home allocation
 roots, and fallback SQLite state; its lifetime spans shared-worker files and module
 resets. The parent removes
 only that namespace after its child process group has stopped and output pipes

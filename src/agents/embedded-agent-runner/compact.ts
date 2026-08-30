@@ -3,7 +3,6 @@
  */
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
@@ -23,6 +22,8 @@ import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import { prepareOwnedPluginLoadContext } from "../prepared-model-runtime.plugin-context.js";
+import type { PreparedModelRuntimeInput } from "../prepared-model-runtime.types.js";
 import { resolveProjectKey } from "../project-memory-scope.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
@@ -273,14 +274,32 @@ export async function compactEmbeddedAgentSessionDirect(
   const canonicalWorkspaceDir = resolveUserPath(
     resolveAgentWorkspaceDir(requestedParams.config ?? {}, requestedAgentIds.sessionAgentId),
   );
+  const runtimeInput: PreparedModelRuntimeInput = {
+    config: requestedParams.config ?? {},
+    agentId: requestedAgentIds.sessionAgentId,
+    agentDir: requestedAgentDir,
+    workspaceDir: requestedWorkspaceDir,
+    preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
+    ...(requestedParams.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+  };
+  const pluginMetadataSnapshot = prepareOwnedPluginLoadContext(runtimeInput, process.env);
+  const planningNormalization = {
+    workspaceDir: requestedWorkspaceDir,
+    pluginMetadataSnapshot,
+    manifestPlugins: pluginMetadataSnapshot.plugins,
+    // Planning selects the runtime to acquire; executable hooks belong to the
+    // retained generation below, after its registry has been constructed.
+    allowPluginNormalization: false,
+  };
   const runtimeSelection = resolveCompactionRuntimeSelection({
     ...requestedParams,
+    ...planningNormalization,
     modelId: requestedParams.model,
     boundHarnessRuntime: requestedParams.agentHarnessId,
     preparedRuntimePlan: requestedParams.runtimePlan,
   });
   // Native control operations reuse the backend's existing authenticated session.
-  // Run them before generic model preparation so subscription-only CLI sessions do
+  // Run them before generic model/auth acquisition so subscription-only CLI sessions do
   // not incorrectly require an OpenClaw model API credential.
   const nativeCliResult = await compactNativeCliSession({
     runtime: runtimeSelection.selectedHarnessRuntime,
@@ -298,6 +317,7 @@ export async function compactEmbeddedAgentSessionDirect(
   }
   const pluginPlanCompactionTarget = resolveEmbeddedCompactionTarget({
     config: requestedParams.config,
+    ...planningNormalization,
     provider: requestedParams.provider,
     modelId: requestedParams.model,
     authProfileId: requestedParams.authProfileId,
@@ -305,16 +325,10 @@ export async function compactEmbeddedAgentSessionDirect(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-    config: requestedParams.config ?? {},
-    workspaceDir: requestedWorkspaceDir,
-    env: process.env,
-    allowWorkspaceScopedSnapshot: true,
-  });
   const pluginPlanCandidates = resolveModelCandidateChain({
     cfg: requestedParams.config,
     agentId: requestedAgentIds.sessionAgentId,
-    manifestPlugins: currentPluginMetadataSnapshot?.plugins ?? [],
+    ...planningNormalization,
     provider: pluginPlanCompactionTarget.provider ?? DEFAULT_PROVIDER,
     model: pluginPlanCompactionTarget.model ?? DEFAULT_MODEL,
     requestedRouteResolution: "resolved",
@@ -351,12 +365,7 @@ export async function compactEmbeddedAgentSessionDirect(
       ),
   ];
   const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime({
-    config: requestedParams.config ?? {},
-    agentId: requestedAgentIds.sessionAgentId,
-    agentDir: requestedAgentDir,
-    workspaceDir: requestedWorkspaceDir,
-    preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
-    ...(requestedParams.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+    ...runtimeInput,
     runtimePluginSelections,
   });
   try {
@@ -396,6 +405,8 @@ export async function compactEmbeddedAgentSessionDirect(
       }
       const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
         config: params.config,
+        workspaceDir: preparedWorkspaceDir,
+        pluginMetadataSnapshot: preparedModelRuntime.metadataSnapshot,
         provider: params.provider,
         modelId: params.model,
         authProfileId: params.authProfileId,
@@ -423,7 +434,8 @@ export async function compactEmbeddedAgentSessionDirect(
       const resolvedPrimaryCandidate = resolveModelCandidateChain({
         cfg: params.config,
         agentId: fallbackAgentId,
-        manifestPlugins: preparedModelRuntime.metadataSnapshot.plugins,
+        workspaceDir: preparedWorkspaceDir,
+        pluginMetadataSnapshot: preparedModelRuntime.metadataSnapshot,
         provider: primaryProvider,
         model: primaryModel,
         requestedRouteResolution: "resolved",
@@ -432,7 +444,8 @@ export async function compactEmbeddedAgentSessionDirect(
       const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
       const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
         cfg: params.config,
-        manifestPlugins: preparedModelRuntime.metadataSnapshot.plugins,
+        workspaceDir: preparedWorkspaceDir,
+        pluginMetadataSnapshot: preparedModelRuntime.metadataSnapshot,
         provider: primaryProvider,
         model: primaryModel,
         requestedRouteResolution: "resolved",

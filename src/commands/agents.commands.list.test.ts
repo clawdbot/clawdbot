@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -14,7 +14,7 @@ const {
   listAgentProvenanceMock,
   readAgentProvenanceMock,
   providerSummaryMetadataMock,
-  requireValidConfigMock,
+  readConfigMock,
   summarizeBindingsMock,
 } = vi.hoisted(() => ({
   buildProviderStatusIndexMock: vi.fn(),
@@ -32,12 +32,31 @@ const {
       },
     ],
   ]),
-  requireValidConfigMock: vi.fn(),
+  readConfigMock: vi.fn(),
   summarizeBindingsMock: vi.fn(),
 }));
 
-vi.mock("./config-validation.js", () => ({
-  requireValidConfig: requireValidConfigMock,
+vi.mock("../cli/command-config-snapshot.js", () => ({
+  withCommandConfigSnapshot: async (
+    _options: unknown,
+    run: (snapshot: ConfigFileSnapshot) => unknown,
+  ) => {
+    const config = await readConfigMock();
+    return run({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      valid: true,
+      raw: null,
+      parsed: config,
+      sourceConfig: config,
+      resolved: config,
+      runtimeConfig: config,
+      config,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+  },
 }));
 
 vi.mock("./agents.providers.js", () => ({
@@ -80,7 +99,7 @@ function createConfig(): OpenClawConfig {
 describe("agentsListCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireValidConfigMock.mockResolvedValue(createConfig());
+    readConfigMock.mockResolvedValue(createConfig());
     buildProviderStatusIndexMock.mockResolvedValue(new Map());
     buildProviderSummaryMetadataIndexMock.mockReturnValue(providerSummaryMetadataMock);
     listProvidersForAgentMock.mockReturnValue(["Telegram default: configured"]);
@@ -113,7 +132,7 @@ describe("agentsListCommand", () => {
   });
 
   it("renders roots, children, missing rows, and dangling creators as a tree", async () => {
-    requireValidConfigMock.mockResolvedValueOnce({
+    readConfigMock.mockResolvedValueOnce({
       agents: {
         entries: {
           main: { name: "Main" },
@@ -148,7 +167,7 @@ describe("agentsListCommand", () => {
     const runtime = createRuntime();
     const cfg = createConfig();
     const providerStatus = new Map();
-    requireValidConfigMock.mockResolvedValueOnce(cfg);
+    readConfigMock.mockResolvedValueOnce(cfg);
     buildProviderStatusIndexMock.mockResolvedValueOnce(providerStatus);
 
     await agentsListCommand({ json: true, bindings: true }, runtime);
@@ -220,7 +239,7 @@ describe("agentsListCommand", () => {
       },
       bindings: [{ agentId: "main", match: { channel: "telegram" } }],
     } satisfies OpenClawConfig;
-    requireValidConfigMock.mockResolvedValue(cfg);
+    readConfigMock.mockResolvedValue(cfg);
     summarizeBindingsMock.mockReturnValue([`${control}Telegram\nroute`]);
     listProvidersForAgentMock.mockReturnValue([`${control}Telegram\tconfigured`]);
 
@@ -254,7 +273,7 @@ describe("agentsListCommand", () => {
         const homeAlias = home.toUpperCase();
         expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
 
-        requireValidConfigMock.mockResolvedValueOnce({
+        readConfigMock.mockResolvedValueOnce({
           agents: {
             list: [
               {

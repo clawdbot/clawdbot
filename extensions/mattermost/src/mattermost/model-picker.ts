@@ -249,6 +249,8 @@ export function resolveMattermostModelPickerCurrentModel(params: {
       ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
     });
     const override = resolveStoredModelOverride({
+      config: params.cfg,
+      agentId: params.route.agentId,
       sessionEntry,
       loadSessionEntry: (sessionKey) =>
         getSessionEntry({

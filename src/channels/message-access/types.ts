@@ -5,8 +5,8 @@ import type { ResolvedChannelImplicitMentions } from "../../config/implicit-ment
  * Defines redacted identifiers, allowlist diagnostics, route facts, and decision gates.
  */
 import type { AccessGroupConfig } from "../../config/types.access-groups.js";
-import type { ChatChannelId } from "../ids.js";
 import type { InboundImplicitMentionKind, InboundMentionFacts } from "../mention-gating.js";
+import type { ChatChannelId } from "../plugins/channel-id.types.js";
 import type { IdentifierAuthentication } from "./identifier-authentication.js";
 
 /** Channel identifier used in ingress diagnostics and config lookups. */

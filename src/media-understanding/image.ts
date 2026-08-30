@@ -24,7 +24,8 @@ import {
 import { isSecretRef } from "../config/types.secrets.js";
 import { complete } from "../llm/stream.js";
 import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
-import { getResolvedImageRuntimeContext, resolveImageRuntime } from "./image-model-runtime.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { resolveImageRuntime } from "./image-model-runtime.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -425,13 +426,11 @@ async function describeImagesWithModelInternal(
     params.cfg,
     params.provider,
   );
-  let runtimeValue: string;
-  let model: Model | undefined;
-  let releaseRuntime: (() => void) | undefined;
+  let resolvedRuntime: Awaited<ReturnType<typeof resolveImageRuntime>>;
   const resolutionTask = resolveImageRuntime(params);
 
   try {
-    const resolved = await withImageDescriptionTimeout({
+    resolvedRuntime = await withImageDescriptionTimeout({
       controller,
       signal: params.signal,
       timeoutMs: configuredTimeoutMs,
@@ -439,9 +438,6 @@ async function describeImagesWithModelInternal(
         buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
       task: resolutionTask,
     });
-    runtimeValue = resolved.runtimeValue;
-    model = resolved.model;
-    releaseRuntime = resolved.release;
   } catch (err) {
     // The setup timeout does not cancel catalog preparation. If it wins the race, release any
     // generation that resolves afterward instead of abandoning its retained lease.
@@ -474,103 +470,102 @@ async function describeImagesWithModelInternal(
     });
   }
 
-  const apiKey = runtimeValue;
+  const { model, runtimeValue: apiKey, preparedModelRuntime } = resolvedRuntime;
   try {
-    params.signal?.throwIfAborted();
-    const setupDurationMs = Date.now() - startedAtMs;
-
-    if (isMinimaxVlmModel(model.provider, model.id)) {
-      return await describeImagesWithMinimax({
-        runtimeValue,
-        provider: model.provider,
-        modelId: model.id,
-        modelBaseUrl: model.baseUrl,
-        prompt,
-        timeoutMs: params.timeoutMs,
-        images: params.images,
-        request: getModelProviderRequestTransport(model),
-        signal: params.signal,
-      });
-    }
-
-    const resolvedRuntimeContext = getResolvedImageRuntimeContext(model);
-    // Prepared auth may carry sentinel-protected request headers. Resolve them only at this
-    // final direct-completion boundary so provider SDKs never receive sentinel placeholders.
-    const requestModel = unwrapModelHeaderSentinelsForProviderEgress(
-      model,
-      "image description provider request",
-    );
-    const providerStreamFn = registerProviderStreamForModel({
-      model: requestModel,
-      cfg: resolvedRuntimeContext?.cfg ?? params.cfg,
-      agentDir: resolvedRuntimeContext?.agentDir ?? params.agentDir,
-      ...(resolvedRuntimeContext?.workspaceDir
-        ? { workspaceDir: resolvedRuntimeContext.workspaceDir }
-        : params.workspaceDir
-          ? { workspaceDir: params.workspaceDir }
-          : {}),
-    });
-
-    const context = buildImageContext(prompt, params.images, {
-      promptInUserContent: shouldPlaceImagePromptInUserContent(model),
-    });
-
-    const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
-    const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
+    // Keep stream factories, request hooks and retries with the generation that
+    // selected the model and auth; a bound API registry alone does not select plugins.
+    return await withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
       params.signal?.throwIfAborted();
-      const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
-      const timeoutMs = configuredTimeoutMs;
-      const headers = buildImageRequestHeaders(requestModel);
-      const streamOptions = {
-        apiKey,
-        maxTokens,
-        signal: requestSignal,
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(headers ? { headers } : {}),
-        ...(payloadHandler ? { onPayload: payloadHandler } : {}),
-      };
-      const task: Promise<AssistantMessage> = providerStreamFn
-        ? (async () =>
-            await (await providerStreamFn(requestModel, context, streamOptions)).result())()
-        : complete(requestModel, context, streamOptions);
-      return await withImageDescriptionTimeout({
-        controller,
-        signal: params.signal,
-        timeoutMs,
-        createTimeoutError: (requestTimeoutMs) =>
-          buildImageDescriptionTimeoutError({
-            phase: "request",
-            timeoutMs: requestTimeoutMs,
-            setupDurationMs,
-          }),
-        task,
-      });
-    };
+      const setupDurationMs = Date.now() - startedAtMs;
 
-    const message = await completeImage();
-    try {
+      if (isMinimaxVlmModel(model.provider, model.id)) {
+        return await describeImagesWithMinimax({
+          runtimeValue: apiKey,
+          provider: model.provider,
+          modelId: model.id,
+          modelBaseUrl: model.baseUrl,
+          prompt,
+          timeoutMs: params.timeoutMs,
+          images: params.images,
+          request: getModelProviderRequestTransport(model),
+          signal: params.signal,
+        });
+      }
+
+      // Prepared auth may carry sentinel-protected request headers. Resolve them only at this
+      // final direct-completion boundary so provider SDKs never receive sentinel placeholders.
+      const requestModel = unwrapModelHeaderSentinelsForProviderEgress(
+        model,
+        "image description provider request",
+      );
+      const providerStreamFn = registerProviderStreamForModel({
+        model: requestModel,
+        cfg: preparedModelRuntime.config,
+        agentDir: preparedModelRuntime.agentDir,
+        ...(resolvedRuntime.workspaceDir ? { workspaceDir: resolvedRuntime.workspaceDir } : {}),
+      });
+
+      const context = buildImageContext(prompt, params.images, {
+        promptInUserContent: shouldPlaceImagePromptInUserContent(model),
+      });
+
+      const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
+      const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
+        params.signal?.throwIfAborted();
+        const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
+        const timeoutMs = configuredTimeoutMs;
+        const headers = buildImageRequestHeaders(requestModel);
+        const streamOptions = {
+          apiKey,
+          maxTokens,
+          signal: requestSignal,
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          ...(headers ? { headers } : {}),
+          ...(payloadHandler ? { onPayload: payloadHandler } : {}),
+        };
+        const task: Promise<AssistantMessage> = providerStreamFn
+          ? (async () =>
+              await (await providerStreamFn(requestModel, context, streamOptions)).result())()
+          : complete(requestModel, context, streamOptions);
+        return await withImageDescriptionTimeout({
+          controller,
+          signal: params.signal,
+          timeoutMs,
+          createTimeoutError: (requestTimeoutMs) =>
+            buildImageDescriptionTimeoutError({
+              phase: "request",
+              timeoutMs: requestTimeoutMs,
+              setupDurationMs,
+            }),
+          task,
+        });
+      };
+
+      const message = await completeImage();
+      try {
+        const text = coerceImageAssistantText({
+          message,
+          provider: model.provider,
+          model: model.id,
+        });
+        return { text, model: model.id };
+      } catch (err) {
+        if (!isImageModelNoTextError(err) || !hasImageReasoningOnlyResponse(message)) {
+          throw err;
+        }
+      }
+
+      params.signal?.throwIfAborted();
+      const retryMessage = await completeImage(disableReasoningForImageRetryPayload);
       const text = coerceImageAssistantText({
-        message,
+        message: retryMessage,
         provider: model.provider,
         model: model.id,
       });
       return { text, model: model.id };
-    } catch (err) {
-      if (!isImageModelNoTextError(err) || !hasImageReasoningOnlyResponse(message)) {
-        throw err;
-      }
-    }
-
-    params.signal?.throwIfAborted();
-    const retryMessage = await completeImage(disableReasoningForImageRetryPayload);
-    const text = coerceImageAssistantText({
-      message: retryMessage,
-      provider: model.provider,
-      model: model.id,
     });
-    return { text, model: model.id };
   } finally {
-    releaseRuntime?.();
+    resolvedRuntime.release();
   }
 }
 

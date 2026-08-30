@@ -7,23 +7,6 @@ import type { PluginHookName } from "./types.js";
 
 export { createPluginRecord };
 
-export function createInstalledPluginIndexSnapshot(
-  plugins: Array<Record<string, unknown>>,
-): Record<string, unknown> {
-  return {
-    version: 1,
-    warning: "test",
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins,
-    diagnostics: [],
-  };
-}
-
 export const HOOK_ONLY_MESSAGE =
   "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.";
 export const REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE =

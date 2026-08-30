@@ -10,11 +10,11 @@ import { applyPrimaryModel } from "./provider-model-primary.js";
 
 /** Runtime API-key auth helper bundle exposed to provider setup code. */
 export const providerApiKeyAuthRuntime = {
-  upsertAuthProfileWithLockOrThrow,
   applyAuthProfileConfig,
   applyPrimaryModel,
   buildApiKeyCredential,
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeApiKeyInput,
+  upsertAuthProfileWithLockOrThrow,
   validateApiKeyInput,
 };

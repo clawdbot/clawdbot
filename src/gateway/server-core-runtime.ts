@@ -144,14 +144,13 @@ export async function startGatewayCoreRuntime(input: {
     coreGatewayMethodNames,
     pluginHostServices,
     baseMethods,
-    pluginWorkspaceDir,
+    pluginMetadataOwner,
     ambientEnvTriggers,
     resolvePluginGatewayContext,
     workerEnvironmentStartup,
     broadcastPluginEvent,
     activateRuntimeSecrets,
   } = runtime;
-  const pluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
   if (desktopSessionRegistry) {
     kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
   }
@@ -322,6 +321,7 @@ export async function startGatewayCoreRuntime(input: {
           return days !== null ? nowMs + days * 86_400_000 : null;
         },
         activateRuntimeSecrets,
+        getPluginMetadata: () => pluginMetadataOwner.getActive(),
         sharedGatewaySessionGenerationState,
         resolveSharedGatewaySessionGenerationForConfig,
         clients,
@@ -523,20 +523,28 @@ export async function startGatewayCoreRuntime(input: {
       );
     const beforeChannelTargets = listAttachedChannelConfigTargets();
     const beforeChannelIds = new Set(beforeChannelTargets.keys());
+    const pluginMetadata =
+      params.pluginMetadata ??
+      pluginMetadataOwner.prepare({
+        config: params.sourceConfig,
+        env: params.env,
+      });
+    const pluginMetadataSnapshot = pluginMetadata.selectedSnapshot;
+    const pluginWorkspaceDir = pluginMetadataSnapshot.workspaceDir;
     const nextPluginActivationConfig = resolveGatewayStartupPluginActivationConfig({
       runtimeConfig: params.nextConfig,
       activationSourceConfig: params.sourceConfig,
       env: params.env,
-      manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
-      discovery: pluginMetadataSnapshot?.discovery,
+      manifestRegistry: pluginMetadata.manifestRegistry,
+      discovery: pluginMetadataSnapshot.discovery,
       ambientEnvTriggers,
     });
     const nextPluginLookUpTable = loadPluginLookUpTable({
       config: nextPluginActivationConfig,
       workspaceDir: pluginWorkspaceDir,
+      metadataSnapshot: pluginMetadataSnapshot,
       env: params.env,
       activationSourceConfig: params.sourceConfig,
-      metadataSnapshot: pluginMetadataSnapshot,
       // Workers can be created after startup; reload planning needs the live durable set.
       workerProviderIds: workerEnvironmentStartup?.listDurableProviderIds() ?? [],
       ambientEnvTriggers,
@@ -697,6 +705,6 @@ export async function startGatewayCoreRuntime(input: {
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
-    getPluginMetadataSnapshot: () => pluginMetadataSnapshot,
+    getPluginMetadata: () => pluginMetadataOwner.getActive(),
   };
 }

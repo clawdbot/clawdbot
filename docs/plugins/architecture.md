@@ -138,11 +138,13 @@ That split lets OpenClaw validate config, explain missing/disabled plugins, and 
 
 ### Plugin metadata snapshot and lookup table
 
-One `PluginCache` starts on the first plugin metadata access, including CLI preflight before Gateway startup, and fills progressively as metadata and artifacts are needed. Gateway startup retains that owner and builds its immutable `PluginMetadataSnapshot`. The snapshot includes plugin metadata from all configured agent workspaces, including disabled plugins, with source precedence and workspace provenance preserved. It stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, and a plugin id normalizer. Package contents and lazily loaded module exports belong to other typed views of the same cache, not the snapshot itself.
+One `PluginCache` starts on the first plugin metadata access, including CLI preflight, and fills progressively. Gateway startup retains that owner and its immutable package inventory from all configured agent workspaces, including disabled plugins. Checked package contents and lazy module exports belong to typed views of the same cache; metadata snapshots hold installed indexes, manifests, diagnostics, owner maps, plugin id normalization, and discovery facts without executing plugin runtime code.
 
-Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstrap consume that snapshot instead of rebuilding manifest/index metadata independently. `PluginLookUpTable` is derived from the same snapshot and adds the startup plugin plan for the current runtime config.
+A prepared metadata collection retains a `unionSnapshot` combining the indexes, manifests, and discovery facts from configured workspaces for validation and management. Runtime loading and model preparation use `selectedSnapshot` or an exact entry in `workspaces`; execution never uses the union index. Auxiliary execution workspaces stay outside the configuration-wide union, so they cannot change unrelated schemas or collision ownership. `PluginLookUpTable` adds the startup plan without rediscovering manifests. Raw channel catalog candidates remain separate from validated manifests so inspection preserves untrusted candidates and shadowed sources.
 
-After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing config, account state, or an agent's run workspace does not invalidate it. Plugin installs, updates, removals, manifest edits, and discovery-root changes become visible to the runtime after a Gateway restart.
+The Gateway retains the accepted collection and at most one observed config candidate. Repeated config reads reuse prepared views; supported config and account changes recompute policy and runtime bindings against the fixed startup inventory. Configuration, environment, secrets, and runtime generation publication share the reload commit boundary. Rejected or superseded preparation cannot replace serving state, and retained runs keep their exact prepared config, metadata, and registry until they finish.
+
+Package metadata has a different lifetime from activation. Runtime readers never rediscover plugin files, reread manifests, or poll freshness when config or an agent workspace changes. Installs, updates, removals, manifest edits, and new discovery roots become visible after Gateway restart. Changing an agent's workspace can hot-apply its runtime configuration, but plugins found only in the new directory are not discovered until restart.
 
 The snapshot and lookup table keep repeated startup decisions on the fast path:
 
@@ -154,11 +156,11 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 - plugin config schema and channel config schema validation
 - startup auto-enable decisions
 
-Activation policy and runtime bindings have a separate lifetime. Hot reload can recompute enablement, replace plugin services, and refresh account state using current config against the fixed startup inventory. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
+Replace prepared views instead of mutating them or retaining unbounded historical copies. Config, environment triggers, and account authentication remain live inputs; retaining package metadata neither freezes those inputs nor activates every discovered plugin.
 
 The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
 
-Install, update, registry refresh, and doctor flows may read fresh package metadata to validate their changes. Their snapshots and installed-index writes do not replace the running Gateway's inventory. Runtime flows must use the startup snapshot or its lookup table instead of falling back to those cold management paths.
+Install, update, registry refresh, and doctor operations may inspect fresh package metadata after acquiring their lifecycle lease. Their local collections remain available through asynchronous work, but their snapshots and installed-index writes cannot replace the running Gateway's inventory. `plugins.refresh` reports `restartRequired: true`; with reload disabled, restart manually. Runtime readers use their prepared workspace view rather than falling back to cold management discovery.
 
 ### Activation planning
 

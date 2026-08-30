@@ -135,15 +135,6 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
 
-      const defaultsModel = api.config?.agents?.defaults?.model;
-      const primary =
-        typeof defaultsModel === "string"
-          ? normalizeOptionalString(defaultsModel)
-          : normalizeOptionalString(defaultsModel?.primary);
-      const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
-      const primaryModel =
-        typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
-
       const requestProvider =
         typeof params.provider === "string" ? params.provider.trim() : undefined;
       const configuredProvider =
@@ -153,31 +144,39 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const requestModel = typeof params.model === "string" ? params.model.trim() : undefined;
       const configuredModel =
         typeof pluginCfg.defaultModel === "string" ? pluginCfg.defaultModel.trim() : undefined;
-      const requestedProvider =
-        requestProvider || configuredProvider || primaryProvider || undefined;
-      const rawModel = requestModel || configuredModel || primaryModel || undefined;
       const hasModelOverride = Boolean(
         requestProvider || configuredProvider || requestModel || configuredModel,
       );
-      const { provider, model } = resolveLlmTaskModelRef({
-        api,
-        provider: requestedProvider,
-        rawModel,
-        preserveProvider: Boolean(requestProvider || (!requestModel && configuredProvider)),
-      });
+      // The execution host owns the unchanged agent default and its runtime normalization.
+      let modelKey: string | undefined;
+      if (hasModelOverride) {
+        const defaultsModel = api.config?.agents?.defaults?.model;
+        const primary =
+          typeof defaultsModel === "string"
+            ? normalizeOptionalString(defaultsModel)
+            : normalizeOptionalString(defaultsModel?.primary);
+        const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
+        const primaryModel =
+          typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
+        const { provider, model } = resolveLlmTaskModelRef({
+          api,
+          provider: requestProvider || configuredProvider || primaryProvider || undefined,
+          rawModel: requestModel || configuredModel || primaryModel || undefined,
+          preserveProvider: Boolean(requestProvider || (!requestModel && configuredProvider)),
+        });
+        modelKey = toModelKey(provider, model);
+        if (!provider || !model || !modelKey) {
+          throw new Error(
+            `provider/model could not be resolved (provider=${provider ?? ""}, model=${model ?? ""})`,
+          );
+        }
+      }
 
       const authProfileId =
         (typeof params.authProfileId === "string" && params.authProfileId.trim()) ||
         (typeof pluginCfg.defaultAuthProfileId === "string" &&
           pluginCfg.defaultAuthProfileId.trim()) ||
         undefined;
-
-      const modelKey = toModelKey(provider, model);
-      if (!provider || !model || !modelKey) {
-        throw new Error(
-          `provider/model could not be resolved (provider=${provider ?? ""}, model=${model ?? ""})`,
-        );
-      }
 
       const thinkingRaw =
         typeof params.thinking === "string" && params.thinking.trim() ? params.thinking : undefined;
@@ -226,7 +225,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           },
         ],
         systemPrompt: system,
-        model: hasModelOverride ? modelKey : undefined,
+        model: modelKey,
         reasoning: thinkLevel,
         maxTokens: streamParams.maxTokens,
         temperature: streamParams.temperature,

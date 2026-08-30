@@ -1,6 +1,5 @@
 // Covers runtime schema defaults and generated runtime config behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -15,8 +14,7 @@ const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
 const mockReadConfigFileSnapshot = vi.hoisted(() =>
   vi.fn<(options?: { observe?: boolean }) => Promise<ConfigFileSnapshot>>(),
 );
-const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
-const mockGetCurrentPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
+const mockResolveConfigWidePluginManifestRegistry = vi.hoisted(() => vi.fn());
 
 let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").readBestEffortRuntimeConfigSchema;
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
@@ -29,36 +27,15 @@ vi.mock("./config.js", () => {
   return {
     getRuntimeConfig: () => mockLoadConfig(),
     loadConfig: () => mockLoadConfig(),
-    readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
-      mockReadConfigFileSnapshot(...args),
+    readConfigFileSnapshotWithPluginMetadata: async (
+      ...args: Parameters<typeof mockReadConfigFileSnapshot>
+    ) => ({ snapshot: await mockReadConfigFileSnapshot(...args) }),
   };
 });
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistryCore: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
-}));
-
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
-    mockLoadPluginManifestRegistry(...args),
-}));
-
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
-  loadPluginMetadataSnapshot: (...args: unknown[]) =>
-    createPluginMetadataSnapshotFixture(mockLoadPluginManifestRegistry(...args)),
-  resolvePluginMetadataSnapshot: (...args: unknown[]) => {
-    const current = mockGetCurrentPluginMetadataSnapshot(...args);
-    return createPluginMetadataSnapshotFixture(
-      current?.manifestRegistry ?? mockLoadPluginManifestRegistry(...args),
-    );
-  },
-}));
-
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: (...args: unknown[]) =>
-    mockGetCurrentPluginMetadataSnapshot(...args),
+vi.mock("./io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: (...args: unknown[]) =>
+    mockResolveConfigWidePluginManifestRegistry(...args),
 }));
 
 function makeSnapshot(params: { valid: boolean; config?: OpenClawConfig }): ConfigFileSnapshot {
@@ -182,12 +159,7 @@ async function readSchemaNodes() {
 }
 
 function getManifestRegistryLoadArg(index = 0): Record<string, unknown> | undefined {
-  const arg = mockLoadPluginManifestRegistry.mock.calls[index]?.[0];
-  return arg && typeof arg === "object" ? (arg as Record<string, unknown>) : undefined;
-}
-
-function getCurrentMetadataSnapshotArg(index = 0): Record<string, unknown> | undefined {
-  const arg = mockGetCurrentPluginMetadataSnapshot.mock.calls[index]?.[0];
+  const arg = mockResolveConfigWidePluginManifestRegistry.mock.calls[index]?.[0];
   return arg && typeof arg === "object" ? (arg as Record<string, unknown>) : undefined;
 }
 
@@ -197,6 +169,7 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
 });
 
@@ -211,7 +184,7 @@ describe("readBestEffortRuntimeConfigSchema", () => {
   beforeAll(async () => {
     vi.clearAllMocks();
     mockLoadConfig.mockReturnValue(explicitMainRoster());
-    mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
+    mockResolveConfigWidePluginManifestRegistry.mockReturnValue(makeManifestRegistry());
     mockReadConfigFileSnapshot.mockResolvedValueOnce(
       makeSnapshot({
         valid: true,
@@ -227,14 +200,14 @@ describe("readBestEffortRuntimeConfigSchema", () => {
       channelProps,
       entryProps,
       loadArg: getManifestRegistryLoadArg(),
-      manifestRegistryLoadCount: mockLoadPluginManifestRegistry.mock.calls.length,
+      manifestRegistryLoadCount: mockResolveConfigWidePluginManifestRegistry.mock.calls.length,
     };
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockLoadConfig.mockReturnValue(explicitMainRoster());
-    mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
+    mockResolveConfigWidePluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
 
   it("merges manifest plugin metadata for valid configs", async () => {
@@ -244,8 +217,6 @@ describe("readBestEffortRuntimeConfigSchema", () => {
       ...explicitMainRoster(),
       plugins: { entries: { demo: { enabled: true } } },
     });
-    expect(loadArg).not.toHaveProperty("cache", false);
-    expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
     expect(channelProps).toHaveProperty("telegram");
     expect(channelProps).toHaveProperty("matrix");
     expect(entryProps).toHaveProperty("demo");
@@ -266,14 +237,13 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
     const { channelProps, entryProps } = await readSchemaNodes();
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    expect(mockResolveConfigWidePluginManifestRegistry).toHaveBeenCalledTimes(1);
     const loadArg = getManifestRegistryLoadArg();
     expect(loadArg?.config).toEqual({
       ...explicitMainRoster(),
       plugins: { enabled: true },
     });
-    expect(loadArg).not.toHaveProperty("cache", false);
-    expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
+    expect(loadArg?.allowCurrent).toBe(false);
     expect(channelProps).toHaveProperty("telegram");
     expect(channelProps).toHaveProperty("slack");
     expect(entryProps?.demo).toBeUndefined();
@@ -287,7 +257,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
       ...explicitMainRoster(),
       plugins: { entries: { demo: { enabled: true } } },
     });
-    mockLoadPluginManifestRegistry.mockReturnValue(makeManifestRegistry());
+    mockResolveConfigWidePluginManifestRegistry.mockReturnValue(makeManifestRegistry());
   });
 
   it("uses manifest metadata instead of booting plugin runtime", () => {
@@ -296,19 +266,18 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
     const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    expect(mockResolveConfigWidePluginManifestRegistry).toHaveBeenCalledTimes(1);
     const loadArg = getManifestRegistryLoadArg();
     expect(loadArg?.config).toEqual({
       ...explicitMainRoster(),
       plugins: { entries: { demo: { enabled: true } } },
     });
-    expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
     expect(channelProps).toHaveProperty("telegram");
     expect(channelProps).toHaveProperty("matrix");
   });
 
   it("projects strict heartbeat visibility for external channels and their accounts", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue({
+    mockResolveConfigWidePluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
         {
@@ -366,7 +335,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
   });
 
   it("projects canonical heartbeats into composed schemas and referenced open accounts", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue({
+    mockResolveConfigWidePluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
         {
@@ -429,54 +398,30 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(projected.$defs).toEqual({ Account: {} });
   });
 
-  it("reuses the current gateway plugin metadata snapshot for config schema requests", () => {
-    mockGetCurrentPluginMetadataSnapshot.mockReturnValueOnce({
-      manifestRegistry: {
-        diagnostics: [],
-        plugins: [
-          {
-            id: "telegram",
-            name: "Telegram",
-            description: "Telegram plugin",
-            origin: "bundled",
-            channels: ["telegram"],
-          },
-          {
-            id: "matrix",
-            name: "Matrix",
-            description: "Matrix plugin",
-            origin: "workspace",
-            channels: ["matrix"],
-            channelConfigs: {
-              matrix: {
-                schema: {
-                  type: "object",
-                  properties: {
-                    homeserver: { type: "string" },
-                  },
-                },
-              },
-            },
-          },
-        ],
-      },
-    });
+  it("reuses prepared schema metadata without repeating JSON serialization", () => {
+    const first = loadGatewayRuntimeConfigSchema();
+    const stringify = vi.spyOn(JSON, "stringify");
+    const second = loadGatewayRuntimeConfigSchema();
+    const serializationCount = stringify.mock.calls.length;
+    stringify.mockRestore();
 
-    const result = loadGatewayRuntimeConfigSchema();
-    const schema = result.schema as { properties?: Record<string, unknown> };
-    const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
-    const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
+    expect(second).toBe(first);
+    expect(serializationCount).toBe(0);
+  });
 
-    expect(mockGetCurrentPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
-    const metadataArg = getCurrentMetadataSnapshotArg();
-    expect(metadataArg?.config).toEqual({
-      ...explicitMainRoster(),
-      plugins: { entries: { demo: { enabled: true } } },
+  it("rebuilds the schema when the prepared manifest registry is replaced", () => {
+    const first = loadGatewayRuntimeConfigSchema();
+    const registry = makeManifestRegistry();
+    mockResolveConfigWidePluginManifestRegistry.mockReturnValue({
+      ...registry,
+      plugins: registry.plugins.map((plugin) =>
+        plugin.id === "demo" ? Object.assign({}, plugin, { name: "Updated Demo" }) : plugin,
+      ),
     });
-    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
-    expect(channelProps).toHaveProperty("telegram");
-    expect(JSON.stringify(channelProps?.telegram)).toContain("botToken");
-    expect(channelProps).toHaveProperty("matrix");
+    const second = loadGatewayRuntimeConfigSchema();
+
+    expect(first.uiHints["plugins.entries.demo"]?.label).toBe("Demo");
+    expect(second.uiHints["plugins.entries.demo"]?.label).toBe("Updated Demo");
   });
 
   it("does not activate or replace the active plugin registry across repeated schema loads (regression guard for #54816)", () => {
@@ -493,11 +438,6 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     loadGatewayRuntimeConfigSchema();
     loadGatewayRuntimeConfigSchema();
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
-    for (const call of mockLoadPluginManifestRegistry.mock.calls) {
-      expect(call[0]).toHaveProperty("config");
-      expect(call[0]).not.toHaveProperty("bundledChannelConfigCollector");
-    }
     expect(getActivePluginRegistry()).toBe(activeRegistry);
     expect(getActivePluginRegistryKey()).toBe("startup-registry");
     expect(getActivePluginRegistryVersion()).toBe(versionBefore);

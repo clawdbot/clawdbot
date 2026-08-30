@@ -31,11 +31,8 @@ import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
 import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
-import {
-  type ChatAbortControllerEntry,
-  removeChatAbortControllerEntry,
-  type RestartRecoveryCandidate,
-} from "./chat-abort.js";
+import { removeChatAbortControllerEntry, type RestartRecoveryCandidate } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import type {
   ChatRunState,

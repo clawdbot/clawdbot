@@ -2,6 +2,7 @@ import { isNixMode } from "../config/paths.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { getOrCreatePluginMetadataOwner } from "../plugins/plugin-metadata-collection.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -123,6 +124,7 @@ export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
 export async function createGatewayKernel(port = 18789, opts: GatewayServerOptions = {}) {
   ensureOpenClawCliOnPath();
   const releasePluginMetadata = retainGatewayPluginMetadata();
+  const pluginMetadataOwner = getOrCreatePluginMetadataOwner();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
   try {
     const bootstrap = await prepareGatewayServerBootstrap({
@@ -132,6 +134,7 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       logSecrets,
       loadWorkerEnvironmentStartupModule,
       formatRuntimeGatewayAuthTokenWarning,
+      pluginMetadataOwner,
     });
     const runtime = await prepareGatewayKernelState({
       bootstrap,

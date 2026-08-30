@@ -2,6 +2,7 @@
  * Loads bundled, manifest, and discovered model catalog entries.
  */
 import { resolveClaudeFable5ModelIdentity } from "@openclaw/llm-core";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -26,7 +27,7 @@ import type {
   ModelInputType,
 } from "./model-catalog.types.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
-import { modelKey, createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
+import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import type { AuthStorageData, ModelRegistry } from "./sessions/index.js";
 
@@ -112,7 +113,7 @@ export function createPreparedModelCatalogProviderNormalizer(
 
 function catalogEntryDedupeKey(provider: string, id: string): string {
   const normalizedProvider = normalizeProviderId(provider);
-  return normalizeLowercaseStringOrEmpty(modelKey(normalizedProvider, id));
+  return normalizeLowercaseStringOrEmpty(buildModelCatalogRef(normalizedProvider, id));
 }
 
 function mergeCatalogCompat(
@@ -586,11 +587,11 @@ export async function buildPreparedModelCatalogSnapshot(
         },
       });
       if (supplemental.length > 0) {
-        // Explicitly configured rows are user-authorized even when live
-        // discovery omits them; normalize both sets to preserve their routes.
+        // These rows already carry their normalized identity. Reapplying a
+        // non-idempotent alias would lose an account-authorized model.
         const accountVisibleModelKeys = new Set(
           [...models, ...configuredModels].map((entry) =>
-            catalogEntryDedupeKey(entry.provider, normalizeModelId(entry.provider, entry.id)),
+            catalogEntryDedupeKey(entry.provider, entry.id),
           ),
         );
         const normalizedSupplemental: ModelCatalogEntry[] = [];

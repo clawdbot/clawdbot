@@ -53,4 +53,4 @@ export const BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES = Object.freeze(
     return prefixes;
   })(),
 );
-export type { ChatChannelId } from "../channels/ids.js";
+export type { ChatChannelId } from "../channels/plugins/channel-id.types.js";

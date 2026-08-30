@@ -12,7 +12,10 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../src/agents/auth-profiles/sqlite.js";
-import { closeOpenClawAgentDatabaseByPath } from "../src/state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  resolveOpenClawAgentSqlitePath,
+} from "../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import {
@@ -484,6 +487,40 @@ describe("installTestEnv", () => {
     expect(
       fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "credentials", "token.txt")),
     ).toBe(false);
+  });
+
+  it("keeps default database state within successive isolated test homes", () => {
+    const resolveDatabasePaths = () => [
+      resolveOpenClawStateSqlitePath(),
+      resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    ];
+    const first = installTestEnv({ mode: "hermetic" });
+    cleanupFns.push(first.cleanup);
+    const firstPaths = resolveDatabasePaths();
+    for (const databasePath of firstPaths) {
+      // Assert containment before writing: an old PID root may belong to another run.
+      expect(databasePath.startsWith(`${first.tempHome}${path.sep}`)).toBe(true);
+    }
+    const markers = firstPaths.map((databasePath) =>
+      path.join(path.dirname(databasePath), "lifecycle-probe"),
+    );
+    for (const marker of markers) {
+      writeFile(marker, "owned test state");
+    }
+
+    first.cleanup();
+    cleanupFns.pop();
+    for (const marker of markers) {
+      expect(fs.existsSync(marker)).toBe(false);
+    }
+
+    const second = installTestEnv({ mode: "hermetic" });
+    cleanupFns.push(second.cleanup);
+    const secondPaths = resolveDatabasePaths();
+    expect(secondPaths).not.toEqual(firstPaths);
+    for (const databasePath of secondPaths) {
+      expect(databasePath.startsWith(`${second.tempHome}${path.sep}`)).toBe(true);
+    }
   });
 
   it.each(["OPENCLAW_HOME", "OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"])(

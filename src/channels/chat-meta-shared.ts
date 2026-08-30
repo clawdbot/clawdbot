@@ -6,7 +6,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
-import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
+import { CHAT_CHANNEL_ORDER } from "./ids.js";
+import type { ChatChannelId } from "./plugins/channel-id.types.js";
 import { buildManifestChannelMeta } from "./plugins/channel-meta.js";
 import type { ChannelMeta } from "./plugins/types.core.js";
 

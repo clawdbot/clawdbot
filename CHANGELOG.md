@@ -452,6 +452,7 @@ Docs: https://docs.openclaw.ai
 - **System-agent recovery guidance:** direct browser and app users to Settings or the OpenClaw host instead of terminal-only exit guidance while preserving the required stop, onboard, and restart lifecycle. (#114633) Thanks @jesse-merhi.
 - **Browser keyboard aliases:** accept `Esc`, `Return`, `Del`, `Ctrl`, and `Cmd` in browser actions and shortcuts, and preserve keyboard guidance in compact tool schemas. (#130401) Thanks @geekforlife.
 - **Microsoft Teams caption probes:** wait for live captions on reused, manually opened meeting tabs and report a timeout when captions do not arrive. (#111466) Thanks @zhangguiping-xydt.
+- **Gateway responsiveness:** reuse workspace-owned plugin metadata for status, model selection, authentication, and session cost reads, avoid provider execution during metadata-only checks, keep plugin model overrides bound to the authorized initial target, and preserve committed Telegram model selections when confirmation delivery fails. (#130706)
 
 ## 2026.7.1
 

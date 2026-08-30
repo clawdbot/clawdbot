@@ -248,6 +248,7 @@ async function defaultBuildProjection(params: {
     agentId: params.facts.agentId,
     snapshot,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
+    pluginRegistry: params.facts.owner.pluginRegistry,
     preparedAuthStore: params.facts.authStore,
     // The owner records usable auth at discovery; metadata must share that exact generation fact.
     preparedRuntimeAuthModes: params.facts.authModes,

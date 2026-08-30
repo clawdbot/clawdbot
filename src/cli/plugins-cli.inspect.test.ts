@@ -2,10 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
-import {
-  createInstalledPluginIndexSnapshot,
-  createPluginRecord,
-} from "../plugins/status.test-fixtures.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
   buildAllPluginInspectReportsMock,
   buildPluginDiagnosticsReportMock,
@@ -40,9 +38,11 @@ function setInspectInstallRecords(
   ),
 ) {
   setInstalledPluginIndexInstallRecords(records);
-  const metadata = {
-    index: { ...createInstalledPluginIndexSnapshot(plugins), installRecords: records },
-  };
+  const metadata = createPluginMetadataSnapshotFixture({
+    plugins: plugins.map(({ pluginId, rootDir }) => ({ id: pluginId, rootDir })),
+  });
+  metadata.index.installRecords = records;
+  metadata.index.plugins = metadata.index.plugins.map((entry, i) => ({ ...plugins[i], ...entry }));
   workshopMocks.loadMetadata.mockReturnValue(metadata);
   return metadata;
 }
@@ -52,7 +52,7 @@ describe("plugins cli inspect", () => {
     resetPluginsCliTestState();
     workshopMocks.detectToolPolicyDiagnostic.mockReset();
     workshopMocks.loadMetadata.mockReset();
-    workshopMocks.loadMetadata.mockReturnValue({ index: createInstalledPluginIndexSnapshot([]) });
+    workshopMocks.loadMetadata.mockReturnValue(createPluginMetadataSnapshotFixture());
   });
 
   it.each([false, true])(

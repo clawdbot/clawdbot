@@ -3,9 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import {
   TURN_MODEL_DEFAULT_REF,
@@ -84,40 +89,57 @@ async function observeStatusSelection(
 
   buildStatusReplyMock.mockClear();
   buildStatusReplyMock.mockResolvedValue({ text: "status" });
-  await maybeResolveNativeSlashCommandFastReply({
-    ctx: buildTestCtx({
-      Body: "/status",
-      BodyForAgent: "/status",
-      RawBody: "/status",
-      CommandBody: "/status",
-      CommandSource: "native",
-      CommandAuthorized: true,
-      SessionKey: "telegram:slash:selection",
-      CommandTargetSessionKey: sessionKey,
-      CommandTurn: {
-        kind: "native",
-        source: "native",
-        authorized: true,
-        commandName: "status",
-        body: "/status",
-      },
-      ...fixture.ctx,
-    }),
-    cfg,
-    agentId: "main",
-    agentDir: "/tmp/agent",
-    agentCfg: undefined,
-    commandAuthorized: true,
-    defaultProvider: TURN_MODEL_DEFAULT_REF.provider,
-    defaultModel: TURN_MODEL_DEFAULT_REF.model,
-    aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: fixture.heartbeat
-      ? TURN_MODEL_OVERRIDE_REF.provider
-      : TURN_MODEL_DEFAULT_REF.provider,
-    model: fixture.heartbeat ? TURN_MODEL_OVERRIDE_REF.model : TURN_MODEL_DEFAULT_REF.model,
-    workspaceDir: "/tmp/workspace",
-    typing: createTypingController(),
-  });
+  // Status rendering and catalog loading are stubbed; this routing fixture owns
+  // a complete generation so a selected provider miss cannot activate plugins.
+  await withPluginRuntimeGenerationScope(
+    {
+      config: cfg,
+      metadataSnapshot: createPluginMetadataSnapshot({
+        config: cfg,
+        workspaceDir: "/tmp/workspace",
+        manifestRegistry: makeRegistry([]),
+      }),
+      pluginRegistry: createSessionConversationTestRegistry(),
+    },
+    () =>
+      maybeResolveNativeSlashCommandFastReply({
+        ctx: buildTestCtx({
+          Body: "/status",
+          BodyForAgent: "/status",
+          RawBody: "/status",
+          CommandBody: "/status",
+          CommandSource: "native",
+          CommandAuthorized: true,
+          SessionKey: "telegram:slash:selection",
+          CommandTargetSessionKey: sessionKey,
+          CommandTurn: {
+            kind: "native",
+            source: "native",
+            authorized: true,
+            commandName: "status",
+            body: "/status",
+          },
+          ...fixture.ctx,
+        }),
+        cfg,
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        agentCfg: undefined,
+        commandAuthorized: true,
+        defaultProvider: TURN_MODEL_DEFAULT_REF.provider,
+        defaultModel: TURN_MODEL_DEFAULT_REF.model,
+        aliasIndex: { byAlias: new Map(), byKey: new Map() },
+        preparedDefaultModel: TURN_MODEL_DEFAULT_REF,
+        preparedInitialModel: fixture.heartbeat ? TURN_MODEL_OVERRIDE_REF : TURN_MODEL_DEFAULT_REF,
+        preparedPrimaryModel: TURN_MODEL_DEFAULT_REF,
+        provider: fixture.heartbeat
+          ? TURN_MODEL_OVERRIDE_REF.provider
+          : TURN_MODEL_DEFAULT_REF.provider,
+        model: fixture.heartbeat ? TURN_MODEL_OVERRIDE_REF.model : TURN_MODEL_DEFAULT_REF.model,
+        workspaceDir: "/tmp/workspace",
+        typing: createTypingController(),
+      }),
+  );
 
   const call = buildStatusReplyMock.mock.calls[0]?.[0] as
     | { provider: string; model: string; sessionEntry?: SessionEntry }

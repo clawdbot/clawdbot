@@ -4,7 +4,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
 import { resolvePluginInstallOwnerLookup } from "./candidate-install-owner.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginLogger } from "./types.js";

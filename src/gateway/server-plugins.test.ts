@@ -1,11 +1,14 @@
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { installPluginMetadataOwner } from "../plugins/current-plugin-metadata.test-support.js";
 import {
   getGlobalPluginRegistry,
   initializeGlobalHookRunner,
@@ -13,13 +16,27 @@ import {
 } from "../plugins/hook-runner-global.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
+import { createPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import {
+  createPluginMetadataOwner,
+  type PluginMetadataOwner,
+  type PreparedPluginMetadata,
+} from "../plugins/plugin-metadata-collection.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { projectPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import {
+  createColdPluginFixture,
+  isColdPluginRuntimeLoaded,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withEnv } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -39,6 +56,7 @@ const primeConfiguredBindingRegistry = vi.hoisted(() =>
   vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
 );
 const normalizeProviderModelIdWithRuntime = vi.hoisted(() => vi.fn(() => undefined));
+const observeAgentDispatch = vi.hoisted(() => vi.fn());
 const pluginRuntimeLoaderLogger = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
@@ -115,8 +133,10 @@ vi.mock("./agent-turn/internal-facade.js", () => ({
         onSignalAbort?: () => Promise<void> | void;
         signal?: AbortSignal;
         timeoutMs?: number;
+        expectedInitialModel?: Readonly<{ provider: string; model: string }>;
       },
     ) => {
+      observeAgentDispatch(request, dispatchOptions);
       const { dispatchGatewayRequestInProcess } = await import("./server-in-process-dispatch.js");
       return await dispatchGatewayRequestInProcess("agent", request, {
         client: options.client,
@@ -196,21 +216,19 @@ function createLookUpTableForTest(params: {
   pluginIds?: readonly string[];
   workerProviderIds?: readonly string[];
 }): PluginLookUpTable {
-  const index: PluginLookUpTable["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 1,
-    installRecords: params.installRecords ?? {},
-    plugins: [],
-    diagnostics: [],
-  };
   return {
     policyHash: "test",
-    index,
-    registryIndex: index,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 1,
+      installRecords: params.installRecords ?? {},
+      plugins: [],
+      diagnostics: [],
+    },
     registryDiagnostics: [],
     manifestRegistry: params.manifestRegistry ?? { plugins: [], diagnostics: [] },
     plugins: [],
@@ -431,6 +449,83 @@ async function createSubagentRuntime(
   return createRuntimeFromLastGatewayLoad().subagent;
 }
 
+async function withPreparedFallbackSubagentRuntime(
+  run: (params: {
+    config: OpenClawConfig;
+    metadata: PreparedPluginMetadata;
+    owner: PluginMetadataOwner;
+    pluginId: string;
+    runtime: PluginRuntime["subagent"];
+    retire: () => void;
+  }) => Promise<void>,
+): Promise<void> {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const pluginDir = state.path("subagent-model-policy");
+    await fs.mkdir(pluginDir);
+    const fixture = createColdPluginFixture({
+      rootDir: pluginDir,
+      pluginId: "subagent-model-policy",
+      manifest: {
+        providers: ["fixture-subagent"],
+        channels: [],
+        channelConfigs: {},
+        providerAuthChoices: [],
+        modelIdNormalization: {
+          providers: { "fixture-subagent": { aliases: { legacy: "current" } } },
+        },
+      },
+    });
+    const config: OpenClawConfig = {
+      agents: { defaults: { workspace: state.workspaceDir } },
+      plugins: {
+        allow: [fixture.pluginId],
+        load: { paths: [pluginDir] },
+        entries: {
+          [fixture.pluginId]: {
+            enabled: true,
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["fixture-subagent/current"],
+            },
+          },
+        },
+      },
+    };
+    const pluginCache = createPluginCache();
+    const owner = createPluginMetadataOwner(pluginCache);
+    const dispose = installPluginMetadataOwner(owner, pluginCache);
+    try {
+      const metadata = owner.prepare({ config });
+      owner.publish(metadata, { config });
+      loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+      const loaded = serverPluginsModule.loadGatewayPlugins({
+        cfg: config,
+        workspaceDir: metadata.selectedSnapshot.workspaceDir,
+        pluginIds: [fixture.pluginId],
+        pluginMetadataSnapshot: metadata.selectedSnapshot,
+        log: createTestLog(),
+        coreGatewayHandlers: {},
+        baseMethods: [],
+        resolveGatewayContext: () => resolveTestGatewayContext(),
+      });
+      runtimeRegistryModule.setActivePluginRegistry(loaded.pluginRegistry);
+      serverPluginsModule.setFallbackGatewayContext(createTestContext("prepared-fallback-model"));
+      await run({
+        config,
+        metadata,
+        owner,
+        pluginId: fixture.pluginId,
+        runtime: createRuntimeFromLastGatewayLoad().subagent,
+        retire: loaded.retireGatewayRuntimeBindings,
+      });
+      expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+    } finally {
+      dispose();
+      clearPluginMetadataLifecycleCaches();
+    }
+  });
+}
+
 async function createRequestScopedSubagentRuntime(): Promise<PluginRuntime["subagent"]> {
   loadOpenClawPlugins.mockReturnValue(createRegistry([]));
   loadGatewayStartupPluginsForTest({ resolveGatewayContext: undefined });
@@ -518,6 +613,7 @@ beforeEach(() => {
     .mockImplementation(({ config }) => ({ config, changes: [], autoEnabledReasons: {} }));
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   normalizeProviderModelIdWithRuntime.mockReset().mockReturnValue(undefined);
+  observeAgentDispatch.mockClear();
   dispatchReplyFromConfig.mockClear();
   pluginRuntimeLoaderLogger.info.mockClear();
   pluginRuntimeLoaderLogger.warn.mockClear();
@@ -2330,6 +2426,82 @@ describe("loadGatewayPlugins", () => {
       'plugin "voice-call" is not trusted for fallback provider/model override requests.',
     );
   });
+
+  test.each([
+    { label: "provider/model", override: { provider: "fixture-subagent", model: "legacy" } },
+    { label: "model-only", override: { model: "fixture-subagent/legacy" } },
+  ])(
+    "binds the authorized initial target without rewriting a fallback $label request",
+    async ({ override }) => {
+      await withPreparedFallbackSubagentRuntime(async ({ pluginId, runtime, retire }) => {
+        const request = {
+          sessionKey: "s-prepared-fallback",
+          message: "use the permitted model alias",
+          ...override,
+          expectedInitialModel: { provider: "fixture-subagent", model: "forged" },
+        };
+        const run = () =>
+          gatewayRequestScopeModule.withPluginRuntimePluginIdScope(pluginId, () =>
+            runtime.run(request),
+          );
+        await expect(run()).resolves.toEqual({ runId: "run-1", sessionKey: request.sessionKey });
+        expect(getRequiredLastDispatchedParams()).toMatchObject(override);
+        expect(getRequiredLastDispatchedParams()).not.toHaveProperty("expectedInitialModel");
+        const [, dispatchOptions] = observeAgentDispatch.mock.calls.at(-1) ?? [];
+        expect(dispatchOptions?.expectedInitialModel).toEqual({
+          provider: "fixture-subagent",
+          model: "current",
+        });
+        expect(Object.isFrozen(dispatchOptions?.expectedInitialModel)).toBe(true);
+
+        retire();
+        await expect(run()).rejects.toThrow(/gateway.*(?:scope|binding)/i);
+        expect(observeAgentDispatch).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
+  test.each([
+    { label: "included", included: true },
+    { label: "empty", included: false },
+  ])(
+    "keeps the $label retained generation authoritative for fallback model normalization",
+    async ({ included }) => {
+      await withPreparedFallbackSubagentRuntime(
+        async ({ config, metadata, owner, pluginId, runtime }) => {
+          const metadataSnapshot = projectPluginMetadataSnapshot(
+            metadata.selectedSnapshot,
+            included ? [pluginId] : [],
+          );
+          const replacement: OpenClawConfig = {
+            ...config,
+            agents: {
+              defaults: { workspace: `${metadata.selectedSnapshot.workspaceDir}-replacement` },
+            },
+          };
+          owner.publish(owner.prepare({ config: replacement }), { config: replacement });
+          const run = withPluginRuntimeGenerationScope({ config, metadataSnapshot }, () =>
+            gatewayRequestScopeModule.withPluginRuntimePluginIdScope(pluginId, () =>
+              runtime.run({
+                sessionKey: "s-retained-fallback",
+                message: "use the permitted model alias",
+                provider: "fixture-subagent",
+                model: "legacy",
+              }),
+            ),
+          );
+          if (included) {
+            await expect(run).resolves.toMatchObject({ runId: "run-1" });
+          } else {
+            await expect(run).rejects.toThrow(
+              'model override "fixture-subagent/legacy" is not allowlisted for plugin "subagent-model-policy".',
+            );
+            expect(handleGatewayRequest).not.toHaveBeenCalled();
+          }
+        },
+      );
+    },
+  );
 
   test("tags plugin fallback subagent runs with the creating plugin id", async () => {
     const serverPlugins = serverPluginsModule;

@@ -138,11 +138,7 @@ export function loadManifestMetadataRegistry(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): PluginMetadataRegistryView {
-  const snapshot = loadManifestMetadataSnapshot(params);
-  return {
-    index: snapshot.index,
-    manifestRegistry: snapshot.manifestRegistry,
-  };
+  return loadManifestMetadataSnapshot(params);
 }
 
 export function loadManifestMetadataSnapshot(params: {

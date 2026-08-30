@@ -331,7 +331,7 @@ function buildCreatePlan(options: TestStateOptions = {}) {
 }
 
 /** Create an isolated OpenClaw test state directory and optional scenario config. */
-async function createState(options: TestStateOptions = {}) {
+export async function createState(options: TestStateOptions = {}) {
   const label = normalizeLabel(options.label);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
   const plan = buildCreatePlan({ ...options, root });

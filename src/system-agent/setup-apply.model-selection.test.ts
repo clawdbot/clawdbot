@@ -14,7 +14,10 @@ describe("applySystemAgentModelSelection", () => {
       },
     } satisfies OpenClawConfig;
 
-    const result = await applySystemAgentModelSelection({ config, model: "openai/gpt-5.6-luna" });
+    const result = await applySystemAgentModelSelection({
+      config,
+      model: { provider: "openai", model: "gpt-5.6-luna" },
+    });
 
     expect(result.agents?.entries?.alpha?.model).toBe("openai/gpt-5.5");
     expect(result.agents?.entries?.beta?.model).toBe("openai/gpt-5.6-luna");
@@ -30,7 +33,7 @@ describe("applySystemAgentModelSelection", () => {
     await expect(
       applySystemAgentModelSelection({
         config,
-        model: "openai/gpt-5.5",
+        model: { provider: "openai", model: "gpt-5.5" },
         targetAgentId: "агент✨",
       }),
     ).rejects.toThrow('Could not resolve configured agent "агент✨".');
@@ -58,7 +61,10 @@ describe("applySystemAgentModelSelection", () => {
       },
     } satisfies OpenClawConfig;
 
-    const result = await applySystemAgentModelSelection({ config, model: "openai/gpt-5.5" });
+    const result = await applySystemAgentModelSelection({
+      config,
+      model: { provider: "openai", model: "gpt-5.5" },
+    });
 
     expect(result.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toBeUndefined();
     expect(result.agents?.entries?.work?.models?.["openai/gpt-5.5"]).toEqual({ alias: "primary" });
@@ -73,7 +79,7 @@ describe("applySystemAgentModelSelection", () => {
           entries: { main: { default: true } },
         },
       },
-      model: "openai/gpt-5.5",
+      model: { provider: "openai", model: "gpt-5.5" },
       authProfileId: "openai:verified",
     });
 

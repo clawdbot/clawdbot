@@ -9,7 +9,6 @@ import {
 } from "./registry-lookup.js";
 export { findChatChannelMeta } from "./chat-meta.js";
 export { CHAT_CHANNEL_ORDER } from "./ids.js";
-export type { ChatChannelId } from "./ids.js";
 export { normalizeAnyChannelId } from "./registry-normalize.js";
 export { normalizeChatChannelId };
 

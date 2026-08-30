@@ -23,7 +23,10 @@ import {
 } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type {
+  PluginMetadataOwner,
+  PreparedPluginMetadata,
+} from "../plugins/plugin-metadata-collection.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
@@ -47,7 +50,7 @@ export type GatewayStartupConfigMeasure = <T>(
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
   wroteConfig: boolean;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  pluginMetadata: PreparedPluginMetadata;
 };
 
 /** Throw a formatted startup error when the loaded config snapshot is invalid. */
@@ -91,15 +94,18 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   log: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
   initialSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
+  pluginMetadataOwner: PluginMetadataOwner;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
   const measure = params.measure ?? (async (_name, run) => await run());
   const snapshotRead =
     params.initialSnapshotRead ??
     (await measure("config.snapshot.read", () =>
-      readConfigFileSnapshotWithPluginMetadata({ measure }),
+      readConfigFileSnapshotWithPluginMetadata({
+        measure,
+        pluginMetadataOwner: params.pluginMetadataOwner,
+      }),
     ));
   const configSnapshot = snapshotRead.snapshot;
-  const pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
   const wroteConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
     throw createInvalidConfigError(
@@ -111,6 +117,10 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   if (configSnapshot.exists) {
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
+  const pluginMetadata = params.pluginMetadataOwner.prepare({
+    config: configSnapshot.sourceConfig,
+    seed: snapshotRead.pluginMetadata,
+  });
 
   const autoEnable = params.minimalTestGateway
     ? { config: configSnapshot.config, changes: [] as string[] }
@@ -118,17 +128,15 @@ export async function loadGatewayStartupConfigSnapshot(params: {
         applyPluginAutoEnable({
           config: configSnapshot.sourceConfig,
           env: process.env,
-          ...(pluginMetadataSnapshot?.manifestRegistry
-            ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
-            : {}),
-          discovery: pluginMetadataSnapshot?.discovery,
+          manifestRegistry: pluginMetadata.manifestRegistry,
+          discovery: pluginMetadata.selectedSnapshot.discovery,
         }),
       );
   if (autoEnable.changes.length === 0) {
     return {
       snapshot: configSnapshot,
       wroteConfig,
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      pluginMetadata,
     };
   }
 
@@ -143,7 +151,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   return {
     snapshot: withRuntimeConfig(configSnapshot, runtimeConfig),
     wroteConfig,
-    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    pluginMetadata,
   };
 }
 

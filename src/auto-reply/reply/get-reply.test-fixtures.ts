@@ -3,6 +3,7 @@ import { expect, vi, type Mock } from "vitest";
 import type { FinalizedRuntimeMsgContext, MsgContext } from "../templating.js";
 import type { ReasoningLevel, ThinkLevel } from "../thinking.js";
 import { finalizeInboundContext } from "./inbound-context.js";
+import { createFastTestModelSelectionState } from "./model-selection.js";
 
 export function buildGetReplyCtx(overrides: Partial<MsgContext> = {}): FinalizedRuntimeMsgContext {
   return finalizeInboundContext({
@@ -146,6 +147,11 @@ export function createGetReplyContinueDirectivesResult(params: {
       provider: params.provider ?? "openai",
       model: params.model ?? "gpt-4o-mini",
       modelState: {
+        ...createFastTestModelSelectionState({
+          agentCfg: undefined,
+          provider: params.provider ?? "openai",
+          model: params.model ?? "gpt-4o-mini",
+        }),
         resolveDefaultThinkingLevel: async () => undefined,
         resolveThinkingCatalog: async () => [],
       },

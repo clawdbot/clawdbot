@@ -250,37 +250,30 @@ describe("plugin embedded-agent runtime admission", () => {
     expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "admittedRunContext",
-    "preparedRunAdmission",
-    "onDeferredLifecycleOwner",
-    "onDeferredLifecycleAbort",
-    "compactionCountOwner",
-    "onCompactionAccounting",
-    "onContextAccountingEvent",
-  ] as const)("rejects a plugin-supplied %s", async (field) => {
-    const value = field === "compactionCountOwner" ? "caller" : {};
-    const input = { ...params, [field]: value };
+  it.each(
+    [
+      "admittedRunContext",
+      "preparedRunAdmission",
+      "expectedInitialModel",
+      "compactionCountOwner",
+      "onCompactionAccounting",
+      "onContextAccountingEvent",
+      "onDeferredLifecycleOwner",
+      "onDeferredLifecycleAbort",
+    ].flatMap((field) => [false, true].map((inherited) => ({ field, inherited }))),
+  )("rejects a plugin-supplied $field (inherited: $inherited)", async ({ field, inherited }) => {
+    const value =
+      field === "compactionCountOwner" ? "caller" : field.startsWith("on") ? vi.fn() : {};
+    const input = { ...params };
+    if (inherited) {
+      Object.setPrototypeOf(input, { [field]: value });
+    } else {
+      Object.defineProperty(input, field, { value, enumerable: true });
+    }
     await expect(
       withPluginRuntimePluginIdScope("memory-plugin", () => runPluginEmbeddedAgent(input)),
     ).rejects.toThrow("cannot supply host run authority");
     expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
     expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
   });
-
-  it.each(["compactionCountOwner", "onCompactionAccounting", "onContextAccountingEvent"])(
-    "rejects inherited %s before admission",
-    async (field) => {
-      const input = { ...params };
-      Object.setPrototypeOf(input, {
-        [field]: field === "compactionCountOwner" ? "caller" : vi.fn(),
-      });
-
-      await expect(
-        withPluginRuntimePluginIdScope("memory-plugin", () => runPluginEmbeddedAgent(input)),
-      ).rejects.toThrow("cannot supply host run authority");
-      expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
-      expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
-    },
-  );
 });

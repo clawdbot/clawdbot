@@ -6,7 +6,10 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isScopedPluginMetadataSnapshotRuntimeGeneration,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   isWorkspacePluginAllowedByConfig,
@@ -95,32 +98,32 @@ export function resolveProviderAuthAliasMap(
 ): Record<string, string> {
   const env = params?.env ?? process.env;
   const config = params?.config;
+  const currentSnapshot = getCurrentPluginMetadataSnapshot({
+    config,
+    workspaceDir: params?.workspaceDir,
+    env,
+    allowWorkspaceScopedSnapshot: true,
+    requireDefaultDiscoveryContext: config === undefined,
+  });
+  // Retained execution cannot borrow a newer explicit packet or an ambient
+  // cache entry. An empty generation still owns the absence of aliases.
+  const capturedSnapshot =
+    currentSnapshot && isScopedPluginMetadataSnapshotRuntimeGeneration(currentSnapshot)
+      ? currentSnapshot
+      : params?.metadataSnapshot;
   const snapshot =
-    params?.metadataSnapshot ??
-    (config
-      ? getCurrentPluginMetadataSnapshot({
-          config,
-          ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-          env,
-          allowWorkspaceScopedSnapshot: true,
-        })
-      : getCurrentPluginMetadataSnapshot({
-          ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-          env,
-          allowWorkspaceScopedSnapshot: true,
-          requireDefaultDiscoveryContext: true,
-        })) ??
+    capturedSnapshot ??
+    currentSnapshot ??
     (() => {
       if (!config || normalizePluginsConfig(config.plugins).loadPaths.length !== 0) {
         return undefined;
       }
-      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+      return getCurrentPluginMetadataSnapshot({
         ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
         env,
         allowWorkspaceScopedSnapshot: true,
         requireDefaultDiscoveryContext: true,
       });
-      return currentSnapshot;
     })() ??
     loadPluginMetadataSnapshot({
       config: config ?? {},

@@ -1,11 +1,13 @@
 import type { RuntimeAuthMaterialization } from "../agents/auth-profiles/runtime-materializations.js";
 import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
 import type { PreparedModelRuntimeAuthScope } from "../agents/prepared-model-runtime-auth.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 export type PreparedGatewayModelCatalogSnapshot = GatewayModelCatalogSnapshot &
   Pick<ResolvedPublishedModelCatalogOwner, "authModes" | "authStore" | "metadataSnapshot"> & {
+    pluginRegistry: PluginRegistry | undefined;
     authMaterializations: readonly RuntimeAuthMaterialization[];
   };
 

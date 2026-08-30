@@ -167,6 +167,20 @@ describe("dispatchReplyFromConfig", () => {
     expect(onWorkStarted).not.toHaveBeenCalled();
   });
 
+  it("preserves an unrelated source failure that settles before caller cancellation", async () => {
+    const abort = new AbortController();
+    const sourceError = new Error("source failed");
+    const abortReason = new Error("caller cancelled");
+
+    const work = runWithDispatchAbortSignal(abort.signal, () => {
+      queueMicrotask(() => abort.abort(abortReason));
+      throw sourceError;
+    });
+
+    await expect(work).rejects.toBe(sourceError);
+    expect(abort.signal.aborted).toBe(true);
+  });
+
   it("audits an aborted prepared-runtime wait as a skipped reply operation", async () => {
     setNoAbort();
     const abort = new AbortController();

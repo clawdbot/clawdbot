@@ -6,10 +6,10 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
+  adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,
   isCurrentPluginMetadataSnapshotRuntimeGeneration,
 } from "./current-plugin-metadata-snapshot.js";
-import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
@@ -30,11 +30,9 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
-import {
-  adoptCurrentPluginMetadataSnapshotIfAbsentRuntime,
-  registerPluginMetadataSnapshotReaders,
-} from "./plugin-metadata-snapshot.runtime.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -45,47 +43,19 @@ import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalize
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
-const PLUGIN_METADATA_ENV_KEYS = [
-  "APPDATA",
-  "HOME",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_COMPATIBILITY_HOST_VERSION",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-  "OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS",
-  "OPENCLAW_HOME",
-  "OPENCLAW_NIX_MODE",
-  "OPENCLAW_STATE_DIR",
-  "USERPROFILE",
-  "XDG_CONFIG_HOME",
-] as const;
 const MAX_PLUGIN_METADATA_PROJECTIONS = 64;
 export type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotOwnerMaps,
 } from "./plugin-metadata-snapshot.types.js";
 
-function pickPluginMetadataEnv(env: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(
-    PLUGIN_METADATA_ENV_KEYS.flatMap((key) => {
-      const value = env[key];
-      return value === undefined ? [] : [[key, value]];
-    }),
-  );
-}
-
-export function resolvePluginMetadataEnvFingerprint(env: NodeJS.ProcessEnv): string {
-  return hashJson({
-    env: pickPluginMetadataEnv(env),
-    installRoots: resolveActivePluginInstallRoots(env),
-  });
-}
+export { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
 function throwReadonlyPluginMetadataMutation(): never {
   throw new TypeError("Plugin metadata snapshots are immutable");
 }
 
-function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
+export function freezePluginMetadataValue<T>(value: T, seen = new WeakSet<object>()): T {
   if (!value || typeof value !== "object") {
     return value;
   }
@@ -95,8 +65,8 @@ function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
   seen.add(value);
   if (value instanceof Map) {
     for (const [key, entry] of value) {
-      freezeSnapshotValue(key, seen);
-      freezeSnapshotValue(entry, seen);
+      freezePluginMetadataValue(key, seen);
+      freezePluginMetadataValue(entry, seen);
     }
     Object.defineProperties(value, {
       clear: { value: throwReadonlyPluginMetadataMutation },
@@ -107,7 +77,7 @@ function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
   }
   if (value instanceof Set) {
     for (const entry of value) {
-      freezeSnapshotValue(entry, seen);
+      freezePluginMetadataValue(entry, seen);
     }
     Object.defineProperties(value, {
       add: { value: throwReadonlyPluginMetadataMutation },
@@ -117,7 +87,7 @@ function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
     return Object.freeze(value);
   }
   for (const entry of Object.values(value)) {
-    freezeSnapshotValue(entry, seen);
+    freezePluginMetadataValue(entry, seen);
   }
   return Object.freeze(value);
 }
@@ -139,7 +109,7 @@ function indexesMatch(
 export function restorePluginMetadataSnapshot(
   snapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">,
 ): PluginMetadataSnapshot {
-  const restored = freezeSnapshotValue({
+  const restored = freezePluginMetadataValue({
     ...snapshot,
     normalizePluginId: createPluginRegistryIdNormalizer(snapshot.index, {
       manifestRegistry: snapshot.manifestRegistry,
@@ -207,7 +177,7 @@ function freezeOwnerMap(owners: Map<string, string[]>): ReadonlyMap<string, read
   );
 }
 
-function buildPluginMetadataOwnerMaps(
+export function buildPluginMetadataOwnerMaps(
   plugins: readonly PluginManifestRecord[],
 ): PluginMetadataSnapshotOwnerMaps {
   const channels = new Map<string, string[]>();
@@ -316,12 +286,18 @@ export function projectPluginMetadataSnapshot(
   pluginIds: readonly string[] | undefined,
 ): PluginMetadataSnapshot {
   const selectedIds = normalizePluginIdScope(pluginIds);
-  if (selectedIds === undefined) {
-    return snapshot;
-  }
   const key = serializePluginIdScope(selectedIds);
   if (key === serializePluginIdScope(snapshot.pluginIds)) {
     return snapshot;
+  }
+  if (selectedIds === undefined) {
+    throw new Error("A complete plugin metadata view must be prepared by its owner");
+  }
+  if (
+    snapshot.pluginIds &&
+    selectedIds.some((pluginId) => !snapshot.pluginIds!.includes(pluginId))
+  ) {
+    throw new Error("Plugin metadata projection cannot widen a prepared scope");
   }
   const cache = getPluginMetadataSnapshotCache(snapshot);
   let selections = cache.metadata.projections.get(snapshot);
@@ -334,10 +310,15 @@ export function projectPluginMetadataSnapshot(
     return cached;
   }
   const selected = new Set(selectedIds);
-  const projected = freezeSnapshotValue({
+  const projected = freezePluginMetadataValue({
     ...rebasePluginMetadataSnapshotManifestRegistry(snapshot, {
       plugins: snapshot.plugins.filter((plugin) => selected.has(plugin.id)),
-      diagnostics: snapshot.manifestRegistry.diagnostics,
+      diagnostics:
+        selectedIds.length === 0
+          ? []
+          : snapshot.diagnostics.filter(
+              (diagnostic) => !diagnostic.pluginId || selected.has(diagnostic.pluginId),
+            ),
     }),
     pluginIds: selectedIds,
   });
@@ -350,9 +331,7 @@ export function projectPluginMetadataSnapshot(
 }
 
 /** Uses semantic inputs only: checking freshness here would defeat first-access reuse. */
-export function resolvePluginMetadataSnapshotCacheKey(
-  params: LoadPluginMetadataSnapshotParams,
-): string {
+function resolvePluginMetadataSnapshotCacheKey(params: LoadPluginMetadataSnapshotParams): string {
   return hashJson({
     env: resolvePluginMetadataEnvFingerprint(params.env ?? process.env),
     policy: resolveInstalledPluginIndexPolicyHash(params.config),
@@ -366,10 +345,27 @@ export function resolvePluginMetadataSnapshotCacheKey(
   });
 }
 
+function resolveSnapshotProjectionIds(
+  snapshot: PluginMetadataSnapshot,
+  params: Pick<LoadPluginMetadataSnapshotParams, "pluginIds" | "pluginIdScope">,
+): readonly string[] | undefined {
+  return (
+    params.pluginIds ??
+    (params.pluginIdScope
+      ? params.pluginIdScope.resolve({ index: snapshot.index })
+      : snapshot.pluginIds)
+  );
+}
+
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
-  if (params.allowCurrent === false && getPluginCache().kind !== "operation") {
+  if (
+    (params.allowCurrent === false ||
+      params.stateDir !== undefined ||
+      params.preferPersisted === false) &&
+    getPluginCache().kind !== "operation"
+  ) {
     return withPluginCache(createPluginCache(), () => loadPluginMetadataSnapshot(params));
   }
   if (
@@ -394,20 +390,14 @@ export function loadPluginMetadataSnapshot(
           index: params.index,
         }))
     ) {
-      return projectPluginMetadataSnapshot(
-        current,
-        params.pluginIds ?? params.pluginIdScope?.resolve({ index: current.index }),
-      );
+      return projectPluginMetadataSnapshot(current, resolveSnapshotProjectionIds(current, params));
     }
   }
   const cache = getPluginCache();
   const key = resolvePluginMetadataSnapshotCacheKey(params);
   const cached = cache.metadata.snapshots.get(key);
   if (cached) {
-    return projectPluginMetadataSnapshot(
-      cached,
-      params.pluginIds ?? params.pluginIdScope?.resolve({ index: cached.index }),
-    );
+    return projectPluginMetadataSnapshot(cached, resolveSnapshotProjectionIds(cached, params));
   }
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
   const snapshot = measureDiagnosticsTimelineSpanSync(
@@ -437,10 +427,7 @@ export function loadPluginMetadataSnapshot(
     },
   );
   cache.metadata.snapshots.set(key, frozen);
-  return projectPluginMetadataSnapshot(
-    frozen,
-    params.pluginIds ?? params.pluginIdScope?.resolve({ index: frozen.index }),
-  );
+  return projectPluginMetadataSnapshot(frozen, resolveSnapshotProjectionIds(frozen, params));
 }
 
 /** Promotes a planning-scoped graph to the complete process-lifecycle metadata snapshot. */
@@ -551,15 +538,12 @@ export function resolvePluginMetadataSnapshot(
         snapshot.workspaceDir === undefined &&
         snapshot.pluginIds === undefined
       ) {
-        adoptCurrentPluginMetadataSnapshotIfAbsentRuntime(snapshot, params);
+        adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, params);
       }
       return snapshot;
     }
     if (isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
-      return projectPluginMetadataSnapshot(
-        current,
-        params.pluginIds ?? params.pluginIdScope?.resolve({ index: current.index }),
-      );
+      return projectPluginMetadataSnapshot(current, resolveSnapshotProjectionIds(current, params));
     }
     if (!params.index) {
       return current;
@@ -631,7 +615,6 @@ function loadPluginMetadataSnapshotImpl(
     }),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index,
-    registryIndex: index,
     registryDiagnostics: registryResult.diagnostics,
     manifestRegistry,
     plugins: manifestRegistry.plugins,

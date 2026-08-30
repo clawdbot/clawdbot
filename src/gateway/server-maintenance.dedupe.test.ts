@@ -3,7 +3,7 @@
 // sits at the max-lines cap; mocks are hoisted per file, so the module-mock
 // preamble is repeated while pure fixtures stay local to each block.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 

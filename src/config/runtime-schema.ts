@@ -4,44 +4,55 @@ import {
   collectChannelSchemaMetadataCore,
   collectPluginSchemaMetadataCore,
 } from "./channel-config-metadata.js";
-import { getRuntimeConfig, readConfigFileSnapshot } from "./config.js";
-import type { OpenClawConfig } from "./config.js";
+import { getRuntimeConfig, readConfigFileSnapshotWithPluginMetadata } from "./config.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { buildConfigSchemaCore, type ConfigSchemaResponse } from "./schema.js";
 
-// Runtime schemas include currently loaded plugin/channel metadata for accurate UI fields.
-function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
-  return resolveConfigWidePluginManifestRegistry({
-    config,
-    env: env ?? process.env,
-  });
-}
+// Registry identity follows the immutable metadata generation, so schema budgets
+// and merging run once rather than serializing the same schemas on every read.
+const schemasByRegistry = new WeakMap<PluginManifestRegistry, ConfigSchemaResponse>();
 
 /** Builds one config schema from an exact manifest registry. */
 export function buildRuntimeConfigSchemaFromRegistry(
   registry: PluginManifestRegistry,
 ): ConfigSchemaResponse {
-  return buildConfigSchemaCore({
+  const cached = schemasByRegistry.get(registry);
+  if (cached) {
+    return cached;
+  }
+  const schema = buildConfigSchemaCore({
     plugins: collectPluginSchemaMetadataCore(registry),
     channels: collectChannelSchemaMetadataCore(registry),
+    cache: false,
   });
+  schemasByRegistry.set(registry, schema);
+  return schema;
 }
 
 /** Builds the config schema from the active runtime config and plugin metadata. */
 export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   const config = getRuntimeConfig();
-  const registry = loadManifestRegistry(config);
+  const registry = resolveConfigWidePluginManifestRegistry({ config });
   return buildRuntimeConfigSchemaFromRegistry(registry);
 }
 
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
-  const snapshot = await readConfigFileSnapshot({ observe: false });
+  const { snapshot, pluginMetadata } = await readConfigFileSnapshotWithPluginMetadata({
+    observe: false,
+  });
   const config = snapshot.valid
     ? snapshot.config
     : { agents: { list: [{ id: "main" }] }, plugins: { enabled: true } };
-  const registry = loadManifestRegistry(config);
+  const registry = resolveConfigWidePluginManifestRegistry({
+    config,
+    metadata: snapshot.valid ? pluginMetadata : undefined,
+    allowCurrent: false,
+  });
+  if (snapshot.valid) {
+    return buildRuntimeConfigSchemaFromRegistry(registry);
+  }
   return buildConfigSchemaCore({
-    plugins: snapshot.valid ? collectPluginSchemaMetadataCore(registry) : [],
     channels: collectChannelSchemaMetadataCore(registry),
+    cache: false,
   });
 }

@@ -1,4 +1,8 @@
 import type { EnvSubstitutionWarning } from "./env-substitution.js";
+import {
+  getRetainedLegacyDefaultAgentId,
+  setRetainedLegacyDefaultAgentId,
+} from "./legacy.default-agent-owner-state.js";
 import { coerceSecretRef, DEFAULT_SECRET_PROVIDER_ALIAS, type SecretRef } from "./types.secrets.js";
 
 /** `null` means this value has not passed through authoritative config env substitution. */
@@ -48,6 +52,11 @@ export function getConfigResolutionFacts(target: unknown): ConfigResolutionFacts
 
 export function copyConfigResolutionFacts(source: unknown, target: unknown): void {
   setConfigResolutionFacts(target, getConfigResolutionFacts(source));
+  // Runtime copies keep the migration-selected workspace owner without reviving
+  // the retired default marker or reselecting an owner from the copied roster.
+  if (source && typeof source === "object" && target && typeof target === "object") {
+    setRetainedLegacyDefaultAgentId(target, getRetainedLegacyDefaultAgentId(source));
+  }
 }
 
 export function cloneConfigWithResolutionFacts<T>(value: T): T {
@@ -61,9 +70,9 @@ export function copyConfigResolutionFactsExcept(
   target: unknown,
   paths: readonly string[],
 ): void {
+  copyConfigResolutionFacts(source, target);
   const facts = getConfigResolutionFacts(source);
   if (facts === null) {
-    setConfigResolutionFacts(target, null);
     return;
   }
   const authoredSecretRefs = authoredSecretRefsByFacts.get(facts);
@@ -71,7 +80,6 @@ export function copyConfigResolutionFactsExcept(
     paths.length === 0 ||
     !paths.some((path) => facts.has(path) || authoredSecretRefs?.has(path) === true)
   ) {
-    setConfigResolutionFacts(target, facts);
     return;
   }
   const remaining = new Set(facts);

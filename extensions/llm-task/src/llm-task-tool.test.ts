@@ -1,4 +1,10 @@
 // Llm Task tests cover llm task tool plugin behavior.
+import { withPluginRuntimeRegistryScope } from "openclaw/plugin-sdk/channel-test-helpers";
+import { parseModelRef } from "openclaw/plugin-sdk/model-ref-parse";
+import {
+  createEmptyPluginRegistry,
+  createPluginRecord,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmTaskTool } from "./llm-task-tool.js";
 
@@ -231,9 +237,27 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("delegates unchanged default model selection to the host", async () => {
-    mockIsolatedCompletionJson({ ok: true });
-    const call = await executeIsolatedCompletion({ prompt: "x" });
-    expect(call.model).toBeUndefined();
+    const registry = createEmptyPluginRegistry();
+    const normalizeModelId = vi.fn(() => "rewritten");
+    registry.plugins.push(createPluginRecord({ id: "openai", origin: "bundled" }));
+    registry.providers.push({
+      pluginId: "openai",
+      source: import.meta.url,
+      provider: { id: "openai", label: "OpenAI fixture", auth: [], normalizeModelId },
+    });
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      expect(parseModelRef("openai/gpt-5.5", "", { allowManifestNormalization: false })).toEqual({
+        provider: "openai",
+        model: "rewritten",
+      });
+      expect(normalizeModelId).toHaveBeenCalledOnce();
+      normalizeModelId.mockClear();
+
+      mockIsolatedCompletionJson({ ok: true });
+      const call = await executeIsolatedCompletion({ prompt: "x" });
+      expect(call.model).toBeUndefined();
+      expect(normalizeModelId).not.toHaveBeenCalled();
+    });
   });
 
   it("reports the canonical provider and model returned by the execution owner", async () => {

@@ -2,6 +2,7 @@
  * Auth-profile forwarding shared by normal and narrow CLI-backed agent runs.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
@@ -42,11 +43,16 @@ export function resolveCliExecutionAuthProfileId(params: {
   authProfileProvider: string;
   config: OpenClawConfig;
   agentDir: string;
+  workspaceDir: string | undefined;
+  metadataSnapshot: PluginMetadataSnapshot | undefined;
   selected?: CliExecutionAuthProfileSelection;
   loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
 }): string | undefined {
   const loadStore = params.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
   const store = loadStore(params.agentDir, {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    pluginMetadataSnapshot: params.metadataSnapshot,
     readOnly: true,
     allowKeychainPrompt: false,
     externalCliProviderIds: [params.cliExecutionProvider],
@@ -86,6 +92,7 @@ export function resolveCliExecutionAuthProfileId(params: {
   const cliProfileId = resolveAuthProfileOrder({
     cfg: params.config,
     store,
+    authAliasLookupParams: params,
     provider: params.cliExecutionProvider,
   })[0];
   if (cliProfileId) {
@@ -102,6 +109,7 @@ export function resolveCliExecutionAuthProfileId(params: {
   return resolveAuthProfileOrder({
     cfg: params.config,
     store,
+    authAliasLookupParams: params,
     provider: GOOGLE_PROVIDER_ID,
   }).find((profileId) => {
     const credential = store.profiles[profileId];

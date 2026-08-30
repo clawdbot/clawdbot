@@ -1,6 +1,7 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
+import type { ModelRef } from "../../model-ref-shared.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
@@ -35,6 +36,8 @@ type CompactionAccountingParams =
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams &
   CompactionAccountingParams & {
+    /** Reject-only target consistency for the authorized initial attempt, never fallbacks. */
+    expectedInitialModel?: Readonly<ModelRef>;
     /** Attempt-local context observer, installed by the host loop before dispatch. */
     onContextAccountingEvent?: (event: EmbeddedContextAccountingEvent) => void;
     onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;

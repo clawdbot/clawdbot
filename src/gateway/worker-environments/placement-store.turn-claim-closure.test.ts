@@ -2,18 +2,26 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareSystemAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
+import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
+import type { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
@@ -23,19 +31,21 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { projectSessionMessagePayload } from "../session-transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerInferenceExecutor } from "./inference-runtime.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import {
-  bindWorkerTurnAdmissionContinuation,
+  bindWorkerTurnAdmission,
   bindWorkerTurnExecutionIdentity,
   getWorkerTurnExecutionIdentityCapability,
   runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
 import { createWorkerTranscriptCommitStore } from "./transcript-commit-store.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
+import { prepareWorkerAgentRuntimeIdentity } from "./worker-turn-payload.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement-claim-close",
@@ -286,7 +296,7 @@ it("lets an unaudited admitted worker complete the exact turn that closes its ow
   }
   try {
     await rootAdmission.run(async () =>
-      bindWorkerTurnAdmissionContinuation(store, claim, operationalRunInstance),
+      bindWorkerTurnAdmission(store, claim, operationalRunInstance),
     );
     expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
     const identity: WorkerConnectionIdentity = {
@@ -313,6 +323,233 @@ it("lets an unaudited admitted worker complete the exact turn that closes its ow
   } finally {
     releaseAgentRunDelegatedAuthority(delegatedAuthority);
     rootAdmission.release();
+  }
+});
+
+it.each([
+  { name: "remapped model", requested: "current", selected: "other", constrained: true },
+  { name: "alias for the same model", requested: "short", selected: "current", constrained: true },
+  { name: "unconstrained alias", requested: "short", selected: "other", constrained: false },
+  {
+    name: "released claim",
+    requested: "current",
+    selected: "current",
+    constrained: true,
+    close: "claim",
+  },
+  {
+    name: "replaced claim",
+    requested: "current",
+    selected: "current",
+    constrained: true,
+    close: "replace",
+  },
+  {
+    name: "closed run",
+    requested: "current",
+    selected: "current",
+    constrained: true,
+    close: "run",
+  },
+])("checks the initial worker model against its exact owner: $name", async (scenario) => {
+  const provider = "fixture-worker";
+  const active = advanceToActive();
+  const claim = store.claimTurn({
+    ...SESSION,
+    owner: placementTurnOwner(active),
+    claimId: "claim-initial-model",
+    runId: "run-initial-model",
+  });
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        workspace: root,
+        model: { primary: `${provider}/${scenario.selected}` },
+        models: { [`${provider}/${scenario.selected}`]: { alias: "short" } },
+      },
+    },
+  };
+  const admission = prepareSystemAgentRunAdmission(
+    cfg,
+    claim.runId,
+    SESSION.agentId,
+    "test.worker-model",
+  );
+  const turn = {
+    preparedRunAdmission: admission,
+    sessionId: SESSION.sessionId,
+    sessionKey: SESSION.sessionKey,
+    sessionFile: SESSION.sessionKey,
+    workspaceDir: root,
+    prompt: "keep the initial model",
+    timeoutMs: 1_000,
+    runId: claim.runId,
+    config: cfg,
+    provider,
+    model: "current",
+    ...(scenario.constrained
+      ? { expectedInitialModel: Object.freeze({ provider, model: "current" }) }
+      : {}),
+  };
+  let replacement: ReturnType<typeof store.claimTurn> | undefined;
+  let replacementAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
+  try {
+    // No root-work or audit scope: model consistency belongs to the live turn owner.
+    await prepareWorkerAgentRuntimeIdentity({
+      agentId: SESSION.agentId,
+      sessionKey: SESSION.sessionKey,
+      runtimeInstanceId: active.environmentId,
+      placements: store,
+      turn,
+      turnClaim: claim,
+    });
+    expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config: cfg,
+      workspaceDir: root,
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [
+          {
+            id: "worker-model-policy",
+            origin: "workspace",
+            rootDir: root,
+            source: path.join(root, "index.js"),
+            manifestPath: path.join(root, "openclaw.plugin.json"),
+            providers: [provider],
+            channels: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            modelIdNormalization: {
+              providers: { [provider]: { aliases: { current: scenario.selected } } },
+            },
+          },
+        ],
+      },
+    });
+    const runtimeSnapshot: PreparedModelRuntimeSnapshot = {
+      catalogOwner: undefined,
+      config: cfg,
+      agentId: SESSION.agentId,
+      agentDir: path.join(root, "agent"),
+      workspaceDir: root,
+      activeProjectKeys: [],
+      authModes: {},
+      metadataSnapshot,
+      pluginRegistry: createEmptyPluginRegistry(),
+      allowGatewaySubagentBinding: true,
+      modelCatalog: {
+        entries: [{ provider, id: scenario.selected, name: "Fixture worker model" }],
+        routeVariants: [],
+      },
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: () => {
+        throw new Error("Fixture stops before credential stores");
+      },
+    };
+    const release = vi.fn();
+    const resolveSessionAuthSelection = vi.fn(async () => undefined);
+    // Stop after model admission; full streaming is covered in inference-runtime.test.ts.
+    const prepareModel = vi.fn<typeof prepareSimpleCompletionModel>(async () => ({
+      error: "fixture model preparation reached",
+    }));
+    const executor = createWorkerInferenceExecutor({
+      resolveSessionTarget: () => ({
+        agentId: SESSION.agentId,
+        sessionKey: SESSION.sessionKey,
+        sessionEntry: { sessionId: SESSION.sessionId, updatedAt: 1 },
+        sessionStore: {},
+        storePath: path.join(root, "agent.sqlite"),
+      }),
+      acquireRuntimeLease: async () => {
+        await Promise.resolve();
+        if (scenario.close === "claim" || scenario.close === "replace") {
+          store.releaseTurn(claim);
+          if (scenario.close === "replace") {
+            replacement = store.claimTurn({
+              ...SESSION,
+              owner: placementTurnOwner(active),
+              claimId: "claim-replacement-model",
+              runId: "run-replacement-model",
+            });
+            replacementAdmission = prepareSystemAgentRunAdmission(
+              cfg,
+              replacement.runId,
+              SESSION.agentId,
+              "test.worker-model-replacement",
+            );
+            await prepareWorkerAgentRuntimeIdentity({
+              agentId: SESSION.agentId,
+              sessionKey: SESSION.sessionKey,
+              runtimeInstanceId: active.environmentId,
+              placements: store,
+              turn: {
+                ...turn,
+                preparedRunAdmission: replacementAdmission,
+                runId: replacement.runId,
+              },
+              turnClaim: replacement,
+            });
+          }
+        } else if (scenario.close === "run") {
+          admission.close();
+        }
+        return { snapshot: runtimeSnapshot, release };
+      },
+      resolveSessionAuthSelection,
+      prepareModel,
+    });
+    const identity: WorkerConnectionIdentity = {
+      environmentId: active.environmentId,
+      credentialHash: "worker-initial-model",
+      bundleHash: "a".repeat(64),
+      sessionId: claim.sessionId,
+      runId: claim.runId,
+      turnClaim: claim,
+      ownerEpoch: active.activeOwnerEpoch,
+      rpcSetVersion: 1,
+      protocolFeatures: [],
+      credentialExpiresAtMs: Date.now() + 60_000,
+    };
+    const outcome = await executor({
+      identity,
+      config: cfg,
+      signal: new AbortController().signal,
+      emit: vi.fn(),
+      isCurrent: () => store.validateTurnClaim(claim),
+      request: {
+        runEpoch: active.activeOwnerEpoch,
+        sessionId: claim.sessionId,
+        runId: claim.runId,
+        turnId: "turn-initial-model",
+        modelRef: { provider, model: scenario.requested },
+        context: { messages: [{ role: "user", content: "test", timestamp: 1 }] },
+        options: {},
+      },
+    });
+
+    if (scenario.close || (scenario.constrained && scenario.selected !== "current")) {
+      expect(outcome).toMatchObject({ type: "error" });
+      expect(resolveSessionAuthSelection).not.toHaveBeenCalled();
+      expect(prepareModel).not.toHaveBeenCalled();
+    } else {
+      expect(outcome).toMatchObject({ type: "error", reason: "provider-error" });
+      expect(prepareModel).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ provider, modelId: scenario.selected }),
+      );
+    }
+    expect(release).toHaveBeenCalledOnce();
+  } finally {
+    admission.close();
+    replacementAdmission?.close();
+    if (store.validateTurnClaim(claim)) {
+      store.releaseTurn(claim);
+    }
+    if (replacement && store.validateTurnClaim(replacement)) {
+      store.releaseTurn(replacement);
+    }
   }
 });
 
@@ -372,7 +609,10 @@ it.each([
     });
     let replacement: typeof claim | undefined;
     try {
-      const bind = () => bindWorkerTurnAdmissionContinuation(store, claim, instance, prepare);
+      const bind = () =>
+        bindWorkerTurnAdmission(store, claim, instance, {
+          prepareAssistantTranscriptMessage: prepare,
+        });
       if (scenario === "root admission") {
         if (!admission) {
           throw new Error("expected root admission");

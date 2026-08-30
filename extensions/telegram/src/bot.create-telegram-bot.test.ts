@@ -44,6 +44,7 @@ const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
 const modelSessionRuntime = await import("openclaw/plugin-sdk/model-session-runtime");
+const { listSessionEntries } = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
 const tempStateDirs: string[] = [];
 let previousStateDir: string | undefined;
@@ -4953,7 +4954,10 @@ describe("createTelegramBot", () => {
     }
   });
   it("honors routed group activation from session store", async () => {
-    const storePath = "/tmp/openclaw-telegram-group-activation.json";
+    const storePath = path.join(
+      createTelegramBotTestStateDir(),
+      "openclaw-telegram-group-activation.json",
+    );
     const routedGroupEntry = {
       sessionId: "agent:ops:telegram:group:123",
       updatedAt: 0,
@@ -5638,18 +5642,29 @@ describe("createTelegramBot", () => {
     });
   });
 
-  it("retries model selection callbacks after a bubbled session-store failure", async () => {
-    createTelegramBot({ token: "tok" });
+  it("retries uncommitted model selections without replaying committed selections after receipt failures", async () => {
+    const storePath = path.join(createTelegramBotTestStateDir(), "openclaw-agent.sqlite");
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-6",
+          models: { "openai/gpt-5.4": {}, "openai/gpt-5.6-luna": {} },
+        },
+      },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      session: { store: storePath },
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    createTelegramBot({ token: "tok", runtime });
     const callbackHandler = getOnHandler("callback_query");
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
       runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
-
+    const readSelection = () => listSessionEntries({ storePath, readOnly: true })[0]?.entry;
     const applySessionModelSelectionSpy = vi.spyOn(
       modelSessionRuntime,
       "applySessionModelSelection",
     );
     applySessionModelSelectionSpy.mockRejectedValueOnce(new Error("session store boom"));
-
     const ctx = makeCallbackRetryContext({
       updateId: 890,
       id: "cbq-model-select-retry-1",
@@ -5659,14 +5674,41 @@ describe("createTelegramBot", () => {
 
     try {
       await expect(runMiddlewareChain(ctx)).rejects.toThrow("session store boom");
+      expect(readSelection()).toBeUndefined();
+      editMessageTextSpy.mockRejectedValueOnce(new Error("receipt edit boom"));
+      sendMessageSpy.mockRejectedValueOnce(new Error("receipt send boom"));
       await runMiddlewareChain(ctx);
+      expect(readSelection()).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+      });
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Model selection applied; telegram: failed to send terminal callback receipt: Error: receipt send boom",
+        ),
+      );
+
+      await runMiddlewareChain(
+        makeCallbackRetryContext({
+          updateId: 891,
+          id: "cbq-model-select-newer",
+          data: "mdl_sel_openai/gpt-5.6-luna",
+          messageId: 25,
+        }),
+      );
+      expect(readSelection()).toMatchObject({ modelOverride: "gpt-5.6-luna" });
+      await runMiddlewareChain(ctx);
+      expect(readSelection()).toMatchObject({ modelOverride: "gpt-5.6-luna" });
+      expect(applySessionModelSelectionSpy).toHaveBeenCalledTimes(3);
     } finally {
       applySessionModelSelectionSpy.mockRestore();
     }
 
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
-    expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    const receipt = sendMessageSpy.mock.calls.at(0)?.[1];
+    expect(receipt).toContain("Model changed to <b>openai/gpt-5.4</b>");
+    expect(receipt).toContain(
       "Session-only model selection. Runtime set to <b>codex</b> from configured policy.",
     );
     expect(
@@ -5677,6 +5719,10 @@ describe("createTelegramBot", () => {
   });
 
   it("shows a permanent rejection when model selection is locked", async () => {
+    loadConfig.mockReturnValue({
+      agents: { defaults: { model: "openai/gpt-5.4" } },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
     const getSessionEntrySpy = vi
@@ -5690,13 +5736,17 @@ describe("createTelegramBot", () => {
         return entry;
       });
     const ctx = makeCallbackRetryContext({
+      updateId: 892,
       id: "cbq-model-select-locked-1",
       data: "mdl_sel_openai/gpt-5.4",
       messageId: 25,
     });
+    const runMiddlewareChain = () =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
     try {
-      await expect(callbackHandler(ctx)).resolves.toBeUndefined();
+      await expect(runMiddlewareChain()).resolves.toBeUndefined();
+      await runMiddlewareChain();
     } finally {
       getSessionEntrySpy.mockRestore();
     }

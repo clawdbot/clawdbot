@@ -1,5 +1,5 @@
 /** Registry access for full and configured-only model lists. */
-import { modelKey } from "../../agents/model-ref-shared.js";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { shouldSuppressBuiltInModelCore } from "../../agents/model-suppression.js";
 import { loadPreparedAgentModelRegistry as loadAgentModelRegistry } from "../../agents/prepared-model-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -47,12 +47,16 @@ export async function loadModelRegistry(cfg: OpenClawConfig, opts?: ModelListReg
       config: runtimeConfig,
     });
   const models = registry.getAll().filter(isVisible);
-  const discoveredKeys = new Set(models.map((model) => modelKey(model.provider, model.id)));
+  const discoveredKeys = new Set(
+    models.map((model) => buildModelCatalogRef(model.provider, model.id)),
+  );
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
   try {
     const availableModels = validateAvailableModels(registry.getAvailable()).filter(isVisible);
-    availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
+    availableKeys = new Set(
+      availableModels.map((model) => buildModelCatalogRef(model.provider, model.id)),
+    );
   } catch (err) {
     // Availability failures use provider auth hints; an empty result remains authoritative.
     // Registry discovery failures above still abort the command.
@@ -84,7 +88,7 @@ export async function loadConfiguredListModelRegistry(
     ) {
       continue;
     }
-    const key = modelKey(model.provider, model.id);
+    const key = buildModelCatalogRef(model.provider, model.id);
     discoveredKeys.add(key);
     if (registry.hasConfiguredAuth(model)) {
       availableKeys.add(key);

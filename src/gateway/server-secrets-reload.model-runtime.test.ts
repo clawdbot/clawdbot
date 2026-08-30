@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
@@ -9,11 +10,15 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { writeConfigFile } from "../config/config.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePluginMetadata } from "../plugins/plugin-metadata-collection.js";
+import * as pluginMetadataSnapshots from "../plugins/plugin-metadata-snapshot.js";
 import {
   activateSecretsRuntimeSnapshotWithSource,
   clearSecretsRuntimeSnapshot,
@@ -92,10 +97,17 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
-  const config = sourceConfig();
+async function coldRuntime(
+  clients: SharedGatewayAuthClient[] = [],
+  config: OpenClawConfig = sourceConfig(),
+) {
   await state.writeConfig(config);
-  const runtimeConfig: OpenClawConfig = structuredClone(config);
+  const pluginMetadata = preparePluginMetadata({
+    config,
+    workspaceDir: state.workspaceDir,
+    allowCurrent: false,
+  });
+  const runtimeConfig = cloneConfigWithResolutionFacts(config);
   runtimeConfig.models!.providers!["healthy-fixture"]!.models[0]!.compat = { supportsStore: false };
   const initial = await prepareSecretsRuntimeSnapshot({
     config: runtimeConfig,
@@ -114,6 +126,7 @@ async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
   await refreshPreparedModelRuntimeSnapshots(requireRuntimeConfig(), {
     catalogMode: "static",
     gatewayLifecycle: true,
+    pluginMetadata,
   });
   expect(
     getPublishedPreparedModelCatalogOwnerSnapshot({
@@ -128,9 +141,11 @@ async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
   const activator = createRuntimeSecretsActivator({
     logSecrets: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     emitStateEvent: vi.fn(),
+    manifestRegistry: pluginMetadata.manifestRegistry,
   });
   const reload = createGatewaySecretsReloader({
     activateRuntimeSecrets: activator,
+    getPluginMetadata: () => pluginMetadata,
     sharedGatewaySessionGenerationState: generationState,
     resolveSharedGatewaySessionGenerationForConfig: () => "reloaded",
     clients,
@@ -143,15 +158,42 @@ async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
     logChannels: { info: vi.fn() },
   });
   vi.stubEnv("TEST_RELOADED_MODEL_KEY", "recovered-fixture-key");
-  return { config, generationState, reload, activator };
+  return { config, generationState, reload, activator, pluginMetadata };
 }
 
 describe("secret reload model-runtime publication", () => {
   it("publishes recovered config refs to the model owner without an auth-profile mutation", async () => {
-    const { config, reload } = await coldRuntime();
+    const baseConfig = sourceConfig();
+    const alternateWorkspaceDir = state.path("alternate-workspace");
+    const config = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        entries: {
+          main: { workspace: state.workspaceDir },
+          alternate: { workspace: alternateWorkspaceDir },
+        },
+      },
+    };
+    const { reload, pluginMetadata } = await coldRuntime([], config);
     const authRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+    const loadMetadata = vi.spyOn(pluginMetadataSnapshots, "loadPluginMetadataSnapshot");
 
     await reload();
+
+    for (const [agentId, workspaceDir] of [
+      ["main", state.workspaceDir],
+      ["alternate", alternateWorkspaceDir],
+    ] as const) {
+      const snapshot = await prepareModelRuntimeSnapshot({
+        config: requireRuntimeConfig(),
+        agentId,
+        agentDir: state.agentDir(agentId),
+        workspaceDir,
+      });
+      expect(snapshot.metadataSnapshot).toBe(pluginMetadata.workspaces.get(workspaceDir));
+    }
+    expect(loadMetadata).not.toHaveBeenCalled();
 
     expect(getRuntimeConfigSourceSnapshot()).toEqual(config);
     expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(authRevision);
@@ -167,31 +209,45 @@ describe("secret reload model-runtime publication", () => {
     );
   });
 
-  it("restores the authoritative runtime model config after a publication failure", async () => {
-    const { config, reload } = await coldRuntime();
-    vi.spyOn(providerCatalog, "prepareImplicitProviderStaticCatalog").mockRejectedValueOnce(
-      new Error("catalog build failed"),
-    );
+  it.each([false, true])(
+    "restores the authoritative runtime model config after a publication failure (upgraded roster: %s)",
+    async (upgradedRoster) => {
+      const baseConfig = sourceConfig();
+      const config = upgradedRoster
+        ? (migratePersistedImplicitMainRoster({
+            ...baseConfig,
+            agents: {
+              ...baseConfig.agents,
+              entries: { main: { default: true }, ops: {} },
+            },
+          }).config as OpenClawConfig)
+        : baseConfig;
+      const { reload, pluginMetadata } = await coldRuntime([], config);
+      vi.spyOn(providerCatalog, "prepareImplicitProviderStaticCatalog").mockRejectedValueOnce(
+        new Error("catalog build failed"),
+      );
 
-    await expect(reload()).rejects.toThrow("catalog build failed");
+      await expect(reload()).rejects.toThrow("catalog build failed");
 
-    expect(getRuntimeConfigSourceSnapshot()).toEqual(config);
-    const current = requireRuntimeConfig();
-    const published = await prepareModelRuntimeSnapshot({
-      config: current,
-      agentId: "main",
-      agentDir: state.agentDir(),
-    });
-    expect(published.config).toBe(current);
-    // The canonical restore retains this now-resolved Ref, rather than the cold predecessor bytes.
-    expect(current.models?.providers?.["recoverable-fixture"]?.apiKey).toBe(
-      "recovered-fixture-key",
-    );
-  });
+      expect(getRuntimeConfigSourceSnapshot()).toEqual(config);
+      const current = requireRuntimeConfig();
+      const published = await prepareModelRuntimeSnapshot({
+        config: current,
+        agentId: "main",
+        agentDir: state.agentDir(),
+      });
+      expect(published.config).toBe(current);
+      expect(published.metadataSnapshot).toBe(pluginMetadata.workspaces.get(state.workspaceDir));
+      // The canonical restore retains this now-resolved Ref, rather than the cold predecessor bytes.
+      expect(current.models?.providers?.["recoverable-fixture"]?.apiKey).toBe(
+        "recovered-fixture-key",
+      );
+    },
+  );
 
   it("observes model rejection when activation throws after starting publication", async () => {
     const { reload, activator } = await coldRuntime();
-    const activate = activator.activatePreparedSnapshotIfCurrent!;
+    const activate = activator.activatePreparedSnapshotIfCurrent;
     const buildStarted = createDeferred();
     activator.activatePreparedSnapshotIfCurrent = async (...args) => {
       await activate(...args);
@@ -271,7 +327,10 @@ describe("secret reload model-runtime publication", () => {
       try {
         await started.promise;
         const next = structuredClone(config);
-        next.models.providers["recoverable-fixture"].baseUrl = "https://newer.example/v1";
+        expectDefined(
+          next.models?.providers?.["recoverable-fixture"],
+          "recoverable model provider fixture",
+        ).baseUrl = "https://newer.example/v1";
         await writeConfigFile(next);
         const current = requireRuntimeConfig();
         expect(current.models?.providers?.["recoverable-fixture"]?.baseUrl).toBe(

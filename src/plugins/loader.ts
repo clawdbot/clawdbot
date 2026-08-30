@@ -5,11 +5,11 @@ export {
   clearPluginRegistryLoadCache,
   isPluginRegistryLoadInFlight,
   resolvePluginRegistryLoadCacheKey,
+  resolveCompatibleRuntimePluginRegistry,
 } from "./loader-cache.js";
 export { loadOpenClawPluginCliRegistry } from "./loader-cli-registry.js";
 export {
   getRuntimePluginRegistryForLoadOptions,
-  resolveCompatibleRuntimePluginRegistry,
   resolveRuntimePluginRegistry,
 } from "./loader-runtime-registry.js";
 

@@ -6,10 +6,10 @@ export {
   deriveLastRoutePolicy,
   resolveAgentRoute,
   resolveInboundLastRouteSessionKey,
-  type ResolvedAgentRoute,
   type RoutePeer,
   type RoutePeerKind,
 } from "../routing/resolve-route.js";
+export type { ResolvedAgentRoute } from "../routing/resolve-route.types.js";
 export {
   buildAgentMainSessionKey,
   DEFAULT_ACCOUNT_ID,

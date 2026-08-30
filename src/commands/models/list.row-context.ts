@@ -11,6 +11,7 @@ type RowFilter = {
 /** Context shared by every model-list row source builder. */
 export type RowBuilderContext = {
   cfg: OpenClawConfig;
+  formatModelRef: (ref: ConfiguredEntry["ref"]) => string;
   agentId?: string;
   agentDir: string;
   inheritedAuthDir?: string;

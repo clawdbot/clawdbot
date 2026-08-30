@@ -356,8 +356,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       // Nothing to stop before the heavy cron service is built.
       await loaded?.state.stopStreamWatchers();
     },
-    async reconcileHeartbeatJobs(cfg) {
-      return await (await load()).state.reconcileHeartbeatJobs(cfg);
+    async reconcileHeartbeatJobs(candidate) {
+      return await (await load()).state.reconcileHeartbeatJobs(candidate);
     },
   };
 }

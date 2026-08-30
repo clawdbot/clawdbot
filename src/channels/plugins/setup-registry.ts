@@ -8,8 +8,9 @@ import {
   getActivePluginChannelRegistry,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
+import { CHAT_CHANNEL_ORDER } from "../registry.js";
 import { listBundledChannelSetupPlugins } from "./bundled.js";
+import type { ChatChannelId } from "./channel-id.types.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 

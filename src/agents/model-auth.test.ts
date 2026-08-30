@@ -541,7 +541,13 @@ describe("resolveUsableCustomProviderApiKey", () => {
     });
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    authored: string;
+    env: NodeJS.ProcessEnv;
+    expected: string | null;
+    runtimeAuthored?: string;
+  }>([
     { name: "unresolved bare shorthand", authored: "$MISSING", env: {}, expected: null },
     { name: "unresolved braced shorthand", authored: "${MISSING}", env: {}, expected: null },
     {
@@ -550,31 +556,47 @@ describe("resolveUsableCustomProviderApiKey", () => {
       env: { SOURCE: "${OTHER}" },
       expected: "${OTHER}",
     },
+    {
+      name: "retained literal under equal-byte foreign runtime",
+      authored: "${SOURCE}",
+      env: { SOURCE: "${OTHER}" },
+      expected: "${OTHER}",
+      runtimeAuthored: "${OTHER}",
+    },
   ])(
     "preserves authored custom-provider credentials: $name",
-    async ({ authored, env, expected }) => {
+    async ({ authored, env, expected, runtimeAuthored }) => {
       const [{ resolveConfigForRead }, { setConfigResolutionFacts }] = await Promise.all([
         import("../config/io.read-helpers.js"),
         import("../config/resolution-facts.js"),
       ]);
-      const read = resolveConfigForRead(
-        {
-          models: {
-            providers: {
-              custom: {
-                baseUrl: "https://example.com/v1",
-                apiKey: authored,
-                models: [],
+      const resolveLoadedConfig = (apiKey: string, resolutionEnv: NodeJS.ProcessEnv) => {
+        const read = resolveConfigForRead(
+          {
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "https://example.com/v1",
+                  apiKey,
+                  models: [],
+                },
               },
             },
           },
-        },
-        env,
-      );
-      const cfg = read.resolvedConfigRaw as NonNullable<
-        Parameters<typeof resolveUsableCustomProviderApiKey>[0]["cfg"]
-      >;
-      setConfigResolutionFacts(cfg, read.resolutionFacts);
+          resolutionEnv,
+        );
+        const cfg = read.resolvedConfigRaw as NonNullable<
+          Parameters<typeof resolveUsableCustomProviderApiKey>[0]["cfg"]
+        >;
+        setConfigResolutionFacts(cfg, read.resolutionFacts);
+        return cfg;
+      };
+      const cfg = resolveLoadedConfig(authored, env);
+      if (runtimeAuthored) {
+        const active = resolveLoadedConfig(runtimeAuthored, {});
+        expect(active).toEqual(cfg);
+        setRuntimeConfigSnapshot(active, active);
+      }
 
       const resolved = resolveUsableCustomProviderApiKey({ cfg, provider: "custom", env: {} });
 
@@ -1336,67 +1358,80 @@ describe("resolveApiKeyForProviderCore", () => {
     },
   );
 
-  it("preserves SecretRef provenance for resolved runtime config clones", async () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          cliproxyapi: {
-            api: "openai-responses" as const,
-            apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" } as const,
-            baseUrl: "https://cliproxy.example/v1",
-            models: [],
+  it.each([false, true])(
+    "preserves SecretRef provenance for resolved runtime config clones (known facts: %s)",
+    async (withFacts) => {
+      const {
+        cloneConfigWithResolutionFacts,
+        createConfigResolutionFacts,
+        setConfigResolutionFacts,
+      } = await import("../config/resolution-facts.js");
+      const sourceConfig = {
+        models: {
+          providers: {
+            cliproxyapi: {
+              api: "openai-responses" as const,
+              apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" } as const,
+              baseUrl: "https://cliproxy.example/v1",
+              models: [],
+            },
           },
         },
-      },
-    };
-    const runtimeConfig = {
-      models: {
-        providers: {
-          cliproxyapi: {
-            ...sourceConfig.models.providers.cliproxyapi,
-            apiKey: "sk-runtime-clone", // pragma: allowlist secret
+      };
+      const runtimeConfig = {
+        models: {
+          providers: {
+            cliproxyapi: {
+              ...sourceConfig.models.providers.cliproxyapi,
+              apiKey: "sk-runtime-clone", // pragma: allowlist secret
+            },
           },
         },
-      },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+      };
+      if (withFacts) {
+        setConfigResolutionFacts(sourceConfig, createConfigResolutionFacts([]));
+      }
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+      const cloneRuntimeConfig = () =>
+        withFacts ? cloneConfigWithResolutionFacts(runtimeConfig) : structuredClone(runtimeConfig);
 
-    const resolved = await resolveApiKeyForProviderCore({
-      provider: "cliproxyapi",
-      cfg: structuredClone(runtimeConfig),
-      secretSentinels: true,
-      store: { version: 1, profiles: {} },
-    });
+      const resolved = await resolveApiKeyForProviderCore({
+        provider: "cliproxyapi",
+        cfg: cloneRuntimeConfig(),
+        secretSentinels: true,
+        store: { version: 1, profiles: {} },
+      });
 
-    expectSecretSentinelAuth(resolved, {
-      value: "sk-runtime-clone",
-      source: "models.providers.cliproxyapi",
-      mode: "api-key",
-    });
+      expectSecretSentinelAuth(resolved, {
+        value: "sk-runtime-clone",
+        source: "models.providers.cliproxyapi",
+        mode: "api-key",
+      });
 
-    const preferred = await resolveApiKeyForProviderCore({
-      provider: "cliproxyapi",
-      cfg: structuredClone(runtimeConfig),
-      preferredProfile: "cliproxyapi:preferred",
-      credentialPrecedence: "profile-first",
-      secretSentinels: true,
-      store: {
-        version: 1,
-        profiles: {
-          "cliproxyapi:preferred": {
-            type: "api_key",
-            provider: "cliproxyapi",
-            key: "sk-preferred-profile", // pragma: allowlist secret
+      const preferred = await resolveApiKeyForProviderCore({
+        provider: "cliproxyapi",
+        cfg: cloneRuntimeConfig(),
+        preferredProfile: "cliproxyapi:preferred",
+        credentialPrecedence: "profile-first",
+        secretSentinels: true,
+        store: {
+          version: 1,
+          profiles: {
+            "cliproxyapi:preferred": {
+              type: "api_key",
+              provider: "cliproxyapi",
+              key: "sk-preferred-profile", // pragma: allowlist secret
+            },
           },
         },
-      },
-    });
-    expectAuthFields(preferred, {
-      apiKey: "sk-preferred-profile",
-      source: "profile:cliproxyapi:preferred",
-      mode: "api-key",
-    });
-  });
+      });
+      expectAuthFields(preferred, {
+        apiKey: "sk-preferred-profile",
+        source: "profile:cliproxyapi:preferred",
+        mode: "api-key",
+      });
+    },
+  );
 
   // Regression: a 402 cooldown recorded under inline-api-key:<provider> must be
   // enforced for managed (file/exec) SecretRef provider keys too, not just
