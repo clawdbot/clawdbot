@@ -31,6 +31,26 @@ describe("tryNativeRequireJavaScriptModule", () => {
     expect(result).toEqual({ ok: true, moduleExport: { marker: "native" } });
   });
 
+  it("loads and clears native CommonJS modules addressed by file URLs", () => {
+    const dir = tempDirs.make("openclaw-native-require-");
+    const modulePath = path.join(dir, "plugin.cjs");
+    const moduleUrl = pathToFileURL(modulePath).href;
+    fs.writeFileSync(modulePath, 'module.exports = { marker: "before" };\n', "utf8");
+
+    expect(tryNativeRequireJavaScriptModule(moduleUrl, { allowWindows: true })).toEqual({
+      ok: true,
+      moduleExport: { marker: "before" },
+    });
+
+    fs.writeFileSync(modulePath, 'module.exports = { marker: "after" };\n', "utf8");
+    clearPluginModuleRequireCache(moduleUrl);
+
+    expect(tryNativeRequireJavaScriptModule(moduleUrl, { allowWindows: true })).toEqual({
+      ok: true,
+      moduleExport: { marker: "after" },
+    });
+  });
+
   it("declines modules that need source-transform fallback", () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const modulePath = path.join(dir, "plugin.mjs");

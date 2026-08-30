@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 
 const nodeRequire = createRequire(import.meta.url);
@@ -74,13 +74,17 @@ export function tryNativeRequireJavaScriptModule(
   if (!isJavaScriptModulePath(modulePath)) {
     return { ok: false };
   }
+  const nativeModulePath = toNativeRequirePath(modulePath);
   try {
-    return { ok: true, moduleExport: requireWithOptionalAliases(modulePath, options.aliasMap) };
+    return {
+      ok: true,
+      moduleExport: requireWithOptionalAliases(nativeModulePath, options.aliasMap),
+    };
   } catch (error) {
     const code =
       error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
     if (
-      isSourceTransformFallbackError(error, modulePath) ||
+      isSourceTransformFallbackError(error, nativeModulePath) ||
       options.fallbackOnNativeError ||
       (options.fallbackOnMissingDependency === true &&
         (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
@@ -97,7 +101,7 @@ export function clearPluginModuleRequireCache(
   options: { dependencyRoot?: string } = {},
 ): void {
   try {
-    const resolved = nodeRequire.resolve(modulePath);
+    const resolved = nodeRequire.resolve(toNativeRequirePath(modulePath));
     clearRequireCacheSubtree(
       resolved,
       resolveRequireCachePath(options.dependencyRoot ?? path.dirname(resolved)),
@@ -105,6 +109,18 @@ export function clearPluginModuleRequireCache(
     );
   } catch {
     // Best-effort lifecycle cleanup: unresolved paths were not loaded.
+  }
+}
+
+/** Converts file URLs only at CommonJS boundaries, which require native paths. */
+function toNativeRequirePath(modulePath: string): string {
+  if (!/^file:\/\//iu.test(modulePath)) {
+    return modulePath;
+  }
+  try {
+    return fileURLToPath(modulePath);
+  } catch {
+    return modulePath;
   }
 }
 
