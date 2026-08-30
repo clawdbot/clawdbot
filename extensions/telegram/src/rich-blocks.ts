@@ -43,7 +43,8 @@ const INLINE_STYLE_RANK: Record<string, number> = {
   bold: 1,
   italic: 2,
   strikethrough: 3,
-  code: 4,
+  // Authored links (rank 50) enclose equal-range code labels and remain clickable.
+  code: 51,
 };
 
 const TELEGRAM_RICH_LINK_HREF_RE = /^(?:https?:\/\/|tg:\/\/|mailto:|tel:)/i;

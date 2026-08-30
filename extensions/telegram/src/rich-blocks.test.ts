@@ -275,6 +275,16 @@ describe("markdownToTelegramRichBlocks", () => {
   });
 
   it.each([
+    { href: "https://example.com", target: { type: "url", url: "https://example.com" } },
+    { href: "#section", target: { type: "anchor_link", anchor_name: "section" } },
+  ])("preserves authored $href links with code-only labels", ({ href, target }) => {
+    const { blocks } = markdownToTelegramRichBlocks("[`foo`](" + href + ")");
+    expect(blocks).toEqual([
+      { type: "paragraph", text: { ...target, text: { type: "code", text: "foo" } } },
+    ]);
+  });
+
+  it.each([
     {
       markdown: "**A ||B** C|| D",
       text: [
