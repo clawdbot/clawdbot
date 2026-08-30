@@ -20,6 +20,7 @@ export const LogsTailResultSchema = closedObject({
   lines: Type.Array(Type.String()),
   truncated: Type.Optional(Type.Boolean()),
   reset: Type.Optional(Type.Boolean()),
+  skippedBytes: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 /** Session-scoped history request used by WebChat and native WebSocket clients. */
