@@ -3880,6 +3880,7 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it("falls back to the default npm spec when a beta tag is unavailable", async () => {
+    const onBeforeNpmPluginArtifactCommit = vi.fn();
     installPluginFromNpmSpecMock
       .mockResolvedValueOnce({
         ok: false,
@@ -3906,10 +3907,17 @@ describe("updateNpmInstalledPlugins", () => {
     const result = await updatePlugin(config, "openclaw-codex-app-server", {
       updateChannel: "beta",
       logger: { warn: (msg) => warnMessages.push(msg) },
+      onBeforeNpmPluginArtifactCommit,
     });
 
     expect(npmInstallCall(0)?.spec).toBe("openclaw-codex-app-server@beta");
     expect(npmInstallCall(1)?.spec).toBe("openclaw-codex-app-server");
+    expect(npmInstallCall(0)?.onBeforeNpmPluginArtifactCommit).toBe(
+      onBeforeNpmPluginArtifactCommit,
+    );
+    expect(npmInstallCall(1)?.onBeforeNpmPluginArtifactCommit).toBe(
+      onBeforeNpmPluginArtifactCommit,
+    );
     expect(npmInstallCall(1)?.config).toBe(config);
     expect(warnMessages).toEqual([
       'Plugin "openclaw-codex-app-server" has no beta npm release for openclaw-codex-app-server@beta; using openclaw-codex-app-server instead. Core update can still complete.',
@@ -4372,6 +4380,7 @@ describe("updateNpmInstalledPlugins", () => {
 
   it("uses the default npm spec when beta ClawHub falls back before an artifact block", async () => {
     const warnMessages: string[] = [];
+    const onBeforeNpmPluginArtifactCommit = vi.fn();
     const installPath = createInstalledPackageDir({
       name: "@openclaw/discord",
       version: "2026.5.12",
@@ -4410,12 +4419,14 @@ describe("updateNpmInstalledPlugins", () => {
       {
         updateChannel: "beta",
         logger: { warn: (msg) => warnMessages.push(msg) },
+        onBeforeNpmPluginArtifactCommit,
       },
     );
 
     expect(clawHubInstallCall(0)?.spec).toBe("clawhub:@openclaw/discord@beta");
     expect(clawHubInstallCall(1)?.spec).toBe("clawhub:@openclaw/discord");
     expect(npmInstallCall()?.spec).toBe("@openclaw/discord");
+    expect(npmInstallCall()?.onBeforeNpmPluginArtifactCommit).toBe(onBeforeNpmPluginArtifactCommit);
     expectRecordFields(result.config.plugins?.installs?.discord, {
       source: "npm",
       spec: "@openclaw/discord@2026.5.16",
