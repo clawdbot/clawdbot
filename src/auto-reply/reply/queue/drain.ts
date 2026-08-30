@@ -464,22 +464,24 @@ function collectQueuedPromptMedia(
     const takenHistoryIndexes = itemHistoryImages.flatMap((image, index) =>
       seenHistoryImages.has(historyImageIdentity(image)) ? [] : [index],
     );
-    // Provenance and payload are index-aligned only when every image is a retained
-    // one, which is what a history-carrying turn produces; anything else is left
-    // whole rather than split against an alignment this cannot verify.
-    const alignedHistoryItem =
-      itemHistoryImages.length > 0 && item.images?.length === itemHistoryImages.length;
-    const historyBudget = RECENT_HISTORY_IMAGE_LIMIT - historyImages.length;
-    const keptHistoryIndexes = alignedHistoryItem
-      ? takenHistoryIndexes.slice(0, Math.max(0, historyBudget))
-      : [];
-    if (itemHistoryImages.length > 0 && keptHistoryIndexes.length === 0) {
+    // Per-image selection needs provenance and payload index-aligned, which is what
+    // a history-carrying turn produces: it only inherits images when it brought none
+    // of its own. Should that ever not hold, the item travels whole rather than being
+    // sliced against an alignment this cannot confirm - dropping a member's image is
+    // the worse failure, and the per-turn resolver still bounds what one item carries.
+    const canSelectPerImage = item.images?.length === itemHistoryImages.length;
+    const historyBudget = Math.max(0, RECENT_HISTORY_IMAGE_LIMIT - historyImages.length);
+    const keptHistoryIndexes = canSelectPerImage
+      ? takenHistoryIndexes.slice(0, historyBudget)
+      : itemHistoryImages.map((_, index) => index);
+    // Every retained image here is already in the batch, so the item adds nothing.
+    if (itemHistoryImages.length > 0 && canSelectPerImage && keptHistoryIndexes.length === 0) {
       if (item.media) {
         media.push(...item.media);
       }
       continue;
     }
-    const keepsEveryImage = itemHistoryImages.length === 0;
+    const keepsEveryImage = itemHistoryImages.length === 0 || !canSelectPerImage;
     const itemImages = keepsEveryImage
       ? (item.images ?? [])
       : keptHistoryIndexes.flatMap((index) => item.images?.[index] ?? []);
