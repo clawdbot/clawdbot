@@ -2,22 +2,23 @@
 
 :root[data-theme="manuscript-light"] {
   /*
-   * Accent — rubric oxblood on aged paper. The only light-first family: light
-   * is the home mode and dark is the reading-room variant below.
+   * Accent — lapis blue with gold leaf on aged paper; vermilion stays in the
+   * rubric role (--destructive). The only light-first family: light is the
+   * home mode and dark is the reading-room variant below.
    *
    * WCAG 2.1 AA audit (bg = #f6f1e4, relative luminance ≈ 0.881):
-   *   --accent #8c3232  contrast ≈ 7.1:1 AA ✓
-   *   --primary-foreground #ffffff on #8c3232 button: 8.0:1 ✓
+   *   --accent #31549b  contrast ≈ 6.5:1 AA ✓
+   *   --primary-foreground #ffffff on #31549b button: 7.3:1 ✓
    *   body text --text #322d22: 10.7:1 on --bg-muted ✓
    *   worst text pairing --muted on --bg-muted: 4.8:1 ✓
    */
-  --ring: #8c3232;
-  --accent: #8c3232;
-  --accent-hover: #722626;
-  --accent-muted: #8c3232;
-  --accent-subtle: rgba(140, 50, 50, 0.09);
-  --accent-glow: rgba(140, 50, 50, 0.14);
-  --primary: #8c3232;
+  --ring: #31549b;
+  --accent: #31549b;
+  --accent-hover: #274279;
+  --accent-muted: #31549b;
+  --accent-subtle: rgba(49, 84, 155, 0.09);
+  --accent-glow: rgba(49, 84, 155, 0.14);
+  --primary: #31549b;
   --primary-foreground: #ffffff;
 
   --bg: #f6f1e4;
@@ -82,24 +83,25 @@
 
 :root[data-theme="manuscript"] {
   /*
-   * Accent — faded rubric on candlelit charcoal (the reading room).
+   * Accent — lapis and gold in the candlelit reading room; iron-gall charcoal
+   * base, vermilion kept for the rubric role (--destructive).
    *
    * WCAG 2.1 AA audit (bg = #211e18, relative luminance ≈ 0.013):
-   *   --accent #cf7d74  contrast ≈ 5.4:1 AA ✓
-   *   --primary-foreground #3a1410 on #cf7d74 button: 5.3:1 ✓
+   *   --accent #8fa8e0  contrast ≈ 7.0:1 AA ✓
+   *   --primary-foreground #101c33 on #8fa8e0 button: 7.2:1 ✓
    *   --destructive-foreground #ffffff on #c93a30 button: 5.1:1 ✓
    *   body text --text #d8d0bc: 10.8:1 ✓
    *   worst text pairing --muted on --bg-muted: 4.7:1 ✓
    */
-  --ring: #cf7d74;
-  --accent: #cf7d74;
-  --accent-hover: #dd968e;
-  --accent-muted: #cf7d74;
-  --accent-subtle: rgba(207, 125, 116, 0.12);
-  --accent-glow: rgba(207, 125, 116, 0.2);
-  --primary: #cf7d74;
-  --primary-hover: #dd968e;
-  --primary-foreground: #3a1410;
+  --ring: #8fa8e0;
+  --accent: #8fa8e0;
+  --accent-hover: #a8bce9;
+  --accent-muted: #8fa8e0;
+  --accent-subtle: rgba(143, 168, 224, 0.12);
+  --accent-glow: rgba(143, 168, 224, 0.2);
+  --primary: #8fa8e0;
+  --primary-hover: #a8bce9;
+  --primary-foreground: #101c33;
 
   --destructive: #c93a30;
   --destructive-hover: #b3332a;

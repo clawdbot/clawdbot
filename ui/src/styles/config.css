@@ -403,7 +403,7 @@
 .settings-theme-card--manuscript,
 .settings-accent-theme--manuscript {
   --theme-chip-bg: #211e18;
-  --theme-chip-accent: #cf7d74;
+  --theme-chip-accent: #8fa8e0;
   --theme-chip-accent-2: #cfa85e;
 }
 
@@ -474,7 +474,7 @@
 :root[data-theme-mode="light"]
   :is(.settings-theme-card--manuscript, .settings-accent-theme--manuscript) {
   --theme-chip-bg: #f6f1e4;
-  --theme-chip-accent: #8c3232;
+  --theme-chip-accent: #31549b;
   --theme-chip-accent-2: #7d6118;
 }
 
