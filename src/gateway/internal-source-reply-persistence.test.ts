@@ -65,7 +65,9 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
   const updates: SessionTranscriptUpdate[] = [];
   const downloads: Array<ReturnType<typeof resolveManagedOutgoingMediaArtifactDownload>> = [];
   const unsubscribe = onSessionTranscriptUpdate((update) => {
-    if (update.target.sessionId !== sessionId) return;
+    if (update.target.sessionId !== sessionId) {
+      return;
+    }
     updates.push(update);
     for (const { record } of records()) {
       downloads.push(
@@ -237,7 +239,7 @@ describe("internal source reply persistence", () => {
             const originalIds = fixture
               .records()
               .map(({ record }) => record.attachmentId)
-              .sort();
+              .toSorted();
             const beforeUpdates = fixture.updates.length;
             await expect(
               fixture.persist({
@@ -253,7 +255,7 @@ describe("internal source reply persistence", () => {
               fixture
                 .records()
                 .map(({ record }) => record.attachmentId)
-                .sort(),
+                .toSorted(),
             ).toEqual(originalIds);
             expect(fixture.updates).toHaveLength(beforeUpdates + 1);
             expect(fixture.updates.at(-1)?.message).toBeUndefined();
@@ -269,8 +271,9 @@ describe("internal source reply persistence", () => {
             expect(fixture.downloads).toHaveLength(
               fixture.updates.length * (mode === "text-only" ? 0 : 2),
             );
-            for (const download of await Promise.all(fixture.downloads))
+            for (const download of await Promise.all(fixture.downloads)) {
               expect(download).toMatchObject({ type: "image" });
+            }
           } finally {
             await fixture.dispose();
           }
@@ -333,7 +336,9 @@ describe("internal source reply persistence", () => {
               const pending = fixture
                 .records()
                 .find(({ record }) => record.messageId === null)?.record;
-              if (!pending) throw new Error("expected second prepared media record");
+              if (!pending) {
+                throw new Error("expected second prepared media record");
+              }
               if (changed === "cleanup-pending") {
                 expect(claimManagedImageRecordCleanupIfCurrent(pending, state.stateDir)).toBe(true);
               } else {
