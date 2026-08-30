@@ -5506,7 +5506,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   ] satisfies ChatDeliveryRoutingCase[])(
     "chat.send %s",
     async (...[_name, id, delivery, sessionKey, options = {}]: ChatDeliveryRoutingCase) => {
-      await createTranscriptFixture(`openclaw-chat-send-${id}-`);
+      await createTranscriptFixture(`openclaw-chat-send-${id}-`, { agentId: "main", sessionKey });
       mockState.finalText = "ok";
       mockState.mainSessionKey = options.mainSessionKey ?? "main";
       mockState.sessionEntry = {
