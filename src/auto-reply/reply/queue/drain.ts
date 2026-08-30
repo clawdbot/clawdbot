@@ -22,7 +22,9 @@ import { defaultRuntime } from "../../../runtime.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
+  type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
+import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
@@ -325,6 +327,8 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
       threadId: run.originatingThreadId,
     }),
     hasPreparedCurrentTurnImages(run),
+    // Approved sources skip the write hook; never carry unstaged input past it.
+    Boolean(run.userTurnTranscriptRecorder?.getPendingInputMessage?.()),
     run.originatingChatId ?? "",
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
@@ -426,7 +430,26 @@ function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[]
 }
 
 function renderCollectItem(item: FollowupRun, idx: number): string {
-  return renderCollectItemPrompt(item, idx, item.prompt);
+  return renderCollectItemPrompt(
+    item,
+    idx,
+    resolveCollectedSourceText(
+      item.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
+      item.prompt,
+    ),
+  );
+}
+
+function resolveCollectedSourceText(
+  message: PersistedUserTurnMessage | undefined,
+  fallback: string,
+): string {
+  return message
+    ? (extractTextFromChatContent(message.content, {
+        normalizeText: (text) => text,
+        joinWith: "\n",
+      }) ?? "")
+    : fallback;
 }
 
 function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string): string {
@@ -516,12 +539,20 @@ function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
   return item.currentInboundEventKind === "room_event" || item.currentInboundAudio === true;
 }
 
-function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
+function buildCollectTranscriptPrompt(
+  items: FollowupRun[],
+  messages?: (PersistedUserTurnMessage | undefined)[],
+): string {
   return buildCollectPrompt({
     title: "[Queued messages while agent was busy]",
     items,
-    renderItem: (item, index) =>
-      renderCollectItemPrompt(item, index, item.transcriptPrompt ?? item.prompt),
+    renderItem: (item, index) => {
+      const message = messages?.[index] ?? item.userTurnTranscriptRecorder?.message;
+      // Staging may redact or rewrite a source. Collection must never restore
+      // its pre-approval text from the queue's display/runtime projection.
+      const text = resolveCollectedSourceText(message, item.transcriptPrompt ?? item.prompt);
+      return renderCollectItemPrompt(item, index, text);
+    },
   });
 }
 
@@ -567,7 +598,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
         ? candidate
         : latest;
     }, undefined);
-    const transcriptPrompt = buildCollectTranscriptPrompt(transcriptSources);
+    const transcriptPrompt = buildCollectTranscriptPrompt(transcriptSources, messages);
     const identityHash = createHash("sha256")
       .update(
         JSON.stringify(
@@ -596,6 +627,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
       provenance: source.run.inputProvenance,
     },
     resolveInput: buildInput,
+    pendingInputSources: transcriptSources.flatMap((item) => item.userTurnTranscriptRecorder ?? []),
     target: () => resolveFollowupTranscriptTarget(source),
     errorContext: "collected followup user turn transcript",
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -1115,6 +1147,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
+    userTurnTranscriptRecorder: source.userTurnTranscriptRecorder,
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
     disableTools: source.disableTools,
@@ -1182,6 +1215,9 @@ async function runSyntheticOverflowSummary(params: {
       provenance: params.source.run.inputProvenance,
     },
     target: () => resolveFollowupTranscriptTarget(params.source),
+    pendingInputSources: params.sources.flatMap(
+      (source) => source.userTurnTranscriptRecorder ?? [],
+    ),
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     errorContext: "followup overflow summary transcript",
   });

@@ -17,6 +17,7 @@ import {
   ensureSessionPendingInputsSchema,
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 
 export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";
@@ -43,8 +44,11 @@ export type SessionPendingInputOwner = {
   idempotencyKey: string;
   lifecycleGeneration: string;
   messageJson: string;
+  config?: OpenClawConfig;
   assertCurrent: () => void;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
+  /** Aggregate authority is the exact source closures, never persisted source identifiers. */
+  sources?: readonly SessionPendingInputOwner[];
 };
 
 const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOwners"), () => ({
@@ -80,6 +84,12 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
 }
 
 function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
+  if (owner.sources) {
+    for (const source of owner.sources) {
+      assertPendingInputOwnerCurrent(source);
+    }
+    return;
+  }
   if (
     owners.live.get(owner.inputId) !== owner ||
     !isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)
@@ -92,6 +102,14 @@ function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
   assertPendingInputOwnerCurrent(owner);
   return owners.current.run(owner, run);
+}
+
+/** Persistence alone may mirror a closed turn; the append owner proves exact committed bytes. */
+export function runWithSessionPendingInputPersistence<T>(
+  owner: SessionPendingInputOwner,
+  persist: () => T,
+): T {
+  return owners.current.run(owner, persist);
 }
 
 export function isSessionPendingInputRowLive(
@@ -191,6 +209,7 @@ export type SessionPendingInputAppend = {
   inputId: string;
   message: PersistedUserTurnMessage;
   alreadyPromoted: boolean;
+  sourceInputIds?: readonly string[];
 };
 
 /** The private call-path owner, not a copied id or durable row, permits promotion. */
@@ -218,10 +237,38 @@ export function resolveSessionPendingInputAppend(
     owner.sessionKey !== scope.sessionKey ||
     (row &&
       (row.input_id !== owner.inputId ||
+        row.consumed_event_id != null ||
         row.state !== "queued" ||
         row.lifecycle_generation !== owner.lifecycleGeneration))
   ) {
     throw new Error("Pending input cannot be appended outside its admitted turn");
+  }
+  if (owner.sources) {
+    const sources = owner.sources.map((source) => {
+      const accepted = readSessionPendingInputByKey(database, scope, source.idempotencyKey);
+      if (
+        !accepted ||
+        accepted.input_id !== source.inputId ||
+        accepted.lifecycle_generation !== source.lifecycleGeneration ||
+        accepted.message_json !== source.messageJson
+      ) {
+        throw new Error("Collected input custody changed before transcript promotion");
+      }
+      return accepted;
+    });
+    const alreadyPromoted = sources.every((source) => source.consumed_event_id === owner.inputId);
+    if (!alreadyPromoted) {
+      if (sources.some((source) => source.consumed_event_id != null || source.state !== "queued")) {
+        throw new Error("Collected input custody ended before transcript promotion");
+      }
+      assertPendingInputOwnerCurrent(owner);
+    }
+    return {
+      inputId: owner.inputId,
+      message: parseSessionPendingInputMessage(owner.messageJson),
+      alreadyPromoted,
+      sourceInputIds: sources.map((source) => source.input_id),
+    };
   }
   // Terminal mirroring may replay a consumed input after cancellation. The caller
   // must prove the existing message; this never permits a new append.
@@ -240,6 +287,21 @@ export function consumeSessionPendingInput(
   pending: SessionPendingInputAppend,
 ): void {
   if (!pending.alreadyPromoted) {
+    if (pending.sourceInputIds) {
+      const updated = executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .updateTable("session_pending_inputs")
+          .set({ consumed_event_id: pending.inputId })
+          .where("input_id", "in", [...pending.sourceInputIds])
+          .where("state", "=", "queued")
+          .where("consumed_event_id", "is", null),
+      );
+      if (updated.numAffectedRows !== BigInt(pending.sourceInputIds.length)) {
+        throw new Error("Collected input custody changed during transcript promotion");
+      }
+      return;
+    }
     executeSqliteQuerySync(
       database.db,
       getSessionKysely(database.db)
@@ -311,7 +373,10 @@ export function copySessionPendingInputsForRepair(
       if (
         existing.request_hash !== row.request_hash ||
         existing.message_json !== row.message_json ||
-        existing.run_id !== row.run_id
+        existing.run_id !== row.run_id ||
+        (existing.consumed_event_id != null &&
+          row.consumed_event_id != null &&
+          existing.consumed_event_id !== row.consumed_event_id)
       ) {
         throw new Error("Canonical repair found conflicting accepted inputs");
       }
@@ -320,6 +385,7 @@ export function copySessionPendingInputsForRepair(
         db
           .updateTable("session_pending_inputs")
           .set({
+            consumed_event_id: existing.consumed_event_id ?? row.consumed_event_id ?? null,
             state:
               existing.state === "cancelled" || row.state === "cancelled"
                 ? "cancelled"

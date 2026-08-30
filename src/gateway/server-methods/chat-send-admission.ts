@@ -614,13 +614,22 @@ export async function admitChatSend(params: {
     sessionBinding.sessionId = binding.sessionId;
   };
   let gatewayWorkAdmissionRetains = 1;
+  let finishPendingInput: (() => void) | undefined;
   const releaseGatewayWorkAdmission = () => {
     if (gatewayWorkAdmissionRetains === 0) {
       return;
     }
     gatewayWorkAdmissionRetains -= 1;
     if (gatewayWorkAdmissionRetains === 0) {
-      acquiredGatewayWorkAdmission.release();
+      try {
+        finishPendingInput?.();
+      } catch (error) {
+        // The durable row remains recoverable; a failed disposition write must
+        // not strand session/root drain ownership during shutdown.
+        context.logGateway.warn(`Failed to finish pending chat input: ${formatForLog(error)}`);
+      } finally {
+        acquiredGatewayWorkAdmission.release();
+      }
     }
   };
   let initialGatewayWorkAdmissionReleased = false;
@@ -700,6 +709,26 @@ export async function admitChatSend(params: {
       originatingRoute,
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission,
+      setPendingInputCleanup: (finish: () => void) => {
+        finishPendingInput = finish;
+      },
+      assertWorkAdmissionCurrent: () => {
+        if (
+          gatewayWorkAdmissionRetains === 0 ||
+          lifecycleGeneration !== getAgentEventLifecycleGeneration()
+        ) {
+          throw new Error("Chat admission ended; submit a new turn.");
+        }
+        const queued = context.chatQueuedTurns.get(clientRunId);
+        // Collect retires source cancellation while retaining the original
+        // admission until the aggregate commits or settles.
+        if (
+          activeRunAbort.controller.signal.aborted &&
+          !(queued?.controller === activeRunAbort.controller && queued.abortable === false)
+        ) {
+          throw new Error("Chat admission was cancelled; submit a new turn.");
+        }
+      },
       restartSafeAdmission,
       setDiscardAbandonedPreparedMedia: (discard: (() => void) | undefined) => {
         discardAbandonedPreparedMedia = discard;

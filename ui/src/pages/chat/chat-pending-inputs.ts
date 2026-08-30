@@ -1,5 +1,12 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
-import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS,
+  CHAT_INPUT_RUN_ID_MAX_CHARS,
+} from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import type {
+  ChatInputConsumptions,
+  ChatPendingInputsPage,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -7,6 +14,11 @@ import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.
 import { removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { messageMatchesSearchQuery } from "./chat-thread-items.ts";
+import {
+  getChatSessionProjection,
+  publishChatSessionProjectionMessages,
+  readChatSessionProjectionScope,
+} from "./history-merge.ts";
 
 type PendingInputView = {
   sessionKey: string;
@@ -68,26 +80,77 @@ export function clearChatPendingInputs(state: ChatState): void {
   pendingInputViews.delete(state);
 }
 
+export function readChatInputRunIds(state: ChatState): string[] {
+  const projection = getChatSessionProjection(
+    state,
+    state.chatMessages,
+    readChatSessionProjectionScope(state, { agentId: resolveUiSelectedSessionAgentId(state) }),
+  );
+  const runIds = [
+    ...projection.entries
+      .filter((entry) => entry.pending && entry.identity?.role === "user")
+      .map((entry) => entry.pendingRunId),
+    ...state.chatQueue
+      .filter((item) => (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed")
+      .map((item) => item.sendRunId),
+  ];
+  return [
+    ...new Set(
+      runIds.filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS)),
+    ),
+  ]
+    .toSorted()
+    .slice(0, CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS);
+}
+
 export function applyChatPendingInputs(
   state: ChatState,
   page: ChatPendingInputsPage | undefined,
-  before?: number,
+  options: { before?: number; consumptions?: ChatInputConsumptions } = {},
 ): void {
   pendingInputViews.set(state, {
     sessionKey: state.sessionKey,
     sessionId: state.currentSessionId ?? null,
     agentId: resolveUiSelectedSessionAgentId(state),
     page: page ?? { items: [], total: 0 },
-    before,
+    before: options.before,
     loading: false,
   });
-  const acceptedRunIds = new Set(page?.items.flatMap((item) => (item.runId ? [item.runId] : [])));
+  const acceptedRunIds = new Set([
+    ...(page?.items.flatMap((item) => (item.runId ? [item.runId] : [])) ?? []),
+    ...(options.consumptions?.map((item) => item.runId) ?? []),
+  ]);
   // The server owns accepted input even after an interruption. Retiring the
   // outbox copy prevents reconnect from silently submitting it a second time.
   for (const item of state.chatQueue) {
-    if (item.sendRunId && acceptedRunIds.has(item.sendRunId)) {
+    if (
+      item.sendRunId &&
+      acceptedRunIds.has(item.sendRunId) &&
+      (!item.sessionId || item.sessionId === state.currentSessionId)
+    ) {
       removeQueuedMessage(state, item.id);
     }
+  }
+  const scope = readChatSessionProjectionScope(state, {
+    agentId: resolveUiSelectedSessionAgentId(state),
+  });
+  const projection = getChatSessionProjection(state, state.chatMessages, scope);
+  // Custody replaces only this pane's provisional user copy, never a canonical
+  // message or active assistant state that happens to share the run correlation.
+  const messages = projection.entries
+    .filter(
+      (entry) =>
+        !(
+          entry.pending &&
+          entry.identity?.role === "user" &&
+          entry.identity.id === null &&
+          entry.identity.sequence === null &&
+          acceptedRunIds.has(entry.pendingRunId ?? "")
+        ),
+    )
+    .map((entry) => entry.message);
+  if (messages.length !== projection.messages.length) {
+    publishChatSessionProjectionMessages(state, messages, { scope });
   }
   state.requestUpdate?.();
 }
@@ -118,7 +181,7 @@ export async function loadChatPendingInputs(state: ChatState, before?: number): 
       ...(before === undefined ? {} : { pendingBefore: before }),
     });
     if (current() && result.sessionId === view.sessionId) {
-      applyChatPendingInputs(state, result.pendingInputs, before);
+      applyChatPendingInputs(state, result.pendingInputs, { before });
     }
   } catch (error) {
     if (current()) {
