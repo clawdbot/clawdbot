@@ -88,18 +88,17 @@ export async function readLastGatewayErrorLine(
   options?: { platform?: NodeJS.Platform; requirePatternMatch?: boolean },
 ): Promise<string | null> {
   const platform = options?.platform ?? process.platform;
-  const readStderr = platform !== "darwin";
-  // launchd supervisor mode combines child stderr into stdout; other platforms
-  // keep stderr as the strongest failure signal.
+  // launchd writes wrapper/process stderr to gateway.err.log; treat it as the
+  // strongest failure signal on every supervisor.
   const { stdoutPath, stderrPath } =
     platform === "darwin"
       ? resolveGatewaySupervisorLogPaths(env, { platform })
       : resolveGatewayLogPaths(env);
-  const stderrLines = readStderr ? await readGatewayLogTailLines(stderrPath).catch(() => []) : [];
+  const stderrLines = await readGatewayLogTailLines(stderrPath).catch(() => []);
   const stdoutLines = await readGatewayLogTailLines(stdoutPath).catch(() => []);
-  // stderr is the strongest failure signal on non-darwin platforms, so place it
-  // last and scan from the end: the most recent stderr error line then wins over
-  // any (possibly stale) stdout match, matching the stderr-first fallback below.
+  // stderr is the strongest failure signal, so place it last and scan from the
+  // end: the most recent stderr error line then wins over any (possibly stale)
+  // stdout match, matching the stderr-first fallback below.
   const lines = [...stdoutLines, ...stderrLines].map((line) => line.trim());
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
@@ -113,7 +112,5 @@ export async function readLastGatewayErrorLine(
   if (options?.requirePatternMatch) {
     return null;
   }
-  return readStderr
-    ? (findLastNonEmptyLine(stderrLines) ?? findLastNonEmptyLine(stdoutLines))
-    : findLastNonEmptyLine(stdoutLines);
+  return findLastNonEmptyLine(stderrLines) ?? findLastNonEmptyLine(stdoutLines);
 }

@@ -1285,7 +1285,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
     Service/supervisor logs (when the gateway runs via launchd/systemd):
 
-    - macOS launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use `gateway-<profile>.log`; stderr is suppressed).
+    - macOS launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use `gateway-<profile>.log`). stderr: `~/Library/Logs/openclaw/gateway.err.log` (profiles use `gateway-<profile>.err.log`).
     - Linux: `journalctl --user -u openclaw-gateway[-<profile>].service -n 200 --no-pager`.
     - Windows: `schtasks /Query /TN "OpenClaw Gateway (<profile>)" /V /FO LIST`.
 

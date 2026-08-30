@@ -15,7 +15,7 @@ export function buildPlatformRuntimeLogHints(params: {
     // Preserve the writer's path bytes; backslashes can be literal POSIX filename characters.
     return [
       `Launchd stdout (if installed): ${logs.stdoutPath}`,
-      "Launchd stderr (if installed): suppressed",
+      `Launchd stderr (if installed): ${logs.stderrPath}`,
       `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
     ];
   }
