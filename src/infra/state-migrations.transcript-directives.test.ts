@@ -7,6 +7,8 @@ import { readSessionArchiveContentSync } from "../config/sessions/archive-compre
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import {
+  AGENT_DATABASE_MAINTENANCE_LEASE,
+  assertAgentDatabaseMaintenanceAuthority,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "../state/openclaw-agent-db-lease.js";
@@ -16,7 +18,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
 import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 
@@ -511,6 +516,85 @@ describe("historical transcript directive migration", () => {
     } finally {
       migrated.close();
     }
+  });
+
+  it("leaves a current empty database and its active writer untouched", async () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-current-empty-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+
+    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+
+    expect(opened.db.isOpen).toBe(true);
+  });
+
+  it("rolls back a transcript transaction when maintenance expires before commit", async () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-expired-commit-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    insertSession(opened.db, {
+      events: [
+        messageEvent({
+          content: [{ type: "text", text: "[[reply_to_current]] Migrating" }],
+          id: "assistant-expired",
+          role: "assistant",
+          timestamp: 1,
+        }),
+      ],
+      generation: "before",
+      sessionId: "session-expired",
+    });
+    const originalEventJson = readEventJson(opened.path, "session-expired", 0);
+    closeOpenClawAgentDatabasesForTest();
+
+    let competingLeaseId: string | undefined;
+    const originalAssert = assertAgentDatabaseMaintenanceAuthority;
+    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    const authority = vi
+      .spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority")
+      .mockImplementation(() => {
+        originalAssert();
+        if (authority.mock.calls.length !== 1) {
+          return;
+        }
+        openOpenClawStateDatabase({ env })
+          .db.prepare("UPDATE state_leases SET expires_at = ? WHERE scope = ? AND lease_key = ?")
+          .run(
+            Date.now() - 1,
+            AGENT_DATABASE_MAINTENANCE_LEASE.scope,
+            AGENT_DATABASE_MAINTENANCE_LEASE.key,
+          );
+        competingLeaseId = claimOpenClawAgentDatabaseLease({
+          agentId: "competitor",
+          path: path.join(stateDir, "competitor.sqlite"),
+          env,
+        });
+      });
+
+    const result = await migrateHistoricalTranscriptDirectives({ env });
+
+    expect(result.warnings).toHaveLength(2);
+    expect(
+      result.warnings.every(
+        (warning) => warning.includes("maintenance lease") && warning.includes("was lost"),
+      ),
+    ).toBe(true);
+    expect(competingLeaseId).toBeDefined();
+    expect(readEventJson(opened.path, "session-expired", 0)).toBe(originalEventJson);
+    const migrated = openNodeSqliteDatabase(opened.path, { readOnly: true });
+    try {
+      expect(
+        migrated
+          .prepare("SELECT 1 FROM schema_meta WHERE meta_key = ?")
+          .get("historical-transcript-directives-v1"),
+      ).toBeUndefined();
+    } finally {
+      migrated.close();
+    }
+    releaseOpenClawAgentDatabaseLease(competingLeaseId as string, { env });
   });
 
   it("renews maintenance beyond its original lifetime and fences writers through final mutation", async () => {

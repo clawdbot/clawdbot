@@ -319,6 +319,7 @@ export async function migrateTranscriptDirectiveArchives(params: {
       runSqliteImmediateTransactionSync(params.database, () => {
         assertAgentDatabaseMaintenanceAuthority();
         params.writeCursor({ phase: "complete" });
+        assertAgentDatabaseMaintenanceAuthority();
       });
       return rewrittenArchives;
     }
@@ -327,7 +328,9 @@ export async function migrateTranscriptDirectiveArchives(params: {
         params.database,
         () => {
           assertAgentDatabaseMaintenanceAuthority();
-          return rewriteArchiveRow(params.database, planned);
+          const currentRowPresent = rewriteArchiveRow(params.database, planned);
+          assertAgentDatabaseMaintenanceAuthority();
+          return currentRowPresent;
         },
         {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -348,6 +351,7 @@ export async function migrateTranscriptDirectiveArchives(params: {
             planned,
             writeCursor: params.writeCursor,
           });
+          assertAgentDatabaseMaintenanceAuthority();
         },
         {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
