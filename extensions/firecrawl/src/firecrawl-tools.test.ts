@@ -1272,21 +1272,110 @@ describe("firecrawl tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBe("plugin-key");
-    expect(resolveFirecrawlBaseUrl(cfg)).toBe("https://plugin.firecrawl.test");
+    expect(resolveFirecrawlApiKey(cfg, "search")).toBe("plugin-key");
+    expect(resolveFirecrawlBaseUrl(cfg, "search")).toBe("https://plugin.firecrawl.test");
+  });
+
+  it("keeps search and fetch credential and endpoint precedence capability-local", () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: "search-key",
+                baseUrl: "https://search.firecrawl.test",
+              },
+              webFetch: {
+                apiKey: "fetch-key",
+                baseUrl: "https://fetch.firecrawl.test",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg, "search")).toBe("search-key");
+    expect(resolveFirecrawlBaseUrl(cfg, "search")).toBe("https://search.firecrawl.test");
+    expect(resolveFirecrawlApiKey(cfg, "fetch")).toBe("fetch-key");
+    expect(resolveFirecrawlBaseUrl(cfg, "fetch")).toBe("https://fetch.firecrawl.test");
+  });
+
+  it("dispatches search and fetch with their capability-local credentials and endpoints", async () => {
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({
+        url,
+        authorization: new Headers(init?.headers).get("Authorization"),
+      });
+      return new Response(
+        JSON.stringify(
+          url.endsWith("/v2/search")
+            ? { success: true, data: { web: [] } }
+            : {
+                success: true,
+                data: {
+                  markdown: "capability-local fetch",
+                  metadata: { statusCode: 200 },
+                },
+              },
+        ),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const cfg = {
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: "search-key",
+                baseUrl: "http://127.0.0.1:17881",
+              },
+              webFetch: {
+                apiKey: "fetch-key",
+                baseUrl: "http://127.0.0.1:17882",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await runActualFirecrawlSearch({ cfg, query: "capability-local search" });
+    await runActualFirecrawlScrape({
+      cfg,
+      url: "https://example.com/capability-local-fetch",
+      extractMode: "markdown",
+    });
+
+    expect(requests).toEqual([
+      {
+        url: "http://127.0.0.1:17881/v2/search",
+        authorization: "Bearer search-key",
+      },
+      {
+        url: "http://127.0.0.1:17882/v2/scrape",
+        authorization: "Bearer fetch-key",
+      },
+    ]);
   });
 
   it("falls back to environment and defaults for fetch config values", () => {
     vi.stubEnv("FIRECRAWL_API_KEY", "env-key");
     vi.stubEnv("FIRECRAWL_BASE_URL", "https://env.firecrawl.test");
 
-    expect(resolveFirecrawlApiKey()).toBe("env-key");
-    expect(resolveFirecrawlBaseUrl()).toBe("https://env.firecrawl.test");
+    expect(resolveFirecrawlApiKey(undefined, "fetch")).toBe("env-key");
+    expect(resolveFirecrawlBaseUrl(undefined, "fetch")).toBe("https://env.firecrawl.test");
     expect(resolveFirecrawlOnlyMainContent()).toBe(true);
     expect(resolveFirecrawlMaxAgeMs()).toBe(172_800_000);
     expect(resolveFirecrawlScrapeTimeoutSeconds()).toBe(60);
     expect(resolveFirecrawlSearchTimeoutSeconds()).toBe(30);
-    expect(resolveFirecrawlBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_FIRECRAWL_BASE_URL);
+    expect(resolveFirecrawlBaseUrl({} as OpenClawConfig, "fetch")).not.toBe(
+      DEFAULT_FIRECRAWL_BASE_URL,
+    );
   });
 
   it("resolves env SecretRefs for Firecrawl API key without requiring a runtime snapshot", () => {
@@ -1309,7 +1398,7 @@ describe("firecrawl tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBe("firecrawl-env-ref-key");
+    expect(resolveFirecrawlApiKey(cfg, "search")).toBe("firecrawl-env-ref-key");
   });
 
   it("does not use env fallback when a non-env SecretRef is configured but unavailable", () => {
@@ -1332,7 +1421,7 @@ describe("firecrawl tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+    expect(resolveFirecrawlApiKey(cfg, "search")).toBeUndefined();
   });
 
   it("does not read arbitrary env SecretRef ids for Firecrawl API key resolution", () => {
@@ -1355,7 +1444,7 @@ describe("firecrawl tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+    expect(resolveFirecrawlApiKey(cfg, "search")).toBeUndefined();
   });
 
   it("does not resolve env SecretRefs when provider allowlist excludes FIRECRAWL_API_KEY", () => {
@@ -1386,7 +1475,7 @@ describe("firecrawl tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+    expect(resolveFirecrawlApiKey(cfg, "search")).toBeUndefined();
   });
 
   it("does not resolve env SecretRefs when provider source is not env", () => {
@@ -1417,7 +1506,7 @@ describe("firecrawl tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+    expect(resolveFirecrawlApiKey(cfg, "search")).toBeUndefined();
   });
 
   it("allows hosted Firecrawl and private self-hosted endpoints only", async () => {

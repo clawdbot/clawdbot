@@ -9,6 +9,7 @@ const DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS = 30;
 const DEFAULT_FIRECRAWL_SCRAPE_TIMEOUT_SECONDS = 60;
 const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
 const FIRECRAWL_API_KEY_ENV_VAR = "FIRECRAWL_API_KEY";
+type FirecrawlOperation = "search" | "fetch";
 
 type FirecrawlSearchConfig =
   | {
@@ -71,19 +72,22 @@ function resolveConfiguredSecret(value: unknown, path: string, cfg?: OpenClawCon
   });
 }
 
-export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {
+export function resolveFirecrawlApiKey(
+  cfg: OpenClawConfig | undefined,
+  operation: FirecrawlOperation,
+): string | undefined {
   const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
   const search = resolveFirecrawlSearchConfig(cfg);
-  const configuredCandidates: Array<{ value: unknown; path: string }> = [
-    {
-      value: pluginConfig?.webFetch?.apiKey,
-      path: "plugins.entries.firecrawl.config.webFetch.apiKey",
-    },
-    {
-      value: search?.apiKey,
-      path: "plugins.entries.firecrawl.config.webSearch.apiKey",
-    },
-  ];
+  const searchCandidate = {
+    value: search?.apiKey,
+    path: "plugins.entries.firecrawl.config.webSearch.apiKey",
+  };
+  const fetchCandidate = {
+    value: pluginConfig?.webFetch?.apiKey,
+    path: "plugins.entries.firecrawl.config.webFetch.apiKey",
+  };
+  const configuredCandidates =
+    operation === "search" ? [searchCandidate, fetchCandidate] : [fetchCandidate, searchCandidate];
   let blockedConfiguredSecret = false;
   for (const candidate of configuredCandidates) {
     const resolved = resolveConfiguredSecret(candidate.value, candidate.path, cfg);
@@ -100,12 +104,16 @@ export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined
   return normalizeSecretInput(process.env[FIRECRAWL_API_KEY_ENV_VAR]) || undefined;
 }
 
-export function resolveFirecrawlBaseUrl(cfg?: OpenClawConfig): string {
+export function resolveFirecrawlBaseUrl(
+  cfg: OpenClawConfig | undefined,
+  operation: FirecrawlOperation,
+): string {
   const search = resolveFirecrawlSearchConfig(cfg);
   const fetch = resolveFirecrawlFetchConfig(cfg);
+  const searchBaseUrl = typeof search?.baseUrl === "string" ? search.baseUrl.trim() : "";
+  const fetchBaseUrl = typeof fetch?.baseUrl === "string" ? fetch.baseUrl.trim() : "";
   const configured =
-    (typeof search?.baseUrl === "string" ? search.baseUrl.trim() : "") ||
-    (typeof fetch?.baseUrl === "string" ? fetch.baseUrl.trim() : "") ||
+    (operation === "search" ? searchBaseUrl || fetchBaseUrl : fetchBaseUrl || searchBaseUrl) ||
     normalizeSecretInput(process.env.FIRECRAWL_BASE_URL) ||
     "";
   return configured || DEFAULT_FIRECRAWL_BASE_URL;

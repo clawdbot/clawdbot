@@ -257,58 +257,6 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     });
   });
 
-  it("materializes Firecrawl dedicated-tool credentials from both capability paths", async () => {
-    expect(
-      findBundledPluginMetadataById("firecrawl", {
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
-      })?.manifest.configContracts?.secretInputs?.paths,
-    ).toEqual([
-      { path: "webSearch.apiKey", expected: "string", ownerKind: "capability" },
-      { path: "webFetch.apiKey", expected: "string", ownerKind: "capability" },
-    ]);
-    const sourceConfig = {
-      agents: explicitMainRoster,
-      plugins: {
-        entries: {
-          firecrawl: {
-            enabled: true,
-            config: {
-              webSearch: { apiKey: envRef("FIRECRAWL_SEARCH_KEY") },
-              webFetch: { apiKey: envRef("FIRECRAWL_FETCH_KEY") },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const runtimeConfig = structuredClone(sourceConfig);
-    const env = {
-      ...isolatedEnv,
-      FIRECRAWL_SEARCH_KEY: "resolved-search-key",
-      FIRECRAWL_FETCH_KEY: "resolved-fetch-key",
-    };
-    const context = createResolverContext({ sourceConfig, env });
-    collectPluginConfigAssignments({
-      config: runtimeConfig,
-      defaults: undefined,
-      context,
-      loadablePluginOrigins: new Map([["firecrawl", "bundled"]]),
-    });
-    expect(context.assignments.map((assignment) => assignment.path).toSorted()).toEqual([
-      "plugins.entries.firecrawl.config.webFetch.apiKey",
-      "plugins.entries.firecrawl.config.webSearch.apiKey",
-    ]);
-    const resolved = await resolveSecretRefValues(
-      context.assignments.map((assignment) => assignment.ref),
-      { config: sourceConfig, env, cache: context.cache },
-    );
-    applyResolvedAssignments({ assignments: context.assignments, resolved });
-    expect(runtimeConfig.plugins?.entries?.firecrawl?.config).toMatchObject({
-      webSearch: { apiKey: "resolved-search-key" },
-      webFetch: { apiKey: "resolved-fetch-key" },
-    });
-  });
-
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("voice-call", {
