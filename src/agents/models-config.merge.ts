@@ -10,7 +10,7 @@ import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import {
   modelKey,
-  normalizeConfiguredProviderCatalogModelId,
+  createConfiguredProviderCatalogModelIdNormalizer,
   type ModelManifestNormalizationContext,
 } from "./model-ref-shared.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
@@ -99,6 +99,7 @@ export function mergeProviderModels(
       .filter(([id]) => Boolean(id)),
   );
   const seen = new Set<string>();
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(options);
 
   const mergedModels = explicitModels.map((explicitModel) => {
     const id = getProviderModelId(explicitModel);
@@ -113,10 +114,7 @@ export function mergeProviderModels(
     const sourceOmittedInput =
       options &&
       options.sourceModelInputOmissions?.has(
-        modelKey(
-          normalizeProviderId(options.providerId),
-          normalizeConfiguredProviderCatalogModelId(options.providerId, id, options),
-        ),
+        modelKey(normalizeProviderId(options.providerId), normalizeModelId(options.providerId, id)),
       ) === true;
     if (options?.preserveConfiguredModelMembership) {
       return sourceOmittedInput && implicitModel.input !== undefined

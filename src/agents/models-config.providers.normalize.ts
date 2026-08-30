@@ -5,7 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
-import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
+import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
 import {
   normalizeProviderSpecificConfig,
   resolveProviderConfigApiKeyResolver,
@@ -85,16 +85,13 @@ function normalizeProviderModelsForConfig(
     return provider;
   }
 
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(options);
   let mutated = false;
   const nextModels: ProviderModelConfig[] = [];
   const seenById = new Map<string, number>();
   for (const model of provider.models) {
     const rawId = getProviderModelId(model);
-    const normalizedId = rawId
-      ? normalizeConfiguredProviderCatalogModelId(providerKey, rawId, {
-          manifestPlugins: options.manifestPlugins,
-        })
-      : rawId;
+    const normalizedId = rawId ? normalizeModelId(providerKey, rawId) : rawId;
     const normalizedModel =
       normalizedId && normalizedId !== rawId ? { ...model, id: normalizedId } : model;
     if (normalizedModel !== model) {
