@@ -696,8 +696,7 @@ export function splitNoOpEdits(
   const noOpEdits: Edit[] = [];
   const realEdits: Edit[] = [];
   for (const edit of edits) {
-    const fuzzyNoOp = normalizeForFuzzyMatch(edit.oldText) === normalizeForFuzzyMatch(edit.newText);
-    if (edit.oldText === edit.newText || fuzzyNoOp) {
+    if (edit.oldText === edit.newText) {
       applyEditsToNormalizedContent(
         normalizedContent,
         [{ oldText: edit.oldText, newText: "" }],

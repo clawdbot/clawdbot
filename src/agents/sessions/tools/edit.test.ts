@@ -723,7 +723,7 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("bazbar\n");
   });
 
-  it("preserves unrelated whitespace beside a fuzzy-equivalent no-op", async () => {
+  it("applies exact formatting beside a disjoint content replacement", async () => {
     const filePath = await createTempFile("foo  \nkeep  \n");
     const tool = createEditTool(tmpDir);
 
@@ -739,7 +739,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo  \nchanged  \n");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\nchanged  \n");
   });
 
   it("rejects duplicate no-op entries", async () => {
