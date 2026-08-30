@@ -14,6 +14,7 @@ import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import {
   hasUsableBundledPluginTree,
+  resolveBundledPluginsDir,
   resolveSourceCheckoutDependencyDiagnostic,
 } from "./bundled-dir.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
@@ -677,6 +678,17 @@ function resolveBundledSourceCheckoutExtensionsDir(bundledRoot?: string): string
   return legacyRoot;
 }
 
+// Host provenance is a fact about where a plugin lives, not how it was referenced.
+// These are exactly the trees the bundled scan walks, so a configured alias of
+// anything inside them is that same host-owned plugin and must classify identically.
+function isHostBundledPluginRoot(dir: string, env: NodeJS.ProcessEnv): boolean {
+  const bundledRoot = resolveBundledPluginsDir(env);
+  const realDir = pluginCacheRealpathSync(dir) ?? path.resolve(dir);
+  return [bundledRoot, resolveBundledSourceCheckoutExtensionsDir(bundledRoot)].some(
+    (root) => root && isPathInside(pluginCacheRealpathSync(root) ?? path.resolve(root), realDir),
+  );
+}
+
 function readChildDirectoryNames(dir: string | undefined): Set<string> {
   if (!dir || !pluginCacheExistsSync(dir)) {
     return new Set();
@@ -1144,6 +1156,13 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     if (!stat) {
       return;
     }
+    // Origin gates entry resolution and bundled runtime privileges, so pointing
+    // plugins.load.paths at a host-owned plugin must not reclassify it.
+    const origin =
+      params.origin === "config" &&
+      isHostBundledPluginRoot(stat.isFile() ? path.dirname(resolved) : resolved, env)
+        ? "bundled"
+        : params.origin;
     if (stat.isFile()) {
       if (!isExtensionFile(resolved)) {
         diagnostics.push({
@@ -1157,7 +1176,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         idHint: path.basename(resolved, path.extname(resolved)),
         source: resolved,
         rootDir: path.dirname(resolved),
-        origin: params.origin,
+        origin,
         workspaceDir: params.workspaceDir,
         ...(params.installOwner ? { installOwner: params.installOwner } : {}),
         ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
@@ -1169,6 +1188,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       if (
         discoverPluginDirectory({
           ...params,
+          origin,
           dir: resolved,
           rootRealPath: pluginCacheRealpathSync(resolved) ?? undefined,
         })
@@ -1178,7 +1198,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
 
       discoverInDirectory({
         dir: resolved,
-        origin: params.origin,
+        origin,
         workspaceDir: params.workspaceDir,
         ...(params.scanFiles !== undefined || params.origin === "config"
           ? { scanFiles: params.scanFiles ?? true }
@@ -1193,10 +1213,16 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
   }
 
   function discoverConfiguredPaths(loadPaths: readonly string[], workspaceDir?: string): void {
+    const firstConfigured = candidates.length;
     for (const loadPath of loadPaths) {
       if (typeof loadPath === "string" && loadPath.trim()) {
         discoverFromPath({ rawPath: loadPath.trim(), origin: "config", workspaceDir });
       }
+    }
+    // Explicit operator selection is its own fact: host-owned aliases keep bundled
+    // origin, so duplicate precedence must not read selection off `origin` alone.
+    for (const candidate of candidates.slice(firstConfigured)) {
+      candidate.configSelected = true;
     }
   }
   function finish(): PluginDiscoveryResult {
@@ -1256,6 +1282,8 @@ function discoveryPolicy(env: NodeJS.ProcessEnv, ownershipUid: number | null | u
   return {
     ownershipUid: currentUid(ownershipUid),
     compatibilityHostVersion: resolveCompatibilityHostVersion(env),
+    // Configured-path classification depends on the host's bundled tree.
+    bundledRoot: resolveBundledPluginsDir(env) ?? "",
     nix: resolveIsNixMode(env),
     sourceOverlaysDisabled: env.OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS ?? "",
     home: env.OPENCLAW_HOME ?? "",

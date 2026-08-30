@@ -47,6 +47,10 @@ built entries:
   `plugins.load.paths` or global roots looks for matching JavaScript peers under
   `dist/` first, then beside the TypeScript source entry, trying `.js`, `.mjs`,
   and `.cjs` in that order at each location.
+- A `plugins.load.paths` entry that resolves inside the host's own bundled
+  plugin tree is discovered as that bundled plugin, so it keeps the bundled
+  entry point and bundled provenance whether or not compiled output exists
+  beside the source. Selecting a bundled plugin's own path never reclassifies it.
 - Package installation and managed installed-package discovery require compiled
   output for TypeScript extension and setup entries. Missing compiled output is
   a packaging error, not a reason to fall back to TypeScript.

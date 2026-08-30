@@ -727,7 +727,7 @@ export function sanitizeChatHistoryMessages(
     }
     const res = sanitizeChatHistoryMessage(message, maxChars);
     changed ||= res.changed;
-    if (shouldDropAssistantHistoryMessage(res.message)) {
+    if (res.changed && shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;
       continue;
     }

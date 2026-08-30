@@ -51,6 +51,14 @@ describe("mime detection", () => {
     },
   );
 
+  it("normalizes byte-detected Matroska to the filename MIME spelling", async () => {
+    const buffer = Buffer.from("1a45dfa38b4282886d6174726f736b61", "hex");
+    const detected = await detectMime({ buffer, filePath: "clip.bin" });
+
+    expect(detected).toBe("video/x-matroska");
+    expect(extensionForMime(detected)).toBe(".mkv");
+  });
+
   it.each([
     { format: "avif", expected: "image/avif" },
     { format: "jpg", expected: "image/jpeg" },
