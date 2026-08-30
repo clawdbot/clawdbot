@@ -5,9 +5,11 @@ import type {
   SessionCatalogProvider,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
+import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { adoptedSourceKey, CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 import { continueClaudeSession } from "./session-catalog-continue.js";
+import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
 import {
   assertClaudeLocalAccess,
@@ -15,13 +17,14 @@ import {
   readClaudeSessionTranscript,
   resolveNodeClaudeRecord,
 } from "./session-catalog-listing.js";
-import { DEFAULT_TRANSCRIPT_LIMIT, MAX_TRANSCRIPT_LIMIT } from "./session-catalog-parsing.js";
+import { MAX_TRANSCRIPT_LIMIT, readTranscriptParams } from "./session-catalog-parsing.js";
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 import {
   configuredClaudeConfigDir,
   currentHomeDir,
   gatewayClaudeScanOptions,
 } from "./session-catalog-scan.js";
+import { ClaudeCatalogParamsError } from "./session-catalog-shared.js";
 import * as catalogTerminal from "./session-catalog-terminal.js";
 import { collectTranscriptText, type ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 import type { ClaudeSessionCatalogHost } from "./session-catalog-types.js";
@@ -61,14 +64,10 @@ function toGenericClaudeItems(item: ClaudeTranscriptItem): SessionCatalogTranscr
         // reasoning or tools, so consumers must not treat it as ordinary prose.
         type: item.truncated ? "other" : (CLAUDE_TRANSCRIPT_TYPES.get(item.type) ?? "other"),
         ...(item.text ? { text: item.text } : {}),
-        ...(item.content !== undefined
-          ? { raw: item.content as SessionCatalogTranscriptItem["raw"] }
-          : {}),
       },
     ];
   }
-  // Native cursors own complete rows. Keep every block, newest first, rather than
-  // letting mixed tools/reasoning inherit the row's user or assistant label.
+  // Mixed tools/reasoning must not inherit the row's user or assistant label.
   return item.content
     .flatMap((block, index): SessionCatalogTranscriptItem[] => {
       if (!isRecord(block)) {
@@ -95,7 +94,6 @@ function toGenericClaudeItems(item: ClaudeTranscriptItem): SessionCatalogTranscr
           ...(item.uuid ? { id: `${item.uuid}:${index}` } : {}),
           type,
           ...(text ? { text } : {}),
-          raw: block as SessionCatalogTranscriptItem["raw"],
         },
       ];
     })
@@ -188,16 +186,55 @@ export function createClaudeSessionCatalogRuntime(
       return result.hosts.map(mapHost);
     },
     read: async (request) => {
-      const { agentId: _agentId, allowProcessHomeFallback, ...catalogRequest } = request;
+      const { threadId, limit, cursor } = readTranscriptParams({
+        threadId: request.threadId,
+        limit: request.limit,
+        cursor: request.cursor,
+      });
+      const blockCursor = /^block:(\d+):(.+)$/u.exec(cursor ?? "");
+      const skip = Number(blockCursor?.[1] ?? 0);
+      if (!Number.isSafeInteger(skip) || (cursor?.startsWith("block:") && !blockCursor)) {
+        throw new ClaudeCatalogParamsError("transcript cursor is invalid");
+      }
       const page = await readClaudeSessionTranscript({
         runtime: api.runtime,
-        hostId: catalogRequest.hostId,
-        threadId: catalogRequest.threadId,
-        cursor: catalogRequest.cursor,
-        limit: catalogRequest.limit ?? DEFAULT_TRANSCRIPT_LIMIT,
-        allowProcessHomeFallback,
+        hostId: request.hostId,
+        threadId,
+        cursor: blockCursor?.[2] ?? cursor,
+        limit,
+        allowProcessHomeFallback: request.allowProcessHomeFallback,
       });
-      return { ...page, items: page.items.flatMap(toGenericClaudeItems) };
+      if (skip && !page.items.length) {
+        throw new ClaudeCatalogParamsError("transcript cursor is invalid");
+      }
+      const projected = page.items.flatMap((row, index) => {
+        const blocks = toGenericClaudeItems(row);
+        const offset = index === 0 ? skip : 0;
+        if (offset && offset >= blocks.length) {
+          throw new ClaudeCatalogParamsError("transcript cursor is invalid");
+        }
+        return blocks.slice(offset).map((item, index) => ({ item, row, skip: offset + index }));
+      });
+      const { items } = sessionCatalogPaging.boundTranscriptPage(
+        projected.map(({ item }) => item).toReversed(),
+        limit,
+        0,
+      );
+      for (const [index, item] of items.entries()) {
+        if (item.text !== projected[index]?.item.text && projected[index]?.item.text) {
+          item.truncated = true;
+        }
+      }
+      const resume = projected[items.length];
+      if (resume && !isExactClaudeSessionCursor(resume.row.resumeCursor)) {
+        throw new Error("Update the Claude session node to page mixed transcript blocks");
+      }
+      // Native byte-end anchors keep partial rows stable across appends and
+      // changed page sizes, including pages cut by the shared byte budget.
+      const nextCursor = resume
+        ? `block:${resume.skip}:${resume.row.resumeCursor}`
+        : page.nextCursor;
+      return { ...page, items, nextCursor };
     },
     continueSession: async (request) => {
       assertClaudeLocalAccess(request.hostId, request.allowProcessHomeFallback);

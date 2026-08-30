@@ -1,8 +1,5 @@
 import { createHash } from "node:crypto";
-import type {
-  SessionCatalogProvider,
-  SessionCatalogTranscriptItem,
-} from "openclaw/plugin-sdk/session-catalog";
+import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { isControlUiCatalogShareId } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BeamStore } from "./store.js";
@@ -25,18 +22,6 @@ function cursorOffset(value: string | undefined): number {
 
 function searchableText(session: BeamStoredSession): string {
   return `${session.title}\n${session.source}`.toLowerCase();
-}
-
-function transcriptItems(session: BeamStoredSession): SessionCatalogTranscriptItem[] {
-  return session.items.map((item, index) => ({
-    id: `${session.beamId}:${index}`,
-    type: item.type,
-    text: item.text,
-    timestamp: session.updatedAt,
-    ...(item.type === "userMessage" && session.uploaderProfileId
-      ? { sender: { identity: { type: "profile" as const, id: session.uploaderProfileId } } }
-      : {}),
-  }));
 }
 
 type TranscriptCursor = { revision: string; end: number };
@@ -66,24 +51,6 @@ function decodeTranscriptCursor(value: string): TranscriptCursor {
     // Reject malformed cursors below.
   }
   throw new Error("invalid Beam transcript cursor");
-}
-
-function transcriptPage(
-  items: SessionCatalogTranscriptItem[],
-  limit: number,
-  revision: string,
-  cursor?: TranscriptCursor,
-): { items: SessionCatalogTranscriptItem[]; nextCursor?: string } {
-  if (cursor && cursor.revision !== revision) {
-    throw new Error("stale Beam transcript cursor");
-  }
-  const end = Math.min(items.length, Math.max(0, cursor?.end ?? items.length));
-  const start = Math.max(0, end - limit);
-  return {
-    // Uploads are chronological; catalog pages expose newest items first.
-    items: items.slice(start, end).toReversed(),
-    ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
-  };
 }
 
 export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvider {
@@ -143,17 +110,35 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
       if (!session) {
         throw new Error(`unknown Beam session: ${params.threadId}`);
       }
-      const page = transcriptPage(
-        transcriptItems(session),
-        boundedLimit(params.limit),
-        transcriptRevision(session),
-        params.cursor === undefined ? undefined : decodeTranscriptCursor(params.cursor),
-      );
+      const cursor =
+        params.cursor === undefined ? undefined : decodeTranscriptCursor(params.cursor);
+      const revision = transcriptRevision(session);
+      if (cursor && cursor.revision !== revision) {
+        throw new Error("stale Beam transcript cursor");
+      }
+      const end = Math.min(session.items.length, cursor?.end ?? session.items.length);
+      const start = Math.max(0, end - boundedLimit(params.limit));
       return {
         hostId: BEAM_HOST_ID,
         label: session.title,
         threadId: session.beamId,
-        ...page,
+        // Project only the selected page; keep chronological source indices in IDs
+        // while exposing newest-first items on the catalog wire.
+        items: session.items
+          .slice(start, end)
+          .map((item, index) => ({
+            id: `${session.beamId}:${start + index}`,
+            type: item.type,
+            text: item.text,
+            timestamp: session.updatedAt,
+            ...(item.type === "userMessage" && session.uploaderProfileId
+              ? {
+                  sender: { identity: { type: "profile" as const, id: session.uploaderProfileId } },
+                }
+              : {}),
+          }))
+          .toReversed(),
+        ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
       };
     },
   };

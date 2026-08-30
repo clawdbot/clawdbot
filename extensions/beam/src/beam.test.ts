@@ -25,6 +25,14 @@ function sampleUpload(overrides: Record<string, unknown> = {}): BeamUploadFixtur
   } as BeamUploadFixture;
 }
 
+function postUpload(endpoint: string, body = sampleUpload()) {
+  return fetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 const writeClient = () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] });
 const rootControlUiBasePath = () => undefined;
 
@@ -155,12 +163,7 @@ describe("Beam receiver", () => {
     const endpoint = await serve(store, {
       resolveClient: () => ({ ...writeClient(), profileId }),
     });
-    const upload = (body = sampleUpload()) =>
-      fetch(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
+    const upload = (body = sampleUpload()) => postUpload(endpoint, body);
     const read = () =>
       createBeamSessionCatalog(store).read({
         hostId: "gateway",
@@ -184,11 +187,7 @@ describe("Beam receiver", () => {
     const store = memoryStore();
     let now = 100;
     const endpoint = await serve(store, { now: () => now });
-    const first = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(sampleUpload()),
-    });
+    const first = await postUpload(endpoint);
     expect(first.status).toBe(200);
     expect(await first.json()).toEqual({
       ok: true,
@@ -201,11 +200,10 @@ describe("Beam receiver", () => {
     });
 
     now = 200;
-    const updated = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(sampleUpload({ completed: true, title: "Renamed upload flow" })),
-    });
+    const updated = await postUpload(
+      endpoint,
+      sampleUpload({ completed: true, title: "Renamed upload flow" }),
+    );
     expect(await updated.json()).toMatchObject({
       beamId: sampleUpload().beamId,
       url: "/beam/renamed-upload-flow-0123456789ab",
@@ -222,11 +220,7 @@ describe("Beam receiver", () => {
     const endpoint = await serve(store, {
       resolveControlUiBasePath: () => "/admin/openclaw/",
     });
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(sampleUpload()),
-    });
+    const response = await postUpload(endpoint);
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
@@ -241,11 +235,7 @@ describe("Beam receiver", () => {
     const endpoint = await serve(store, {
       resolveClient: () => ({ clientIp: "127.0.0.1", scopes: ["operator.read"] }),
     });
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(sampleUpload()),
-    });
+    const response = await postUpload(endpoint);
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ ok: false, error: "operator.write is required" });
