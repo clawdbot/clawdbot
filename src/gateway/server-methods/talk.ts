@@ -363,8 +363,10 @@ function buildTalkCatalog(config: OpenClawConfig) {
           modes: ["transcription"],
           transports: ["gateway-relay"],
           brains: ["none"],
-          ...(provider.models?.length ? { models: [...provider.models] } : {}),
         };
+        if (provider.models?.length) {
+          entry.models = [...provider.models];
+        }
         if (provider.defaultModel) {
           entry.defaultModel = provider.defaultModel;
         }
