@@ -12,18 +12,24 @@ export function createDiagnosticEmbeddedRunIndex<
       return undefined;
     }
     activity.activeEmbeddedRuns.delete(workKey);
-    const runIdStillActive = Array.from(activity.activeEmbeddedRuns.values()).some(
-      (candidate) => candidate.runId === embeddedRun.runId,
-    );
-    if (!runIdStillActive && runIdIndex.get(embeddedRun.runId) === activity) {
+    for (const candidate of activity.activeEmbeddedRuns.values()) {
+      if (candidate.runId === embeddedRun.runId) {
+        return embeddedRun;
+      }
+    }
+    if (runIdIndex.get(embeddedRun.runId) === activity) {
       runIdIndex.delete(embeddedRun.runId);
     }
     return embeddedRun;
   };
   const clear = (activity: TActivity): void => {
-    for (const workKey of Array.from(activity.activeEmbeddedRuns.keys())) {
-      remove(activity, workKey);
+    // Every local owner is leaving; only retain indexes now owned by another activity.
+    for (const { runId } of activity.activeEmbeddedRuns.values()) {
+      if (runIdIndex.get(runId) === activity) {
+        runIdIndex.delete(runId);
+      }
     }
+    activity.activeEmbeddedRuns.clear();
   };
   return { clear, remove };
 }

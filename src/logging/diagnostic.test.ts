@@ -40,7 +40,6 @@ import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
   peekDiagnosticSessionState,
-  pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
 import {
@@ -214,17 +213,12 @@ describe("diagnostic session state pruning", () => {
   it("caps tracked session states to a bounded max", () => {
     const now = Date.now();
     for (let i = 0; i < 2001; i += 1) {
-      diagnosticSessionStates.set(`session-${i}`, {
-        sessionId: `session-${i}`,
-        lastActivity: now + i,
-        generation: 0,
-        state: "idle",
-        queueDepth: 1,
-      });
+      vi.setSystemTime(now + i);
+      getDiagnosticSessionState({ sessionKey: `session-${i}` }).queueDepth = 1;
     }
-    pruneDiagnosticSessionStates(now + 2002, true);
 
     expect(diagnosticSessionStates.size).toBe(2000);
+    expect(diagnosticSessionStates.has("session-0")).toBe(false);
   });
 
   it("reuses keyed session state when later looked up by sessionId", () => {
