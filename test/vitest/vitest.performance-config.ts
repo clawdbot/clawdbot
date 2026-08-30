@@ -1,4 +1,5 @@
 // Vitest performance config helper normalizes performance test environment settings.
+import path from "node:path";
 type EnvMap = Record<string, string | undefined>;
 
 const isEnabled = (value: string | undefined): boolean => {
@@ -28,9 +29,16 @@ type VitestExperimentalConfig = {
   };
 };
 
+// Linked worktrees may share node_modules; invalidating that cache would remove
+// another checkout's transforms. Keep writable cache ownership in this checkout.
+export function resolveVitestFsModuleCacheRoot(cwd = process.cwd()): string {
+  return path.join(cwd, ".cache", "vitest");
+}
+
 export function loadVitestExperimentalConfig(
   env: EnvMap = process.env,
   platform: NodeJS.Platform = process.platform,
+  cwd = process.cwd(),
 ): VitestExperimentalConfig {
   const experimental: {
     fsModuleCache?: true;
@@ -46,8 +54,12 @@ export function loadVitestExperimentalConfig(
   if (windowsEnv && isEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
     experimental.fsModuleCache = true;
   }
-  if (experimental.fsModuleCache && env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim()) {
-    experimental.fsModuleCachePath = env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH.trim();
+  if (experimental.fsModuleCache) {
+    // The default leaf cannot contain the scheduler's concurrent cache leaves:
+    // Vitest recursively removes its selected directory when lockfiles change.
+    experimental.fsModuleCachePath =
+      env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim() ||
+      path.join(resolveVitestFsModuleCacheRoot(cwd), "default");
   }
   if (isEnabled(env.OPENCLAW_VITEST_IMPORT_DURATIONS)) {
     experimental.importDurations = { print: true };

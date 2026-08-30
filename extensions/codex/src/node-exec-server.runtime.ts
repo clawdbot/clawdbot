@@ -209,7 +209,7 @@ export async function runCodexNodeExecServer(params: {
         }
         // Awaited setup is complete; policy and invocation closure win at spawn.
         params.assertExecAuthorized();
-        const child = createStdioTransport(
+        const child = await createStdioTransport(
           {
             transport: "stdio",
             command: native,
@@ -225,6 +225,12 @@ export async function runCodexNodeExecServer(params: {
             clearEnv: ["NODE_OPTIONS"],
           },
           baseEnv,
+          () => {
+            if (io.signal.aborted) {
+              throw nodeExecServerAbortError(io.signal);
+            }
+            params.assertExecAuthorized();
+          },
         );
         child.stdin.on("error", (error) => {
           rejectDisconnected(error);

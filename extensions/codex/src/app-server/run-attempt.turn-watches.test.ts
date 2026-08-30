@@ -32,6 +32,7 @@ import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   createTestParams,
   createResumeHarness,
@@ -3606,6 +3607,23 @@ describe("runCodexAppServerAttempt turn watches", () => {
         transportError:
           'codex app-server exited: code=137 signal=SIGKILL stderr="worker exhausted"',
       },
+    });
+  });
+
+  it("settles a client-close route after the host trajectory capability closes", async () => {
+    const harness = createStartedThreadHarness();
+    const params = Object.assign(createTestParams(), {
+      trajectoryRecorder: { recordEvent: vi.fn(), flush: vi.fn() },
+    });
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
+
+    await harness.waitForMethod("turn/start");
+    closeHost();
+    harness.close();
+
+    await expect(run).resolves.toMatchObject({
+      codexAppServerFailure: { kind: "client_closed_before_turn_completed" },
     });
   });
 

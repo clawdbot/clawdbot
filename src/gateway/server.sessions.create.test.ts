@@ -1794,6 +1794,11 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       ownerId: key,
     });
 
+    const retainedDraft = path.join(worktree!.path, "session-draft.txt");
+    await fs.writeFile(retainedDraft, "uncommitted work survives reuse\n");
+    const originalHead = (await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"]))
+      .stdout;
+
     const recreated = await directSessionReq<{
       entry: { spawnedCwd?: string };
       worktree: { id: string; path: string; branch: string };
@@ -1805,7 +1810,12 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     expect(recreated.ok).toBe(true);
     expect(recreated.payload?.worktree).toEqual(worktree);
     expect(recreated.payload?.entry.spawnedCwd).toBe(worktree?.path);
-    expect(createSpy).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(retainedDraft, "utf8")).resolves.toBe(
+      "uncommitted work survives reuse\n",
+    );
+    expect((await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"])).stdout).toBe(
+      originalHead,
+    );
     expect(
       listRegistryWorktrees(process.env).filter(
         (record) =>

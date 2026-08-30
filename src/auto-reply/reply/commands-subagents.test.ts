@@ -1,6 +1,6 @@
 /**
  * Tests subagent command output: status lines, info, log routing, shared text
- * extraction, and focus resolution. Grouped in one file because each command
+ * extraction. Grouped in one file because each command
  * test file pays the full auto-reply module graph on import; keep sibling
  * subagent command assertions here instead of new per-action files.
  */
@@ -27,7 +27,6 @@ import { extractSubagentMessageText } from "./commands-subagents-text.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
 import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
 import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
-import { resolveFocusTargetSession } from "./commands-subagents/shared.js";
 import {
   baseCommandTestConfig,
   configureInMemoryTaskRegistryStoreForTests,
@@ -168,7 +167,6 @@ describe("subagents info", () => {
         cfg: params.cfg,
         sessionKey: "agent:main:main",
       },
-      handledPrefix: "/subagents",
       requesterKey: "agent:main:main",
       runs: params.runs,
       restTokens: params.restTokens,
@@ -232,6 +230,53 @@ describe("subagents info", () => {
     expect(text).toContain("Status: done");
     expect(text).toContain("TaskStatus: succeeded");
     expect(text).toContain("Task summary: Completed the requested task");
+  });
+
+  it("uses displayed indices for info and log when stale unended runs exist", async () => {
+    const now = Date.now();
+    const runs: SubagentRunRecord[] = [
+      {
+        runId: "numbering-stale",
+        childSessionKey: "agent:main:subagent:numbering-stale",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "stale worker",
+        cleanup: "keep",
+        createdAt: now - 3 * 60 * 60_000,
+        execution: { status: "running", startedAt: now - 3 * 60 * 60_000 },
+      },
+      {
+        runId: "numbering-recent",
+        childSessionKey: "agent:main:subagent:numbering-recent",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "recent worker",
+        cleanup: "keep",
+        createdAt: now - 120_000,
+        execution: {
+          status: "terminal",
+          startedAt: now - 120_000,
+          endedAt: now - 60_000,
+          outcome: { status: "ok" },
+        },
+      },
+    ];
+    for (const run of runs) {
+      addSubagentRunForTests(run);
+    }
+    const context = buildInfoContext({ cfg: buildCommandTestConfig(), runs, restTokens: ["1"] });
+    const listing = requireReplyText(handleSubagentsListAction(context).reply);
+    expect(listing).toContain("1. recent worker");
+    expect(listing).not.toContain("stale worker");
+    expect(requireReplyText(handleSubagentsInfoAction(context).reply)).toContain(
+      "Run: numbering-recent",
+    );
+    callGatewayMock.mockResolvedValue({ messages: [] });
+    await handleSubagentsLogAction(context);
+    expect(callGatewayMock).toHaveBeenLastCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:subagent:numbering-recent", limit: 20 },
+    });
   });
 
   it.each([
@@ -433,7 +478,6 @@ describe("subagents info", () => {
         cfg,
         sessionKey: "agent:main:slash-session",
       },
-      handledPrefix: "/subagents",
       requesterKey: "agent:main:target",
       runs: [run],
       restTokens: ["1"],
@@ -469,7 +513,6 @@ describe("subagents log", () => {
         cfg: {} as OpenClawConfig,
         sessionKey: "agent:main:main",
       },
-      handledPrefix: "/subagents",
       requesterKey: "agent:main:main",
       runs,
       restTokens,
@@ -612,32 +655,5 @@ describe("extractSubagentMessageText", () => {
       const result = extractSubagentMessageText(testCase.message);
       expect(result?.text).toBe(testCase.expectedText);
     }
-  });
-});
-
-describe("resolveFocusTargetSession", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-  });
-
-  it("restricts gateway fallback resolution to a subagent requester's children", async () => {
-    callGatewayMock.mockResolvedValue({
-      key: "agent:main:subagent:child",
-    });
-
-    const result = await resolveFocusTargetSession({
-      runs: [],
-      token: "child",
-      requesterKey: "agent:main:subagent:parent",
-    });
-
-    expect(result?.targetSessionKey).toBe("agent:main:subagent:child");
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "sessions.resolve",
-      params: {
-        key: "child",
-        spawnedBy: "agent:main:subagent:parent",
-      },
-    });
   });
 });

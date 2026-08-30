@@ -66,6 +66,7 @@ export type ChatPageHost = ChatHost &
     basePath: string;
     resourceBasePath: string;
     chatAvatarUrl: string | null;
+    senderAgentAvatars?: ReadonlyMap<string, string | null>;
     chatAvatarSource: string | null;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
     chatAvatarReason: string | null;
@@ -73,6 +74,7 @@ export type ChatPageHost = ChatHost &
     chatModelPickerOpenSessionKey?: string | null;
     chatModelCatalog: ModelCatalogEntry[];
     chatModelCatalogError: string | null;
+    modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;
     modelAuthStatusError: string | null;
     sessionsResult: SessionsListResult | null;

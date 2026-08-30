@@ -104,6 +104,9 @@ vi.mock("../agents/agent-command.js", () => ({
 vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
   queueEmbeddedAgentMessageWithOutcomeAsync: (...args: unknown[]) =>
     queueEmbeddedAgentMessageWithOutcomeAsyncMock(...args),
+}));
+
+vi.mock("../agents/embedded-agent-runner/active-run-projections.js", () => ({
   resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
     resolveActiveEmbeddedRunSessionIdMock(...args),
 }));

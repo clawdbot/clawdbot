@@ -365,36 +365,12 @@ describe("session-entry compaction budgeting", () => {
     expect(preparation.value).toMatchObject({
       firstKeptEntryId: "entry-3",
       isSplitTurn: true,
-      splitTurnCompleted: true,
       tokensBefore: 10,
       turnPrefixMessages: [{ role: "user" }, { role: "assistant" }],
     });
+    expect(preparation.value).not.toHaveProperty("splitTurnCompleted");
     expect(JSON.stringify(preparation.value)).not.toContain("private output");
     expect(JSON.stringify(entries)).toContain("private output");
-  });
-
-  it("binds split-turn completion to the cut turn instead of a newer retained turn", () => {
-    const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "boundary request", timestamp: 1 }, 0),
-      createMessageEntry(createAssistant("boundary complete", createUsage(10), 2), 1),
-      createMessageEntry({ role: "user", content: "newer unresolved request", timestamp: 3 }, 2),
-    ];
-
-    const preparation = prepareCompaction(entries, {
-      enabled: true,
-      reserveTokens: 0,
-      keepRecentTokens: 8,
-    });
-
-    expect(preparation.ok).toBe(true);
-    if (!preparation.ok || !preparation.value) {
-      throw new Error("expected the boundary turn to be split");
-    }
-    expect(preparation.value).toMatchObject({
-      firstKeptEntryId: "entry-1",
-      isSplitTurn: true,
-      splitTurnCompleted: true,
-    });
   });
 
   it("applies the shared common-CJK budget heuristic", () => {
@@ -970,21 +946,9 @@ describe("generateSummary thinking options", () => {
 describe("split-turn compaction", () => {
   const operatorFocus = "Preserve API decisions.";
   it.each([
-    {
-      name: "ordinary history",
-      history: true,
-      prefix: false,
-      budgets: [800],
-      focus: operatorFocus,
-    },
-    {
-      name: "history and prefix",
-      history: true,
-      prefix: true,
-      budgets: [800, 500],
-      focus: operatorFocus,
-    },
-    { name: "prefix-only", history: false, prefix: true, budgets: [500], focus: operatorFocus },
+    { name: "ordinary history", history: true, prefix: false, budgets: [800] },
+    { name: "history and prefix", history: true, prefix: true, budgets: [800, 500] },
+    { name: "prefix-only", history: false, prefix: true, budgets: [500] },
     {
       name: "caller-owned instructions",
       history: true,
@@ -994,7 +958,7 @@ describe("split-turn compaction", () => {
     },
   ])(
     "forwards focus and serializes $name summaries",
-    async ({ history, prefix, budgets, focus }) => {
+    async ({ history, prefix, budgets, focus = operatorFocus }) => {
       const model: Model = {
         id: "summary-model",
         name: "Summary Model",
@@ -1009,6 +973,7 @@ describe("split-turn compaction", () => {
       };
       const prompts: string[] = [];
       const outputBudgets: Array<number | undefined> = [];
+      const usageSink = vi.fn();
       let active = 0;
       let maxActive = 0;
       const streamFn = vi.fn<StreamFn>((_model, context, options) => {
@@ -1033,7 +998,7 @@ describe("split-turn compaction", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: createUsage(0),
+            usage: createUsage(outputBudgets.length * 10 + 1),
             stopReason: "stop",
             timestamp: 1,
           };
@@ -1059,12 +1024,16 @@ describe("split-turn compaction", () => {
         undefined,
         undefined,
         streamFn,
+        { completeSimple: vi.fn(), internalUsageSink: usageSink },
       );
 
       expect(result.ok).toBe(true);
       expect(streamFn).toHaveBeenCalledTimes(budgets.length);
       expect(maxActive).toBe(1);
       expect(outputBudgets).toEqual(budgets);
+      expect(usageSink.mock.calls.map(([usage]) => usage.totalTokens)).toEqual(
+        budgets.map((_, index) => (index + 1) * 10 + 1),
+      );
       for (const prompt of prompts) {
         expect(prompt).toContain(focus);
         expect(prompt.indexOf(focus)).toBeGreaterThan(prompt.lastIndexOf("</conversation>"));

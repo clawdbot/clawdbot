@@ -38,7 +38,7 @@ import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./man
 import { safeRealpathSync } from "./path-safety.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { validatePluginSchemaValue } from "./schema-validator.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { buildPluginSnapshotReport } from "./status.js";
 import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
@@ -459,7 +459,8 @@ function resolvePluginConfigEnablement(params: {
   }
   const entry = params.config.plugins?.entries?.[params.pluginId];
   const hasConfig = isRecord(entry) && Object.hasOwn(entry, "config");
-  const result = validateJsonSchemaValue({
+  const result = validatePluginSchemaValue({
+    origin: manifest.origin,
     schema: manifest.configSchema,
     cacheKey: manifest.schemaCacheKey ?? manifest.manifestPath,
     value: hasConfig ? entry.config : {},
@@ -468,7 +469,10 @@ function resolvePluginConfigEnablement(params: {
   if (result.ok) {
     return { mode: "ready" };
   }
-  if (!hasConfig) {
+  // A malformed manifest schema fails validation regardless of what config is supplied,
+  // so it is never "missing" (no config value could satisfy it) even when hasConfig is
+  // false; only a well-formed schema rejecting an absent/empty config counts as missing.
+  if (!hasConfig && !result.schemaError) {
     return { mode: "missing" };
   }
   return { mode: "invalid", error: result.errors[0]?.text ?? "invalid plugin config" };

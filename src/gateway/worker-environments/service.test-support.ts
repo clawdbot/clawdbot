@@ -6,6 +6,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type {
   WorkerDesktopEndpoint,
+  WorkerNodeEnrollment,
   WorkerProvider,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
@@ -56,6 +57,14 @@ export const DESKTOP: WorkerDesktopEndpoint = {
   ],
 };
 export const BUNDLE_HASH = "a".repeat(64);
+export const NODE_BOOTSTRAP: WorkerNodeEnrollment["nodeBootstrap"] = {
+  url: `https://gateway.example.test/__openclaw__/worker-bootstrap/artifacts/${"b".repeat(64)}`,
+  token: "t".repeat(43),
+  sha256: "b".repeat(64),
+  bytes: 1,
+  openclawVersion: "2026.8.1",
+  enabledPluginIds: ["runtime-plugin"],
+};
 export const BUNDLE_ARTIFACT: WorkerInstallationArtifact = {
   install: "bundle",
   bundleHash: BUNDLE_HASH,
@@ -156,6 +165,19 @@ export function getDevelopmentProfile() {
   );
 }
 
+export async function reopenWorkerEnvironmentStore() {
+  await testState.service?.stop();
+  testState.service = undefined;
+  closeOpenClawStateDatabaseForTest();
+  testState.stateDb = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: testState.root },
+  });
+  testState.store = createWorkerEnvironmentStore({
+    database: testState.stateDb,
+    now: () => testState.nowMs,
+  });
+}
+
 export function createService(
   provider: WorkerProvider,
   serviceOptions: Partial<
@@ -165,10 +187,13 @@ export function createService(
       | "bootstrapCallTimeoutMs"
       | "executeInference"
       | "executeSessionTool"
+      | "executeComputer"
       | "providerCallTimeoutMs"
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"
+      | "prepareNodeBootstrap"
       | "prepareNodeEnrollment"
+      | "closeNodeEnrollment"
       | "retireNodeEnrollment"
       | "stopNodeEnrollmentWaits"
       | "tunnelManager"
@@ -211,6 +236,7 @@ export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerP
   return {
     id: "fake",
     supportedExecutionModes: ["remote-exec"],
+    resolveAllocation: async () => ({ leaseId: "lease-1", sharedHost: false }),
     provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
     inspect: async () => ({ status: "active" }),
     destroy: async () => {},

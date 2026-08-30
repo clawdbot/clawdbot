@@ -632,6 +632,8 @@ async function runSummarizationCompletion(params: {
   const response = params.streamFn
     ? await consumeAgentCoreStream(params.streamFn(params.model, context, options))
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
+  // Usage belongs to the completed provider request even when its summary is invalid.
+  params.runtime?.internalUsageSink?.(response.usage);
   if (response.stopReason === "aborted") {
     return err(
       new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
@@ -701,8 +703,6 @@ export interface CompactionPreparation {
   turnPrefixMessages: AgentMessage[];
   /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
-  /** Explicit terminal state of the turn whose prefix was split from its retained suffix. */
-  splitTurnCompleted?: boolean;
   /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Previous compaction summary used for iterative updates. */
@@ -713,24 +713,6 @@ export interface CompactionPreparation {
   fileOps: FileOperations;
   /** Settings used to prepare compaction. */
   settings: CompactionSettings;
-}
-
-function latestUserTurnCompleted(messages: AgentMessage[]): boolean {
-  let sawTurnTail = false;
-  let completed = false;
-  for (const message of messages.toReversed()) {
-    if (message.role === "user") {
-      return completed;
-    }
-    if (!sawTurnTail && (message.role === "assistant" || message.role === "toolResult")) {
-      sawTurnTail = true;
-      completed =
-        message.role === "assistant" &&
-        message.stopReason === "stop" &&
-        message.content.some((block) => block.type === "text" && block.text.trim().length > 0);
-    }
-  }
-  return false;
 }
 
 /** Prepare session entries for compaction, or return undefined when compaction is not applicable. */
@@ -842,23 +824,12 @@ export function prepareCompaction(
     }
   }
   const turnPrefixMessages: AgentMessage[] = [];
-  const retainedTurnSuffixMessages: AgentMessage[] = [];
   if (cutPoint.isSplitTurn) {
     for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
       const entry = effectiveEntries.at(i);
       const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
       if (msg) {
         turnPrefixMessages.push(msg);
-      }
-    }
-    for (let i = cutPoint.firstKeptEntryIndex; i < boundaryEnd; i++) {
-      const entry = effectiveEntries.at(i);
-      if (!entry || (i > cutPoint.firstKeptEntryIndex && isTurnStartEntry(entry))) {
-        break;
-      }
-      const msg = getMessageFromEntryForCompaction(entry);
-      if (msg) {
-        retainedTurnSuffixMessages.push(msg);
       }
     }
   }
@@ -877,14 +848,6 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
-    ...(cutPoint.isSplitTurn
-      ? {
-          splitTurnCompleted: latestUserTurnCompleted([
-            ...turnPrefixMessages,
-            ...retainedTurnSuffixMessages,
-          ]),
-        }
-      : {}),
     tokensBefore,
     previousSummary,
     previousSummaryDetails,
@@ -893,7 +856,7 @@ export function prepareCompaction(
   });
 }
 
-const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
+export const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
 
 Summarize the prefix to provide context for the retained suffix:
 

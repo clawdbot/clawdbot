@@ -350,7 +350,7 @@ export function createExecTool(
       const trustedAsk = defaults?.messageProvider && hostAsk === "off" ? undefined : requestedAsk;
       let ask = maxAsk(hostAsk, trustedAsk ?? hostAsk);
       const bypassApprovals =
-        defaults?.bypassHostApprovalFloors === true ||
+        (defaults?.bypassHostApprovalFloors === true && modePolicy.ask === "off") ||
         (elevatedRequested &&
           elevatedMode === "full" &&
           modePolicyAllowsFullBypass &&
@@ -517,6 +517,7 @@ export function createExecTool(
             defaultTimeoutSec,
             security,
             ask,
+            bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
             autoReview,
             autoReviewer,
             signal,

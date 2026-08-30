@@ -24,7 +24,7 @@ import type {
   PluginHookToolRequesterContext,
 } from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -87,7 +87,11 @@ import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
-import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exec-mode.js";
+import {
+  resolveSessionPermissionCoreToolPolicy,
+  resolveSessionPermissionExecPolicy,
+} from "./session-permission-exec-mode.js";
+import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import {
   createCodingTools,
   createEditTool,
@@ -197,6 +201,7 @@ type OpenClawCodingToolsOptions = {
   /** Opaque host-issued capability for current-turn channel message actions. */
   messageActionTurnCapability?: string;
   sandbox?: SandboxContext | null;
+  stagedMediaPaths?: ReadonlyMap<string, string>;
   sessionKey?: string;
   /**
    * The durable store session key for the live run when it differs from the
@@ -403,7 +408,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   // Prefer the already-resolved sandbox context policy. Recomputing from
   // sessionKey/config can lose the real sandbox agent when callers pass a
   // legacy alias like `main` instead of an agent session key.
-  const sandboxToolPolicy = sandbox?.tools;
   const capabilityProfile =
     options?.conversationCapabilityProfile ??
     resolveConversationCapabilityProfile({
@@ -444,7 +448,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       cwd: options?.cwd,
       spawnWorkspaceDir: options?.spawnWorkspaceDir,
       skillsSnapshot: options?.skillsSnapshot,
-      sandboxToolPolicy,
+      sandboxToolPolicy: sandbox?.tools,
       runtimeToolAllowlist: options?.runtimeToolAllowlist,
       inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
       inputProvenance: options?.inputProvenance,
@@ -583,7 +587,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
-  const effectiveExecPolicy = applyExecPolicyLayer(execConfig, options?.exec);
+  const effectiveExecPolicy = sessionPermissionPolicy
+    ? resolveSessionPermissionExecPolicy(sessionPermissionPolicy, options?.exec)
+    : applyExecPolicyLayer(execConfig, options?.exec);
   // A scheduled cap narrows the rebuilt exec tool to its captured policy.
   // Its approval floor outranks a reused full session; the wrapper below
   // prevents caller arguments from weakening either restriction.
@@ -618,9 +624,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     execDefaults: {
       ...execDefaults,
       bypassHostApprovalFloors:
-        scheduledExecTarget?.ask !== "always" && sessionCoreToolPolicy?.bypassHostApprovalFloors,
+        scheduledExecTarget?.ask !== "always" &&
+        sessionCoreToolPolicy?.bypassHostApprovalFloors &&
+        effectiveExecPolicy.security === "full",
       host: scheduledExecTarget?.host ?? options?.exec?.host ?? execConfig.host,
-      mode: effectiveExecPolicy.mode,
+      mode: scheduledExecTarget?.ask ? undefined : effectiveExecPolicy.mode,
       security: effectiveExecPolicy.security,
       ask: scheduledExecTarget?.ask ?? effectiveExecPolicy.ask,
       config: execRuntimeConfig,
@@ -842,6 +850,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sandboxRoot,
             sandboxContainerWorkdir: sandbox?.containerWorkdir,
             sandboxFsBridge,
+            stagedMediaPaths: options?.stagedMediaPaths,
             sandboxWorkspaceMediaReadAllowed,
             fsPolicy,
             workspaceDir: workspaceRoot,
@@ -881,6 +890,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             hasRepliedRef: options?.hasRepliedRef,
             modelHasVision: options?.modelHasVision,
             computerContextEpoch: options?.computerContextEpoch,
+            computerTransport: resolveSessionPlacementComputer(options?.operationalRunInstance),
             registerRunCleanup: options?.registerRunCleanup,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,

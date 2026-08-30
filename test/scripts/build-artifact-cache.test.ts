@@ -91,6 +91,32 @@ function fixture(noEmit = false, outputRoot = "dist") {
 }
 
 describe("native owner content records", () => {
+  it("traverses deep namespace candidates without resolving ordinary ancestors again", () => {
+    const f = fixture(true);
+    const depth = 32;
+    const nested = `namespace/${"nested/".repeat(depth)}`;
+    f.write(`${nested}candidate.ts`, "export {};");
+    const originalRealpath = fs.realpathSync;
+    let resolutions = 0;
+    fs.realpathSync = new Proxy(originalRealpath, {
+      apply(target, receiver, args) {
+        resolutions += 1;
+        return Reflect.apply(target, receiver, args);
+      },
+    });
+    let first: string;
+    try {
+      const snapshot = new BoundaryInputSnapshot(f.root);
+      first = snapshot.signature(f.config, f.args, []);
+      expect(snapshot.signature(f.config, f.args, [])).toBe(first);
+    } finally {
+      fs.realpathSync = originalRealpath;
+    }
+    expect(resolutions).toBeLessThan(depth);
+    f.write(`${nested}added.ts`, "export {};");
+    expect(new BoundaryInputSnapshot(f.root).signature(f.config, f.args, [])).not.toBe(first);
+  });
+
   it("seals a cold producer reached through its own workspace package alias", () => {
     const f = fixture(false, "packages/sdk/dist");
     f.write("packages/sdk/package.json", '{"name":"fixture-sdk","type":"module"}');
@@ -251,6 +277,28 @@ describe("native owner content records", () => {
     expect(matches()).toBe(true);
     fs.unlinkSync(link);
     fs.symlinkSync(`${target}-other`, link, kind === "directory" ? "dir" : "file");
+    expect(matches()).toBe(false);
+  });
+
+  it("ignores tool scratch churn under installed roots", () => {
+    const f = fixture(true);
+    fs.mkdirSync(path.join(f.root, "node_modules"));
+    const run = f.prepare();
+    // Sibling config loads mint these between the before and seal walks.
+    f.write("node_modules/.vite-temp/vitest.config.ts.timestamp-1-a.mjs", "export default {};");
+    const record = f.seal(run);
+    const matches = () =>
+      new BoundaryInputSnapshot(f.root).matches(
+        record,
+        f.config,
+        f.args,
+        Object.keys(record.outputs),
+      );
+    expect(matches()).toBe(true);
+    fs.rmSync(path.join(f.root, "node_modules/.vite-temp"), { recursive: true });
+    f.write("node_modules/.cache/jiti/config.deadbeef.mjs", "export default {};");
+    expect(matches()).toBe(true);
+    f.write("node_modules/.pnpm/pkg@1.0.0/node_modules/pkg/index.js", "export const value = 1;");
     expect(matches()).toBe(false);
   });
 

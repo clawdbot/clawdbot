@@ -1,5 +1,5 @@
 // Msteams tests cover thread parent context plugin behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GraphThreadMessage } from "./graph-thread.js";
 
 let fetchParentMessageCached: typeof import("./thread-parent-context.js").fetchParentMessageCached;
@@ -8,7 +8,7 @@ let markParentContextInjected: typeof import("./thread-parent-context.js").markP
 let shouldInjectParentContext: typeof import("./thread-parent-context.js").shouldInjectParentContext;
 let summarizeParentMessage: typeof import("./thread-parent-context.js").summarizeParentMessage;
 
-beforeEach(async () => {
+async function loadParentContextModule() {
   vi.resetModules();
   ({
     fetchParentMessageCached,
@@ -17,7 +17,10 @@ beforeEach(async () => {
     shouldInjectParentContext,
     summarizeParentMessage,
   } = await import("./thread-parent-context.js"));
-});
+}
+
+// Formatting is stateless; only the cache and dedupe suites need per-case imports.
+beforeAll(loadParentContextModule);
 
 // Matches an unpaired UTF-16 surrogate (lone high or lone low), without relying
 // on the ES2024 String.prototype.isWellFormed() runtime API.
@@ -120,6 +123,8 @@ describe("formatParentContextEvent", () => {
 });
 
 describe("fetchParentMessageCached", () => {
+  beforeEach(loadParentContextModule);
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -238,6 +243,8 @@ describe("fetchParentMessageCached", () => {
 });
 
 describe("shouldInjectParentContext / markParentContextInjected", () => {
+  beforeEach(loadParentContextModule);
+
   it("returns true for first observation", () => {
     expect(shouldInjectParentContext("session-1", "parent-1")).toBe(true);
   });

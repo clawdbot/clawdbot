@@ -19,6 +19,7 @@ type SessionEntryMaintenanceCounts = {
   capped: number;
 };
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
+  archivedWorktrees?: Array<{ entry: SessionEntry; sessionKey: string; storePath: string }>;
   entryRemovals: SessionEntryRemovalPlan[];
   stateDeletePlans: SessionStateDeletePlan[];
 };

@@ -5368,6 +5368,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let threadid: String
     public let sourcehomeid: String?
     public let name: String?
+    public let color: String?
     public let cwd: String?
     public let status: String
     public let createdat: Double?
@@ -5390,6 +5391,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         threadid: String,
         sourcehomeid: String? = nil,
         name: String? = nil,
+        color: String? = nil,
         cwd: String? = nil,
         status: String,
         createdat: Double? = nil,
@@ -5411,6 +5413,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.threadid = threadid
         self.sourcehomeid = sourcehomeid
         self.name = name
+        self.color = color
         self.cwd = cwd
         self.status = status
         self.createdat = createdat
@@ -5434,6 +5437,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case threadid = "threadId"
         case sourcehomeid = "sourceHomeId"
         case name
+        case color
         case cwd
         case status
         case createdat = "createdAt"
@@ -5500,6 +5504,7 @@ public struct SessionCatalog: Codable, Sendable {
     public let id: String
     public let label: String
     public let capabilities: SessionCatalogCapabilities
+    public let shareroute: [String: AnyCodable]?
     public let hosts: [SessionCatalogHost]
     public let error: [String: AnyCodable]?
 
@@ -5507,14 +5512,25 @@ public struct SessionCatalog: Codable, Sendable {
         id: String,
         label: String,
         capabilities: SessionCatalogCapabilities,
+        shareroute: [String: AnyCodable]? = nil,
         hosts: [SessionCatalogHost],
         error: [String: AnyCodable]? = nil)
     {
         self.id = id
         self.label = label
         self.capabilities = capabilities
+        self.shareroute = shareroute
         self.hosts = hosts
         self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case capabilities
+        case shareroute = "shareRoute"
+        case hosts
+        case error
     }
 }
 
@@ -5524,6 +5540,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
     public let text: String?
     public let timestamp: String?
     public let model: String?
+    public let sender: SessionParticipant?
     public let truncated: Bool?
     public let raw: AnyCodable?
 
@@ -5533,6 +5550,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
         text: String? = nil,
         timestamp: String? = nil,
         model: String? = nil,
+        sender: SessionParticipant? = nil,
         truncated: Bool? = nil,
         raw: AnyCodable? = nil)
     {
@@ -5541,6 +5559,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
         self.text = text
         self.timestamp = timestamp
         self.model = model
+        self.sender = sender
         self.truncated = truncated
         self.raw = raw
     }
@@ -6330,6 +6349,7 @@ public struct SessionRow: Codable, Sendable {
     public let kind: AnyCodable
     public let label: String?
     public let icon: String?
+    public let color: String?
     public let channelavatarurl: String?
     public let boardface: AnyCodable?
     public let displayname: String?
@@ -6403,6 +6423,7 @@ public struct SessionRow: Codable, Sendable {
         kind: AnyCodable,
         label: String? = nil,
         icon: String? = nil,
+        color: String? = nil,
         channelavatarurl: String? = nil,
         boardface: AnyCodable? = nil,
         displayname: String? = nil,
@@ -6475,6 +6496,7 @@ public struct SessionRow: Codable, Sendable {
         self.kind = kind
         self.label = label
         self.icon = icon
+        self.color = color
         self.channelavatarurl = channelavatarurl
         self.boardface = boardface
         self.displayname = displayname
@@ -6549,6 +6571,7 @@ public struct SessionRow: Codable, Sendable {
         case kind
         case label
         case icon
+        case color
         case channelavatarurl = "channelAvatarUrl"
         case boardface = "boardFace"
         case displayname = "displayName"
@@ -9762,6 +9785,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let expectedmarkedunreadat: AnyCodable?
     public let label: AnyCodable?
     public let icon: AnyCodable?
+    public let color: AnyCodable?
     public let category: AnyCodable?
     public let boardface: AnyCodable?
     public let statusnote: AnyCodable?
@@ -9800,6 +9824,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         expectedmarkedunreadat: AnyCodable? = nil,
         label: AnyCodable? = nil,
         icon: AnyCodable? = nil,
+        color: AnyCodable? = nil,
         category: AnyCodable? = nil,
         boardface: AnyCodable? = nil,
         statusnote: AnyCodable? = nil,
@@ -9837,6 +9862,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.expectedmarkedunreadat = expectedmarkedunreadat
         self.label = label
         self.icon = icon
+        self.color = color
         self.category = category
         self.boardface = boardface
         self.statusnote = statusnote
@@ -9876,6 +9902,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case expectedmarkedunreadat = "expectedMarkedUnreadAt"
         case label
         case icon
+        case color
         case category
         case boardface = "boardFace"
         case statusnote = "statusNote"
@@ -9911,6 +9938,7 @@ public struct SessionsPatchParams: Codable, Sendable {
 public struct SessionsPatchMutation: Codable, Sendable {
     public let label: AnyCodable?
     public let icon: AnyCodable?
+    public let color: AnyCodable?
     public let category: AnyCodable?
     public let boardface: AnyCodable?
     public let statusnote: AnyCodable?
@@ -9944,6 +9972,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public init(
         label: AnyCodable? = nil,
         icon: AnyCodable? = nil,
+        color: AnyCodable? = nil,
         category: AnyCodable? = nil,
         boardface: AnyCodable? = nil,
         statusnote: AnyCodable? = nil,
@@ -9976,6 +10005,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     {
         self.label = label
         self.icon = icon
+        self.color = color
         self.category = category
         self.boardface = boardface
         self.statusnote = statusnote
@@ -10010,6 +10040,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case label
         case icon
+        case color
         case category
         case boardface = "boardFace"
         case statusnote = "statusNote"
@@ -13965,6 +13996,7 @@ public struct AgentSummary: Codable, Sendable {
     public let thinkinglevels: [[String: AnyCodable]]?
     public let thinkingoptions: [String]?
     public let thinkingdefault: String?
+    public let defaultpermissionmode: SessionPermissionMode?
 
     public init(
         id: String,
@@ -13980,7 +14012,8 @@ public struct AgentSummary: Codable, Sendable {
         agentruntime: [String: AnyCodable]? = nil,
         thinkinglevels: [[String: AnyCodable]]? = nil,
         thinkingoptions: [String]? = nil,
-        thinkingdefault: String? = nil)
+        thinkingdefault: String? = nil,
+        defaultpermissionmode: SessionPermissionMode? = nil)
     {
         self.id = id
         self.kind = kind
@@ -13996,6 +14029,7 @@ public struct AgentSummary: Codable, Sendable {
         self.thinkinglevels = thinkinglevels
         self.thinkingoptions = thinkingoptions
         self.thinkingdefault = thinkingdefault
+        self.defaultpermissionmode = defaultpermissionmode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -14013,6 +14047,7 @@ public struct AgentSummary: Codable, Sendable {
         case thinkinglevels = "thinkingLevels"
         case thinkingoptions = "thinkingOptions"
         case thinkingdefault = "thinkingDefault"
+        case defaultpermissionmode = "defaultPermissionMode"
     }
 }
 
@@ -17335,6 +17370,7 @@ public struct LogsTailResult: Codable, Sendable {
     public let lines: [String]
     public let truncated: Bool?
     public let reset: Bool?
+    public let skippedbytes: Int?
 
     public init(
         file: String,
@@ -17342,7 +17378,8 @@ public struct LogsTailResult: Codable, Sendable {
         size: Int,
         lines: [String],
         truncated: Bool? = nil,
-        reset: Bool? = nil)
+        reset: Bool? = nil,
+        skippedbytes: Int? = nil)
     {
         self.file = file
         self.cursor = cursor
@@ -17350,6 +17387,17 @@ public struct LogsTailResult: Codable, Sendable {
         self.lines = lines
         self.truncated = truncated
         self.reset = reset
+        self.skippedbytes = skippedbytes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case file
+        case cursor
+        case size
+        case lines
+        case truncated
+        case reset
+        case skippedbytes = "skippedBytes"
     }
 }
 
@@ -20757,6 +20805,7 @@ public struct ChatHistoryParams: Codable, Sendable {
     public let cursor: String?
     public let limit: Int?
     public let offset: Int?
+    public let pendingbefore: Int?
     public let messageid: String?
     public let sessionid: String?
     public let maxchars: Int?
@@ -20767,6 +20816,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         cursor: String? = nil,
         limit: Int? = nil,
         offset: Int? = nil,
+        pendingbefore: Int? = nil,
         messageid: String? = nil,
         sessionid: String? = nil,
         maxchars: Int? = nil)
@@ -20776,6 +20826,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         self.cursor = cursor
         self.limit = limit
         self.offset = offset
+        self.pendingbefore = pendingbefore
         self.messageid = messageid
         self.sessionid = sessionid
         self.maxchars = maxchars
@@ -20787,6 +20838,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         case cursor
         case limit
         case offset
+        case pendingbefore = "pendingBefore"
         case messageid = "messageId"
         case sessionid = "sessionId"
         case maxchars = "maxChars"
@@ -20801,6 +20853,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
     public let agentslist: AnyCodable?
     public let inflightrun: AnyCodable?
     public let metadata: AnyCodable?
+    public let pendinginputs: [String: AnyCodable]?
 
     public init(
         kind: String,
@@ -20809,7 +20862,8 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         sessioninfo: AnyCodable,
         agentslist: AnyCodable? = nil,
         inflightrun: AnyCodable? = nil,
-        metadata: AnyCodable? = nil)
+        metadata: AnyCodable? = nil,
+        pendinginputs: [String: AnyCodable]? = nil)
     {
         self.kind = kind
         self.messages = messages
@@ -20818,6 +20872,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         self.agentslist = agentslist
         self.inflightrun = inflightrun
         self.metadata = metadata
+        self.pendinginputs = pendinginputs
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -20828,6 +20883,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         case agentslist = "agentsList"
         case inflightrun = "inFlightRun"
         case metadata
+        case pendinginputs = "pendingInputs"
     }
 }
 

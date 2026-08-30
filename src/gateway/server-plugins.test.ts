@@ -98,6 +98,7 @@ vi.mock("./server-methods.js", () => ({
 
 vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
   dispatchReplyFromConfig,
+  dispatchLowLevelChannelReplyFromConfig: dispatchReplyFromConfig,
 }));
 
 vi.mock("./agent-turn/internal-facade.js", () => ({

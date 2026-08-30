@@ -89,7 +89,9 @@ suite.define(() => {
         await selectedModel.getByText("LM Studio", { exact: true }).waitFor();
         await selectedModel.getByRole("button", { name: "Check model" }).click();
         await selectedModel.getByText("qwen3-8b-instruct at http://localhost:1234/v1").waitFor();
-        await selectedModel.getByText("LM Studio isn’t responding.").waitFor();
+        await selectedModel
+          .getByText("connect ECONNREFUSED 127.0.0.1:1234", { exact: false })
+          .waitFor();
         await selectedModel.getByRole("button", { name: "Try again" }).waitFor();
         await expect.poll(() => selectedModel.getByText("Change connection").count()).toBe(0);
         await expect

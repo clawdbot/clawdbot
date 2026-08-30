@@ -35,6 +35,7 @@ type GatewayRequestContextParams = {
     "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  isConfigReloadSettled: GatewayRequestContext["isConfigReloadSettled"];
   getGatewayMethodRegistry: NonNullable<GatewayRequestContext["getGatewayMethodRegistry"]>;
   gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
@@ -48,6 +49,7 @@ type GatewayRequestContextParams = {
   questionManager?: GatewayRequestContext["questionManager"];
   cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
+  approvalWebPushDelivery?: GatewayRequestContext["approvalWebPushDelivery"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
   systemAgentApprovalManager?: GatewayRequestContext["systemAgentApprovalManager"];
@@ -182,6 +184,7 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    isConfigReloadSettled: params.isConfigReloadSettled,
     getGatewayMethodRegistry: params.getGatewayMethodRegistry,
     gatewayTlsFingerprint: params.gatewayTlsFingerprint,
     controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
@@ -203,6 +206,7 @@ export function createGatewayRequestContext(
       ? (runId) => params.cancelRunBoundApprovals!(runId, context)
       : undefined,
     forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
+    approvalWebPushDelivery: params.approvalWebPushDelivery,
     pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
     pluginApprovalManager: params.pluginApprovalManager,
     systemAgentApprovalManager: params.systemAgentApprovalManager,

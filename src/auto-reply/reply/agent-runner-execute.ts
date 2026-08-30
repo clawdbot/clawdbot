@@ -16,7 +16,9 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
+import { markPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
+import { accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -93,6 +95,20 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   turnAdoptionLifecycle: NonNullable<RunReplyAgentParams["opts"]>["turnAdoptionLifecycle"];
   typingSignals: TypingSignaler;
 };
+
+function markPostCompactionFailureResult(
+  result: ReplyPayload | ReplyPayload[] | undefined,
+  postCompactionModelFailure: true | undefined,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (Array.isArray(result)) {
+    return result.map((payload) =>
+      markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
+    );
+  }
+  return result
+    ? markPostCompactionModelFailurePayload(postCompactionModelFailure, result)
+    : result;
+}
 
 export async function executePreparedReplyAgentRun(
   context: ExecutePreparedReplyAgentRunInput,
@@ -371,7 +387,7 @@ export async function executePreparedReplyAgentRun(
       ? "superseded"
       : runOutcome.outcome.kind === "rejected"
         ? "failed"
-        : runOutcome.outcome.kind === "aborted" || runOutcome.outcome.abortReason
+        : runOutcome.outcome.kind === "aborted"
           ? "cancelled"
           : runOutcome.outcome.status,
     replyOperation,
@@ -379,6 +395,14 @@ export async function executePreparedReplyAgentRun(
   activeSessionEntry = getActiveSessionEntry();
   const activeIsNewSession = getActiveIsNewSession();
 
+  if (runOutcome.outcome.kind !== "settled") {
+    // Only captured facts cross cancellation; no successor adoption, hooks, or reply work.
+    await accountAgentTurnCompaction({
+      compaction: runOutcome.outcome.compaction,
+      sessionStore: activeSessionStore,
+      replyOperation,
+    });
+  }
   if (operationSuperseded) {
     return { text: SILENT_REPLY_TOKEN };
   }
@@ -388,12 +412,15 @@ export async function executePreparedReplyAgentRun(
     }
     return returnWithQueuedFollowupDrain(
       runOutcome.outcome.kind === "rejected"
-        ? runOutcome.outcome.payload
+        ? markPostCompactionModelFailurePayload(
+            runOutcome.outcome.postCompactionModelFailure,
+            runOutcome.outcome.payload,
+          )
         : { text: SILENT_REPLY_TOKEN },
     );
   }
 
-  return await finalizeReplyAgentRun({
+  const result = await finalizeReplyAgentRun({
     activeIsNewSession,
     activeSessionEntry,
     activeSessionStore,
@@ -429,6 +456,7 @@ export async function executePreparedReplyAgentRun(
     storePath,
     typingSignals,
   });
+  return markPostCompactionFailureResult(result, runOutcome.outcome.postCompactionModelFailure);
 }
 
 export function createReplyAgentRestartRecoveryController(

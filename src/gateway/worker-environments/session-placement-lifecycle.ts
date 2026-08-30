@@ -12,7 +12,7 @@ export type SessionWorkerPlacementContext = {
   workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get">;
   workerPlacementDispatchService?: Pick<WorkerPlacementDispatchContract, "reclaim">;
   workerSessionPlacementService?: Pick<WorkerSessionPlacementStore, "getMany"> &
-    Partial<Pick<WorkerSessionPlacementStore, "retireSessionPlacement">>;
+    Partial<Pick<WorkerSessionPlacementStore, "retireSessionPlacement" | "listForReconcile">>;
 };
 
 type PlacementMutationAction = "fork" | "reset" | "restore" | "rewind" | "switch";
@@ -169,9 +169,10 @@ function samePlacementOwner(
   );
 }
 
-/** Capture retirement without erasing cloud affinity before fallible session cleanup. */
-export function prepareSessionWorkerPlacementRetirement(
+/** Retain the exact stopped placement across fallible workspace or session mutations. */
+export function prepareSessionWorkerPlacementMutationCheck(
   params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+  operation: "mutation" | "retirement" = "mutation",
 ) {
   const expected = readSessionWorkerPlacement(params);
   const assertCurrent = () => {
@@ -181,10 +182,19 @@ export function prepareSessionWorkerPlacementRetirement(
       current?.turnClaim ||
       (current && !isWorkerPlacementSafeForMutation(params.context, current))
     ) {
-      throw new Error(`Worker session placement ${params.sessionId} changed before retirement`);
+      throw new Error(`Worker session placement ${params.sessionId} changed before ${operation}`);
     }
   };
   assertCurrent();
+  return assertCurrent;
+}
+
+/** Capture retirement without erasing cloud affinity before fallible session cleanup. */
+export function prepareSessionWorkerPlacementRetirement(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+) {
+  const expected = readSessionWorkerPlacement(params);
+  const assertCurrent = prepareSessionWorkerPlacementMutationCheck(params, "retirement");
   const retire = params.context.workerSessionPlacementService?.retireSessionPlacement;
   if (expected && !retire) {
     throw new Error("Worker session placement retirement service is unavailable");

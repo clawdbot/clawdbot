@@ -275,6 +275,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     } finally {
       pendingCreations.delete(pending);
     }
+    let assertAttachment;
     const created = {
       tab,
       // Creation owns a tab, not its first HTTP document (which may redirect).
@@ -288,6 +289,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       namingGroup: undefined,
       initialGroup: false,
       assertCurrent: () => {
+        assertAttachment?.();
         if (createdTabs.get(tab.id) !== created || !epochIsCurrent(tab.id, created.epoch)) {
           throw new Error(`tab ${tab.id} creation access was revoked`);
         }
@@ -310,6 +312,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       await requireTab(tab.id, created.epoch);
       created.assertCurrent();
       const attached = await attachDebugger(tab.id, created.assertCurrent, created.epoch);
+      assertAttachment = attached.assertCurrent;
       created.assertCurrent();
       if (message.focus === true && typeof tab.windowId === "number") {
         await chromeApi.windows.update(tab.windowId, { focused: true });
@@ -317,11 +320,13 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       }
       await requireTab(tab.id, created.epoch);
       created.assertCurrent();
-      handoff({ tabId: tab.id, ...attached });
+      handoff({ tabId: tab.id, targetId: attached.targetId });
       created.handedOff = true;
     } catch (error) {
       // Rollback belongs to the creator, before any id is handed to the relay.
       // Never use ordinary close as a privileged bypass or close a user-revoked tab.
+      // Socket/native closure ends handoff authority, but not ownership of this
+      // unhanded tab. Rollback uses the creator epoch and unchanged tab identity.
       const ownsRollback = () =>
         createdTabs.get(tab.id) === created &&
         !deniedTabIds.has(tab.id) &&

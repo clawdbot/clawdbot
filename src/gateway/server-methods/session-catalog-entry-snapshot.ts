@@ -1,7 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import type {
-  SessionCatalogHost,
-  SessionCatalogSession,
+import {
+  normalizeSessionColorValue,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -28,7 +29,7 @@ type SessionCatalogRequestEntrySnapshot = {
   freeze: () => void;
   captureHostInstances: (host: SessionCatalogHost, instances: SessionCatalogInstances) => void;
   entryForSession: (sessionKey: string) => SessionEntry | undefined;
-  projectHostCreatedActors: (
+  projectHostSessions: (
     host: SessionCatalogHost,
     instances: SessionCatalogInstances,
   ) => SessionCatalogHost;
@@ -147,10 +148,13 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
     },
     entryForSession,
-    projectHostCreatedActors: (host, instances) => ({
+    projectHostSessions: (host, instances) => ({
       ...host,
       sessions: host.sessions.map(
-        ({ createdActor: _providerCreatedActor, sessionKey, ...session }) => {
+        ({ createdActor: _providerCreatedActor, sessionKey, color: rawColor, ...session }) => {
+          // Provider-supplied colors are display metadata independent of adoption identity.
+          const color = typeof rawColor === "string" ? normalizeSessionColorValue(rawColor) : null;
+          const colorProjection = color ? { color } : {};
           const original = sessionKey ? instances.get(sessionKey) : undefined;
           const current = sessionKey ? entryForSession(sessionKey) : undefined;
           // Native rows remain native if their adoption was replaced or detached. Never project
@@ -163,10 +167,15 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
             current.initializationPending === true ||
             !isDeepStrictEqual(original.createdActor, current.createdActor)
           ) {
-            return session;
+            return { ...session, ...colorProjection };
           }
           const createdActor = sessionKey ? createdActorForSession(sessionKey) : undefined;
-          return { ...session, sessionKey, ...(createdActor ? { createdActor } : {}) };
+          return {
+            ...session,
+            sessionKey,
+            ...(createdActor ? { createdActor } : {}),
+            ...colorProjection,
+          };
         },
       ),
     }),

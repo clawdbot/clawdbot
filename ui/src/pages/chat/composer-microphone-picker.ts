@@ -30,6 +30,8 @@ export class ComposerMicrophonePicker {
   private catalogRequest = 0;
   private realtimeStatusValue: ComposerTalkCapabilityStatus = "unknown";
   private dictationStatusValue: ComposerTalkCapabilityStatus = "unknown";
+  // Terminal login changes credentials without replacing the Gateway connection.
+  private readonly refreshOnFocus = (): void => this.loadCatalog();
 
   constructor(private readonly requestUpdate: () => void) {}
 
@@ -61,6 +63,7 @@ export class ComposerMicrophonePicker {
     if (client === this.catalogClient && connected === this.catalogConnected) {
       return;
     }
+    window.removeEventListener("focus", this.refreshOnFocus);
     this.catalogClient = client;
     this.catalogConnected = connected;
     this.catalogRequest++;
@@ -69,6 +72,7 @@ export class ComposerMicrophonePicker {
       this.dictationStatusValue = "unknown";
       return;
     }
+    window.addEventListener("focus", this.refreshOnFocus);
     this.loadCatalog(false);
   }
 
@@ -99,6 +103,7 @@ export class ComposerMicrophonePicker {
 
   /** Ends an in-flight discovery too, so a late result cannot revive the list. */
   dispose(): void {
+    window.removeEventListener("focus", this.refreshOnFocus);
     this.release();
     this.discoveryRequest++;
     this.catalogRequest++;

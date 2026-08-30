@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -35,6 +36,7 @@ export function unwrapGatewayMethodDispatchResponse(
       retryable: response.error?.retryable,
       retryAfterMs: response.error?.retryAfterMs,
     });
+    retainGatewayResponsePayload(requestError, response.payload);
     const cause = (response.error as (ErrorShape & { cause?: unknown }) | undefined)?.cause;
     if (cause !== undefined) {
       Object.defineProperty(requestError, "cause", { value: cause });
@@ -207,7 +209,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     options.onSignalAbort,
   );
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
-  if (options.expectFinal !== true || firstPayload?.status !== "accepted") {
+  if (!firstResponse.ok || options.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
   }
   options.onAccepted?.(firstResponse.payload);

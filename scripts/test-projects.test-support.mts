@@ -60,6 +60,7 @@ import {
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
+import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
   pluginSdkLightTestFiles,
@@ -539,6 +540,15 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
+  [
+    "patches/vitest@4.1.11.patch",
+    [
+      "test/scripts/run-vitest-profile.test.ts",
+      "test/scripts/run-vitest-state-cleanup.test.ts",
+      "test/scripts/vitest-fork-shutdown.test.ts",
+    ],
+  ],
+  ["test/fixtures/vitest-fork-shutdown.mjs", ["test/scripts/vitest-fork-shutdown.test.ts"]],
   ...[
     "src/system-agent/setup-inference-persist.ts",
     "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
@@ -1358,6 +1368,11 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
   const unmatched: UnmatchedExplicitTestTarget[] = [];
   for (const targetArg of targetArgs) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    const absolute = path.resolve(cwd, targetArg);
+    // Existing exact tests need no inventory scan; lane assignment belongs to the run planner.
+    if (!isGlobTarget(relative) && isTestFileTarget(relative) && fs.existsSync(absolute)) {
+      continue;
+    }
     if (
       resolveVitestConfigTargetKind(relative) ||
       (isVitestConfigFileTarget(relative) && isExistingFileTarget(targetArg, cwd))
@@ -1378,7 +1393,6 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
       continue;
     }
 
-    const absolute = path.resolve(cwd, targetArg);
     if (!fs.existsSync(absolute)) {
       if (resolveExplicitTestPrefixTargets(targetArg, cwd)) {
         continue;
@@ -1390,10 +1404,6 @@ export function findUnmatchedExplicitTestTargets(args: string[], cwd = process.c
           ? { includePattern: `${relative}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` }
           : {}),
       });
-      continue;
-    }
-
-    if (isTestFileTarget(relative)) {
       continue;
     }
 
@@ -2084,6 +2094,7 @@ const changedScope = "src/scripts/ci-changed-scope.test.ts";
 const changedScopeTests = [
   "src/scripts/ci-changed-scope.contract-fixtures.test.ts",
   "src/scripts/ci-changed-scope.control-ui.test.ts",
+  "src/scripts/ci-changed-scope.git-owner.test.ts",
   "src/scripts/ci-changed-scope.native-i18n.test.ts",
   changedScope,
   "src/scripts/ci-changed-scope.windows.test.ts",
@@ -2110,15 +2121,26 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
-  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git"]],
-  ["test/scripts/fixtures/ci-platform-checkout.mjs", ["ci-platform-checkout", "ci-linux-git"]],
+  [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
+  [".github/workflows/docs-sync-publish.yml", ["docs-sync-publish"]],
+  [".github/workflows/docs-agent.yml", ["docs-agent-workflow"]],
+  ["scripts/generate-ci-git-owner.mts", ["ci-git-owner"]],
   [
     ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
     [packageAcceptance, workflowGuards, "release-workflow-matrix-plan", installDocker],
   ],
   [
+    ".github/workflows/plugin-clawhub-release.yml",
+    [packageAcceptance, "plugin-release-git-lifecycle", workflowGuards],
+  ],
+  [
     ".github/workflows/plugin-npm-release.yml",
-    [packageAcceptance, "plugin-npm-extended-stable-workflow", workflowGuards],
+    [
+      packageAcceptance,
+      "plugin-npm-extended-stable-workflow",
+      "plugin-release-git-lifecycle",
+      workflowGuards,
+    ],
   ],
   [".github/workflows/qa-live-transports-convex.yml", [packageAcceptance, workflowGuards]],
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
@@ -2253,6 +2275,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
 ]);
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
+  [
+    /^(?:git-hooks\/pre-commit|scripts\/pre-commit\/(?:guard-staged-content\.mjs|filter-staged-files\.mjs|format-staged\.sh|run-node-tool\.sh)|test\/git-hooks-pre-commit\.test-support\.ts)$/u,
+    ["test/git-hooks-pre-commit.test.ts", "test/git-hooks-pre-commit-boundaries.test.ts"],
+  ],
   [/^scripts\/pr$/u, ["pr-merge", "pr-merge-outcome", "pr-operation-lock", "pr-wrappers"]],
   [
     /^scripts\/pr-lib\/crabbox-gate-contract\.mjs$/u,
@@ -2327,7 +2353,19 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["src/dockerfile.test.ts", "docker-channel-promote", "vercel-container-registry-publish"],
   ],
   [/^\.github\/workflows\/install-smoke\.yml$/u, ["install-smoke-no-push-workflow", installDocker]],
-  [/^\.github\/workflows\/openclaw-performance\.yml$/u, ["openclaw-performance-workflow"]],
+  [
+    /^\.github\/workflows\/openclaw-performance\.yml$/u,
+    ["openclaw-performance-workflow", "openclaw-performance-git-lifecycle"],
+  ],
+  [/^\.github\/workflows\/linux-app-release\.yml$/u, ["release-workflow-git-lifecycle"]],
+  [
+    /^\.github\/workflows\/macos-release\.yml$/u,
+    ["release-workflow-git-lifecycle", packageAcceptance],
+  ],
+  [
+    /^\.github\/workflows\/npm-placeholder-bootstrap\.yml$/u,
+    ["release-workflow-git-lifecycle", "npm-placeholder-publication"],
+  ],
   [/^\.github\/workflows\/plugin-prerelease\.yml$/u, [pluginPrerelease]],
   [/^\.github\/workflows\/tui-pty\.yml$/u, [packageAcceptance]],
   [
@@ -2372,11 +2410,20 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, workflowGuards],
   ],
   [
-    /^\.github\/workflows\/mantis-web-ui-chat-proof\.yml$/u,
+    /^\.github\/(?:workflows\/mantis-web-ui-chat-proof\.yml|actions\/mantis-validate-trusted-ref\/action\.yml)$/u,
     ["mantis-web-ui-chat-proof-workflow", packageAcceptance, workflowGuards],
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
-  [/^\.github\/actions\/ensure-base-commit\/action\.yml$/u, [workflowGuards]],
+  [
+    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
+    [
+      "ci-git-owner",
+      "ci-linux-git",
+      "ci-platform-checkout",
+      "src/scripts/ci-changed-scope.git-owner.test.ts",
+    ],
+  ],
+  [/^\.github\/actions\/publish-generated-pr\//u, [workflowGuards]],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
   [/^scripts\/test-projects\.test-support\.mts$/u, ["test-projects"]],
   [/^scripts\/ci-changed-scope\.mjs$/u, [...changedScopeTests, "control-ui-i18n"]],
@@ -2980,6 +3027,22 @@ function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
 }
 
 function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
+  if (
+    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/ci-platform-checkout\.mjs)$/u.test(
+      changedPath,
+    )
+  ) {
+    return resolveToolingTestOwnerTargets(
+      "ci-git-owner",
+      "ci-linux-git",
+      "ci-platform-checkout",
+      "openclaw-performance-workflow",
+      "openclaw-performance-git-lifecycle",
+      "plugin-release-git-lifecycle",
+      "release-workflow-git-lifecycle",
+      workflowGuards,
+    );
+  }
   if (changedPath.startsWith("test/scripts/") && isTestFileTarget(changedPath)) {
     return [changedPath];
   }
@@ -4126,8 +4189,7 @@ export function applyParallelVitestCachePaths<T extends VitestSpecShape>(
   const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
   // CI publishes a persistent cache root, not a writer-safe leaf. Every
   // concurrent Vitest process still needs its own live directory below it.
-  const cacheRoot =
-    configuredCacheRoot ?? path.join(cwd, "node_modules", ".experimental-vitest-cache");
+  const cacheRoot = configuredCacheRoot ?? resolveVitestFsModuleCacheRoot(cwd);
   return specs.map((spec, index) => {
     const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
     if (specCachePath && specCachePath !== configuredCacheRoot) {

@@ -94,6 +94,7 @@ const mocks = vi.hoisted(() => ({
   consultRealtimeVoiceAgent: vi.fn(async (_params?: unknown) => ({ text: "agent answer" })),
   closeTalkClientGatewayControlSession: vi.fn(async () => false),
   gatewayControlActivate: vi.fn(),
+  gatewayControlAdoptProvider: vi.fn(async () => undefined),
   gatewayControlClose: vi.fn(async () => undefined),
   gatewayControl: { bindBridge: vi.fn() },
   createTalkClientGatewayControlOwner: vi.fn(),
@@ -589,6 +590,7 @@ describe("talk.catalog handler", () => {
       defaultModel: "gpt-realtime-2.1",
       models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
       voices: ["alloy", "marin"],
+      capabilities: { voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] } },
       resolveConfig: vi.fn(({ rawConfig }: { rawConfig: Record<string, unknown> }) => rawConfig),
       isConfigured: vi.fn(() => false),
       createBridge: vi.fn(),
@@ -625,6 +627,7 @@ describe("talk.catalog handler", () => {
     expect(catalog.realtime.providers[0]).toMatchObject({
       models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
       voices: ["alloy", "marin"],
+      voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] },
     });
     // Catalog readiness must mirror talk.client.create: top-level
     // talk.realtime.model overrides the provider-level model and the resolved
@@ -692,98 +695,109 @@ describe("talk.catalog handler", () => {
     expect(catalog.realtime).toEqual(expect.objectContaining({ ready: true }));
   });
 
-  it("reports the runtime-selected automatic providers instead of registry row order", async () => {
-    const transcriptionSlow = {
-      id: "transcription-slow",
-      label: "Transcription Slow",
-      autoSelectOrder: 20,
-      isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
-    };
-    const transcriptionFast = {
-      id: "transcription-fast",
-      label: "Transcription Fast",
-      models: ["transcribe-model"],
-      autoSelectOrder: 10,
-      isConfigured: vi.fn(
-        ({ providerConfig }) =>
-          providerConfig.enabled === true && providerConfig.model === "transcribe-model",
-      ),
-    };
-    const realtimeSlow = {
-      id: "realtime-slow",
-      label: "Realtime Slow",
-      autoSelectOrder: 20,
-      isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
-      createBridge: vi.fn(),
-    };
-    const realtimeFast = {
-      id: "realtime-fast",
-      label: "Realtime Fast",
-      autoSelectOrder: 10,
-      isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
-      createBridge: vi.fn(),
-    };
-    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
-      transcriptionSlow,
-      transcriptionFast,
-    ] as never);
-    mocks.listRealtimeVoiceProviders.mockReturnValue([realtimeSlow, realtimeFast] as never);
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
-      provider: realtimeFast,
-      providerConfig: { enabled: true },
-    } as never);
+  it.each(["realtime-fast", "realtime-fast-alias"])(
+    "reports the runtime-selected automatic providers and configured rows for %s",
+    async (configKey) => {
+      const transcriptionSlow = {
+        id: "transcription-slow",
+        label: "Transcription Slow",
+        autoSelectOrder: 20,
+        isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
+      };
+      const transcriptionFast = {
+        id: "transcription-fast",
+        label: "Transcription Fast",
+        models: ["transcribe-model"],
+        autoSelectOrder: 10,
+        isConfigured: vi.fn(
+          ({ providerConfig }) =>
+            providerConfig.enabled === true && providerConfig.model === "transcribe-model",
+        ),
+      };
+      const realtimeSlow = {
+        id: "realtime-slow",
+        label: "Realtime Slow",
+        autoSelectOrder: 20,
+        isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
+        createBridge: vi.fn(),
+      };
+      const realtimeFast = {
+        id: "realtime-fast",
+        aliases: ["realtime-fast-alias"],
+        label: "Realtime Fast",
+        autoSelectOrder: 10,
+        isConfigured: vi.fn(({ providerConfig }) => providerConfig.enabled === true),
+        createBridge: vi.fn(),
+      };
+      mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+        transcriptionSlow,
+        transcriptionFast,
+      ] as never);
+      mocks.listRealtimeVoiceProviders.mockReturnValue([realtimeSlow, realtimeFast] as never);
+      mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+        provider: realtimeFast,
+        providerConfig: { enabled: true },
+      } as never);
 
-    const respond = vi.fn();
-    await callTalkHandler("talk.catalog", {
-      params: {},
-      client: { connect: { scopes: ["operator.read"] } },
-      respond,
-      context: {
-        getRuntimeConfig: () =>
-          ({
-            agents: {
-              defaults: {
-                voiceModel: { primary: "transcription-fast/transcribe-model" },
-              },
-            },
-            talk: {
-              realtime: {
-                providers: {
-                  "realtime-slow": { enabled: true },
-                  "realtime-fast": { enabled: true },
+      const respond = vi.fn();
+      await callTalkHandler("talk.catalog", {
+        params: {},
+        client: { connect: { scopes: ["operator.read"] } },
+        respond,
+        context: {
+          getRuntimeConfig: () =>
+            ({
+              agents: {
+                defaults: {
+                  voiceModel: { primary: "transcription-fast/transcribe-model" },
                 },
               },
-            },
-            plugins: {
-              entries: {
-                "voice-call": {
-                  config: {
-                    streaming: {
-                      providers: {
-                        "transcription-slow": { enabled: true },
-                        "transcription-fast": { enabled: true },
+              talk: {
+                realtime: {
+                  providers: {
+                    "realtime-slow": { enabled: true },
+                    [configKey]: { enabled: true },
+                  },
+                },
+              },
+              plugins: {
+                entries: {
+                  "voice-call": {
+                    config: {
+                      streaming: {
+                        providers: {
+                          "transcription-slow": { enabled: true },
+                          "transcription-fast": { enabled: true },
+                        },
                       },
                     },
                   },
                 },
               },
-            },
-          }) as OpenClawConfig,
-      },
-    });
+            }) as OpenClawConfig,
+        },
+      });
 
-    expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      transcription: {
-        ready: true,
-        activeProvider: "transcription-fast",
-        providers: [
-          { id: "transcription-slow", configured: true },
-          { id: "transcription-fast", configured: true },
-        ],
-      },
-      realtime: { ready: true, activeProvider: "realtime-fast" },
-    });
-  });
+      expect(mockCallArg(respond, 0, 1)).toMatchObject({
+        transcription: {
+          ready: true,
+          activeProvider: "transcription-fast",
+          providers: [
+            { id: "transcription-slow", configured: true },
+            { id: "transcription-fast", configured: true },
+          ],
+        },
+        realtime: {
+          ready: true,
+          activeProvider: "realtime-fast",
+          providers: [
+            { id: "realtime-slow", configured: true },
+            { id: "realtime-fast", configured: true },
+          ],
+        },
+      });
+    },
+  );
 
   it("includes a provider-map transcription provider missing from the active registry", async () => {
     const openai = {
@@ -3031,11 +3045,19 @@ describe("talk.client.create handler", () => {
     mocks.createOrResumeClientVoiceSession.mockReturnValue("voice-test");
     mocks.resolveClientVoiceAgentSessionId.mockReturnValue("session-main");
     mocks.closeTalkClientGatewayControlSession.mockResolvedValue(false);
-    mocks.createTalkClientGatewayControlOwner.mockReturnValue({
-      activate: mocks.gatewayControlActivate,
-      close: mocks.gatewayControlClose,
-      control: mocks.gatewayControl,
-    });
+    mocks.createTalkClientGatewayControlOwner.mockImplementation(
+      (params: {
+        runAgentConsult: (args: unknown, signal?: AbortSignal) => Promise<{ text: string }>;
+      }) => ({
+        activate: mocks.gatewayControlActivate,
+        adoptProvider: mocks.gatewayControlAdoptProvider,
+        close: mocks.gatewayControlClose,
+        assertOpen: vi.fn(),
+        control: mocks.gatewayControl,
+        runAgentConsult: ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>
+          params.runAgentConsult({ question: prompt }, signal),
+      }),
+    );
   });
 
   it("builds realtime launch defaults from talk.realtime", () => {
@@ -3308,7 +3330,8 @@ describe("talk.client.create handler", () => {
         transcriptCapable: true,
       }),
     );
-    expect(mocks.gatewayControlActivate).toHaveBeenCalledWith(expect.any(Function));
+    expect(mocks.gatewayControlAdoptProvider).toHaveBeenCalledWith(expect.any(Function));
+    expect(mocks.gatewayControlActivate).toHaveBeenCalledOnce();
     expectRespondOk(respond, {
       ...browserSession,
       voiceSessionId: "voice-gateway",

@@ -428,10 +428,18 @@ export function applySessionEntryMaintenance(
     });
     remainingEntryCount -= modelRunPruned;
   }
+  const archivedWorktrees: NonNullable<SessionEntryMaintenancePlan["archivedWorktrees"]> = [];
   const archived = archiveStaleDashboardEntries(store, maintenance.archiveDashboardAfterMs, {
     log: false,
     onArchived: ({ key, entry }) => {
       writeSessionEntry(database, key, entry);
+      if (entry.worktree) {
+        archivedWorktrees.push({
+          entry: cloneSessionEntry(entry),
+          sessionKey: key,
+          storePath: params.storePath,
+        });
+      }
     },
     preserveKeys,
   });
@@ -486,6 +494,7 @@ export function applySessionEntryMaintenance(
     }
   }
   return {
+    ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
     entryRemovals: [...removals.values()],
     stateDeletePlans: deletePlans,
     archived,
@@ -500,6 +509,12 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   plans: readonly SessionEntryMaintenancePlan[],
 ): Promise<SessionEntryMaintenanceResult> {
+  const archivedWorktrees = plans.flatMap((plan) => plan.archivedWorktrees ?? []);
+  if (archivedWorktrees.length) {
+    const { cleanUpAutomaticallyArchivedWorktrees } =
+      await import("../../sessions/session-worktree-lifecycle.js");
+    await cleanUpAutomaticallyArchivedWorktrees(scope, archivedWorktrees);
+  }
   const entryRemovals = plans.flatMap((plan) => plan.entryRemovals);
   const stateDeletePlans = plans.flatMap((plan) => plan.stateDeletePlans);
   const warn = (

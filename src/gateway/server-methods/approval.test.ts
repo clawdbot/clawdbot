@@ -230,7 +230,10 @@ function createClient(params: {
   } as unknown as GatewayRequestHandlerOptions["client"];
 }
 
-function createContext(controlUiBasePath?: string) {
+function createContext(
+  controlUiBasePath?: string,
+  approvalWebPushDelivery?: GatewayRequestHandlerOptions["context"]["approvalWebPushDelivery"],
+) {
   return {
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
@@ -240,6 +243,7 @@ function createContext(controlUiBasePath?: string) {
     },
     getApprovalClientConnIds: vi.fn(() => new Set(["approval-client"])),
     getRuntimeConfig: () => ({ gateway: { controlUi: { basePath: controlUiBasePath } } }),
+    approvalWebPushDelivery,
     logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
   } as unknown as GatewayRequestHandlerOptions["context"];
 }
@@ -1247,7 +1251,12 @@ describe("unified approval handlers", () => {
       request: { allowedDecisions: ["allow-once"] },
       reviewerDeviceIds: ["phone-device"],
     });
-    const context = createContext();
+    const handleWebPushResolved = vi.fn(async () => {});
+    const context = createContext(undefined, {
+      handleRequested: vi.fn(() => false),
+      handleResolved: handleWebPushResolved,
+      handleExpired: vi.fn(async () => {}),
+    });
     const handlePluginApprovalResolved = vi.fn(async () => {});
     const handlePluginIosPushResolved = vi.fn(async () => {});
     const forwarder = {
@@ -1314,6 +1323,9 @@ describe("unified approval handlers", () => {
     expect(handlePluginApprovalResolved).toHaveBeenCalledTimes(1);
     expect(handlePluginIosPushResolved).toHaveBeenCalledTimes(1);
     expect(handlePluginIosPushResolved).toHaveBeenCalledWith(
+      expect.objectContaining({ id: pending.record.id, decision: "deny" }),
+    );
+    expect(handleWebPushResolved).toHaveBeenCalledWith(
       expect.objectContaining({ id: pending.record.id, decision: "deny" }),
     );
     const recipientLookup = context.getApprovalClientConnIds as ReturnType<typeof vi.fn>;

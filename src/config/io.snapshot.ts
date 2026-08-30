@@ -33,7 +33,11 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
+import {
+  findLegacyConfigIssues,
+  migrateLegacyContextBudgetConfig,
+  migratePersistedImplicitMainRoster,
+} from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
@@ -222,7 +226,10 @@ export async function readConfigFileSnapshotInternal(
     );
     if (!validated.ok) {
       const availableSnapshot = pluginMetadata.getSnapshot();
-      const collect = () => collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed);
+      const collect = () =>
+        context.options.pluginValidation === "core-only"
+          ? findLegacyConfigIssues(effectiveConfigRaw, effectiveParsed)
+          : collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed);
       const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
         availableSnapshot
           ? withPluginMetadataSnapshotScope(availableSnapshot, collect, {
@@ -470,14 +477,8 @@ export async function readBestEffortConfigSnapshotFromContext(
     };
   }
   return {
-    config: context.finalizeLoadedRuntimeConfig(
-      materializeRuntimeConfig(result.snapshot.sourceConfig, {
-        manifestRegistry:
-          context.options.pluginValidation === "core-only"
-            ? { plugins: [] }
-            : result.pluginMetadataSnapshot?.manifestRegistry,
-      }),
-    ),
+    // The snapshot already materialized under the caller's plugin-validation policy.
+    config: context.finalizeLoadedRuntimeConfig(result.snapshot.config),
     sourceConfig: result.snapshot.sourceConfig,
     configDiagnostics: null,
   };

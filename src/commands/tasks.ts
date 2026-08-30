@@ -56,6 +56,7 @@ import {
   type TaskSystemAuditCode,
   type TaskSystemAuditSeverity,
 } from "../tasks/task-system-audit.types.js";
+import { formatTaskStatusCell, TASK_STATUS_CELL_WIDTH } from "./task-status-cell.js";
 import {
   buildTaskSystemAuditJsonPayload,
   buildTaskSystemAuditFindings,
@@ -64,7 +65,6 @@ import {
 import { runSessionRegistryMaintenance } from "./tasks-session-registry-maintenance.js";
 
 const RUNTIME_PAD = 8;
-const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
@@ -149,31 +149,11 @@ function shortToken(value: string | undefined, maxChars = ID_PAD): string {
   return truncate(sanitized, maxChars);
 }
 
-function formatTaskStatusCell(status: string, rich: boolean) {
-  const padded = status.padEnd(STATUS_PAD);
-  if (!rich) {
-    return padded;
-  }
-  if (status === "succeeded") {
-    return theme.success(padded);
-  }
-  if (status === "failed" || status === "lost" || status === "timed_out") {
-    return theme.error(padded);
-  }
-  if (status === "running") {
-    return theme.accentBright(padded);
-  }
-  if (status === "blocked") {
-    return theme.warn(padded);
-  }
-  return theme.muted(padded);
-}
-
 function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   const header = [
     "Task".padEnd(ID_PAD),
     "Kind".padEnd(RUNTIME_PAD),
-    "Status".padEnd(STATUS_PAD),
+    "Status".padEnd(TASK_STATUS_CELL_WIDTH),
     "Delivery".padEnd(DELIVERY_PAD),
     "Run".padEnd(RUN_PAD),
     "Child Session",
@@ -232,7 +212,7 @@ function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
     "Severity".padEnd(8),
     "Code".padEnd(22),
     "Item".padEnd(ID_PAD),
-    "Status".padEnd(STATUS_PAD),
+    "Status".padEnd(TASK_STATUS_CELL_WIDTH),
     "Age".padEnd(8),
     "Detail",
   ].join(" ");

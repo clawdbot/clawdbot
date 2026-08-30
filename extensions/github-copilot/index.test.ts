@@ -1397,6 +1397,10 @@ describe("github-copilot plugin", () => {
         provider: "github-copilot",
         token: "refreshed-token",
       });
+      expect(result.profiles[0]?.secretStorage).toBeUndefined();
+      expect(result.notes).toContain(
+        "Plaintext secret input mode was selected, so the GitHub Copilot token will remain inline in the auth profile and openclaw secrets audit --check will report it.",
+      );
     } finally {
       vi.unstubAllGlobals();
       if (isTtyDescriptor) {
@@ -1488,7 +1492,6 @@ describe("github-copilot plugin", () => {
           prompter,
           runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
           opts: {},
-          secretInputMode: "plaintext",
           allowSecretRefPrompt: false,
           isRemote: false,
           openUrl,
@@ -1506,6 +1509,10 @@ describe("github-copilot plugin", () => {
       type: "token",
       provider: "github-copilot",
       token: "public-fresh-token",
+    });
+    expect(result.profiles[0]?.secretStorage).toEqual({
+      kind: "store",
+      namePrefix: "GITHUB_COPILOT_TOKEN",
     });
     const params = (
       result.configPatch as {
@@ -1544,7 +1551,6 @@ describe("github-copilot plugin", () => {
           prompter,
           runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
           opts: {},
-          secretInputMode: "plaintext",
           allowSecretRefPrompt: false,
           isRemote: false,
           openUrl,
@@ -1561,6 +1567,10 @@ describe("github-copilot plugin", () => {
       type: "token",
       provider: "github-copilot",
       token: "tenant-fresh-token",
+    });
+    expect(result.profiles[0]?.secretStorage).toEqual({
+      kind: "store",
+      namePrefix: "GITHUB_COPILOT_TOKEN",
     });
     const params = (
       result.configPatch as {

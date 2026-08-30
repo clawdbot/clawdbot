@@ -51,7 +51,7 @@ suite.define(() => {
             await page.getByRole("button", { name: "Send message" }).click();
             const request = await gateway.waitForRequest("chat.send");
             expect(request.params).toMatchObject({
-              sessionKey: "main",
+              sessionKey: "agent:main:main",
               message: "Send the summary PDF",
               deliver: false,
               idempotencyKey: expect.any(String),
@@ -70,7 +70,7 @@ suite.define(() => {
             await gateway.emitGatewayEvent("chat", {
               message: reply,
               runId,
-              sessionKey: "main",
+              sessionKey: "agent:main:main",
               state: "final",
             });
           } else {
@@ -78,7 +78,7 @@ suite.define(() => {
               message: reply,
               messageId: "appended-reply",
               messageSeq: 3,
-              sessionKey: "main",
+              sessionKey: "agent:main:main",
               activeRunIds: [],
               hasActiveRun: false,
             });

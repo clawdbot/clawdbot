@@ -71,7 +71,7 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import {
   resolveAcpSpawnRequesterState,
-  resolveAcpSpawnStreamPlan,
+  shouldStreamAcpSpawnToParent,
   resolveRequesterInternalSessionKey,
   validateAcpResumeSessionOwnership,
 } from "./acp-spawn-requester.js";
@@ -338,7 +338,6 @@ export async function spawnAcpDirect(
     requesterAgentId,
     targetAgentId,
     ctx,
-    subagentStore,
   });
   const hasSubagentEnvelope = isSubagentEnvelopeSession(requesterInternalKey, {
     cfg,
@@ -393,7 +392,7 @@ export async function spawnAcpDirect(
       error: runtimeOptionsResult.error,
     });
   }
-  const { effectiveStreamToParent } = resolveAcpSpawnStreamPlan({
+  const effectiveStreamToParent = shouldStreamAcpSpawnToParent({
     spawnMode,
     requestThreadBinding,
     streamToParentRequested,
@@ -554,7 +553,6 @@ export async function spawnAcpDirect(
       state.deliveryPlan = resolveAcpSpawnBootstrapDeliveryPlan({
         cfg,
         spawnMode,
-        requestThreadBinding,
         effectiveStreamToParent,
         requester: requesterState,
         binding: state.binding,

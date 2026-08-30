@@ -309,6 +309,7 @@ async function readPagesViaPlaywright(
   return await withPlaywrightSafeReadReconnect(
     { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, attempt },
     async (browser) => {
+      let remainingTargetIds: Set<string> | undefined;
       if (opts.requireCompleteTargetList) {
         const session = await browser.newBrowserCDPSession();
         try {
@@ -316,6 +317,13 @@ async function readPagesViaPlaywright(
           if (!Array.isArray(result.targetInfos)) {
             throw new Error("Browser target enumeration was unavailable.");
           }
+          remainingTargetIds = new Set(
+            result.targetInfos
+              .filter(
+                (info) => info.type === "page" && !isBlockedTarget(opts.cdpUrl, info.targetId),
+              )
+              .map((info) => info.targetId),
+          );
         } finally {
           await session.detach().catch(() => {});
         }
@@ -360,12 +368,18 @@ async function readPagesViaPlaywright(
       );
       // Promise.all preserves candidate order and still propagates recoverable disconnects
       // to the outer reconnect path when any per-page task rejects.
+      // Native discovery can lead Page publication. Consume only projected IDs from that
+      // snapshot; a quarantined Page reference alone cannot identify a missing native target.
       const resolvedPages = pageResults.flatMap((result) =>
-        result.status === "available" ? [result.page] : [],
+        result.status === "available" &&
+        (!remainingTargetIds || remainingTargetIds.delete(result.page.targetId))
+          ? [result.page]
+          : [],
       );
       if (
-        resolvedPages.length === 0 &&
-        pageResults.some((result) => result.status === "unresolved")
+        (remainingTargetIds && remainingTargetIds.size > 0) ||
+        ((opts.requireCompleteTargetList || resolvedPages.length === 0) &&
+          pageResults.some((result) => result.status === "unresolved"))
       ) {
         return { status: "unavailable", reason: "target-identity-unresolved" };
       }

@@ -49,8 +49,8 @@ function registerAdapter(record: SessionBindingRecord | null): {
   const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>(() => record);
   const touch = vi.fn<NonNullable<SessionBindingAdapter["touch"]>>();
   registerSessionBindingAdapter({
-    channel: "demo",
-    accountId: "default",
+    channel: record?.conversation.channel ?? "demo",
+    accountId: record?.conversation.accountId ?? "default",
     listBySession: () => [],
     resolveByConversation,
     touch,
@@ -72,9 +72,17 @@ describe("runtime conversation binding route", () => {
     expect(result.bindingOwnerAvailable).toBeUndefined();
   });
 
-  it("rewrites the route to a runtime-bound ACP session and touches the binding", () => {
+  it("rewrites the route and touches only the owning channel account's binding", () => {
     const binding = createBinding();
     const { resolveByConversation, touch } = registerAdapter(binding);
+    const siblingTouches = [
+      { channel: "other", accountId: "default" },
+      { channel: "demo", accountId: "other" },
+    ].map(
+      (scope) =>
+        registerAdapter(createBinding({ conversation: { ...binding.conversation, ...scope } }))
+          .touch,
+    );
 
     const result = resolveRuntimeConversationBindingRoute({
       route: createRoute(),
@@ -91,6 +99,9 @@ describe("runtime conversation binding route", () => {
       conversationId: "room-1",
     });
     expect(touch).toHaveBeenCalledWith("binding-1", undefined);
+    for (const siblingTouch of siblingTouches) {
+      expect(siblingTouch).not.toHaveBeenCalled();
+    }
     expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
     expect(result.boundAgentId).toBe("review");
     expect(result.route).toEqual({

@@ -1,0 +1,329 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, expect, vi, type Mock } from "vitest";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
+import { createWorkerSessionToolExecutor } from "./worker-session-tool-executor.js";
+
+export const SOURCE = {
+  agentId: "main",
+  sessionId: "source-session",
+  sessionKey: "agent:main:dashboard:source",
+  environmentId: "source-environment",
+  ownerEpoch: 3,
+};
+export const TARGET = {
+  agentId: "main",
+  sessionId: "target-session",
+  sessionKey: "agent:main:dashboard:target",
+  environmentId: "target-environment",
+  ownerEpoch: 4,
+};
+export const PARENT = {
+  sessionId: "parent-session",
+  sessionKey: "agent:main:dashboard:parent",
+};
+export const CHILD = {
+  agentId: "main",
+  sessionId: "spawned-child-session",
+  environmentId: "spawned-child-environment",
+  ownerEpoch: 5,
+};
+export const GRANDCHILD = {
+  agentId: "main",
+  sessionId: "spawned-grandchild-session",
+  environmentId: "spawned-grandchild-environment",
+  ownerEpoch: 6,
+};
+export const PARENT_EXECUTION_IDENTITY_TOKEN = {
+  tokenVersion: 1,
+  contextId: "parent-context",
+  executionId: "parent-execution",
+  runId: "source-run",
+  createdAt: 1,
+} satisfies ExecutionIdentityAdmissionToken;
+
+export const resolveGatewayContext = () => undefined;
+
+type WorkerSessionToolTestMocks = {
+  sessionEntries: Map<string, SessionEntry>;
+  delivered: Mock;
+  gatewayRequest: Mock;
+  gatewayCreate: Mock;
+  gatewayRuntimeIdentity: Mock;
+  dispatchChild: Mock;
+  spawnCallerIdentity: Mock;
+  spawnArgs: Mock;
+  githubPublicationRequest: Mock;
+  scopedSessionAccess: Mock<(params: { run: () => Promise<unknown> }) => Promise<unknown>>;
+};
+
+async function createWorkerSessionToolTestFixture(mocks: WorkerSessionToolTestMocks) {
+  const {
+    sessionEntries,
+    delivered,
+    gatewayRequest,
+    gatewayCreate,
+    gatewayRuntimeIdentity,
+    dispatchChild,
+    spawnCallerIdentity,
+    spawnArgs,
+    githubPublicationRequest,
+    scopedSessionAccess,
+  } = mocks;
+  const root = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-tools-"),
+  );
+  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+  const placements = createWorkerSessionPlacementStore({ database });
+  activate(SOURCE);
+  activate(TARGET);
+  const sourceClaim = placements.claimTurn({
+    sessionId: SOURCE.sessionId,
+    agentId: SOURCE.agentId,
+    sessionKey: SOURCE.sessionKey,
+    claimId: "source-claim",
+    runId: "source-run",
+    owner: {
+      kind: "worker",
+      environmentId: SOURCE.environmentId,
+      ownerEpoch: SOURCE.ownerEpoch,
+    },
+  });
+  placements.authorizeWorkerTurnTools(sourceClaim, [
+    "sessions_send",
+    "sessions_spawn",
+    "github_publish",
+  ]);
+  const delegatedAuthorities: AgentRunDelegatedAuthority[] = [];
+  const sourceOperationalRun = createOperationalRunInstanceRef(sourceClaim.runId);
+  delegatedAuthorities.push(claimAgentRunDelegatedAuthority(sourceOperationalRun));
+  bindWorkerTurnExecutionIdentity(
+    placements,
+    sourceClaim,
+    PARENT_EXECUTION_IDENTITY_TOKEN,
+    sourceOperationalRun,
+    { agentId: SOURCE.agentId, sessionKey: SOURCE.sessionKey },
+  );
+  const identity: WorkerConnectionIdentity = {
+    environmentId: SOURCE.environmentId,
+    credentialHash: "credential-hash",
+    bundleHash: "a".repeat(64),
+    sessionId: SOURCE.sessionId,
+    runId: sourceClaim.runId,
+    turnClaim: sourceClaim,
+    ownerEpoch: SOURCE.ownerEpoch,
+    rpcSetVersion: 1,
+    protocolFeatures: ["worker-session-tools-v1"],
+    credentialExpiresAtMs: Date.now() + 60_000,
+  };
+  sessionEntries.clear();
+  delivered.mockReset();
+  gatewayRequest.mockReset();
+  gatewayCreate.mockReset();
+  gatewayRuntimeIdentity.mockReset();
+  dispatchChild.mockReset();
+  spawnCallerIdentity.mockReset();
+  spawnArgs.mockReset();
+  githubPublicationRequest.mockReset();
+  githubPublicationRequest.mockResolvedValue({
+    requestId: "publication-1",
+    status: "requested",
+    message: "Publication was accepted.",
+  });
+  scopedSessionAccess.mockClear();
+  const spawnState: { childSessionKey: string | undefined; order: string[] } = {
+    childSessionKey: undefined,
+    order: [],
+  };
+  gatewayCreate.mockImplementation(
+    async (request: { method: string; params: Record<string, unknown> }) => {
+      spawnState.order.push("create");
+      spawnState.childSessionKey = String(request.params.key);
+      setEntry(spawnState.childSessionKey, CHILD.sessionId, {
+        sessionKey: SOURCE.sessionKey,
+        sessionId: SOURCE.sessionId,
+      });
+      return { ok: true, key: spawnState.childSessionKey, sessionId: CHILD.sessionId };
+    },
+  );
+  dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
+    spawnState.order.push("dispatch");
+    expect(placements.get(CHILD.sessionId)).toBeUndefined();
+    activate({
+      ...CHILD,
+      sessionKey: request.sessionKey,
+    });
+    return placements.get(CHILD.sessionId);
+  });
+  gatewayRequest.mockImplementation(
+    async (request: { method: string; params: Record<string, unknown> }) => {
+      if (request.method === "agent") {
+        spawnState.order.push("send");
+        expect(placements.get(CHILD.sessionId)?.state).toBe("active");
+        return { runId: "spawned-child-run", status: "accepted" };
+      }
+      throw new Error(`Unexpected gateway request: ${request.method}`);
+    },
+  );
+  const execute = createWorkerSessionToolExecutor({
+    resolveGatewayContext,
+    placements,
+    dispatchChild,
+    githubPublication: { requestForClaim: githubPublicationRequest },
+    portals: {
+      getService: () => undefined,
+      carrier: { open: vi.fn() },
+      onChanged: vi.fn(),
+    },
+    environments: {
+      get: (environmentId: string) => {
+        if (environmentId === SOURCE.environmentId) {
+          return {
+            state: "attached",
+            ownerEpoch: SOURCE.ownerEpoch,
+            attachedSessionIds: [SOURCE.sessionId],
+            providerId: "fake",
+            profileId: "cloud-profile",
+            profileSnapshot: { install: "bundle", settings: { region: "source" } },
+          };
+        }
+        if (environmentId === CHILD.environmentId) {
+          return {
+            state: "attached",
+            ownerEpoch: CHILD.ownerEpoch,
+            attachedSessionIds: [CHILD.sessionId],
+            providerId: "fake",
+            profileId: "cloud-profile",
+            profileSnapshot: { install: "bundle", settings: { region: "source" } },
+          };
+        }
+        if (environmentId === GRANDCHILD.environmentId) {
+          return {
+            state: "attached",
+            ownerEpoch: GRANDCHILD.ownerEpoch,
+            attachedSessionIds: [GRANDCHILD.sessionId],
+            providerId: "fake",
+            profileId: "cloud-profile",
+            profileSnapshot: { install: "bundle", settings: { region: "source" } },
+          };
+        }
+        return undefined;
+      },
+    } as never,
+  });
+  function activate(session: {
+    agentId: string;
+    environmentId: string;
+    ownerEpoch: number;
+    sessionId: string;
+    sessionKey: string;
+  }): void {
+    let placement = placements.startDispatch(session);
+    placement = placements.transition({
+      sessionId: session.sessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: placement.generation,
+      patch: { environmentId: session.environmentId },
+    });
+    placement = placements.transition({
+      sessionId: session.sessionId,
+      from: "provisioning",
+      to: "syncing",
+      expectedGeneration: placement.generation,
+      patch: { workerBundleHash: "a".repeat(64) },
+    });
+    placement = placements.transition({
+      sessionId: session.sessionId,
+      from: "syncing",
+      to: "starting",
+      expectedGeneration: placement.generation,
+      patch: {
+        workspaceBaseManifestRef: `manifest-${session.sessionId}`,
+        remoteWorkspaceDir: `/workspace/${session.sessionId}`,
+      },
+    });
+    placements.transition({
+      sessionId: session.sessionId,
+      from: "starting",
+      to: "active",
+      expectedGeneration: placement.generation,
+      patch: { activeOwnerEpoch: session.ownerEpoch },
+    });
+  }
+
+  function setEntry(
+    sessionKey: string,
+    sessionId: string,
+    parent?: { sessionKey: string; sessionId: string },
+  ): void {
+    sessionEntries.set(sessionKey, {
+      sessionId,
+      updatedAt: Date.now(),
+      ...(parent ? { parentSessionKey: parent.sessionKey, parentSessionId: parent.sessionId } : {}),
+    });
+  }
+
+  async function send(toolCallId: string) {
+    return await execute({
+      identity,
+      toolName: "sessions_send",
+      request: {
+        toolCallId,
+        sessionKey: TARGET.sessionKey,
+        message: "status",
+        timeoutSeconds: 0,
+      },
+    });
+  }
+
+  function spawn(toolCallId: string, task = "start the child") {
+    return execute({ identity, toolName: "sessions_spawn", request: { toolCallId, task } });
+  }
+
+  return {
+    placements,
+    identity,
+    execute,
+    sourceClaim,
+    delegatedAuthorities,
+    spawnState,
+    activate,
+    setEntry,
+    send,
+    spawn,
+    async dispose() {
+      for (const authority of delegatedAuthorities) {
+        releaseAgentRunDelegatedAuthority(authority);
+      }
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(root, { recursive: true, force: true });
+    },
+  };
+}
+
+export function installWorkerSessionToolTestFixture(mocks: WorkerSessionToolTestMocks) {
+  let fixture: Awaited<ReturnType<typeof createWorkerSessionToolTestFixture>>;
+  beforeEach(async () => {
+    fixture = await createWorkerSessionToolTestFixture(mocks);
+  });
+  afterEach(async () => {
+    await fixture.dispose();
+  });
+  return () => fixture;
+}

@@ -159,16 +159,16 @@ function readLatestActiveBoundaryMetadataByType(
   );
 }
 
-function readLatestActiveBoundaryMetadata(projection: ResetWindowProjection) {
+function readLatestActiveBoundaryMetadata(
+  projection: ResetWindowProjection,
+  scope: BoundaryWindowScope,
+) {
   const reset = readLatestActiveBoundaryMetadataByType(projection, "reset");
-  const compaction = readLatestActiveBoundaryMetadataByType(projection, "compaction");
-  if (!reset) {
-    return compaction;
-  }
-  if (!compaction) {
+  if (scope === "history") {
     return reset;
   }
-  return reset.seq > compaction.seq ? reset : compaction;
+  const compaction = readLatestActiveBoundaryMetadataByType(projection, "compaction");
+  return reset && (!compaction || reset.seq > compaction.seq) ? reset : compaction;
 }
 
 function readBoundaryPayload(
@@ -204,8 +204,8 @@ function findLatestResetMessageWindow(
   scope: BoundaryWindowScope,
 ): ResetMessageWindow | null {
   const db = getResetWindowKysely(projection.database);
-  const latestBoundary = readLatestActiveBoundaryMetadata(projection);
-  if (!latestBoundary || !isWindowBoundary(latestBoundary.event_type, scope)) {
+  const latestBoundary = readLatestActiveBoundaryMetadata(projection, scope);
+  if (!latestBoundary) {
     return null;
   }
   const boundaryPayload = readBoundaryPayload(projection, latestBoundary.seq, scope);
@@ -312,12 +312,8 @@ function resolveResetMessageWindow(
       return cached.window;
     }
     if (cached.generation === generation && cached.window) {
-      const latestBoundary = readLatestActiveBoundaryMetadata(projection);
-      if (
-        latestBoundary &&
-        isWindowBoundary(latestBoundary.event_type, scope) &&
-        latestBoundary.seq === cached.window.boundarySeq
-      ) {
+      const latestBoundary = readLatestActiveBoundaryMetadata(projection, scope);
+      if (latestBoundary?.seq === cached.window.boundarySeq) {
         const window = { ...cached.window, indexedSeq: projection.state.indexedSeq };
         cacheResetMessageWindow(key, { generation, indexedSeq: window.indexedSeq, window });
         return window;

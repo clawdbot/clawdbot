@@ -18,30 +18,14 @@ import {
   resolveEstimatedSessionCostUsd,
   resolvePositiveNumber,
   resolveRuntimeChildSessionKeys,
-  resolveStoreChildSessionKeysFromCandidates,
 } from "./session-utils-core.js";
 
-export function buildSessionListRowContext(params: {
-  store: Record<string, SessionEntry>;
+export function buildSessionListRowMetadataContext(params: {
   now: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
-  const subagentRuns = buildSubagentSessionListReadIndex(params.now);
-  return buildSessionListRowContextFromParts({
-    subagentRuns,
-    storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
-    userProfileIdentityById: params.userProfileIdentityById,
-  });
-}
-
-function buildSessionListRowContextFromParts(params: {
-  subagentRuns: SessionListRowContext["subagentRuns"];
-  storeChildSessionsByKey: Map<string, string[]>;
-  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
-}): SessionListRowContext {
   return {
-    subagentRuns: params.subagentRuns,
-    storeChildSessionsByKey: params.storeChildSessionsByKey,
+    subagentRuns: buildSubagentSessionListReadIndex(params.now),
     selectedModelByOverrideRef: new Map(),
     thinkingMetadataByModelRef: new Map(),
     displayModelIdentityByKey: new Map(),
@@ -51,33 +35,22 @@ function buildSessionListRowContextFromParts(params: {
   };
 }
 
-export function buildSessionListRowMetadataContext(params: {
-  now: number;
-  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
-}): SessionListRowContext {
-  return buildSessionListRowContextFromParts({
-    subagentRuns: buildSubagentSessionListReadIndex(params.now),
-    storeChildSessionsByKey: new Map(),
-    userProfileIdentityById: params.userProfileIdentityById,
-  });
-}
-
 export function buildSingleRowStoreChildSessionsByKey(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
   key: string;
   now: number;
 }): Map<string, string[]> {
-  const storeChildSessions = resolveStoreChildSessionKeysFromCandidates({
+  return buildStoreChildSessionIndex({
     store: params.store,
-    key: params.key,
+    keys: [params.key],
     now: params.now,
     candidates: getSingleRowChildSessionCandidates({
       storePath: params.storePath,
       store: params.store,
     }),
+    requireCurrentController: true,
   });
-  return storeChildSessions ? new Map([[params.key, storeChildSessions]]) : new Map();
 }
 
 export function resolveSessionSelectedModelRef(params: {
@@ -136,9 +109,12 @@ export function resolveChildSessionKeys(
     now,
     subagentRuns,
   );
-  const storeChildSessions = buildStoreChildSessionIndex(store, now, subagentRuns).get(
-    controllerSessionKey,
-  );
+  const storeChildSessions = buildStoreChildSessionIndex({
+    store,
+    keys: [controllerSessionKey],
+    now,
+    subagentRuns,
+  }).get(controllerSessionKey);
   return mergeChildSessionKeys(runtimeChildSessions, storeChildSessions);
 }
 

@@ -1220,7 +1220,7 @@ export async function maybeRestartService(params: {
       }
     }
 
-    if (requiresVerifiedRestart() || opts.requireRunningService) {
+    if (requiresVerifiedRestart() || opts.requireRunningService || expectedGatewayBuildId) {
       return false;
     }
 

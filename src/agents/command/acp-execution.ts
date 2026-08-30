@@ -72,6 +72,7 @@ export async function runAcpAgentCommand(params: {
     sessionId: params.sessionId,
     agentId: params.sessionAgentId,
     lifecycleGeneration: params.lifecycleGeneration,
+    projectSessionActive: !params.suppressVisibleSessionEffects,
     ...(params.suppressVisibleSessionEffects ? { isControlUiVisible: false } : {}),
   });
   attemptExecutionRuntime.emitAcpLifecycleStart({
@@ -162,7 +163,13 @@ export async function runAcpAgentCommand(params: {
       requestId: params.runId,
       signal: params.opts.abortSignal,
       onElicitation,
-      onBeforePrompt: params.opts.onExecutionStarted,
+      onBeforePrompt: async () => {
+        const recorder = params.opts.userTurnTranscriptRecorder;
+        if (recorder && !recorder.hasPersisted() && !(await recorder.persistApproved())) {
+          throw new Error("ACP input could not enter the session transcript");
+        }
+        params.opts.onExecutionStarted?.();
+      },
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
           attemptExecutionRuntime.emitAcpPromptSubmitted({
@@ -255,7 +262,10 @@ export async function runAcpAgentCommand(params: {
     const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
       body: params.body,
       transcriptBody: params.transcriptBody,
-      ...(params.opts.suppressPromptPersistence !== true && params.opts.transcriptMedia?.length
+      userTurnTranscriptRecorder: params.opts.userTurnTranscriptRecorder,
+      ...(!params.opts.userTurnTranscriptRecorder &&
+      params.opts.suppressPromptPersistence !== true &&
+      params.opts.transcriptMedia?.length
         ? {
             userInput: {
               text: params.transcriptBody,

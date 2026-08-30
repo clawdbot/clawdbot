@@ -28,6 +28,7 @@ import type {
 } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { loadCachedSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
 import {
   isRequiredSessionTargetMethod,
@@ -80,16 +81,7 @@ const AGENT_RUN_START_METHODS = new Set([
 // must not reassign ownership of a foreign session it can merely see.
 const VISIBILITY_AUTHORIZED_METHODS = new Set(["sessions.assignOwner"]);
 
-export class SessionMutationAuthorizationChangedError extends Error {
-  readonly error: ErrorShape;
-
-  constructor(error: ErrorShape) {
-    super(error.message);
-    this.name = "SessionMutationAuthorizationChangedError";
-    this.error = error;
-  }
-}
-
+export { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 export { invalidateSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
 
 export function resolveSessionVisibility(

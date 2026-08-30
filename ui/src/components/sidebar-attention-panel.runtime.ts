@@ -64,6 +64,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
   const visibleDismissals = visibleEntries.flatMap((entry) =>
     entry.dismissal ? [entry.dismissal] : [],
   );
+  const hasVisibleDismissals = visibleDismissals.length > 0;
   const tabCounts = sidebarInboxTabCounts(params.entries);
   const custodianItems = params.entries.filter(
     (entry) => entry.type === "attention" && entry.action.kind === "askCustodian",
@@ -136,19 +137,20 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
             ${t("attention.issues")}
           </h2>
           <div class="sidebar-issues-panel__header-actions">
-            ${visibleDismissals.length > 0
-              ? html`<button
-                  type="button"
-                  class="btn btn--xs btn--ghost sidebar-issues-panel__dismiss-shown"
-                  @click=${() => {
-                    for (const dismissal of visibleDismissals) {
-                      params.onDismiss(dismissal);
-                    }
-                  }}
-                >
-                  ${t("attention.dismissShown")}
-                </button>`
-              : nothing}
+            <button
+              type="button"
+              class="btn btn--xs btn--ghost sidebar-issues-panel__dismiss-shown"
+              style=${hasVisibleDismissals ? nothing : "visibility:hidden"}
+              ?disabled=${!hasVisibleDismissals}
+              aria-hidden=${hasVisibleDismissals ? nothing : "true"}
+              @click=${() => {
+                for (const dismissal of visibleDismissals) {
+                  params.onDismiss(dismissal);
+                }
+              }}
+            >
+              ${t("attention.dismissShown")}
+            </button>
             ${renderSidebarAskOpenClawButton({
               count: custodianItems.length,
               severity: custodianSeverity,

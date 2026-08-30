@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
-import { buildStatusText } from "./status-text.js";
+import { buildStatusReplyParts, buildStatusText } from "./status-text.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionCostSummariesFromCache: vi.fn(),
@@ -351,6 +351,180 @@ describe("buildStatusText thinking facts", () => {
 
     expect(text).toContain("think high");
     expect(text).not.toMatch(/think\s+off\b/);
+  });
+});
+
+describe("buildStatusText prepared context windows", () => {
+  const catalog = [
+    {
+      provider: "deepseek",
+      id: "deepseek-v4-flash",
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+    },
+    {
+      provider: "fallback",
+      id: "small-model",
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+    },
+    {
+      provider: "openrouter",
+      id: "deepseek/deepseek-v4-flash",
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+    },
+  ];
+
+  async function renderPreparedStatus(
+    overrides: Partial<Parameters<typeof buildStatusReplyParts>[0]> = {},
+  ) {
+    return await buildStatusReplyParts({
+      cfg: {},
+      sessionEntry: {
+        sessionId: "prepared-context",
+        updatedAt: 0,
+        totalTokens: 45_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      sessionKey: "agent:main:main",
+      statusChannel: "mobilechat",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      thinkingCatalog: catalog,
+      resolvedHarness: "openclaw",
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      pluginHealthLineOverride: "Plugins: test",
+      taskLineOverride: "",
+      skipDefaultTaskLookup: true,
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+      includeTranscriptUsage: false,
+      ...overrides,
+    });
+  }
+
+  it("renders a cold-cache prepared window in plain and rich status", async () => {
+    const parts = await renderPreparedStatus();
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+
+    expect(parts.text).toContain("Context: 45k/1.0m");
+    expect(parts.text).not.toContain("Context: 45k/200k");
+    expect(table?.type === "table" ? table.rows : []).toContainEqual([
+      "📚 Context",
+      expect.stringContaining("45k/1.0m"),
+    ]);
+  });
+
+  it("keeps the selected prepared window over stale active model state", async () => {
+    const parts = await renderPreparedStatus({
+      sessionEntry: {
+        sessionId: "selected-prepared-context",
+        updatedAt: 0,
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "user",
+        modelProvider: "fallback",
+        model: "small-model",
+        totalTokens: 45_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+    });
+
+    expect(parts.text).toContain("Context: 45k/1.0m");
+    expect(parts.text).not.toContain("Context: 45k/128k");
+  });
+
+  it("uses the active prepared window for an established fallback", async () => {
+    const parts = await renderPreparedStatus({
+      sessionEntry: {
+        sessionId: "active-prepared-context",
+        updatedAt: 0,
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelProvider: "fallback",
+        model: "small-model",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "deepseek/deepseek-v4-flash",
+          activeModel: "fallback/small-model",
+          reason: "provider unavailable",
+        },
+        totalTokens: 45_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+    });
+
+    expect(parts.text).toContain("Context: 45k/128k");
+    expect(parts.text).not.toContain("Context: 45k/1.0m");
+  });
+
+  it("keeps Anthropic authored caps below the prepared Claude CLI window", async () => {
+    const parts = await renderPreparedStatus({
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      resolvedHarness: "claude-cli",
+      thinkingCatalog: [
+        {
+          provider: "anthropic",
+          id: "claude-haiku-4-5",
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+        },
+      ],
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.test",
+              models: [
+                {
+                  id: "claude-haiku-4-5",
+                  name: "Claude Haiku 4.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_000_000,
+                  contextTokens: 256_000,
+                  maxTokens: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(parts.text).toContain("Context: 45k/256k");
+    expect(parts.text).not.toContain("Context: 45k/1.0m");
+  });
+
+  it("matches namespaced prepared model IDs without stripping them", async () => {
+    const parts = await renderPreparedStatus({
+      provider: "openrouter",
+      model: "deepseek/deepseek-v4-flash",
+      thinkingCatalog: [
+        ...catalog,
+        {
+          provider: "openrouter",
+          id: "deepseek-v4-flash",
+          reasoning: false,
+          input: ["text"],
+          contextWindow: 128_000,
+          contextTokens: 128_000,
+        },
+      ],
+    });
+
+    expect(parts.text).toContain("Context: 45k/1.0m");
+    expect(parts.text).not.toContain("Context: 45k/128k");
   });
 });
 

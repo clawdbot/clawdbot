@@ -50,34 +50,59 @@ function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
 }
 
 describe("chat pane retained presentation", () => {
-  it("keeps a hidden retained session current without requesting a transcript redraw", () => {
-    const { pane, requestUpdate, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.presented = false;
-    requestUpdate.mockClear();
-    const result = {
-      count: 1,
-      path: "",
-      sessions: [{ key: state.sessionKey, kind: "direct", updatedAt: 1 }],
-    } as NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
+  it.each(["hidden", "frame", "no-frame"] as const)(
+    "keeps session publications current while scheduling %s presentation",
+    (presentation) => {
+      const { pane, requestUpdate, state } = createTestChatPane({
+        client: createGatewayBrowserClientFixture(),
+        sessions: createSessionCapabilityFixture(),
+      });
+      pane.presented = presentation !== "hidden";
+      requestUpdate.mockClear();
+      const frames: FrameRequestCallback[] = [];
+      const requestFrame = vi.fn((callback: FrameRequestCallback) => frames.push(callback));
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        presentation === "no-frame" ? undefined : requestFrame,
+      );
+      const rendered: Array<ChatPageHost["sessionsResult"]> = [];
+      requestUpdate.mockImplementation(() => rendered.push(state.sessionsResult));
+      for (const updatedAt of [1, 2, 3]) {
+        const result = {
+          ts: updatedAt,
+          count: 1,
+          path: "",
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [{ key: state.sessionKey, kind: "direct", updatedAt }],
+        } satisfies NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
+        pane.applySessionsState({
+          agentId: "main",
+          deletedSessions: [],
+          error: null,
+          groups: [],
+          groupSettings: [],
+          loading: false,
+          modelOverrides: {},
+          result,
+          sectionOrder: [],
+        });
+        expect(state.sessionsResult).toBe(result);
+      }
 
-    pane.applySessionsState({
-      agentId: "main",
-      deletedSessions: [],
-      error: null,
-      groups: [],
-      groupSettings: [],
-      loading: false,
-      modelOverrides: {},
-      result,
-      sectionOrder: [],
-    });
-
-    expect(state.sessionsResult).toBe(result);
-    expect(requestUpdate).not.toHaveBeenCalled();
-  });
+      if (presentation === "frame") {
+        expect(requestUpdate).not.toHaveBeenCalled();
+        expect(requestFrame).toHaveBeenCalledOnce();
+        frames[0]?.(0);
+        expect(rendered).toEqual([state.sessionsResult]);
+      } else {
+        expect(requestFrame).not.toHaveBeenCalled();
+        expect(requestUpdate).toHaveBeenCalledTimes(presentation === "hidden" ? 0 : 3);
+        if (presentation === "no-frame") {
+          expect(rendered.at(-1)).toBe(state.sessionsResult);
+        }
+      }
+    },
+  );
 
   it("does not redraw a retained transcript when its navigation callback is replaced", async () => {
     const { pane } = createTestChatPane({
@@ -103,6 +128,8 @@ describe("chat pane header state", () => {
     ["pin", { kind: "toggle-pin" } as const, { pinned: true }],
     ["unread", { kind: "toggle-unread" } as const, { unread: true }],
     ["icon", { kind: "set-icon", icon: "🦞" } as const, { icon: "🦞" }],
+    ["color", { kind: "set-color", color: "purple" } as const, { color: "purple" }],
+    ["clear color", { kind: "set-color", color: null } as const, { color: null }],
     ["group", { kind: "move-to-group", category: "Projects" } as const, { category: "Projects" }],
   ])("patches the active session from the header %s action", async (_name, action, expected) => {
     const patch = vi.fn(async () => ({}));
@@ -703,6 +730,7 @@ describe("chat pane initialization", () => {
     state.initialUserMessage = createInitialUserMessageHandoff();
     state.chatRunId = "run-reconnected";
     state.chatStream = "The response survived navigation.";
+    state.loadAssistantIdentity = vi.fn(async () => undefined);
     pane.sessionKey = canonicalSessionKey;
 
     (

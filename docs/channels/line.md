@@ -223,6 +223,7 @@ Allowlists and policies:
 - `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups; DM `allowFrom` entries do not admit group senders
 - Per-group overrides: `channels.line.groups.<groupId>.allowFrom` (plus `enabled`, `requireMention`, `systemPrompt`, `skills`). With
   `groupPolicy: "allowlist"`, set `groupAllowFrom` or the per-group `allowFrom`; an empty group allowlist blocks group messages even when DMs are open.
+- Quoting one of the bot's own messages counts as addressing it, so a group reply made with LINE's quote gesture reaches the agent without an explicit mention. LINE does not read the `implicitMentions` flags, so this always counts; see [Groups](/channels/groups). The bot recognizes a quote of its own message from the most recent ones it remembers sending (a few hundred per account), so quoting an older message, or one sent before the last Gateway restart, still needs a mention.
 - Static sender access groups can be referenced from `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` with `accessGroup:<name>`; see [Access groups](/channels/access-groups).
 - Runtime note: if `channels.line` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
@@ -252,8 +253,9 @@ as untrusted.
 - Text is chunked at 5000 characters.
 - Markdown formatting is stripped; code blocks and tables are converted into Flex
   cards when possible.
-- Streaming responses are buffered; LINE receives full chunks with a loading
-  animation while the agent works.
+- Streaming responses are buffered; LINE receives full chunks. The loading
+  animation runs only in one-to-one chats — LINE's loading API accepts a user id
+  and rejects group and room ids — so a group reply arrives without one.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
 - Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
   to the agent, matching the shared media store used by other channel plugins.
@@ -361,14 +363,14 @@ The LINE plugin sends images, videos, and audio through the agent message tool:
 - **Videos**: require a preview image; set `channelData.line.previewImageUrl` to an image URL.
 - **Audio**: sent as LINE audio messages; duration defaults to 60 seconds unless `channelData.line.durationMs` is set.
 
-The media kind is taken from `channelData.line.mediaKind` when set, otherwise inferred
-from the other LINE options or the URL file suffix, with image as the fallback.
+When `mediaKind` is omitted, LINE infers it from LINE-specific options or the URL
+suffix. Native suffix inference supports JPEG/PNG, MP4, and MP3/M4A; suffixless URLs
+retain the image fallback. Other suffixed URLs and inferred MP4 without a preview
+become text links. Explicit video still requires `previewImageUrl`.
 
 Outbound media URLs must be public HTTPS URLs of at most 2000 characters. OpenClaw
 validates the target hostname before handing the URL to LINE and rejects loopback,
 link-local, and private-network targets.
-
-Generic media sends without LINE-specific options use the image route.
 
 ## Troubleshooting
 

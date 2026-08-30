@@ -238,8 +238,10 @@ suite.define(() => {
       Date.parse("2026-07-01T16:00:00.000Z"),
       { archived: true },
     );
+    const main = sessionRow("agent:main:main", "Main", archived.updatedAt + 1);
     const gateway = await installMockGateway(page, {
       mainSessionKey: "agent:main:main",
+      sessions: [main, archived],
       methodResponses: {
         "sessions.branches.list": {
           branches: [
@@ -247,10 +249,7 @@ suite.define(() => {
             { active: false, headline: "Other branch", leafEntryId: "other", messageCount: 1 },
           ],
         },
-        "sessions.describe": { session: archived },
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", archived.updatedAt + 1),
-        ]),
+        "sessions.list": sessionsListResponse([main]),
         "sessions.patch": {},
       },
       sessionArchiveFiltering: true,
@@ -280,9 +279,6 @@ suite.define(() => {
         .toBe(true);
       expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);
 
-      await gateway.setMethodResponse("sessions.describe", {
-        session: { ...archived, archived: false },
-      });
       await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Unarchive" }));
       await waitForPatch(
         gateway,
@@ -291,6 +287,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", {
         ...archived,
         archived: false,
+        archivedAt: undefined,
         reason: "update",
         sessionKey: archived.key,
       });

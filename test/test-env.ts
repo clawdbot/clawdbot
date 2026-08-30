@@ -219,6 +219,7 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_CANVAS_HOST_PORT", value: process.env.OPENCLAW_CANVAS_HOST_PORT },
     { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
+    { key: "PI_CODING_AGENT_DIR", value: process.env.PI_CODING_AGENT_DIR },
     ...ISOLATED_TEST_CREDENTIAL_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
     { key: "NODE_OPTIONS", value: process.env.NODE_OPTIONS },
   ];
@@ -239,7 +240,9 @@ function initializeIsolatedTestEnv(tempHome: string): void {
   // Derive all state, including SQLite, from this unique HOME so cleanup owns it.
   // Leave the override unset so nested HOME scopes also isolate their state.
   deleteTestEnvValue("OPENCLAW_STATE_DIR");
+  // Model status still honors the shipped legacy selector; isolate both agent-dir keys.
   deleteTestEnvValue("OPENCLAW_AGENT_DIR");
+  deleteTestEnvValue("PI_CODING_AGENT_DIR");
   // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
   deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
   deleteTestEnvValue("OPENCLAW_BRIDGE_ENABLED");

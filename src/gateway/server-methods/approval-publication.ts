@@ -31,7 +31,7 @@ export type PluginApprovalIosPushDelivery = {
 async function runSideEffect(params: {
   context: GatewayRequestContext;
   approvalKind: "exec" | "plugin" | "system-agent";
-  effect: "broadcast" | "forwarder" | "ios-push";
+  effect: "broadcast" | "forwarder" | "ios-push" | "web-push";
   run: () => void | Promise<void>;
 }): Promise<void> {
   try {
@@ -96,6 +96,18 @@ export async function publishAppliedApprovalResolution(params: {
       approvalKind: nativeApprovalKind,
       run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
     });
+    const webPushDelivery = params.context.approvalWebPushDelivery;
+    if (webPushDelivery) {
+      await runSideEffect({
+        context: params.context,
+        approvalKind: nativeApprovalKind,
+        effect: "web-push",
+        run: () =>
+          params.record.status === "expired"
+            ? webPushDelivery.handleExpired(params.liveRecord)
+            : webPushDelivery.handleResolved(event),
+      });
+    }
   }
   if (params.record.kind === "exec" && params.forwarder) {
     await runSideEffect({

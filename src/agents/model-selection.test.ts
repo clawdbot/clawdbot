@@ -2867,6 +2867,17 @@ describe("resolveSubagentSpawnModelSelection", () => {
       expected: "openai/gpt-5.4",
     },
     {
+      name: "resolves profile-qualified aliases without treating the profile as model identity",
+      config: {
+        modelEntries: {
+          "openai/gpt-5.6-luna": { alias: "luna" },
+        },
+      },
+      agentId: "main",
+      modelOverride: "luna@openai:test-profile",
+      expected: "openai/gpt-5.6-luna@openai:test-profile",
+    },
+    {
       name: "resolves an alias configured only on the target agent",
       config: {
         modelEntries: { "openai/gpt-5.4": { alias: "global-gpt" } },

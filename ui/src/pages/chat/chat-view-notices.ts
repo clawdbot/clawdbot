@@ -5,6 +5,7 @@ import { renderCopyButton } from "../../components/copy-button.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
+import { clampText } from "../../lib/format.ts";
 import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
@@ -66,6 +67,14 @@ function renderDiskSpaceNotice(diskSpace: SessionPlacementDiskSpace | undefined)
 }
 
 function renderErrorNotice(error: string, action: TemplateResult | typeof nothing = nothing) {
+  const lines = error
+    .trim()
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/\s+/gu, " ").trim());
+  const [firstLine = ""] = lines;
+  const summary = clampText(firstLine);
+  const hasDetails = lines.some((line) => line !== "" && line !== summary);
+  // Plain summaries wrap fully; only expandable previews may clip at narrow widths.
   return html`
     <div
       class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-error"
@@ -74,16 +83,20 @@ function renderErrorNotice(error: string, action: TemplateResult | typeof nothin
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
         >${icons.alertTriangle}</span
       >
-      <details class="chat-error__content">
-        <summary class="chat-error__summary">
-          <strong>${error}</strong>
-          <span>${t("chat.errorDetails")}</span>
-          <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
-        </summary>
-        <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
+      ${hasDetails
+        ? html`<details class="chat-error__content">
+            <summary class="chat-error__summary">
+              <strong>${summary}</strong>
+              <span>${t("chat.errorDetails")}</span>
+              <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
+            </summary>
+            <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
 ${error}</pre>
-        ${renderCopyButton(error, t("chat.copyError"))}
-      </details>
+            ${renderCopyButton(error, t("chat.copyError"))}
+          </details>`
+        : html`<span class="chat-error__content"
+            ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
+          >`}
       ${action}
     </div>
   `;

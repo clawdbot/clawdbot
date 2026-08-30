@@ -6,7 +6,6 @@ import {
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
 } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
 import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
 import {
@@ -94,7 +93,6 @@ function renderSettingsMediaDeviceField(options: {
       ? [{ label: options.fallbackLabel(state.devices.length + 1), value: selectedDeviceId }]
       : []),
   ];
-  const refreshLabel = `${t("common.refresh")}: ${options.title}`;
   let accessRequested = false;
   const requestAccess = () => {
     if (accessRequested || !state.permissionRequired) {
@@ -143,15 +141,6 @@ function renderSettingsMediaDeviceField(options: {
           `,
         )}
       </select>
-      <button
-        type="button"
-        class="btn btn--sm btn--icon"
-        aria-label=${refreshLabel}
-        ?disabled=${state.loading}
-        @click=${() => options.onRefresh?.()}
-      >
-        ${state.loading ? icons.loader : icons.refresh}
-      </button>
     `,
   });
 }
@@ -212,6 +201,10 @@ export function renderChatPreferencesSection(
     (props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord) !==
       UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
   );
+  const collapseTaskProgressDefaultDescription = renderSettingsDefaultDescription(
+    t("common.disabled"),
+    props.chatCollapseTaskProgress !== UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
+  );
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-section">
       <div class="settings-section__header">
@@ -223,6 +216,13 @@ export function renderChatPreferencesSection(
           description: html`${t("configView.chatPrefs.messageWidthHint")}<br />
             ${messageWidthDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           control: messageWidthInput,
+        })}
+        ${renderSettingsToggleRow({
+          title: t("configView.chatPrefs.collapseTaskProgress"),
+          description: html`${t("configView.chatPrefs.collapseTaskProgressHint")}<br />
+            ${collapseTaskProgressDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          checked: props.chatCollapseTaskProgress,
+          onChange: props.setChatCollapseTaskProgress,
         })}
         ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),

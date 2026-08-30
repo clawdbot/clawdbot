@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -11,12 +12,9 @@ import {
 } from "../../scripts/lib/tsgo-sparse-guard.mts";
 import { resolveTsgoTimeoutMs } from "../../scripts/run-tsgo.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
-import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import { withTestTimeout } from "../helpers/promise.js";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -459,19 +457,29 @@ child.once("message", () => process.exit(0));
   it.each(["wrapper", "spawn"])(
     "reaps a wedged compiler on SIGTERM during %s",
     async (phase) => {
-      const cwd = fs.realpathSync(createTempDir("openclaw-run-tsgo-signal-"));
-      const pidFile = path.join(cwd, "fake-tsgo.pid");
-      fs.writeFileSync(path.join(cwd, "tsconfig.extensions.json"), "{}\n");
-      writeFakeTsgo(
-        cwd,
-        '#!/bin/sh\ntrap \'\' TERM HUP INT\necho $$ > "$(dirname "$0")/../../fake-tsgo.pid"\nwhile true; do sleep 1; done\n',
-      );
-      const preloadPath = path.join(cwd, "signal-during-spawn.mjs");
-      // Hold the real spawn boundary until the compiler is ready, then deliver an
-      // OS signal before the supervisor can register the returned child.
-      fs.writeFileSync(
-        preloadPath,
-        `
+      const fixtureDirs = createTempDirTracker();
+      // Detached compilers can outlive Vitest's temporary namespace. Retain their
+      // diagnostics outside it until both the wrapper and compiler are joined.
+      const artifacts = path.resolve(".artifacts/tsgo-signal");
+      fs.mkdirSync(artifacts, { recursive: true });
+      const cwd = fixtureDirs.make("fixture-", fs.realpathSync(artifacts));
+      let retainFixture = false;
+      try {
+        const pidFile = path.join(cwd, "fake-tsgo.pid");
+        // Give this fixture its own artifact lock rather than the enclosing checkout's.
+        fs.writeFileSync(path.join(cwd, "package.json"), '{"private":true}\n');
+        fs.writeFileSync(path.join(cwd, "pnpm-workspace.yaml"), "packages: []\n");
+        fs.writeFileSync(path.join(cwd, "tsconfig.extensions.json"), "{}\n");
+        writeFakeTsgo(
+          cwd,
+          '#!/bin/sh\ntrap \'\' TERM HUP INT\necho $$ > "$(dirname "$0")/../../fake-tsgo.pid"\nwhile true; do sleep 1; done\n',
+        );
+        const preloadPath = path.join(cwd, "signal-during-spawn.mjs");
+        // Hold the real spawn boundary until the compiler is ready, then deliver an
+        // OS signal before the supervisor can register the returned child.
+        fs.writeFileSync(
+          preloadPath,
+          `
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -492,47 +500,77 @@ childProcess.spawn = (...args) => {
 };
 syncBuiltinESMExports();
 `,
-      );
-      const wrapper = spawn(
-        process.execPath,
-        [path.resolve("scripts/run-tsgo.mjs"), "-p", "tsconfig.extensions.json"],
-        {
-          cwd,
-          stdio: ["ignore", "ignore", "pipe"],
-          env: withSupervisorClock(cwd, {
-            ...process.env,
-            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""}${phase === "spawn" ? ` --import=${pathToFileURL(preloadPath).href}` : ""}`,
-          }),
-        },
-      );
-      const stderr = createBoundedChildOutput();
-      wrapper.stderr.on("data", (chunk) => stderr.append(chunk));
-      wrapper.once("error", (error) => stderr.append(`wrapper spawn error: ${error.message}\n`));
-      const wrapperClose = waitForChildClose(wrapper, 15_000);
-
-      try {
-        const compilerPid = await waitForPidFile(pidFile, 10_000);
-        if (phase === "wrapper") {
-          wrapper.kill("SIGTERM");
-        }
-
-        const wrapperResult = await wrapperClose;
-        expect([
-          { code: 143, signal: null },
-          { code: null, signal: "SIGTERM" },
-        ]).toContainEqual(wrapperResult);
-        await expect(waitForDead(compilerPid, 2_000)).resolves.toBeUndefined();
-      } catch (error) {
-        throw new Error(
-          `${String(error)}\nwrapper exitCode=${wrapper.exitCode}, signalCode=${wrapper.signalCode}\n${stderr.text()}`,
-          { cause: error },
         );
-      } finally {
-        if (wrapper.exitCode === null && wrapper.signalCode === null) {
-          wrapper.kill("SIGKILL");
+        const wrapper = spawn(
+          process.execPath,
+          [path.resolve("scripts/run-tsgo.mjs"), "-p", "tsconfig.extensions.json"],
+          {
+            cwd,
+            stdio: ["ignore", "ignore", "pipe"],
+            env: withSupervisorClock(cwd, {
+              ...process.env,
+              NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""}${phase === "spawn" ? ` --import=${pathToFileURL(preloadPath).href}` : ""}`,
+            }),
+          },
+        );
+        retainFixture = true;
+        const deadline = performance.now() + 15_000;
+        const stderr = createBoundedChildOutput();
+        wrapper.stderr.on("data", (chunk) => stderr.append(chunk));
+        wrapper.once("error", (error) => stderr.append(`wrapper spawn error: ${error.message}\n`));
+        // A work deadline must not consume the real completion needed by teardown.
+        const wrapperClose = new Promise<{
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        }>((resolve) => {
+          wrapper.once("close", (code, signal) => resolve({ code, signal }));
+        });
+        const errors: unknown[] = [];
+        try {
+          const compilerPid = await waitForPidFile(pidFile, 10_000);
+          if (phase === "wrapper") {
+            wrapper.kill("SIGTERM");
+          }
+
+          const wrapperResult = await withTestTimeout(
+            wrapperClose,
+            Math.max(0, deadline - performance.now()),
+            "child did not close before timeout",
+          );
+          expect([
+            { code: 143, signal: null },
+            { code: null, signal: "SIGTERM" },
+          ]).toContainEqual(wrapperResult);
+          await expect(waitForDead(compilerPid, 2_000)).resolves.toBeUndefined();
+        } catch (error) {
+          errors.push(error);
         }
-        reapFakeTsgo(cwd);
-        await wrapperClose;
+        try {
+          if (wrapper.exitCode === null && wrapper.signalCode === null) {
+            wrapper.kill("SIGKILL");
+          }
+          reapFakeTsgo(cwd);
+          const compilerPid = readFakeTsgoPid(cwd);
+          await Promise.all([
+            withTestTimeout(wrapperClose, 2_000, "wrapper did not close during cleanup"),
+            compilerPid === undefined ? undefined : waitForDead(compilerPid, 2_000),
+          ]);
+          retainFixture = false;
+        } catch (error) {
+          errors.push(error);
+        }
+        if (errors.length > 0) {
+          const cause = errors.length === 1 ? errors[0] : new AggregateError(errors);
+          const retained = retainFixture ? `\nfixture retained at ${cwd}` : "";
+          throw new Error(
+            `${errors.map(String).join("\n")}\nwrapper exitCode=${wrapper.exitCode}, signalCode=${wrapper.signalCode}${retained}\n${stderr.text()}`,
+            { cause },
+          );
+        }
+      } finally {
+        if (!retainFixture) {
+          fixtureDirs.cleanup();
+        }
       }
     },
     20_000,

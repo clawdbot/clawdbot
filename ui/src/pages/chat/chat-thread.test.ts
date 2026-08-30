@@ -318,7 +318,7 @@ describe("assistant commentary grouping", () => {
         runId: "active-run",
         messages: [
           userMessage("Original", 1, {
-            __openclaw: { idempotencyKey: "active-run:user" },
+            __openclaw: { idempotencyKey: "original-submit:user", runId: "active-run" },
           }),
           userMessage("Steer", 2, {
             __openclaw: {
@@ -532,11 +532,11 @@ describe("assistant commentary grouping", () => {
         runId: "run-current",
         messages: [
           userMessage("Earlier prompt", 1_000, {
-            __openclaw: { idempotencyKey: "run-earlier:user" },
+            __openclaw: { idempotencyKey: "earlier-submit:user", runId: "run-earlier" },
           }),
           assistantMessage("Earlier reply", 1_300),
           userMessage("Current prompt", 2_000, {
-            __openclaw: { idempotencyKey: "run-current:user" },
+            __openclaw: { idempotencyKey: "current-submit:user", runId: "run-current" },
           }),
         ],
         streamSegments: [
@@ -1363,41 +1363,45 @@ describe("coalesceActivityRuns", () => {
 });
 
 describe("buildCachedChatItems row identity", () => {
-  it("keeps an accepted initial send key across local-to-history replacement", () => {
-    resetChatThreadState();
-    const initial = groupAt(
-      messageGroups({
-        messages: [
-          {
-            __openclaw: { idempotencyKey: "initial-send:user", seq: 1 },
-            role: "user",
-            content: "Initial image prompt",
-            timestamp: 1,
-          },
-        ],
-      }),
-      0,
-    );
-    const reconciled = groupAt(
-      messageGroups({
-        messages: [
-          {
-            __openclaw: {
-              id: "persisted-user-message",
-              idempotencyKey: "initial-send:user",
-              seq: 1,
+  it.each([undefined, "queued-execution"])(
+    "keeps a send key across local-to-history replacement with execution %s",
+    (runId) => {
+      resetChatThreadState();
+      const initial = groupAt(
+        messageGroups({
+          messages: [
+            {
+              __openclaw: { idempotencyKey: "initial-send:user", seq: 1 },
+              role: "user",
+              content: "Initial image prompt",
+              timestamp: 1,
             },
-            role: "user",
-            content: "Initial image prompt",
-            timestamp: 2,
-          },
-        ],
-      }),
-      0,
-    );
+          ],
+        }),
+        0,
+      );
+      const reconciled = groupAt(
+        messageGroups({
+          messages: [
+            {
+              __openclaw: {
+                id: "persisted-user-message",
+                idempotencyKey: "initial-send:user",
+                runId,
+                seq: 1,
+              },
+              role: "user",
+              content: "Initial image prompt",
+              timestamp: 2,
+            },
+          ],
+        }),
+        0,
+      );
 
-    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
-  });
+      expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+    },
+  );
 
   it("keeps a persistent message key across live-to-authoritative replacement", () => {
     resetChatThreadState();
@@ -2426,6 +2430,10 @@ describe("buildCachedChatItems", () => {
       });
     const result = (id: string, text = "ready", runId: string | undefined = "run-a") =>
       toolResultMessage(id, "exec", [{ type: "text", text }], 20, { runId });
+    const canonical = ({ runId, ...message }: Record<string, unknown>, seq: number) => ({
+      ...message,
+      __openclaw: { id: `tool-entry-${seq}`, seq, runId },
+    });
     const snapshot = (id: string, completed = true) =>
       assistantMessage(
         [
@@ -2471,6 +2479,97 @@ describe("buildCachedChatItems", () => {
         const cards = cardsFor(messages);
         expect(cards).toHaveLength(1);
         expect(cards[0]).toMatchObject({ completed: true, outputText: "" });
+      },
+    );
+
+    it.each(
+      [false, true].flatMap((completed) =>
+        ["live", "canonical"].map((owner) => ({ completed, owner })),
+      ),
+    )(
+      "keeps one invocation before an optimistic steer ($owner ownership, completed=$completed)",
+      ({ completed, owner }) => {
+        const persisted = [call("exec-1"), ...(completed ? [result("exec-1")] : [])].map(
+          (message, index) => (owner === "canonical" ? canonical(message, index + 2) : message),
+        );
+        const history = [
+          userMessage("Original request", 1, {
+            __openclaw: { id: "user-entry", seq: 1 },
+          }),
+          ...persisted,
+          userMessage("Follow up after the command", 15, {
+            __openclaw: { idempotencyKey: "steer-send:user" },
+          }),
+        ];
+        const before = structuredClone(history);
+        const groups = messageGroups({
+          runId: "run-a",
+          messages: history,
+          toolMessages: [snapshot("exec-1", completed)],
+        });
+        const visible = groups.flatMap((group) =>
+          group.messages.flatMap((entry) => {
+            const cards = extractToolCards(entry.message, entry.key);
+            return cards.length ? cards : [requireRecord(entry.message).content];
+          }),
+        );
+
+        expect(visible).toEqual([
+          "Original request",
+          expect.objectContaining({
+            callId: "exec-1",
+            completed,
+            outputText: completed ? "ready" : "working",
+          }),
+          "Follow up after the command",
+        ]);
+        expect(history).toEqual(before);
+      },
+    );
+
+    it("keeps canonical sibling invocation owners when live runs reuse a call id", () => {
+      const cards = cardsFor(
+        [
+          canonical(call("shared"), 1),
+          canonical(result("shared", "first result"), 2),
+          canonical(call("shared", "exec", "run-b"), 3),
+          canonical(result("shared", "second result", "run-b"), 4),
+        ],
+        [snapshot("shared", false), { ...snapshot("shared", false), runId: "run-b" }],
+      );
+      expect(cards).toHaveLength(2);
+      expect(cards.map((card) => card.outputText)).toEqual(["first result", "second result"]);
+      expect(cards.every((card) => card.completed)).toBe(true);
+    });
+
+    it.each(["different run", "unknown history run", "unknown live run", "reset", "reused"])(
+      "does not relocate a live invocation across a boundary with %s ownership",
+      (ownership) => {
+        const persisted = call("exec-1");
+        const live = snapshot("exec-1", false);
+        if (ownership === "different run") {
+          persisted.runId = "run-b";
+        } else if (ownership === "unknown history run") {
+          persisted.runId = undefined;
+        } else if (ownership === "unknown live run") {
+          live.runId = undefined;
+        }
+        const groups = messageGroups({
+          runId: "run-a",
+          messages: [
+            userMessage("Original request", 1),
+            persisted,
+            ...(ownership === "reset" ? [resetMessage("reset-invocation")] : []),
+            userMessage("Next request", 15),
+            ...(ownership === "reused" ? [call("exec-1")] : []),
+          ],
+          toolMessages: [live],
+        });
+        const cards = groups.flatMap((group) =>
+          group.messages.flatMap((entry) => extractToolCards(entry.message, entry.key)),
+        );
+        expect(cards).toHaveLength(2);
+        expect(cards.filter((card) => card.outputText === "working")).toHaveLength(1);
       },
     );
 

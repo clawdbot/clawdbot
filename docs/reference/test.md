@@ -58,6 +58,91 @@ Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
 
+## Crabbox repository setup
+
+The shared [Crabbox skill](https://github.com/openclaw/agent-skills/tree/main/skills/crabbox)
+owns portable lease, trust, sync, and cleanup procedures. This section owns the
+OpenClaw wrapper and workflow inputs. Routine task-needed Crabbox/Testbox use
+and task-owned worktrees do not require another confirmation; preserve unrelated
+work and existing credential, production, budget, and publication boundaries.
+
+Run trusted OpenClaw remote proof through the wrapper from the repository root:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --help
+```
+
+Read `.crabbox.yaml` and the resolved provider before running. The repository
+default is `blacksmith-testbox`, with `.github/workflows/ci-check-testbox.yml`
+owning its prepared environment. Direct providers use
+`.github/workflows/crabbox-hydrate.yml`. Keep the resolved provider unless the
+requested proof requires another environment; capacity or hydration failure
+does not make a different provider equivalent.
+
+The wrapper checks an executable sibling `../crabbox/bin/crabbox`, then `PATH`,
+then the sibling of the Git common checkout. Verify the selected binary and
+its source rather than trusting a directory name. If it needs repair or is
+missing, use a clean task-owned checkout of
+[Crabbox](https://github.com/openclaw/crabbox), build `./cmd/crabbox` into a
+task-owned binary directory, and leave other checkouts and the operator's
+installed binary untouched. The existing
+`OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY=1` setting skips the first sibling
+candidate; a task binary on `PATH` then takes precedence over the common-checkout
+candidate. A dirty or occupied sibling is not a reason to stop and ask.
+
+For a selected trusted Testbox lane:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 \
+  OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 \
+  OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 \
+  pnpm test <path-or-filter>
+```
+
+For several commands, warm once with
+`node scripts/crabbox-wrapper.mjs warmup --keep --timing-json`, save the returned
+lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
+`node scripts/crabbox-wrapper.mjs stop --id <tbx_id>`; stop has no `--timing-json`.
+
+- Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
+  deliberately transfers that ownership and never changes repository identity.
+  Sparse staging uses the wrapper's ownership path. Do not sync or reclaim
+  while another command owns the lease.
+- Wrapper reuse requires the local SSH key created by Crabbox. A missing key
+  requires a fresh warmup. Leases created directly by Blacksmith remain usable
+  through `blacksmith testbox run --id <tbx_id>`, not Crabbox wrapper reuse.
+- Every native Testbox run syncs again, including reused leases. `--no-sync`
+  cannot preserve a remote baseline. Compare revisions in separate remote
+  worktrees within one synced command; never switch refs in the synced root.
+- Compound remote shell commands use `bash -lc`, not `sh -lc`; hydration can
+  depend on Bash declarations. Testbox's workflow owns Chromium, so do not pass
+  Crabbox `--browser` to that provider.
+- Keep the lease fingerprint checks described above. No stale-lease override
+  for release proof. Direct-provider flags such as `--fresh-pr`, `--full-resync`,
+  `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
+  a substitute for the delegated Testbox workflow.
+
+The shared skill's command placeholders map to the focused commands in this
+guide. Its trusted bootstrap is `scripts/crabbox-untrusted-bootstrap.sh`; the
+untrusted path above invokes the installed trusted CLI, never the PR's wrapper.
+For an explicitly selected local-container lane, the existing example image is
+`node:24-bookworm` and the install command is
+`corepack pnpm install --frozen-lockfile --store-dir .pnpm-store`, followed by
+the chosen test. Keep `--no-hydrate` and a repository-local dependency store
+when host caches cannot cross filesystems. The OpenClaw broker login endpoint
+is `https://crabbox.openclaw.ai`; normal brokered validation does not require
+asking for AWS keys.
+
+Live Gateway, channel, and agent-turn proof uses an isolated
+`OPENCLAW_STATE_DIR`, a free port, and the real user path. Test-only plugin
+artifacts may use `OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1`; that does not make
+them official installs. Before sharing WebVNC, inspect a screenshot of the
+working app. Keep proof media out of the product repository and compare source
+hashes before and after generator runs. If a final timing result is written but
+portal synchronization hangs, interrupt only the task wrapper and independently
+verify lease cleanup; never stop the operator's Gateway.
+
 ## Routine local order
 
 1. `pnpm test:changed` for changed-scope Vitest proof.
@@ -99,6 +184,12 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 | `pnpm test:coverage:changed`                      | Unit coverage only for files changed since `origin/main`.                                                                                                                                                                                                                                                                                             |
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
 | `pnpm check:changed`                              | Runs the local changed formatting/typecheck/lint/guard plan, including targeted Vitest owner tests for selected paths. Use `pnpm test:changed` or `pnpm test <target>` for additional test proof matching the touched contract.                                                                                                                       |
+
+For native app changes, `pnpm check:changed` uses platform scope to select lint:
+Android selects `pnpm android:lint` (the Gradle ktlint checks), while Apple app
+changes retain Swift lint. Android-only changes do not select Swift lint or its
+missing-tool notice. Android framework/resource lint and runtime tests remain
+separate checks; Kotlin lint does not replace them.
 
 Remote filesystem fixtures that execute GNU `stat` and `readlink` run locally
 only on Linux. The shared leading-`@` file-tool scenario
@@ -188,6 +279,7 @@ not sweep old directories or infer ownership from names, ages, or PIDs.
 - Gateway tests are included in the untargeted `pnpm test` full suite; run them alone with `pnpm test:gateway`.
 - `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e`.
 - `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with one worker in `vitest.e2e.config.ts`; opt into parallelism with `OPENCLAW_E2E_WORKERS=<n>` (capped at 16), and enable verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
+  Broad runs prepare the shared runtime once, then use four sequential Vitest shards in fresh processes to bound worker memory. The worker limit applies within each process; ordinary test failures are retained while remaining shards finish. Explicit filters, watch mode, caller-supplied shards, coverage, and report-output options keep one direct invocation.
 - `pnpm test:live`: provider live tests (Claude/Minimax/DeepSeek/z.ai/etc, gated by `*.live.test.ts`). Requires API keys and `LIVE=1` (or `OPENCLAW_LIVE_TEST=1`) to unskip; verbose output with `OPENCLAW_LIVE_TEST_QUIET=0`.
 
 ## Full Docker suite (`pnpm test:docker:all`)
@@ -265,14 +357,70 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 - `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`
 - `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache pnpm test:changed`
 
+## JSON reports across native processes
+
+For a multi-project or chunked run, explicitly request native JSON with an output
+file, for example:
+
+```bash
+pnpm test test/vitest/vitest.unit-fast-isolated.config.ts test/vitest/vitest.agents-embedded-agent.config.ts --reporter=verbose --reporter=json --outputFile=.artifacts/test-results.json
+```
+
+The project runner and plugin batch runner give each attempt separate native JSON
+and blob files, then publish the requested JSON from Vitest's native report merge.
+They print a companion `<output>.reports-<unique>` directory. Keep that directory:
+it contains original reports, per-attempt coverage files when coverage is enabled,
+and an `index.json` with child exit codes, signals, timeouts and unstarted work.
+Only the accepted retry attempt contributes to the aggregate.
+
+The aggregate preserves the accepted case inventory, but is not a lossless
+replacement for the originals. Native merging does not restore snapshot summaries
+or JSON `coverageMap`, and its `startTime` is the merge time. Passing snapshot tests
+still succeed. Read native originals for those details and the index for process
+outcomes: JSON `success` does not encode every wrapper or unhandled-error failure.
+Separate built-in coverage reports remain per attempt in the companion directory.
+Custom coverage providers/reporters and coverage reporter tuple options require
+separate invocations with unique destinations.
+
+A complete failed-test aggregate is retained with a failing command exit. Missing
+or invalid evidence, cancellation, unstarted required work, or publication failure
+does not publish a complete aggregate; an existing output file is not proof of the
+new run. The diagnostic prints the retained report-set location. Report sets are
+not automatically swept.
+
+Overlapping selections can share native task IDs, so merging them can replace
+independent failure details even when case counts match. Such report sets retain
+their originals and fail publication. Select each configuration once, or run
+overlapping selections separately with distinct output files.
+
+This ownership applies to explicit CLI JSON file requests with named, file-based
+Node projects and native console reporters. Scalar `--outputFile` and
+`--outputFile.json` both work. Config-owned reporter options, other file formats,
+custom reporters and inline/browser project composition require separate native
+invocations with unique output destinations. Do not assume those outputs are
+aggregated. Single-process and console-only runs keep their existing native behavior.
+Native help and other non-test controls stay with the child CLI and do not allocate
+report sets. `run --version` still runs tests, as it does in native Vitest.
+Config-only reporters are not intercepted: multiple children can still overwrite
+the same configured file. Run those configurations separately with distinct paths;
+adding `--reporter=json` alone does not override a reporter tuple's own `outputFile`.
+
 ## Test performance tooling
 
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets. `pnpm test:perf:imports:changed` scopes the same profiling to files changed since `origin/main`.
 - `pnpm test:perf:changed:bench -- --ref <git-ref>` benchmarks the routed changed-mode path against the native root-project run for the same committed git diff; `pnpm test:perf:changed:bench -- --worktree` benchmarks the current worktree change set without committing first.
-- `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread (`.artifacts/vitest-main-profile`); `pnpm test:perf:profile:runner` writes CPU + heap profiles for the unit runner (`.artifacts/vitest-runner-profile`).
+- `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread; `pnpm test:perf:profile:runner` writes CPU + heap profiles for each unit worker. Both print their output directory (a temporary directory by default). Use `-- --output-dir <dir>` or `OPENCLAW_VITEST_PROFILE_DIR` to retain profiles at a chosen location.
 - `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. Full-suite reports isolate files by default so retained module graphs and GC pauses from earlier files are not charged to later assertions; pass `-- --no-isolate` only when intentionally profiling shared-worker accumulation. `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json` compares grouped reports after a performance-focused change.
 - Full, extension, and include-pattern shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later whole-config runs use those timings to balance slow and fast shards. Include-pattern CI shards append the shard name to the timing key, which keeps filtered shard timings visible without replacing whole-config timing data. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
 - `pnpm ci:timings:refit`: regenerate committed `config/ci-test-timings.json` from the last five successful main CI runs; add `--dry-run` to preview the changed-entry table. This file owns per-file UI E2E and per-profile compact-group weights, unlike the gitignored `.artifacts/vitest-shard-timings.json` whole-config timing cache. Independent CI shards use only the committed weights, never that cache. See [CI timing refits](/ci#measured-shard-weights) for the daily refresh and sampling rules.
+
+Runner profiling preserves the selected `forks` or `threads` pool, isolation, environment, and custom runners extending Vitest's `TestRunner`. Capture starts in a Node preload before Vitest worker imports, spans all files assigned to that worker, and finishes both profile files in awaited worker cleanup before teardown is acknowledged. It does not depend on exit-time profile flushing. Root global setup configures every selected project without replacing its reporters or setup. Main capture spans Vitest/Vite startup through run completion and close. Process termination before cleanup, bootstrap failures before runner construction, and teardown timeouts can still prevent output. Browser/VM pools, custom runners without `onCleanupWorkerContext`, and additional native `--cpu-prof`/`--heap-prof` flags are rejected for runner profiling.
+
+Forward Vitest options after the profiler separator. Forwarded options use Vitest's native CLI validation before loading config. Config-only settings, such as `runner` and `globalSetup`, belong in the Vitest config file, not CLI flags. For example:
+
+```bash
+pnpm test:perf:profile:runner -- --output-dir .artifacts/profiles -- --config test/vitest/vitest.unit.config.ts --pool threads
+```
 
 `pnpm test:extensions:memory` profiles built plugin index entries from `dist/extensions` (including nested `dist` output) and package-local `extensions/<id>/dist` output; TypeScript source entries are excluded. Root artifacts take precedence when both builds exist. Selecting an already-built plugin with `--extension <id>` reuses its output without requiring unrelated plugin builds; build the plugin package first if its output is not supplied by `pnpm build`.
 

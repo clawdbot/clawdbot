@@ -1,29 +1,30 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+let fixtureTemplate: ReturnType<typeof createFixtureTemplate> | undefined;
 const scripts = join(process.cwd(), "scripts");
 const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
 const lockRef = "refs/openclaw/pr-operation-locks/123";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const unknownProjection = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
 
-function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]> = [["after\n"]]) {
-  const root = realpathSync(temps.make("pr-merge-outcome-"));
-  const remote = join(root, "remote.git");
-  const repo = join(root, "repo");
-  mkdirSync(repo);
+function createFixtureGit(repo: string) {
   const git = (args: string[], input?: string, cwd = repo) =>
     execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
       cwd,
@@ -31,14 +32,6 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
-  git(["init", "-q", "-b", "main"]);
-  git(["config", "user.name", "Merge Fixture"]);
-  git(["config", "user.email", "fixture@example.invalid"]);
-  git(["init", "-q", "--bare", remote]);
-  git(["remote", "add", "origin", remote]);
-  // Production URLs still use the real Git transport, redirected only in this disposable repo.
-  git(["config", `url.${remote}.insteadOf`, "https://github.com/fixture/repo"]);
-  git(["config", "--add", `url.${remote}.insteadOf`, "https://github.com/fixture/repo.git"]);
   const tree = (owner: string, sibling = "stable\n") => {
     const a = git(["hash-object", "-w", "--stdin"], owner);
     const b = git(["hash-object", "-w", "--stdin"], sibling);
@@ -46,14 +39,48 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
   };
   const commit = (contents: string, parents: string[], message = "Fixture commit\n") =>
     git(["commit-tree", contents, ...parents.flatMap((parent) => ["-p", parent])], message);
+  return { git, tree, commit };
+}
+
+function createFixtureTemplate(directory: string) {
+  const root = realpathSync(directory);
+  const repo = join(root, "repo");
+  const remote = join(root, "remote.git");
+  mkdirSync(repo);
+  const { git, tree, commit } = createFixtureGit(repo);
+  git(["init", "-q", "-b", "main"]);
+  git(["config", "user.name", "Merge Fixture"]);
+  git(["config", "user.email", "fixture@example.invalid"]);
+  git(["init", "-q", "--bare", remote]);
   const base = commit(tree("before\n"), []);
+  git(["update-ref", "refs/heads/main", base]);
+  return { repo, remote, base };
+}
+
+function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]> = [["after\n"]]) {
+  const root = realpathSync(temps.make("pr-merge-outcome-"));
+  const remote = join(root, "remote.git");
+  const repo = join(root, "repo");
+  const template = (fixtureTemplate ??= createFixtureTemplate(
+    templateDirs.make("pr-merge-outcome-template-"),
+  ));
+  // Only the common base is reused. Source commits stay fresh, loose and private
+  // so corruption, GC, attribution and multi-commit rebase cases keep their proof.
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  cpSync(template.repo, repo, copyOptions);
+  cpSync(template.remote, remote, copyOptions);
+  const { base } = template;
+  const { git, tree, commit } = createFixtureGit(repo);
+  git(["remote", "add", "origin", remote]);
+  // Production URLs still use the real Git transport, redirected only in this disposable repo.
+  git(["config", `url.${remote}.insteadOf`, "https://github.com/fixture/repo"]);
+  git(["config", "--add", `url.${remote}.insteadOf`, "https://github.com/fixture/repo.git"]);
   const sourceCommits: string[] = [];
   let head = base;
   for (const [owner, sibling] of sourceVersions) {
     head = commit(tree(owner, sibling), [head], sourceMessage);
     sourceCommits.push(head);
   }
-  git(["update-ref", "refs/heads/main", base]);
   git(["update-ref", "refs/heads/topic", head]);
   git(["push", "-q", "origin", "main", "topic:refs/pull/123/head", "topic"]);
   const worktree = join(repo, ".worktrees/pr-123");
@@ -61,17 +88,21 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
   mkdirSync(join(worktree, ".local"));
   writeFileSync(
     join(worktree, ".local/prep.env"),
-    `PREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${base}\n`,
+    `PREP_HEAD_SHA=${head}\nLOCAL_PREP_HEAD_SHA=${head}\nPREP_MAINLINE_BASE_SHA=${base}\nPREP_REPLACED_HOSTED_ANCESTRY=false\nPREP_AUTHOR_ACCESS=external\n`,
   );
+  writeFileSync(join(worktree, ".local/gates.env"), "GATES_MODE=full\n");
   for (const name of ["review.md", "review.json", "pr-meta.env", "pr-meta.json", "prep.md"]) {
     writeFileSync(join(worktree, ".local", name), "fixture\n");
   }
   const initial = {
+    // gh reports the REST database id (a number) while GraphQL reports the node id.
+    // The fixture models both so the merge path is exercised against real gh shapes.
     repo: {
-      id: "fixture-repo",
+      id: 1103012935 as string | number,
       url: "https://github.com/fixture/repo",
       nameWithOwner: "fixture/repo",
     },
+    repoNodeId: "R_kgDOQb6kRw" as string | null,
     pr: {
       id: "fixture-pr",
       number: 123,
@@ -116,6 +147,7 @@ function fixture(sourceMessage?: string, sourceVersions: Array<[string, string?]
     ready: true,
     cleanup: "",
     cleanupHead: "",
+    operator: "fixture-operator",
   };
   const statePath = join(root, "server.json");
   const save = (state: typeof initial) => writeFileSync(statePath, JSON.stringify(state));
@@ -138,6 +170,7 @@ if(route==="sleep") {s.settlementSleeps.push(Number(args[0]));save();process.exi
 s.calls.push([route,...args]);save();
 const main=()=>git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse","refs/heads/main"]);
 if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
+else if(args[0]==="api"&&args.includes("user")) out(s.operator);
 else if(args[0]==="pr"&&args[1]==="checks") {out([{name:"CI",bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"}]);}
 else if(args[0]==="pr"&&args[1]==="view") {
   const pr={...s.pr,changedFiles:0,files:[],headRefName:"topic",headRepository:{name:"repo"},headRepositoryOwner:{login:"fixture"}};
@@ -195,7 +228,9 @@ else if(args[0]==="pr"&&args[1]==="view") {
     if(step?.unavailable) fail("metadata unavailable");
     if(step?.invalid) {save();out({data:{repository:{}}});process.exit(0);}
     const pr={...s.pr};if(s.drift&&s.reads%2===0) pr.baseRefName="changed";
-    out({data:{repository:{...s.repo,ref:{target:{oid:main()}},pullRequest:pr}}});
+    const repository={...s.repo,ref:{target:{oid:main()}},pullRequest:pr};
+    if(s.repoNodeId!==null) {repository.id=s.repoNodeId;repository.databaseId=s.repo.id;}
+    out({data:{repository}});
   }
 } else if(args.some(x=>x.includes("/comments"))) {
   if(args.includes("POST")) {
@@ -254,6 +289,11 @@ git() {
       command git update-ref "$3" "$(printf 'successor\\n' | command git hash-object -w --stdin)"
     fi
     command git "$@" || return
+    if [ "$crash" = capture ]; then
+      local attempt
+      attempt=$(command git show "$4:outcome.json" | command jq -r .attempt)
+      ln -s "$FIXTURE_ROOT/capture-target" ".local/merge-output.$attempt.log"
+    fi
     if [ "$crash" = intent ]; then kill -KILL "$$"; fi
     return
   fi
@@ -262,13 +302,14 @@ git() {
 export FIXTURE_LEADER="$$"
 acquire_pr_operation_lock 123
 begin_pr_operation_validation_phase
-merge_run 123 "\${1:-false}"
+merge_run 123 "\${1:-false}" "\${2:-}"
 `,
   );
   chmodSync(shell, 0o755);
   const env = {
     ...process.env,
     FIXTURE_STATE: statePath,
+    FIXTURE_ROOT: root,
     FIXTURE_REPO: repo,
     FIXTURE_REMOTE: remote,
     FIXTURE_SCRIPTS: scripts,
@@ -276,10 +317,10 @@ merge_run 123 "\${1:-false}"
     OPENCLAW_PR_MERGE_METHOD: "squash",
     OPENCLAW_PR_STRICT_DRIFT: "",
   };
-  const run = (auto = false, cwd = repo, method = "squash") => {
+  const run = (auto = false, cwd = repo, method = "squash", recoveryOid = "") => {
     const result = spawnSync(
       process.execPath,
-      [join(scripts, "pr-lib/process-group-runner.mjs"), repo, shell, String(auto)],
+      [join(scripts, "pr-lib/process-group-runner.mjs"), repo, shell, String(auto), recoveryOid],
       { cwd, env: { ...env, OPENCLAW_PR_MERGE_METHOD: method }, encoding: "utf8", timeout: 20_000 },
     );
     return { ...result, output: result.stdout + result.stderr };
@@ -324,6 +365,24 @@ merge_run 123 "\${1:-false}"
       ),
     );
   const record = () => JSON.parse(git(["show", outcomeRef + ":outcome.json"]));
+  const captures = () =>
+    readdirSync(join(worktree, ".local"))
+      .filter((name) => /^merge-output(?:\..+)?\.log$/.test(name))
+      .sort()
+      .map((name) => [name, readFileSync(join(worktree, ".local", name), "utf8")] as const);
+  const setPrivacyProvenance = (rewrite: string | null, access: string | null) => {
+    const path = join(worktree, ".local/prep.env");
+    let contents = readFileSync(path, "utf8");
+    contents = contents.replace(
+      /^PREP_REPLACED_HOSTED_ANCESTRY=.*\n/mu,
+      rewrite === null ? "" : `PREP_REPLACED_HOSTED_ANCESTRY=${rewrite}\n`,
+    );
+    contents = contents.replace(
+      /^PREP_AUTHOR_ACCESS=.*\n/mu,
+      access === null ? "" : `PREP_AUTHOR_ACCESS=${access}\n`,
+    );
+    writeFileSync(path, contents);
+  };
   return {
     root,
     repo,
@@ -341,11 +400,261 @@ merge_run 123 "\${1:-false}"
     recover,
     advance,
     record,
+    captures,
+    setPrivacyProvenance,
     ordinaryRead,
   };
 }
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it.each([
+    {
+      route: "immediate",
+      access: "external",
+      auto: false,
+      admin: false,
+      queue: false,
+      mergeStateStatus: "CLEAN",
+    },
+    {
+      route: "auto",
+      access: "unknown",
+      auto: true,
+      admin: false,
+      queue: false,
+      mergeStateStatus: "BEHIND",
+    },
+    {
+      route: "queue",
+      access: "external",
+      auto: false,
+      admin: false,
+      queue: true,
+      mergeStateStatus: "CLEAN",
+    },
+    {
+      route: "admin",
+      access: "unknown",
+      auto: false,
+      admin: true,
+      queue: false,
+      mergeStateStatus: "BLOCKED",
+    },
+  ])(
+    "blocks rewritten $access squash before $route intent",
+    ({ access, auto, admin, queue, mergeStateStatus }) => {
+      const f = fixture();
+      f.setPrivacyProvenance("true", access);
+      f.save({
+        ...f.state(),
+        admin,
+        gates: admin ? "fail" : "pass",
+        pr: { ...f.state().pr, isMergeQueueEnabled: queue, mergeStateStatus },
+      });
+
+      const run = f.run(auto);
+
+      expect(run.status, run.output).toBe(1);
+      expect(run.output).toContain("maintainer-owned replacement PR");
+      expect(f.state().mutations).toBe(0);
+      expect(f.captures()).toEqual([]);
+      expect(() => f.record()).toThrow();
+    },
+  );
+
+  it.each([
+    { rewrite: "true", access: "maintainer" },
+    { rewrite: "false", access: "unknown" },
+  ])("allows squash with valid privacy provenance: %j", ({ rewrite, access }) => {
+    const f = fixture();
+    f.setPrivacyProvenance(rewrite, access);
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().mutations).toBe(1);
+    expect(f.record().phase).toBe("complete");
+  });
+
+  it.each([
+    ["missing", "PREP_REPLACED_HOSTED_ANCESTRY=false\n"],
+    [
+      "malformed rewrite",
+      "PREP_REPLACED_HOSTED_ANCESTRY=false",
+      "PREP_REPLACED_HOSTED_ANCESTRY=yes",
+    ],
+    ["malformed access", "PREP_AUTHOR_ACCESS=external", "PREP_AUTHOR_ACCESS=write"],
+  ])("requires prepare rerun for %s squash provenance", (_label, from, to = "") => {
+    const f = fixture();
+    const prepPath = join(f.worktree, ".local/prep.env");
+    writeFileSync(prepPath, readFileSync(prepPath, "utf8").replace(from, to));
+
+    const run = f.run();
+
+    expect(run.status, run.output).toBe(1);
+    expect(run.output).toContain("scripts/pr prepare-run");
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
+
+  it.each(["merge", "rebase"])("leaves %s mechanics independent of squash provenance", (method) => {
+    const f = fixture();
+    f.setPrivacyProvenance(null, null);
+
+    const run = f.run(false, f.repo, method);
+
+    expect(run.status, run.output).toBe(0);
+    expect(f.state().mutations).toBe(1);
+  });
+
+  it("reconciles a prior outcome before reading squash privacy provenance", () => {
+    const f = fixture();
+    f.save({ ...f.state(), mode: "unapplied" });
+    expect(f.run().status).toBe(1);
+    f.recover();
+    f.setPrivacyProvenance(null, null);
+
+    const retry = f.run();
+
+    expect(retry.status, retry.output).toBe(1);
+    expect(retry.output).not.toContain("scripts/pr prepare-run");
+    expect(f.state().mutations).toBe(1);
+  });
+
+  it("operator recovery preserves prior evidence and consumes one exact attempt", () => {
+    const f = fixture();
+    f.save({ ...f.state(), mode: "unapplied" });
+    expect(f.run().status).toBe(1);
+    const previous = f.git(["rev-parse", outcomeRef]);
+    const previousRecord = f.record();
+    const captures = f.captures();
+    expect(captures).toHaveLength(1);
+    f.recover();
+    // Keep the worktree after the merge so old capture preservation is observable.
+    f.save({ ...f.state(), mode: "success", comment: "rejected" });
+    const recovered = f.run(false, f.repo, "squash", previous);
+    expect(f.state().mutations, recovered.output).toBe(2);
+    expect(f.record()).toMatchObject({
+      phase: "commenting",
+      head: f.head,
+      recovery: {
+        outcome: previous,
+        attempt: previousRecord.attempt,
+        actor: "fixture-operator",
+        reason: "explicit-operator-recovery",
+      },
+    });
+    expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
+    expect(JSON.parse(f.git(["show", `${previous}:outcome.json`]))).toEqual(previousRecord);
+    f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
+    for (const [name, contents] of captures) {
+      expect(readFileSync(join(f.worktree, ".local", name), "utf8")).toBe(contents);
+    }
+    f.recover();
+    const replay = f.run(false, f.repo, "squash", previous);
+    expect(replay.status, replay.output).toBe(1);
+    expect(f.state().mutations).toBe(2);
+    expect(f.state().posts).toBe(1);
+  });
+
+  it.each([
+    "stale-outcome",
+    "accepted",
+    "auto-route",
+    "queue-route",
+    "admin-route",
+    "review",
+    "checks",
+    "pending",
+    "current-queue",
+    "current-admin",
+    "prepared-head",
+    "method",
+    "operator",
+    "successor",
+    "no-net-change",
+  ])("operator recovery refuses %s without another dispatch", (fault) => {
+    const f = fixture();
+    const initial = f.state();
+    initial.mode = fault === "accepted" ? "pending" : "unapplied";
+    if (fault === "auto-route") initial.pr.mergeStateStatus = "BEHIND";
+    if (fault === "queue-route") initial.pr.isMergeQueueEnabled = true;
+    if (fault === "admin-route") {
+      initial.admin = true;
+      initial.gates = "fail";
+    }
+    f.save(initial);
+    const first = f.run(fault === "auto-route");
+    expect(first.status, first.output).toBe(fault === "accepted" ? 0 : 1);
+    const previous = f.git(["rev-parse", outcomeRef]);
+    const captures = f.captures();
+    f.recover();
+    const next = f.state();
+    next.mode = "success";
+    next.admin = false;
+    next.gates = "pass";
+    next.pr.autoMergeRequest = null;
+    next.pr.isInMergeQueue = false;
+    next.pr.isMergeQueueEnabled = false;
+    next.pr.mergeStateStatus = "CLEAN";
+    if (fault === "review") next.review = false;
+    if (fault === "checks") next.gates = "fail";
+    if (fault === "pending") next.gates = "pending";
+    if (fault === "current-queue") next.pr.isMergeQueueEnabled = true;
+    if (fault === "current-admin") {
+      next.admin = true;
+      next.gates = "fail";
+    }
+    if (fault === "operator") next.operator = "";
+    if (fault === "successor") next.crash = "successor";
+    if (fault === "no-net-change") f.advance("after\n", "stable\n");
+    if (fault === "prepared-head") {
+      next.pr.headRefOid = f.base;
+      f.git(["-C", f.worktree, "checkout", "--detach", f.base]);
+      writeFileSync(
+        join(f.worktree, ".local/prep.env"),
+        `PREP_HEAD_SHA=${f.base}\nLOCAL_PREP_HEAD_SHA=${f.base}\nPREP_MAINLINE_BASE_SHA=${f.base}\n`,
+      );
+    }
+    f.save(next);
+    const result = f.run(
+      false,
+      f.repo,
+      fault === "method" ? "merge" : "squash",
+      fault === "stale-outcome" ? f.base : previous,
+    );
+    expect(result.status, result.output).toBe(1);
+    expect(f.state().mutations, result.output).toBe(1);
+    expect(f.state().posts).toBe(0);
+    expect(f.captures()).toEqual(captures);
+    if (fault === "successor") {
+      expect(f.git(["cat-file", "blob", outcomeRef])).toBe("successor");
+    } else {
+      expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+    }
+  });
+
+  it.each([false, true])(
+    "does not overwrite or read a capture symlink (target exists=%s)",
+    (exists) => {
+      const f = fixture();
+      const target = join(f.root, "capture-target");
+      if (exists) writeFileSync(target, "existing capture sentinel\n");
+      f.save({ ...f.state(), crash: "capture" });
+      const run = f.run();
+      expect(run.status, run.output).toBe(1);
+      expect(f.state().mutations).toBe(0);
+      expect(f.state().posts).toBe(0);
+      expect(f.record()).toMatchObject({ phase: "intent", accepted: false });
+      expect(run.output).not.toContain("existing capture sentinel");
+      expect(existsSync(target)).toBe(exists);
+      if (exists) expect(readFileSync(target, "utf8")).toBe("existing capture sentinel\n");
+      f.recover();
+      expect(f.run().status).toBe(1);
+      expect(f.state().mutations).toBe(0);
+    },
+  );
+
   it("reconciles a merged receipt without waiting for terminal mergeability", () => {
     const f = fixture();
     const unknown = { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } };
@@ -384,7 +693,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.state().posts).toBe(0);
       expect(f.state().settlementSleeps).toEqual(settles ? [1] : []);
       expect(() => f.record()).toThrow();
-      expect(existsSync(join(f.worktree, ".local/merge-output.log"))).toBe(false);
+      expect(f.captures()).toEqual([]);
       expect(existsSync(f.worktree)).toBe(true);
       expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
     },
@@ -559,7 +868,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(state.mutations).toBe(0);
     expect(state.posts).toBe(0);
     expect(() => f.record()).toThrow();
-    expect(existsSync(join(f.worktree, ".local/merge-output.log"))).toBe(false);
+    expect(f.captures()).toEqual([]);
     expect(existsSync(f.worktree)).toBe(true);
     expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
     expect(f.git(["cat-file", "-t", lockRef])).toBe("blob");
@@ -580,7 +889,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       f.save({ ...f.state(), mode: "unapplied" });
       expect(f.run().status).toBe(1);
       const before = f.git(["rev-parse", outcomeRef]);
-      const capture = readFileSync(join(f.worktree, ".local/merge-output.log"), "utf8");
+      const capture = f.captures();
       f.recover();
       const landed = state === "MERGED" ? f.advance("after\n", "stable\n") : null;
       f.save({
@@ -599,7 +908,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.state().posts).toBe(0);
       expect(f.state().settlementSleeps).toEqual([]);
       expect(f.state().observationReads).toBe(2);
-      expect(readFileSync(join(f.worktree, ".local/merge-output.log"), "utf8")).toBe(capture);
+      expect(f.captures()).toEqual(capture);
       expect(existsSync(f.worktree)).toBe(true);
       if (landed) expect(f.record()).toMatchObject({ phase: "merged", landed });
       else expect(f.git(["rev-parse", outcomeRef])).toBe(before);
@@ -966,7 +1275,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(first.status, first.output).toBe(0);
     expect(first.output).toContain("AUTO/QUEUE PENDING");
     const before = f.git(["rev-parse", outcomeRef]);
-    const capture = readFileSync(join(f.worktree, ".local/merge-output.log"), "utf8");
+    const capture = f.captures();
     f.save({
       ...f.state(),
       observationReads: 0,
@@ -976,7 +1285,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(0);
     expect(f.git(["rev-parse", outcomeRef])).toBe(before);
-    expect(readFileSync(join(f.worktree, ".local/merge-output.log"), "utf8")).toBe(capture);
+    expect(f.captures()).toEqual(capture);
     expect(pending.status, pending.output).toBe(0);
     expect(pending.output).toContain("AUTO/QUEUE PENDING");
     expect(f.state().settlementSleeps).toEqual([]);
@@ -1181,5 +1490,84 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(run.output).not.toContain("Warning: remote cleanup pending");
     expect(f.record().phase).toBe("complete");
     expect(f.state().posts).toBe(1);
+  });
+});
+
+describePosix("merge_outcome_repo_identity", () => {
+  // gh reports the repository id as a REST database number while PR ids stay GraphQL
+  // node strings, so admission has to accept both scalars. Requiring a string here
+  // failed every merge closed on a current gh.
+  const identity = (repo: unknown) =>
+    spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail; . "$1"; printf '%s' "$2" | merge_outcome_repo_identity`,
+        "bash",
+        join(scripts, "pr-lib/merge-outcome.sh"),
+        JSON.stringify(repo),
+      ],
+      { encoding: "utf8" },
+    );
+
+  it("accepts the numeric repository id gh actually returns", () => {
+    const run = identity({
+      id: 1103012935,
+      nameWithOwner: "openclaw/openclaw",
+      url: "https://github.com/openclaw/openclaw",
+    });
+    expect(run.status, run.stderr).toBe(0);
+    expect(JSON.parse(run.stdout).id).toBe(1103012935);
+  });
+
+  it("accepts a GraphQL node string repository id", () => {
+    const run = identity({
+      id: "R_kgDOQb6kRw",
+      nameWithOwner: "openclaw/openclaw",
+      url: "https://github.com/openclaw/openclaw",
+    });
+    expect(run.status, run.stderr).toBe(0);
+  });
+
+  it.each([
+    ["a missing id", { id: null }],
+    ["an empty string id", { id: "" }],
+    ["an object id", { id: { node: "x" } }],
+  ])("still rejects %s", (_label, overrides) => {
+    const run = identity({
+      nameWithOwner: "openclaw/openclaw",
+      url: "https://github.com/openclaw/openclaw",
+      ...overrides,
+    });
+    expect(run.status).not.toBe(0);
+    expect(run.stdout).toBe("");
+  });
+
+  it("still rejects a url that does not belong to the named repository", () => {
+    const run = identity({
+      id: 1103012935,
+      nameWithOwner: "openclaw/openclaw",
+      url: "https://github.com/attacker/openclaw",
+    });
+    expect(run.status).not.toBe(0);
+    expect(run.stdout).toBe("");
+  });
+});
+
+describePosix("repository identity across gh id representations", () => {
+  // The fixture's default state models current gh: a numeric CLI id and a GraphQL node
+  // id. This covers the other host shape, where gh reports the node id from both
+  // sources, so neither representation regresses.
+  it("merges when gh reports the node id from both sources", () => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      repo: { ...f.state().repo, id: "R_kgDOQb6kRw" },
+      repoNodeId: null,
+    });
+    const run = f.run();
+    expect(run.status, run.output).toBe(0);
+    expect(f.record().phase).toBe("complete");
+    expect(f.state().mutations).toBe(1);
   });
 });

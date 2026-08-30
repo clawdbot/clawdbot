@@ -211,6 +211,8 @@ describe("fork boundaries from imported Codex history", () => {
         excludeTurns: true,
       });
       expect(child.entry.label).toBeUndefined();
+      expect(createSession.mock.calls[0]?.[0]).not.toHaveProperty("label");
+      expect(createSession.mock.calls[0]?.[0]).not.toHaveProperty("displayName");
       const childEntries = await readVisibleSessionTranscriptMessageEntries({
         ...history.target,
         sessionId: child.sessionId,

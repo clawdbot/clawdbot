@@ -259,7 +259,9 @@ describe("Codex node exec-server", () => {
 
     const invokeNode = vi.fn(async () => ({ ok: true as const, payload: { connected: true } }));
     const request = vi.fn();
-    const { placement } = createManagedWorkspaceInvocation(process.cwd());
+    const { placement } = createManagedWorkspaceInvocation(
+      path.join(process.cwd(), "long-session-workspace-".repeat(20)),
+    );
     const context = {
       nodeId,
       command: CODEX_NODE_EXEC_SERVER_COMMAND,
@@ -320,8 +322,9 @@ describe("Codex node exec-server", () => {
         allowedDecisions: ["allow-once"],
       }),
     );
-    expect(request.mock.lastCall?.[0].description).toContain(
-      "arbitrary processes and filesystem access across the node account",
+    // Gateway approval descriptions are bounded to 256 characters.
+    expect(request.mock.lastCall?.[0].description.slice(0, 256)).toContain(
+      "arbitrary processes and filesystem access across the node account, not only this workspace",
     );
   });
 

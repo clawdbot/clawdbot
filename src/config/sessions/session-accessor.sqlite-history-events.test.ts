@@ -9,11 +9,9 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
+import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import {
   readTranscriptDisplayDelta,
-  readTranscriptRawDelta,
-} from "./session-accessor.sqlite-delta.js";
-import {
   readRecentSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,

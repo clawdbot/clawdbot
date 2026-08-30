@@ -311,6 +311,7 @@ describe("loadOpenClawPlugins", () => {
       body: `module.exports = { id: "worker-provider-register-fail", register(api) {
     api.registerWorkerProvider({
       id: "failed-worker",
+      resolveAllocation: async () => ({ leaseId: "unused", sharedHost: false }),
       provision: async () => { throw new Error("not called"); },
       inspect: async () => ({ status: "unknown" }),
       destroy: async () => {}

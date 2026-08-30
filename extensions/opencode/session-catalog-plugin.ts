@@ -169,7 +169,7 @@ async function createAdoptedOpenCodeSession(params: {
     key: sessionCatalogAdoptedSessionKey(OPENCODE_ADOPTED_SESSION_KEY_PREFIX, params.threadId),
     agentId: params.agentId,
     recoverMatchingInitialEntry: true,
-    ...(params.session.name ? { label: params.session.name } : {}),
+    ...(params.session.name ? { displayName: params.session.name } : {}),
     ...(params.session.cwd ? { spawnedCwd: params.session.cwd } : {}),
     initialEntry: {
       acpBackendId: ACPX_BACKEND_ID,

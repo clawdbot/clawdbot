@@ -181,7 +181,10 @@ export const boardChatDockLayout = createDockPanelLayout({
 });
 
 export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
-export const CHAT_HISTORY_INTENT_EDGE_PX = 300;
+// One distance owns both halves of early history loading: upward intent within
+// this range arms the sentinel observer, and the observer's rootMargin fires
+// the same distance out. Splitting them re-creates the wall at the smaller value.
+export const CHAT_HISTORY_PREFETCH_EDGE_PX = 1200;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
 export const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
 export const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);

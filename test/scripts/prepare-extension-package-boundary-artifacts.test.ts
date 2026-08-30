@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
+import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
 import {
   createPrefixedOutputWriter,
   parseMode,
@@ -83,100 +84,126 @@ async function waitForProcessExit(
 }
 
 describe("prepare-extension-package-boundary-artifacts", () => {
-  it("prunes only obsolete native declarations after success and repairs a failed partial emit", async () => {
-    const root = fs.realpathSync(makeTempDir(tempRoots, "native-preparer-"));
-    const write = (file: string, text: string) => {
-      const target = path.join(root, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, text);
-    };
-    write("package.json", '{"name":"openclaw","type":"module"}');
-    write("pnpm-workspace.yaml", "packages: []\n");
-    write(
-      "tsconfig.json",
-      JSON.stringify({
-        compilerOptions: {
-          target: "es2023",
-          module: "nodenext",
-          skipLibCheck: true,
-        },
-      }),
-    );
-    write(
-      "packages/plugin-sdk/tsconfig.json",
-      JSON.stringify({
-        extends: "../../tsconfig.json",
-        include: ["../../src/**/*.ts"],
-      }),
-    );
-    write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
-    write("src/nested.ts", "export const value = 1;");
-    write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
-    const copy = (file: string) => {
-      const target = path.join(root, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(path.resolve(file), target);
-    };
-    copy("scripts/prepare-extension-package-boundary-artifacts.mts");
-    copy("scripts/lib/plugin-sdk-entries.mts");
-    fs.cpSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"), { recursive: true });
-    write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
-    for (const file of [
-      "scripts/run-tsgo.mjs",
-      "scripts/run-tsgo.mts",
-      "scripts/tsx.mjs",
-      "scripts/windows-cmd-helpers.mjs",
-    ]) {
-      copy(file);
-    }
-    for (const name of ["tsx", "typescript", "@typescript", "@openclaw/fs-safe", ".bin/tsgo"]) {
-      const target = path.join(root, "node_modules", name);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.symlinkSync(path.resolve("node_modules", name), target);
-    }
-    fs.symlinkSync(
-      path.resolve("packages/normalization-core"),
-      path.join(root, "packages/normalization-core"),
-      process.platform === "win32" ? "junction" : undefined,
-    );
-    const recordPath = path.join(root, ".artifacts/extension-package-boundary/plugin-sdk.json");
-    const output = "packages/plugin-sdk/dist";
-    const run = () =>
-      runNodeStep(
-        "native-fixture",
-        [
-          path.join(root, "scripts/prepare-extension-package-boundary-artifacts.mts"),
-          "--mode=package-boundary",
-        ],
-        30_000,
+  it.each(["package-boundary", "all"])(
+    "prunes only obsolete native declarations after success and repairs a failed partial emit (%s)",
+    async (mode) => {
+      const root = fs.realpathSync(makeTempDir(tempRoots, "native-preparer-"));
+      const write = (file: string, text: string) => {
+        const target = path.join(root, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, text);
+      };
+      write("package.json", '{"name":"openclaw","type":"module"}');
+      write("pnpm-workspace.yaml", "packages: []\n");
+      write(
+        "tsconfig.json",
+        JSON.stringify({
+          compilerOptions: {
+            target: "es2023",
+            module: "nodenext",
+            skipLibCheck: true,
+          },
+        }),
       );
-    await run();
-    const first = readArtifactRecord(recordPath)!;
-    expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
-    write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');
-    fs.renameSync(path.join(root, "src/nested.ts"), path.join(root, "src/renamed.ts"));
-    write("src/renamed.ts", 'export const value: number = "error";');
-    write(`${output}/orphan.d.ts`, "export {};");
-    write(`${output}/operator-note.txt`, "unowned");
-    await expect(run()).rejects.toThrow("failed with exit code 1");
-    expect(fs.existsSync(recordPath)).toBe(false);
-    expect(fs.existsSync(path.join(root, output, "src/renamed.d.ts"))).toBe(true);
-    expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(true);
-    write("src/renamed.ts", "export const value = 2;");
-    await run();
-    const repaired = readArtifactRecord(recordPath)!;
-    expect(repaired.outputs[`${output}/src/renamed.d.ts`]).toBeDefined();
-    expect(repaired.outputs[`${output}/src/nested.d.ts`]).toBeUndefined();
-    expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(false);
-    expect(fs.existsSync(path.join(root, output, "orphan.d.ts"))).toBe(false);
-    expect(fs.readFileSync(path.join(root, output, "operator-note.txt"), "utf8")).toBe("unowned");
-    fs.rmSync(path.join(root, output, "src/renamed.d.ts"));
-    await run();
-    expect(readArtifactRecord(recordPath)?.outputs).toEqual(repaired.outputs);
-    const unchanged = fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs;
-    await run();
-    expect(fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs).toBe(unchanged);
-  }, 30_000);
+      write(
+        "packages/plugin-sdk/tsconfig.json",
+        JSON.stringify({
+          extends: "../../tsconfig.json",
+          include: ["../../src/**/*.ts"],
+        }),
+      );
+      write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
+      write("src/nested.ts", "export const value = 1;");
+      write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
+      const copy = (file: string) => {
+        const target = path.join(root, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(path.resolve(file), target);
+      };
+      copy("scripts/prepare-extension-package-boundary-artifacts.mts");
+      copy("scripts/lib/plugin-sdk-entries.mts");
+      fs.cpSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"), { recursive: true });
+      write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
+      for (const file of [
+        "scripts/run-tsgo.mjs",
+        "scripts/run-tsgo.mts",
+        "scripts/tsx.mjs",
+        "scripts/windows-cmd-helpers.mjs",
+      ]) {
+        copy(file);
+      }
+      for (const name of ["tsx", "typescript", "@typescript", "@openclaw/fs-safe", ".bin/tsgo"]) {
+        const target = path.join(root, "node_modules", name);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.symlinkSync(path.resolve("node_modules", name), target);
+      }
+      fs.symlinkSync(
+        path.resolve("packages/normalization-core"),
+        path.join(root, "packages/normalization-core"),
+        process.platform === "win32" ? "junction" : undefined,
+      );
+      write(
+        "packages/plugin-sdk/package.json",
+        '{"name":"fixture-sdk","type":"module","types":"./dist/src/plugin-sdk/core.d.ts"}',
+      );
+      fs.symlinkSync("../packages/plugin-sdk", path.join(root, "node_modules/fixture-sdk"), "dir");
+      const plugins = mode === "all" ? BOUNDARY_PLUGIN_UNITS : [];
+      for (const [id, entry] of plugins) {
+        write(
+          `extensions/${id}/tsconfig.json`,
+          JSON.stringify({ extends: "../../tsconfig.json", files: [`${entry}.ts`] }),
+        );
+        write(`extensions/${id}/${entry}.ts`, 'export { value } from "fixture-sdk";');
+      }
+      const recordPath = path.join(root, ".artifacts/extension-package-boundary/plugin-sdk.json");
+      const output = "packages/plugin-sdk/dist";
+      const run = () =>
+        runNodeStep(
+          "native-fixture",
+          [
+            path.join(root, "scripts/prepare-extension-package-boundary-artifacts.mts"),
+            `--mode=${mode}`,
+          ],
+          30_000,
+        );
+      await run();
+      const first = readArtifactRecord(recordPath)!;
+      expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
+      write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');
+      fs.renameSync(path.join(root, "src/nested.ts"), path.join(root, "src/renamed.ts"));
+      write("src/renamed.ts", 'export const value: number = "error";');
+      write(`${output}/orphan.d.ts`, "export {};");
+      write(`${output}/operator-note.txt`, "unowned");
+      await expect(run()).rejects.toThrow("failed with exit code 1");
+      expect(fs.existsSync(recordPath)).toBe(false);
+      expect(fs.existsSync(path.join(root, output, "src/renamed.d.ts"))).toBe(true);
+      expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(true);
+      write("src/renamed.ts", "export const value = 2;");
+      await run();
+      const repaired = readArtifactRecord(recordPath)!;
+      expect(repaired.outputs[`${output}/src/renamed.d.ts`]).toBeDefined();
+      expect(repaired.outputs[`${output}/src/nested.d.ts`]).toBeUndefined();
+      expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(false);
+      expect(fs.existsSync(path.join(root, output, "orphan.d.ts"))).toBe(false);
+      expect(fs.readFileSync(path.join(root, output, "operator-note.txt"), "utf8")).toBe("unowned");
+      for (const [id, entry] of plugins) {
+        const record = readArtifactRecord(
+          path.join(root, `.artifacts/extension-package-boundary/${id}.json`),
+        )!;
+        expect(record.inputs).toContain(`${output}/src/renamed.d.ts`);
+        expect(
+          record.outputs[`.artifacts/extension-package-boundary/plugins/${id}/${entry}.d.ts`],
+        ).toBeDefined();
+      }
+      fs.rmSync(path.join(root, output, "src/renamed.d.ts"));
+      await run();
+      expect(readArtifactRecord(recordPath)?.outputs).toEqual(repaired.outputs);
+      const unchanged = fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs;
+      await run();
+      expect(fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs).toBe(unchanged);
+    },
+    30_000,
+  );
   it("prefixes each completed line and flushes the trailing partial line", () => {
     let output = "";
     const writer = createPrefixedOutputWriter("boundary", {

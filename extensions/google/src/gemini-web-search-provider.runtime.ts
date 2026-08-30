@@ -4,6 +4,7 @@ import {
   createProviderHttpError,
   formatProviderHttpErrorMessage,
   readProviderJsonObjectResponse,
+  truncateErrorDetail,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
@@ -24,7 +25,7 @@ import {
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleApiClientHeaders } from "../google-api-client-header.js";
 import {
   resolveGeminiConfig,
@@ -38,29 +39,6 @@ type GeminiFreshness = "day" | "week" | "month" | "year";
 type GeminiTimeRangeFilter = {
   startTime: string;
   endTime: string;
-};
-
-type GeminiGroundingResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        text?: string;
-      }>;
-    };
-    groundingMetadata?: {
-      groundingChunks?: Array<{
-        web?: {
-          uri?: string;
-          title?: string;
-        };
-      }>;
-    };
-  }>;
-  error?: {
-    code?: number;
-    message?: string;
-    status?: string;
-  };
 };
 
 const GEMINI_PROVIDER_OWNED_HEADER_NAMES = new Set([
@@ -309,55 +287,72 @@ async function runGeminiSearch(params: {
         throw new Error(error.message.replace(/key=[^&\s]+/giu, "key=***"));
       }
 
-      const data = (await readProviderJsonObjectResponse(
-        res,
-        "Gemini API error",
-      )) as GeminiGroundingResponse;
+      const data = await readProviderJsonObjectResponse(res, "Gemini API error");
 
-      if (data.error) {
-        const rawMessage = data.error.message || data.error.status || "unknown";
+      if (data.error !== undefined) {
+        if (!isRecord(data.error)) {
+          throwMalformedGeminiResponse();
+        }
+        const rawMessage =
+          normalizeOptionalString(data.error.message) ??
+          normalizeOptionalString(data.error.status) ??
+          "unknown";
         throw new Error(
           formatProviderHttpErrorMessage({
             label: "Gemini API error",
-            status: data.error.code ?? 0,
+            status: typeof data.error.code === "number" ? data.error.code : 0,
             detail: rawMessage.replace(/key=[^&\s]+/giu, "key=***"),
           }),
         );
       }
 
-      if (!Array.isArray(data.candidates)) {
+      if (
+        (data.candidates !== undefined && !Array.isArray(data.candidates)) ||
+        (data.promptFeedback !== undefined && !isRecord(data.promptFeedback))
+      ) {
         throwMalformedGeminiResponse();
       }
-      const candidate = data.candidates[0];
-      if (!isRecord(candidate) || !isRecord(candidate.content)) {
+      const candidate: unknown = data.candidates?.[0];
+      if (candidate !== undefined && !isRecord(candidate)) {
         throwMalformedGeminiResponse();
       }
-      const parts = candidate.content.parts;
-      if (!Array.isArray(parts)) {
+      const candidateContent = candidate?.content;
+      if (candidateContent !== undefined && !isRecord(candidateContent)) {
         throwMalformedGeminiResponse();
       }
-      const content = parts
+      const parts = candidateContent?.parts;
+      if (parts !== undefined && !Array.isArray(parts)) {
+        throwMalformedGeminiResponse();
+      }
+      const content = (parts ?? [])
         .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : undefined))
         .filter((text): text is string => Boolean(text))
         .join("\n");
+      const groundingMetadata = candidate?.groundingMetadata;
+      if (groundingMetadata !== undefined && !isRecord(groundingMetadata)) {
+        throwMalformedGeminiResponse();
+      }
+      const groundingChunks = groundingMetadata?.groundingChunks;
+      if (groundingChunks !== undefined && !Array.isArray(groundingChunks)) {
+        throwMalformedGeminiResponse();
+      }
       if (!content) {
-        throwMalformedGeminiResponse();
+        const reasons = [data.promptFeedback?.blockReason, candidate?.finishReason];
+        if (
+          reasons.some((reason) => reason !== undefined && typeof reason !== "string") ||
+          parts?.some(
+            (part) => !isRecord(part) || (part.text !== undefined && typeof part.text !== "string"),
+          )
+        ) {
+          throwMalformedGeminiResponse();
+        }
+        // No answer is not proof of zero search matches. Keep the thrown seam
+        // so explicit selection and automatic fallback retain their behavior.
+        const reason = reasons.map((value) => normalizeOptionalString(value)).find(Boolean);
+        const detail = reason ? ` (${truncateErrorDetail(reason, 120)})` : "";
+        throw new Error(`Gemini search returned no final answer${detail}.`);
       }
-      const groundingMetadata = candidate.groundingMetadata;
-      const groundingChunks =
-        groundingMetadata === undefined
-          ? []
-          : isRecord(groundingMetadata)
-            ? groundingMetadata.groundingChunks === undefined
-              ? []
-              : Array.isArray(groundingMetadata.groundingChunks)
-                ? groundingMetadata.groundingChunks
-                : undefined
-            : undefined;
-      if (!groundingChunks) {
-        throwMalformedGeminiResponse();
-      }
-      const rawCitations = groundingChunks.flatMap((chunk) => {
+      const rawCitations = (groundingChunks ?? []).flatMap((chunk) => {
         if (!isRecord(chunk) || !isRecord(chunk.web) || typeof chunk.web.uri !== "string") {
           return [];
         }

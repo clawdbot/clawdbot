@@ -1,20 +1,8 @@
 // Model special token helpers strip model control tokens outside code regions.
-import { findCodeRegions, isInsideCode } from "./code-regions.js";
+import { findCodeRegions } from "./code-regions.js";
 
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
-
-function overlapsCodeRegion(
-  start: number,
-  end: number,
-  codeRegions: { start: number; end: number }[],
-): boolean {
-  return codeRegions.some((region) => start < region.end && end > region.start);
-}
-
-function shouldInsertSeparator(before: string | undefined, after: string | undefined): boolean {
-  return Boolean(before && after && !/\s/.test(before) && !/\s/.test(after));
-}
 
 /**
  * Strips leaked model control tokens like `<|assistant|>` or full-width pipe variants.
@@ -40,9 +28,14 @@ export function stripModelSpecialTokens(text: string): string {
     const start = match.index ?? 0;
     const end = start + matched.length;
     out += text.slice(cursor, start);
-    if (isInsideCode(start, codeRegions) || overlapsCodeRegion(start, end, codeRegions)) {
+    if (codeRegions.some((region) => start < region.end && end > region.start)) {
       out += matched;
-    } else if (shouldInsertSeparator(text[start - 1], text[end])) {
+    } else if (
+      // Retained text handles adjacent tokens; two code units preserve astral letters.
+      // A following combining mark stays attached, and punctuation needs no separator.
+      /[\p{L}\p{M}\p{N}]$/u.test(out.slice(-2)) &&
+      /^[\p{L}\p{N}]/u.test(text.slice(end, end + 2))
+    ) {
       out += " ";
     }
     cursor = end;

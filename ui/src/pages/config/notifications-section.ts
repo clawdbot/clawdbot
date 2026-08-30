@@ -1,11 +1,15 @@
 import { html, nothing } from "lit";
 import type {
+  WebPushDevicePreferences,
+  WebPushNotificationPreferences,
+} from "../../../../packages/gateway-protocol/src/schema/push.js";
+import type {
   NativeNotificationsPermission,
   NativeNotificationTestOutcome,
 } from "../../app/native-notifications.ts";
+import type { WebPushSnapshot } from "../../app/web-push.ts";
 import { icons } from "../../components/icons.ts";
 import {
-  renderLearnMoreLink,
   renderSettingsRow,
   renderSettingsStatus,
   renderSettingsValue,
@@ -13,20 +17,6 @@ import {
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
-
-const NOTIFICATIONS_DOCS_URL = "https://docs.openclaw.ai/web/notifications";
-
-function renderNotificationsHint(copy: string) {
-  return html`${copy} ${renderLearnMoreLink(NOTIFICATIONS_DOCS_URL)}`;
-}
-
-export type WebPushUiState = {
-  supported: boolean;
-  permission: NotificationPermission | "unsupported";
-  subscribed: boolean;
-  loading: boolean;
-  error?: string | null;
-};
 
 // Leaf props contract: view.ts imports this module, so importing ConfigProps
 // back from view.ts would create an import cycle. ConfigProps is structurally
@@ -39,11 +29,361 @@ type NotificationsSectionProps = {
   };
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
-  webPush?: WebPushUiState;
+  webPush?: WebPushSnapshot;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
   onWebPushTest?: () => void;
+  onWebPushSetUserPreferences?: (preferences: WebPushNotificationPreferences) => void;
+  onWebPushSetDevicePreferences?: (preferences: WebPushDevicePreferences) => void;
 };
+
+const WEB_PUSH_CATEGORIES = [
+  ["approvalRequested", () => t("configView.notifications.approvalRequested")],
+  ["agentFinished", () => t("configView.notifications.agentFinished")],
+  ["agentQuestion", () => t("configView.notifications.agentQuestion")],
+  ["scheduledTaskFailed", () => t("configView.notifications.scheduledTaskFailed")],
+  ["backgroundTaskFailed", () => t("configView.notifications.backgroundTaskFailed")],
+] as const;
+
+function minutesToTime(value: number): string {
+  return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+}
+
+function timeToMinutes(value: string, fallback: number): number {
+  const match = /^(\d{2}):(\d{2})$/u.exec(value);
+  if (!match) {
+    return fallback;
+  }
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function inputTarget(event: Event): HTMLInputElement {
+  // SAFETY: callers bind these handlers directly to input elements in this module.
+  return event.currentTarget as HTMLInputElement;
+}
+
+function selectTarget(event: Event): HTMLSelectElement {
+  // SAFETY: callers bind these handlers directly to select elements in this module.
+  return event.currentTarget as HTMLSelectElement;
+}
+
+function detailLevel(value: string): WebPushNotificationPreferences["detailLevel"] {
+  return value === "identified" || value === "detailed" ? value : "private";
+}
+
+function renderUserNotificationPreferences(
+  preferences: WebPushNotificationPreferences,
+  onChange: (preferences: WebPushNotificationPreferences) => void,
+) {
+  const patch = (next: Partial<WebPushNotificationPreferences>) =>
+    onChange({ ...preferences, ...next });
+  return html`
+    <section class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("configView.notifications.accountDefaults")}</h2>
+      </div>
+      <div class="settings-group">
+        ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
+          renderSettingsRow({
+            title: label(),
+            control: html`<input
+              type="checkbox"
+              .checked=${preferences.categories[key]}
+              @change=${(event: Event) =>
+                patch({
+                  categories: {
+                    ...preferences.categories,
+                    [key]: inputTarget(event).checked,
+                  },
+                })}
+            />`,
+          }),
+        )}
+        ${renderSettingsRow({
+          title: t("configView.notifications.lockScreenDetail"),
+          description: t("configView.notifications.lockScreenDetailHint"),
+          control: html`<select
+            .value=${preferences.detailLevel}
+            @change=${(event: Event) =>
+              patch({
+                detailLevel: detailLevel(selectTarget(event).value),
+              })}
+          >
+            <option value="private">${t("configView.notifications.private")}</option>
+            <option value="identified">${t("configView.notifications.namesOnly")}</option>
+            <option value="detailed">${t("configView.notifications.detailed")}</option>
+          </select>`,
+        })}
+        ${renderSettingsRow({
+          title: t("configView.notifications.quietHours"),
+          control: html`<input
+            type="checkbox"
+            .checked=${preferences.quietHours.enabled}
+            @change=${(event: Event) =>
+              patch({
+                quietHours: {
+                  ...preferences.quietHours,
+                  enabled: inputTarget(event).checked,
+                },
+              })}
+          />`,
+        })}
+        ${preferences.quietHours.enabled
+          ? html`
+              ${renderSettingsRow({
+                title: t("configView.notifications.quietHoursWindow"),
+                control: html`<span>
+                  <input
+                    type="time"
+                    .value=${minutesToTime(preferences.quietHours.startMinute)}
+                    @change=${(event: Event) =>
+                      patch({
+                        quietHours: {
+                          ...preferences.quietHours,
+                          startMinute: timeToMinutes(
+                            inputTarget(event).value,
+                            preferences.quietHours.startMinute,
+                          ),
+                        },
+                      })}
+                  />
+                  –
+                  <input
+                    type="time"
+                    .value=${minutesToTime(preferences.quietHours.endMinute)}
+                    @change=${(event: Event) =>
+                      patch({
+                        quietHours: {
+                          ...preferences.quietHours,
+                          endMinute: timeToMinutes(
+                            inputTarget(event).value,
+                            preferences.quietHours.endMinute,
+                          ),
+                        },
+                      })}
+                  />
+                </span>`,
+              })}
+              ${renderSettingsRow({
+                title: t("configView.notifications.timeZone"),
+                control: html`<input
+                  type="text"
+                  .value=${preferences.quietHours.timeZone}
+                  @change=${(event: Event) =>
+                    patch({
+                      quietHours: {
+                        ...preferences.quietHours,
+                        timeZone: inputTarget(event).value,
+                      },
+                    })}
+                />`,
+              })}
+            `
+          : nothing}
+        ${renderSettingsRow({
+          title: t("configView.notifications.onlyAgents"),
+          control: html`<input
+            type="text"
+            .value=${preferences.agentIds.join(", ")}
+            @change=${(event: Event) =>
+              patch({
+                agentIds: inputTarget(event)
+                  .value.split(",")
+                  .map((entry) => entry.trim())
+                  .filter(Boolean),
+              })}
+          />`,
+        })}
+      </div>
+    </section>
+  `;
+}
+
+function renderDeviceNotificationPreferences(
+  preferences: WebPushDevicePreferences,
+  onChange: (preferences: WebPushDevicePreferences) => void,
+) {
+  const patch = (next: Partial<WebPushDevicePreferences>) => onChange({ ...preferences, ...next });
+  const deviceQuietHours = preferences.quietHours;
+  return html`
+    <section class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("configView.notifications.installedApp")}</h2>
+      </div>
+      <div class="settings-group">
+        ${renderSettingsRow({
+          title: t("configView.notifications.deliverDevice"),
+          control: html`<input
+            type="checkbox"
+            .checked=${preferences.enabled}
+            @change=${(event: Event) => patch({ enabled: inputTarget(event).checked })}
+          />`,
+        })}
+        ${renderSettingsRow({
+          title: t("configView.notifications.notificationLabel"),
+          control: html`<input
+            type="text"
+            maxlength="80"
+            .value=${preferences.label}
+            @change=${(event: Event) => patch({ label: inputTarget(event).value })}
+          />`,
+        })}
+        ${renderSettingsRow({
+          title: t("configView.notifications.lockScreenDetail"),
+          control: html`<select
+            .value=${preferences.detailLevel ?? "inherit"}
+            @change=${(event: Event) => {
+              const value = selectTarget(event).value;
+              patch({
+                detailLevel: value === "inherit" ? undefined : detailLevel(value),
+              });
+            }}
+          >
+            <option value="inherit">${t("configView.notifications.inheritDetail")}</option>
+            <option value="private">${t("configView.notifications.private")}</option>
+            <option value="identified">${t("configView.notifications.namesOnly")}</option>
+            <option value="detailed">${t("configView.notifications.detailed")}</option>
+          </select>`,
+        })}
+        ${renderSettingsRow({
+          title: t("configView.notifications.quietHours"),
+          control: html`<select
+            .value=${preferences.quietHours === undefined
+              ? "inherit"
+              : preferences.quietHours.enabled
+                ? "on"
+                : "off"}
+            @change=${(event: Event) => {
+              const value = selectTarget(event).value;
+              patch({
+                quietHours:
+                  value === "inherit"
+                    ? undefined
+                    : {
+                        enabled: value === "on",
+                        startMinute: preferences.quietHours?.startMinute ?? 22 * 60,
+                        endMinute: preferences.quietHours?.endMinute ?? 7 * 60,
+                        timeZone: preferences.quietHours?.timeZone ?? "UTC",
+                      },
+              });
+            }}
+          >
+            <option value="inherit">${t("configView.notifications.inheritQuietHours")}</option>
+            <option value="on">${t("configForm.enumOn")}</option>
+            <option value="off">${t("configForm.enumOff")}</option>
+          </select>`,
+        })}
+        ${deviceQuietHours?.enabled
+          ? html`
+              ${renderSettingsRow({
+                title: t("configView.notifications.quietHoursWindow"),
+                control: html`<span>
+                  <input
+                    type="time"
+                    .value=${minutesToTime(deviceQuietHours.startMinute)}
+                    @change=${(event: Event) =>
+                      patch({
+                        quietHours: {
+                          ...deviceQuietHours,
+                          startMinute: timeToMinutes(
+                            inputTarget(event).value,
+                            deviceQuietHours.startMinute,
+                          ),
+                        },
+                      })}
+                  />
+                  –
+                  <input
+                    type="time"
+                    .value=${minutesToTime(deviceQuietHours.endMinute)}
+                    @change=${(event: Event) =>
+                      patch({
+                        quietHours: {
+                          ...deviceQuietHours,
+                          endMinute: timeToMinutes(
+                            inputTarget(event).value,
+                            deviceQuietHours.endMinute,
+                          ),
+                        },
+                      })}
+                  />
+                </span>`,
+              })}
+              ${renderSettingsRow({
+                title: t("configView.notifications.timeZone"),
+                control: html`<input
+                  type="text"
+                  .value=${deviceQuietHours.timeZone}
+                  @change=${(event: Event) =>
+                    patch({
+                      quietHours: {
+                        ...deviceQuietHours,
+                        timeZone: inputTarget(event).value,
+                      },
+                    })}
+                />`,
+              })}
+            `
+          : nothing}
+        ${renderSettingsRow({
+          title: t("configView.notifications.onlyAgents"),
+          control: html`<select
+            .value=${preferences.agentIds === undefined ? "inherit" : "override"}
+            @change=${(event: Event) => {
+              const value = selectTarget(event).value;
+              patch({ agentIds: value === "inherit" ? undefined : [] });
+            }}
+          >
+            <option value="inherit">${t("configView.notifications.inherit")}</option>
+            <option value="override">${t("configView.notifications.overrideAgents")}</option>
+          </select>`,
+        })}
+        ${preferences.agentIds !== undefined
+          ? renderSettingsRow({
+              title: t("configView.notifications.onlyAgents"),
+              control: html`<input
+                type="text"
+                .value=${preferences.agentIds.join(", ")}
+                @change=${(event: Event) =>
+                  patch({
+                    agentIds: inputTarget(event)
+                      .value.split(",")
+                      .map((entry) => entry.trim())
+                      .filter(Boolean),
+                  })}
+              />`,
+            })
+          : nothing}
+        ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
+          renderSettingsRow({
+            title: label(),
+            control: html`<select
+              .value=${preferences.categories?.[key] === undefined
+                ? "inherit"
+                : preferences.categories[key]
+                  ? "on"
+                  : "off"}
+              @change=${(event: Event) => {
+                const value = selectTarget(event).value;
+                const categories = { ...preferences.categories };
+                if (value === "inherit") {
+                  delete categories[key];
+                } else {
+                  categories[key] = value === "on";
+                }
+                patch({ categories });
+              }}
+            >
+              <option value="inherit">${t("configView.notifications.inherit")}</option>
+              <option value="on">${t("configForm.enumOn")}</option>
+              <option value="off">${t("configForm.enumOff")}</option>
+            </select>`,
+          }),
+        )}
+      </div>
+    </section>
+  `;
+}
 
 function nativeNotificationsStatus(permission: NativeNotificationsPermission | "unknown"): {
   kind: "ok" | "danger" | "accent" | "muted";
@@ -104,9 +444,6 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             <h2 class="settings-section__heading">${t("configView.notifications.nativeTitle")}</h2>
             <div class="settings-section__actions">${renderSettingsStatus(status)}</div>
           </div>
-          <p class="settings-section__desc">
-            ${renderNotificationsHint(t("configView.notifications.nativeHint"))}
-          </p>
           <div class="settings-group">
             ${renderSettingsRow({
               title: t("configView.notifications.permission"),
@@ -171,9 +508,6 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               })}
             </div>
           </div>
-          <p class="settings-section__desc">
-            ${renderNotificationsHint(t("configView.notifications.unavailableHint"))}
-          </p>
           <div class="settings-group">
             <div class="settings-row">
               <div class="settings-row__text">
@@ -196,27 +530,35 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
         : push.permission === "default"
           ? t("configView.notifications.notRequested")
           : t("configView.notifications.unsupported");
-  const subscriptionLabel = push.subscribed
+  const registered = push.subscription === "registered";
+  const canReset = registered || push.subscription === "vapid-mismatch";
+  const subscriptionLabel = registered
     ? t("configView.notifications.subscribed")
-    : t("configView.notifications.notSubscribed");
+    : push.subscription === "unknown"
+      ? t("configView.notifications.checking")
+      : t("configView.notifications.notSubscribed");
   const statusLabel = !push.supported
     ? t("configView.notifications.unsupported")
     : push.permission === "denied"
       ? t("configView.notifications.blocked")
-      : push.subscribed
+      : registered
         ? t("configView.notifications.subscribed")
-        : t("configView.notifications.ready");
+        : push.subscription === "vapid-mismatch"
+          ? t("configView.notifications.unavailable")
+          : push.subscription === "unknown"
+            ? t("configView.notifications.checking")
+            : t("configView.notifications.ready");
   const statusKind = !push.supported
     ? ("muted" as const)
-    : push.permission === "denied"
+    : push.permission === "denied" || push.subscription === "vapid-mismatch"
       ? ("danger" as const)
-      : push.subscribed
+      : registered
         ? ("ok" as const)
         : ("accent" as const);
 
   const actionButtons =
     push.supported && push.permission !== "denied"
-      ? push.subscribed
+      ? canReset
         ? html`
             <button
               class="btn"
@@ -225,13 +567,15 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             >
               ${icons.x} ${t("configView.notifications.unsubscribe")}
             </button>
-            <button
-              class="btn primary"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushTest?.()}
-            >
-              ${icons.send} ${t("configView.notifications.sendTest")}
-            </button>
+            ${registered
+              ? html`<button
+                  class="btn primary"
+                  ?disabled=${push.loading || !props.connected}
+                  @click=${() => props.onWebPushTest?.()}
+                >
+                  ${icons.send} ${t("configView.notifications.sendTest")}
+                </button>`
+              : nothing}
           `
         : html`
             <button
@@ -256,9 +600,11 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             ${renderSettingsStatus({ kind: statusKind, label: statusLabel })}
           </div>
         </div>
-        <p class="settings-section__desc">
-          ${renderNotificationsHint(t("configView.notifications.hint"))}
-        </p>
+        ${push.permission === "install-required"
+          ? html`<p class="settings-section__desc">
+              ${t("configView.notifications.iosInstallRequired")}
+            </p>`
+          : nothing}
         <div class="settings-group">
           ${renderSettingsRow({
             title: t("configView.notifications.browserSupport"),
@@ -275,7 +621,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
           ${renderSettingsRow({
             title: t("configView.notifications.status"),
             control: renderSettingsStatus({
-              kind: push.subscribed ? "ok" : "muted",
+              kind: registered ? "ok" : "muted",
               label: subscriptionLabel,
             }),
           })}
@@ -307,6 +653,18 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             : nothing}
         </div>
       </section>
+      ${registered && push.preferences
+        ? html`<div class="settings-page" ?inert=${push.loading}>
+            ${push.preferences.durableIdentity
+              ? renderUserNotificationPreferences(push.preferences.user, (preferences) =>
+                  props.onWebPushSetUserPreferences?.(preferences),
+                )
+              : nothing}
+            ${renderDeviceNotificationPreferences(push.preferences.device, (preferences) =>
+              props.onWebPushSetDevicePreferences?.(preferences),
+            )}
+          </div>`
+        : nothing}
     </div>
   `;
 }

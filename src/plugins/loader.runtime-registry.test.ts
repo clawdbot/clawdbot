@@ -4,6 +4,10 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
@@ -37,11 +41,15 @@ import {
 } from "./loader.test-fixtures.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  captureActivePluginRegistrySnapshot,
   clearActivePluginRegistry,
+  commitStagedPluginRegistry,
   getActivePluginRegistry,
+  rollbackStagedPluginRegistry,
   setActivePluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
@@ -52,9 +60,10 @@ afterEach(() => {
   vi.restoreAllMocks();
   resetPluginStateStoreForTests();
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
 });
 
-it("initializes trusted state and executable CLI before resolving the broad runtime", async () => {
+it("initializes config, trusted state and executable CLI before resolving the broad runtime", async () => {
   const root = fs.realpathSync(makePluginLoaderTempDir());
   const bundledDir = path.join(root, "bundled");
   const observed = path.join(root, "observed.json");
@@ -66,7 +75,7 @@ it("initializes trusted state and executable CLI before resolving the broad runt
       const sync = api.runtime.state.openSyncKeyedStore({ namespace: "registration", maxEntries: 2 });
       const entries = sync.entries();
       const asyncStore = api.runtime.state.openKeyedStore({ namespace: "registration", maxEntries: 2 });
-      require("node:fs").writeFileSync(${JSON.stringify(observed)}, JSON.stringify(entries));
+      require("node:fs").writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, config: api.runtime.config.current() }));
       api.registerCli(({ program }) => program.command("state-proof").action(async () => {
         sync.register("before", { value: "retained" });
         const chunks = api.runtime.channel.text.chunkText("channel runtime works", 100);
@@ -113,6 +122,7 @@ it("initializes trusted state and executable CLI before resolving the broad runt
       const dispatchReplyFromConfig =
         vi.fn<PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"]>();
       const config = { plugins: { entries: { [plugin.id]: { enabled: true } } } };
+      setRuntimeConfigSnapshot(config);
       const metadata = await loadOpenClawPluginCliRegistry({ config, pluginSdkResolution: "src" });
       expect(metadata.plugins).toContainEqual(
         expect.objectContaining({
@@ -132,10 +142,15 @@ it("initializes trusted state and executable CLI before resolving the broad runt
       expect(registry.plugins).toContainEqual(
         expect.objectContaining({ id: plugin.id, status: "loaded" }),
       );
-      expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual([]);
+      expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({ entries: [], config });
       expect(fs.existsSync(path.join(root, "state", "state", "openclaw.sqlite"))).toBe(false);
       expect(resolveRuntime).not.toHaveBeenCalled();
       const runtime = getPluginRegistryRuntime(registry)!;
+      const configApi = runtime.config;
+      const refreshedConfig = { ...config, agents: { defaults: { workspace: "/refreshed" } } };
+      setRuntimeConfigSnapshot(refreshedConfig);
+      expect(configApi.current()).toBe(refreshedConfig);
+      expect(Object.getOwnPropertyDescriptor(runtime, "config")?.get?.()).toBe(configApi);
       const state = runtime.state;
       const descriptor = Object.getOwnPropertyDescriptor(runtime, "state")!;
       expect(descriptor.get?.()).toBe(state);
@@ -159,6 +174,9 @@ it("initializes trusted state and executable CLI before resolving the broad runt
       expect(resolveRuntime).toHaveBeenCalledTimes(1);
       expect(factories).toHaveBeenCalledTimes(1);
       expect(runtime.state).toBe(state);
+      expect(runtime.config).toBe(configApi);
+      setRuntimeConfigSnapshot(config);
+      expect(configApi.current()).toBe(config);
       expect(runtime.hooks).toBe(hooks);
       expect(runtime.channel.reply.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
       const replacement = { ...state };
@@ -548,6 +566,41 @@ describe("resolveRuntimePluginRegistry", () => {
 });
 
 describe("clearPluginRegistryLoadCache", () => {
+  it.each(["commit", "rollback"])(
+    "releases only the retired cache aliases after staged %s",
+    (action) => {
+      const original = createEmptyPluginRegistry();
+      const candidate = createEmptyPluginRegistry();
+      pluginLoaderCacheState.set("original", original);
+      pluginLoaderCacheState.set("original-alias", original);
+      pluginLoaderCacheState.set("candidate", candidate);
+      pluginLoaderCacheState.set("candidate-alias", candidate);
+      setActivePluginRegistry(original, "original");
+      const snapshot = captureActivePluginRegistrySnapshot();
+
+      stageActivePluginRegistry(candidate, "candidate", "default");
+      expect(pluginLoaderCacheState.get("original") === original).toBe(true);
+      expect(pluginLoaderCacheState.get("candidate") === candidate).toBe(true);
+      // Reusing a key must not let the old value's retirement evict its successor.
+      pluginLoaderCacheState.set("reused-key", original);
+      pluginLoaderCacheState.set("reused-key", candidate);
+
+      if (action === "commit") {
+        commitStagedPluginRegistry(original, candidate);
+      } else {
+        rollbackStagedPluginRegistry(snapshot);
+      }
+
+      const committed = action === "commit";
+      for (const key of ["original", "original-alias"]) {
+        expect(pluginLoaderCacheState.get(key) === original).toBe(!committed);
+      }
+      for (const key of ["candidate", "candidate-alias", "reused-key"]) {
+        expect(pluginLoaderCacheState.get(key) === candidate).toBe(committed);
+      }
+    },
+  );
+
   it.each(["clear", "replacement"])(
     "rebuilds plugin registrations after runtime %s with unchanged load options",
     async (retirement) => {
@@ -592,6 +645,7 @@ describe("clearPluginRegistryLoadCache", () => {
         return await tool.execute("probe", {});
       };
       const original = loadOpenClawPlugins(options);
+      const originalKey = resolvePluginLoadCacheContext(options).cacheKey;
       expect(loadOpenClawPlugins(options)).toBe(original);
       expect(await read(original)).toMatchObject({ content: [{ text: "live" }] });
 
@@ -606,8 +660,12 @@ describe("clearPluginRegistryLoadCache", () => {
           expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
         });
         expect(loadOpenClawPlugins(replacementOptions)).toBe(replacement);
+        expect(
+          pluginLoaderCacheState.get(resolvePluginLoadCacheContext(replacementOptions).cacheKey),
+        ).toBe(replacement);
       }
 
+      expect(pluginLoaderCacheState.get(originalKey) === undefined).toBe(true);
       expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
       const reloaded = loadOpenClawPlugins(options);
       expect(await read(reloaded)).toMatchObject({ content: [{ text: "live" }] });

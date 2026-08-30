@@ -418,6 +418,55 @@ describe("FRV immutable plan eligibility", () => {
 });
 
 describe("FRV continuation preflight", () => {
+  it("rejects parent-owned candidate artifacts before any GitHub access", async () => {
+    const selected = child("normalCi", "101");
+    const parentOwnedPlan = {
+      ...plan([selected]),
+      candidate: { producer: { runId: "77" } },
+    };
+    let reads = 0;
+    let mutations = 0;
+    const read = async () => {
+      reads += 1;
+      throw new Error("unexpected GitHub read");
+    };
+    const mutate = async () => {
+      mutations += 1;
+    };
+
+    await expect(
+      continueFailed(parentOwnedPlan, "77", {
+        getAttemptJobs: read,
+        getJobLog: read,
+        getParentJobs: read,
+        getRun: read,
+        getRunAttempt: read,
+        repository: REPOSITORY,
+        rerunFailed: mutate,
+        rerunParent: mutate,
+        verify: mutate,
+      }),
+    ).rejects.toThrow(
+      "parent-owned sealed candidate artifacts do not survive parent reruns; start a fresh all-group FRV",
+    );
+    expect(reads).toBe(0);
+    expect(mutations).toBe(0);
+  });
+
+  it.each([
+    ["candidate-free", undefined],
+    ["externally produced", { producer: { runId: "88" } }],
+  ])("allows %s plans through candidate ownership preflight", async (_label, candidate) => {
+    const selected = child("normalCi", "101");
+    await expect(
+      preflightContinuation(
+        { ...plan([selected]), candidate },
+        "77",
+        preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
+      ),
+    ).resolves.toMatchObject({ id: 77 });
+  });
+
   it("rejects fail-fast roots before any rerun mutation", async () => {
     const selected = child("normalCi", "101");
     let mutations = 0;
@@ -522,20 +571,23 @@ describe("FRV same-parent recovery", () => {
     expect(scenario.counters.posts.child).toBe(0);
   });
 
-  it("reruns current v2 failed children concurrently, preserves green children, then reruns the parent once", async () => {
+  it("reruns blocking children concurrently, preserves green and advisory children, then reruns the parent once", async () => {
     const first = child("normalCi", "101");
     const second = child("pluginPrerelease", "202");
     const green = child("releaseChecks", "303");
+    const telegram = child("npmTelegram", "505");
+    const selectedPlan = { ...plan([first, second, green, telegram]), releaseProfile: "full" };
     const childRuns = new Map([
       ["101", { attempt: 1, conclusion: "failure" }],
       ["202", { attempt: 1, conclusion: "failure" }],
       ["303", { attempt: 1, conclusion: "success" }],
+      ["505", { attempt: 1, conclusion: "failure" }],
     ]);
     const parent = { attempt: 1, conclusion: "failure" as string | null };
     const events: string[] = [];
     let parentReruns = 0;
     const client = {
-      ...controllerClient([first, second, green], childRuns, parent),
+      ...controllerClient(selectedPlan.children, childRuns, parent),
       rerunFailed: async (runId: string) => {
         events.push(`child:${runId}`);
         childRuns.set(runId, { attempt: 2, conclusion: "success" });
@@ -547,15 +599,30 @@ describe("FRV same-parent recovery", () => {
         parent.attempt = 2;
         parent.conclusion = "success";
       },
-      verify: async () => {
+      verify: async (
+        _runId: string,
+        _plan: Record<string, unknown>,
+        _deadline?: number,
+        attempts?: Record<string, number>,
+      ) => {
+        expect(attempts?.["505"]).toBe(1);
         events.push("verify");
         return "{}";
       },
     };
-    const result = await continueFailed(plan([first, second, green]), "77", client);
+    const result = await continueFailed(selectedPlan, "77", client);
     expect(result).toMatchObject({ action: "reran-parent", finalRunId: "77" });
     expect(events.slice(0, 2).toSorted()).toEqual(["child:101", "child:202"]);
     expect(events).not.toContain("child:303");
+    expect(events).not.toContain("child:505");
+    expect(result.status.children).toContainEqual(
+      expect.objectContaining({
+        key: "npmTelegram",
+        conclusion: "failure",
+        passed: true,
+        effectiveRunAttempt: 1,
+      }),
+    );
     expect(events.indexOf("parent")).toBeGreaterThan(events.indexOf("child:202"));
     expect(events.at(-1)).toBe("verify");
     expect(parentReruns).toBe(1);

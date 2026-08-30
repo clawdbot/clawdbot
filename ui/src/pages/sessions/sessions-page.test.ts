@@ -339,7 +339,7 @@ describe("sessions page lifecycle", () => {
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
   });
 
-  it("uses the legacy-compatible Mark as read payload", async () => {
+  it("marks the exact qualified session read without a redundant routing agent", async () => {
     const patch = vi.fn(async () => ({
       ok: true as const,
       path: "",
@@ -355,7 +355,11 @@ describe("sessions page lifecycle", () => {
       "completed",
     );
 
-    expect(patch).toHaveBeenCalledWith("agent:main:main", { unread: false }, { agentId: "main" });
+    expect(patch).toHaveBeenCalledWith(
+      "agent:main:main",
+      { unread: false },
+      { agentId: undefined },
+    );
   });
 
   it("shows a connection error in the checkpoints drawer while disconnected", async () => {
@@ -454,6 +458,29 @@ describe("sessions page lifecycle", () => {
     });
     await pending;
     expect(page.transcriptSearch).toEqual({ status: "idle" });
+  });
+
+  it.each(["green", null])("patches color %s from the sessions page menu", async (color) => {
+    const row = {
+      key: "agent:main:color",
+      sessionId: "color-session",
+      kind: "direct",
+      updatedAt: 1,
+    } satisfies GatewaySessionRow;
+    const result = { count: 1, sessions: [row] } as SessionsListResult;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const sessions = createSessions();
+    const page = await createRenderedPage(createContext(gateway, sessions), result);
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await menu?.updateComplete;
+    const item = menu?.querySelector<HTMLElement>(`[value="set-color:${color ?? ""}"]`);
+    expect(item).not.toBeNull();
+    item?.click();
+    await vi.waitFor(() =>
+      expect(sessions.patch).toHaveBeenCalledWith(row.key, { color }, { agentId: undefined }),
+    );
   });
 
   it("disables Fork session for model-selection-locked rows", async () => {

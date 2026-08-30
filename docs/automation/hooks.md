@@ -519,8 +519,9 @@ command source or automatic reset reason.
 | `llmSlug`    | `false`       | Ask a model for a descriptive filename slug.                                                                    |
 | `model`      | Agent default | Optional configured alias, bare model ID on the default provider, or `provider/model` used for slug generation. |
 
-The hook captures a bounded transcript snapshot before background writing
-(up to 4,096 scanned messages and 8 MiB for that capture).
+The hook captures the departing conversation before a reset closes its active
+window, then writes the snapshot in the background. Capture is bounded to
+4,096 scanned messages and 8 MiB.
 Manual resets do not await the file write or optional slug-model call; automatic
 reset dispatch also runs independently of the successor turn. Wait for
 `Session context saved to ...` in logs before expecting the file.

@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
 import { resolveMaxRunRetryIterations } from "../../agents/embedded-agent-runner/run/helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import { BILLING_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { ProviderAuthError } from "../../agents/model-auth.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -970,6 +969,7 @@ describe("executeAgentTurn: provider failures", () => {
 
     const result = await executeTestTurn({
       sessionCtx: createDirectFailureSessionCtx("telegram"),
+      opts: { runId: "direct-provider-request-error" },
     });
 
     expect(result.kind).toBe("final");
@@ -978,6 +978,17 @@ describe("executeAgentTurn: provider failures", () => {
       expect(result.payload.text).not.toContain("/new");
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
+    const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
+    const terminal = emitAgentEvent.mock.calls
+      .map(([event]) => event)
+      .find(
+        (event) =>
+          event.runId === "direct-provider-request-error" &&
+          event.stream === "lifecycle" &&
+          event.data.phase === "error",
+      );
+    expect(terminal).toBeDefined();
+    expect(terminal?.data.fallbackExhaustedFailure).not.toBe(true);
   });
 
   it("surfaces billing guidance for Volcengine Coding Plan subscription failures before reply", async () => {
@@ -991,7 +1002,7 @@ describe("executeAgentTurn: provider failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
+      expect(result.payload.text).toBe(formatBillingErrorMessage());
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });

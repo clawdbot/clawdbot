@@ -13,7 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscript } from "../../gateway/session-transcript-title-reader.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
@@ -78,7 +78,11 @@ const SessionListRowOutputSchema = Type.Object(
     archived: Type.Boolean(),
     pinned: Type.Boolean(),
     label: Type.Optional(Type.String()),
-    category: Type.Optional(Type.String()),
+    group: Type.Optional(
+      Type.String({
+        description: 'Custom sidebar group membership; unrelated to kind "group" (group chats).',
+      }),
+    ),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
@@ -310,7 +314,6 @@ export function createSessionsListTool(opts?: {
       const titleTargets: Array<{
         row: SessionListRow;
         titleEntry: SessionEntry;
-        sessionEntry: { sessionFile?: string; sessionId: string };
         sessionId: string;
         sessionKey: string;
         agentId: string;
@@ -344,15 +347,14 @@ export function createSessionsListTool(opts?: {
         });
 
         const sessionId = readStringValue(entry.sessionId);
-        const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
-        const sessionFile = readStringValue(sessionFileRaw);
         // Version lookup keys on the store-owning agent (gateway row agentId), not the
         // key-derived agent: bare "global" keys parse to the default agent id.
         const stateVersionAgentId =
           typeof entry.agentId === "string" && entry.agentId ? entry.agentId : resolvedAgentId;
         const stateVersion = stateVersions[stateVersionAgentId]?.[key];
         const rowLabel = readStringValue(entry.label);
-        const category = readStringValue(entry.category);
+        // Gateway rows carry groups under the legacy wire field `category`.
+        const group = readStringValue(entry.category);
         const displayName = readStringValue(entry.displayName);
         const derivedTitle = readStringValue(entry.derivedTitle);
         const lastMessagePreview = readStringValue(entry.lastMessagePreview);
@@ -404,7 +406,7 @@ export function createSessionsListTool(opts?: {
           archived: entry.archived === true,
           pinned: entry.pinned === true,
           ...(rowLabel ? { label: rowLabel } : {}),
-          ...(category ? { category } : {}),
+          ...(group ? { group } : {}),
           ...(displayName ? { displayName } : {}),
           ...(derivedTitle ? { derivedTitle } : {}),
           ...(lastMessagePreview ? { lastMessagePreview } : {}),
@@ -432,10 +434,6 @@ export function createSessionsListTool(opts?: {
               subject: readStringValue((entry as { subject?: unknown }).subject),
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
-            sessionEntry: {
-              sessionId,
-              ...(sessionFile ? { sessionFile } : {}),
-            },
             sessionId,
             sessionKey: resolveInternalSessionKey({
               key,
@@ -456,29 +454,20 @@ export function createSessionsListTool(opts?: {
         rows.push(row);
       }
 
-      if (titleTargets.length > 0) {
-        await pMap(
-          titleTargets,
-          async (target) => {
-            const fields = await readSessionTitleFieldsFromTranscriptAsync({
-              agentId: target.agentId,
-              sessionEntry: target.sessionEntry,
-              sessionId: target.sessionId,
-              sessionKey: target.sessionKey,
-              storePath,
-            });
-            if (includeDerivedTitles && !target.row.derivedTitle) {
-              target.row.derivedTitle = deriveSessionTitle(
-                target.titleEntry,
-                fields.firstUserMessage,
-              );
-            }
-            if (includeLastMessage && fields.lastMessagePreview) {
-              target.row.lastMessagePreview = fields.lastMessagePreview;
-            }
-          },
-          { concurrency: 4, stopOnError: true },
-        );
+      for (const target of titleTargets) {
+        const fields = readSessionTitleFieldsFromTranscript({
+          agentId: target.agentId,
+          sessionEntry: target.titleEntry,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath,
+        });
+        if (includeDerivedTitles && !target.row.derivedTitle) {
+          target.row.derivedTitle = deriveSessionTitle(target.titleEntry, fields.firstUserMessage);
+        }
+        if (includeLastMessage && fields.lastMessagePreview) {
+          target.row.lastMessagePreview = fields.lastMessagePreview;
+        }
       }
 
       if (messageLimit > 0 && historyTargets.length > 0) {

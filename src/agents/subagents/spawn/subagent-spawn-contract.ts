@@ -53,6 +53,8 @@ export type SpawnSubagentContext = SpawnedToolContext & {
   currentMessageId?: string | number;
   requesterAgentIdOverride?: string;
   requesterRunId?: string;
+  /** Private invocation fence, consumed only before registration transfers ownership. */
+  assertActive?: () => void;
 };
 
 export type SpawnSubagentResult = {

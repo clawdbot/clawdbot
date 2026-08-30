@@ -140,7 +140,9 @@ function requireWithOptionalAliases(
   modulePath: string,
   aliasMap: Record<string, string> | ((specifier: string) => string | undefined) | undefined,
 ): unknown {
-  return withNativeRequireAliases(aliasMap, () => nodeRequire(modulePath));
+  // A process-wide require retains evicted modules through its synthetic parent's children.
+  // Keep that parent scoped to this load so retired graphs can be collected.
+  return withNativeRequireAliases(aliasMap, () => createRequire(import.meta.url)(modulePath));
 }
 
 /** Runs a native require block with temporary CJS/ESM alias hooks and restores both afterward. */

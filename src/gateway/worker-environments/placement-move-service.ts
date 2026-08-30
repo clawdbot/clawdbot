@@ -8,6 +8,7 @@ import type {
   WorkerPlacementMoveIntent,
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
+import type { WorkerReclaimPlacement } from "./placement-reclaim-contract.js";
 import { isCurrentPlacementTurnClaim, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerPlacementDispatchRequest,
@@ -20,7 +21,6 @@ import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-life
 
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerMovePlacement = Extract<WorkerDispatchPlacement, { state: "local" | "active" }>;
-type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
 type WorkerPlacementMoveSourceDisposition = "reconcile" | "abandon";
 const RESTART_AUTHORITY_EXPIRED =
   "Cloud worker move request authority expired after Gateway restart; retry move";

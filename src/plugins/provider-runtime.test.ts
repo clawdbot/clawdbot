@@ -36,23 +36,25 @@ type ResolveBundledProviderPolicySurface =
 type ResolveProviderPolicySurface =
   typeof import("./provider-public-artifacts.js").resolveProviderPolicySurface;
 
-const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
-const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
+const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>(
+  (_params) => [] as ProviderPlugin[],
+);
+const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_params) => false);
 const resolveCatalogHookProviderPluginIdsMock = vi.fn<ResolveCatalogHookProviderPluginIds>(
-  (_) => [] as string[],
+  (_params) => [] as string[],
 );
 const resolveUsageHookProviderPluginContractsMock = vi.fn<ResolveUsageHookProviderPluginContracts>(
-  (_) => [],
+  (_params) => [],
 );
 const resolveExternalAuthProfileProviderPluginIdsMock =
-  vi.fn<ResolveExternalAuthProfileProviderPluginIds>((_) => [] as string[]);
+  vi.fn<ResolveExternalAuthProfileProviderPluginIds>((_params) => [] as string[]);
 const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
-  (_) => undefined,
+  (_params) => undefined,
 );
 const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPolicySurface>(
-  (_) => null,
+  (_providerId) => null,
 );
-const resolveProviderPolicySurfaceMock = vi.fn<ResolveProviderPolicySurface>((_) => null);
+const resolveProviderPolicySurfaceMock = vi.fn<ResolveProviderPolicySurface>((_providerId) => null);
 const providerRuntimeWarnMock = vi.fn();
 
 let getAiTransportHost: typeof import("@openclaw/ai").getAiTransportHost;
@@ -100,7 +102,7 @@ let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderD
 let validateProviderReplayTurnsWithPlugin: typeof import("./provider-runtime.js").validateProviderReplayTurnsWithPlugin;
 let wrapProviderSimpleCompletionStreamFn: typeof import("./provider-runtime.js").wrapProviderSimpleCompletionStreamFn;
 let wrapProviderStreamFn: typeof import("./provider-runtime.js").wrapProviderStreamFn;
-let createEmptyPluginRegistry: typeof import("./registry.js").createEmptyPluginRegistry;
+let createEmptyPluginRegistry: typeof import("./registry-empty.js").createEmptyPluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
@@ -353,7 +355,7 @@ describe("provider-runtime", () => {
       await import("./provider-hook-runtime.js"));
     await import("../agents/ai-transport-runtime-host.js");
     ({ getAiTransportHost } = await import("@openclaw/ai"));
-    ({ createEmptyPluginRegistry } = await import("./registry.js"));
+    ({ createEmptyPluginRegistry } = await import("./registry-empty.js"));
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
   });
 

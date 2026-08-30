@@ -17,9 +17,15 @@ import {
 import { absoluteEntryMatches } from "../gateway/worker-environments/workspace-reconcile-fs.js";
 import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
+import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  ensureStagedInputDirectory,
+  isStagedInputPath,
+  stagedInputDirectoriesFromEntries,
+} from "../media/staged-inputs.js";
 import { runExec } from "../process/exec.js";
 import {
   nodeWorkspaceTransferBlobPath,
@@ -362,6 +368,16 @@ async function downloadWorkspace(params: {
     MAX_WORKSPACE_MANIFEST_BYTES,
   );
   const manifest = parseWorkerWorkspaceManifest(raw.toString("utf8"), params.transfer.manifestRef);
+  const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
+  if (
+    params.transfer.attachments &&
+    (manifest.baseCommit !== null ||
+      manifest.entries.some(
+        (entry) => entry.type !== "file" || !isStagedInputPath(entry.path, stagedInputs),
+      ))
+  ) {
+    throw new Error("Invalid worker attachment manifest");
+  }
   const stagingWorkspace = await tempWorkspace({
     rootDir: path.dirname(params.workspaceDir),
     prefix: `.${path.basename(params.workspaceDir)}.workspace-transfer-`,
@@ -473,7 +489,34 @@ async function downloadWorkspace(params: {
         `workspace transfer materialized a different manifest (${observed}/${params.transfer.manifestRef})`,
       );
     }
-    await replaceWorkspace(params.workspaceDir, staging);
+    if (params.transfer.attachments) {
+      params.signal?.throwIfAborted();
+      const root = await fsRoot(params.workspaceDir);
+      for (const directory of stagedInputs) {
+        params.signal?.throwIfAborted();
+        await ensureStagedInputDirectory(params.workspaceDir, directory, params.signal);
+      }
+      for (const entry of manifest.entries) {
+        params.signal?.throwIfAborted();
+        const data = await fsp.readFile(workspacePath(staging, entry.path));
+        params.signal?.throwIfAborted();
+        try {
+          // Adopt guarded exclusive-create with identity-bound rollback when fs-safe supports it.
+          // Until then an entered create may retain this private copy after cancellation;
+          // never unlink by path or overwrite an earlier turn's edits.
+          await root.create(entry.path, data, { mode: 0o600 });
+        } catch (error) {
+          params.signal?.throwIfAborted();
+          if (!(error instanceof FsSafeError) || error.code !== "already-exists") {
+            throw error;
+          }
+          await root.open(entry.path).then((opened) => opened.handle.close());
+        }
+        params.signal?.throwIfAborted();
+      }
+    } else {
+      await replaceWorkspace(params.workspaceDir, staging);
+    }
     transferLog.debug("node worker workspace transfer completed", {
       environmentId: params.environmentId,
       direction: "download",

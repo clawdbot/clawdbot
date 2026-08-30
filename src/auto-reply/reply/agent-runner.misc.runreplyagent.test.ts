@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 // Tests miscellaneous run-reply-agent behaviors and artifact output.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
@@ -16,7 +18,7 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { clearRuntimeConfigSnapshot } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -50,6 +52,9 @@ import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let rootDir: string;
 
 function createCliBackendTestConfig() {
   return {};
@@ -299,12 +304,24 @@ function createBaseRun(options: BaseRunOptions = {}) {
       sessionId: "session",
       sessionKey,
       messageProvider,
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
+      sessionFile: path.join(rootDir, "session.jsonl"),
+      workspaceDir: rootDir,
       config: {},
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [
+        { provider: "anthropic", id: "claude", input: ["text"] },
+        { provider: "claude-cli", id: "opus-4.5", input: ["text", "image"] },
+        { provider: "anthropic", id: "claude-opus-4-7", input: ["text", "image"] },
+        { provider: "google", id: "gemini-2.5-pro", input: ["text", "image"] },
+        { provider: "google-gemini-cli", id: "gemini-3", input: ["text", "image"] },
+        {
+          provider: "amazon-bedrock",
+          id: "us.anthropic.claude-sonnet-4-6",
+          input: ["text", "image"],
+        },
+      ],
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
@@ -374,6 +391,7 @@ function firstMockCallArg(mock: MockCallSource, label: string): unknown {
 }
 
 function setupAgentRunnerMocks(): void {
+  rootDir = tempDirs.make("openclaw-run-reply-agent-");
   vi.useRealTimers();
   registerCliBackendsForTest();
   clearRuntimeConfigSnapshot();
@@ -381,11 +399,11 @@ function setupAgentRunnerMocks(): void {
   resetSystemEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
-  runEmbeddedAgentMock.mockClear();
+  runEmbeddedAgentMock.mockReset();
   warnPrivateFinalSpy.mockClear();
-  runCliAgentMock.mockClear();
-  runWithModelFallbackMock.mockClear();
-  runtimeErrorMock.mockClear();
+  runCliAgentMock.mockReset();
+  runWithModelFallbackMock.mockReset();
+  runtimeErrorMock.mockReset();
   abortEmbeddedAgentRunMock.mockClear();
   compactState.compactEmbeddedAgentSessionMock.mockReset();
   compactState.compactEmbeddedAgentSessionMock.mockResolvedValue({
@@ -398,7 +416,7 @@ function setupAgentRunnerMocks(): void {
   refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   vi.mocked(enqueueFollowupRun).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
-  loadCronStoreMock.mockClear();
+  loadCronStoreMock.mockReset();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
 
@@ -478,7 +496,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     return createBaseRun({
       run: {
         agentId: "main",
-        agentDir: "/tmp/agent",
+        agentDir: path.join(rootDir, "agent"),
         config: options?.config ?? {},
         reasoningLevel: "on",
       },
@@ -498,7 +516,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     tmpPrefix: string;
     workspaceDir?: string;
   }) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tmpPrefix));
+    const tmp = tempDirs.make(params.tmpPrefix);
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {
@@ -525,10 +543,10 @@ describe("runReplyAgent auto-compaction token update", () => {
     const baseRun = createBaseRun({
       run: {
         agentId: "main",
-        agentDir: "/tmp/agent",
+        agentDir: path.join(rootDir, "agent"),
         config: params.config ?? {},
         reasoningLevel: "on",
-        workspaceDir: params.workspaceDir ?? "/tmp",
+        workspaceDir: params.workspaceDir ?? rootDir,
       },
       reply: {
         sessionEntry,
@@ -565,7 +583,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   }, 180_000);
 
   it("keeps an unarmed preflight drain visible instead of dropping the reply", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-drain-"));
+    const tmp = tempDirs.make("openclaw-preflight-drain-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "agent:main:main";
     const sessionEntry = {
@@ -579,7 +597,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     compactState.compactEmbeddedAgentSessionMock.mockRejectedValueOnce(new GatewayDrainingError());
 
     const result = await createBaseRun({
-      run: { agentId: "main", agentDir: "/tmp/agent", reasoningLevel: "on" },
+      run: { agentId: "main", agentDir: path.join(rootDir, "agent"), reasoningLevel: "on" },
       reply: {
         queueKey: sessionKey,
         sessionEntry,
@@ -594,7 +612,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("executes the next user turn in the default 32K early-flush interval without compaction", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-early-flush-"));
+    const tmp = tempDirs.make("openclaw-early-flush-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
@@ -607,6 +625,26 @@ describe("runReplyAgent auto-compaction token update", () => {
       compactionCount: 0,
     };
     const prompt = "What is two plus two? Answer in one short sentence without tools.";
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://example.test",
+            models: [
+              {
+                id: "claude-opus-4-6",
+                name: "Test model",
+                contextTokens: 32_768,
+                reasoning: false,
+                input: ["text"],
+                maxTokens: 8_192,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    };
     registerMemoryFlushPlanResolverForTest(({ cfg, contextWindowTokens }) => {
       expect(cfg?.models?.providers?.anthropic?.models).toMatchObject([
         { id: "claude-opus-4-6", contextTokens: 32_768 },
@@ -633,7 +671,10 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
     });
     runEmbeddedAgentMock.mockImplementation(
-      async (params: { trigger?: string; prompt?: string }) => {
+      async (params: { trigger?: string; prompt?: string; config?: OpenClawConfig }) => {
+        expect(params.config?.models?.providers?.anthropic?.models).toEqual(
+          config.models?.providers?.anthropic?.models,
+        );
         if (params.trigger === "memory") {
           await replaceTranscriptEvents(scope, [terminalEvent(7_039, 34)]);
           return {
@@ -646,10 +687,11 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
     );
     try {
+      // Memory-flush persistence reads runtime config again; share its authoritative source
+      // with the queued turn so the selected model cannot escape into real catalog discovery.
+      setRuntimeConfigSnapshot(config, config);
       await replaceSessionEntry(scope, sessionEntry);
       await replaceTranscriptEvents(scope, [terminalEvent(10_920, 10)]);
-      // Store preparation can populate the shared test config snapshot.
-      clearRuntimeConfigSnapshot();
       const result = await createBaseRun({
         followup: { prompt },
         run: {
@@ -659,26 +701,7 @@ describe("runReplyAgent auto-compaction token update", () => {
           sessionFile: path.join(tmp, "session.jsonl"),
           workspaceDir: tmp,
           model: "claude-opus-4-6",
-          config: {
-            models: {
-              providers: {
-                anthropic: {
-                  baseUrl: "https://example.test",
-                  models: [
-                    {
-                      id: "claude-opus-4-6",
-                      name: "Test model",
-                      contextTokens: 32_768,
-                      reasoning: false,
-                      input: ["text"],
-                      maxTokens: 8_192,
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    },
-                  ],
-                },
-              },
-            },
-          },
+          config,
         },
         reply: {
           commandBody: prompt,
@@ -822,7 +845,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     });
 
     const result = await createBaseRun({
-      run: { agentId: "main", agentDir: "/tmp/agent", reasoningLevel: "on" },
+      run: { agentId: "main", agentDir: path.join(rootDir, "agent"), reasoningLevel: "on" },
       reply: {
         queueKey: sessionKey,
         sessionEntry,
@@ -836,9 +859,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("loads post-compaction context before starting a queued followup drain", async () => {
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-post-compaction-queued-followup-"),
-    );
+    const workspaceDir = tempDirs.make("openclaw-post-compaction-queued-followup-");
     try {
       await fs.writeFile(
         path.join(workspaceDir, "AGENTS.md"),
@@ -866,7 +887,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       const baseRun = createBaseRun({
         run: {
           agentId: "main",
-          agentDir: "/tmp/agent",
+          agentDir: path.join(rootDir, "agent"),
           workspaceDir,
           reasoningLevel: "on",
           config: {
@@ -917,7 +938,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     });
 
     const result = await createBaseRun({
-      run: { agentId: "main", agentDir: "/tmp/agent", reasoningLevel: "on" },
+      run: { agentId: "main", agentDir: path.join(rootDir, "agent"), reasoningLevel: "on" },
       reply: {
         queueKey: sessionKey,
         sessionEntry,
@@ -951,15 +972,20 @@ describe("runReplyAgent auto-compaction token update", () => {
       expectedCode: "aborted_for_supersession" as const,
     },
   ])(
-    "records a settled fallback cancelled by $label as aborted",
+    "records a settled fallback cancelled by $label without losing committed compaction",
     async ({ superseded, expectedCode }) => {
+      const root = tempDirs.make("openclaw-aborted-compaction-");
+      const storePath = path.join(root, "sessions.json");
       const upstreamAbort = new AbortController();
       const sessionKey = `${superseded ? "superseded" : "upstream-cancelled"}-settled-fallback`;
       const sessionEntry = {
         sessionId: "session-upstream-cancelled",
+        lifecycleRevision: "original-generation",
         updatedAt: Date.now(),
+        compactionCount: 3,
         totalTokens: 50_000,
       };
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
       const replyOperation = createReplyOperation({
         sessionKey,
         sessionId: sessionEntry.sessionId,
@@ -974,22 +1000,40 @@ describe("runReplyAgent auto-compaction token update", () => {
       const fallbackRelease = new Promise<void>((resolve) => {
         releaseFallback = resolve;
       });
-      runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "late reply" }],
-        meta: { agentMeta: {} },
-      });
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          params.onCompactionAccounting?.({
+            kind: "durable",
+            count: 1,
+            currentContextSnapshot: { tokens: 40 },
+            target: {
+              agentId: "main",
+              sessionId: sessionEntry.sessionId,
+              sessionKey,
+              storePath,
+              lifecycleRevision: sessionEntry.lifecycleRevision,
+              activeWriterRunId: undefined,
+            },
+          });
+          return {
+            payloads: [{ text: "late reply" }],
+            meta: { agentMeta: { compactionCount: 1, compactionTokensAfter: 40 } },
+          };
+        },
+      );
       runWithModelFallbackMock.mockImplementationOnce(
         async (params: RunWithModelFallbackParams) => {
           const result = await runInitialModelFallbackAttempt(params);
           markCandidateSettled();
           await fallbackRelease;
-          return { result, provider: params.provider, model: params.model };
+          return { result, provider: params.provider, model: params.model, attempts: [] };
         },
       );
       const baseRun = createBaseRun({
         run: {
           agentId: "main",
-          agentDir: "/tmp/agent",
+          agentDir: path.join(rootDir, "agent"),
+          sessionId: sessionEntry.sessionId,
           sessionKey,
           reasoningLevel: "on",
         },
@@ -998,6 +1042,7 @@ describe("runReplyAgent auto-compaction token update", () => {
           sessionEntry,
           sessionStore: { [sessionKey]: sessionEntry },
           sessionKey,
+          storePath,
           replyOperation,
         },
       });
@@ -1014,8 +1059,20 @@ describe("runReplyAgent auto-compaction token update", () => {
 
         expectReplyText(await pending, SILENT_REPLY_TOKEN);
         expect(replyOperation.result).toEqual({ kind: "aborted", code: expectedCode });
+        expect(
+          loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
+        ).toMatchObject({
+          sessionId: sessionEntry.sessionId,
+          lifecycleRevision: "original-generation",
+          compactionCount: 4,
+          totalTokens: 40,
+          totalTokensFresh: true,
+        });
+        expect(peekSystemEvents(sessionKey)).toEqual([]);
       } finally {
+        releaseFallback();
         replyOperation.complete();
+        await fs.rm(root, { recursive: true, force: true });
       }
     },
   );
@@ -1069,6 +1126,26 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(stored[sessionKey as keyof typeof stored]?.totalTokens).toBe(44_000);
   });
 
+  it.each([0, 0.25])(
+    "preserves cost-only total %s in reply diagnostics and persistence",
+    async (total) => {
+      const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({
+        tmpPrefix: "openclaw-usage-diagnostic-cost-only-",
+        collectDiagnostics: true,
+        agentMeta: { usage: { cost: { total } } },
+      });
+
+      expect(usageEvent).toMatchObject({ type: "model.usage", costUsd: total });
+      expect(usageEvent).not.toHaveProperty("context.used");
+      const entry = stored[sessionKey as keyof typeof stored];
+      expect(entry?.estimatedCostUsd).toBe(total);
+      for (const key of ["inputTokens", "outputTokens", "cacheRead", "cacheWrite"] as const) {
+        expect(entry?.[key]).toBeUndefined();
+      }
+      expect(entry?.totalTokensFresh).not.toBe(true);
+    },
+  );
+
   it("falls back to last-call prompt usage for live diagnostic context", async () => {
     const { usageEvent } = await runBaseReplyWithAgentMeta({
       tmpPrefix: "openclaw-usage-diagnostic-last-",
@@ -1114,9 +1191,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("does not treat diagnostic compaction metadata as a context-refresh trigger", async () => {
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-post-compaction-workspace-"),
-    );
+    const workspaceDir = tempDirs.make("openclaw-post-compaction-workspace-");
     await fs.writeFile(
       path.join(workspaceDir, "AGENTS.md"),
       [
@@ -1211,6 +1286,7 @@ describe("runReplyAgent block streaming", () => {
   it("returns the final payload when onBlockReply times out", async () => {
     vi.useFakeTimers();
     let sawAbort = false;
+    const blockReplyStarted = createDeferred();
 
     const onBlockReply = vi.fn((_payload, context) => {
       return new Promise<void>((resolve) => {
@@ -1222,6 +1298,7 @@ describe("runReplyAgent block streaming", () => {
           },
           { once: true },
         );
+        blockReplyStarted.resolve();
       });
     });
 
@@ -1270,6 +1347,7 @@ describe("runReplyAgent block streaming", () => {
       },
     }).run();
 
+    await blockReplyStarted.promise;
     await vi.advanceTimersByTimeAsync(5);
     const result = await resultPromise;
 
@@ -1303,7 +1381,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
   }
 
   async function runActiveMemoryDebugCase(sessionEntry: SessionEntry) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-inline-"));
+    const tmp = tempDirs.make("openclaw-active-memory-inline-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
@@ -1425,7 +1503,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
   });
 
   it("appends raw trace payloads when trace raw is enabled", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-usage-"));
+    const tmp = tempDirs.make("openclaw-trace-raw-usage-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
     const sessionKey = "main";
@@ -1472,49 +1550,70 @@ describe("runReplyAgent Active Memory inline debug", () => {
         },
       ],
     }));
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Visible reply" }],
-      meta: {
-        finalPromptText:
-          "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything",
-        finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "<final>Visible reply</final>",
-        executionTrace: {
-          winnerProvider: "anthropic",
-          winnerModel: "claude",
-          runner: "embedded",
-          fallbackUsed: false,
-          attempts: [
-            {
-              provider: "anthropic",
-              model: "claude",
-              result: "success",
-              stage: "assistant",
-              elapsedMs: 4200,
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
+      params.onCompactionAccounting?.({
+        kind: "durable",
+        count: 1,
+        currentContextSnapshot: { tokens: 1250 },
+        target: {
+          agentId: "main",
+          sessionId: sessionEntry.sessionId,
+          sessionKey,
+          storePath,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+          activeWriterRunId: undefined,
+        },
+      });
+      return {
+        payloads: [{ text: "Visible reply" }],
+        meta: {
+          finalPromptText:
+            "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything",
+          finalAssistantVisibleText: "Visible reply",
+          finalAssistantRawText: "<final>Visible reply</final>",
+          executionTrace: {
+            winnerProvider: "anthropic",
+            winnerModel: "claude",
+            runner: "embedded",
+            fallbackUsed: false,
+            attempts: [
+              {
+                provider: "anthropic",
+                model: "claude",
+                result: "success",
+                stage: "assistant",
+                elapsedMs: 4200,
+              },
+            ],
+          },
+          toolSummary: {
+            calls: 2,
+            tools: ["active-memory", "github-search"],
+            failures: 0,
+            totalToolTimeMs: 481,
+          },
+          completion: {
+            finishReason: "stop",
+            stopReason: "end_turn",
+            refusal: false,
+          },
+          agentMeta: {
+            sessionId: "session",
+            provider: "anthropic",
+            model: "claude",
+            usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
+            lastCallUsage: {
+              input: 1000,
+              output: 45,
+              cacheRead: 750,
+              cacheWrite: 150,
+              total: 1945,
             },
-          ],
+            promptTokens: 1250,
+            compactionCount: 1,
+          },
         },
-        toolSummary: {
-          calls: 2,
-          tools: ["active-memory", "github-search"],
-          failures: 0,
-          totalToolTimeMs: 481,
-        },
-        completion: {
-          finishReason: "stop",
-          stopReason: "end_turn",
-          refusal: false,
-        },
-        agentMeta: {
-          sessionId: "session",
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
-          lastCallUsage: { input: 1000, output: 45, cacheRead: 750, cacheWrite: 150, total: 1945 },
-          promptTokens: 1250,
-          compactionCount: 1,
-        },
-      },
+      };
     });
 
     const result = await runRawTraceCase({
@@ -1607,7 +1706,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
   });
 
   it("does not emit persisted trace output to an unauthorized sender", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-unauthorized-"));
+    const tmp = tempDirs.make("openclaw-trace-raw-unauthorized-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
     const sessionKey = "main";
@@ -1650,7 +1749,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
   });
 
   it("shows session and last-turn usage totals without per-call usage blocks", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-usage-"));
+    const tmp = tempDirs.make("openclaw-trace-raw-usage-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
     const sessionKey = "main";
@@ -1706,7 +1805,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
   });
 
   it("escapes markdown fence delimiters inside raw trace blocks", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-fence-"));
+    const tmp = tempDirs.make("openclaw-trace-raw-fence-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
     const sessionKey = "main";
@@ -2204,7 +2303,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
     return createBaseRun({
       run: {
         agentId: "main",
-        agentDir: "/tmp/agent",
+        agentDir: path.join(rootDir, "agent"),
         sessionKey,
         config: createCliBackendTestConfig(),
       },
@@ -2221,9 +2320,12 @@ describe("runReplyAgent fallback reasoning tags", () => {
       result: await runFallbackModelAttempt(params, "google", "gemini-2.5-pro", "unknown"),
       provider: "google",
       model: "gemini-2.5-pro",
+      attempts: [],
     }));
 
-    await createRun();
+    const result = await createRun();
+    const payloads = Array.isArray(result) ? result : [result];
+    expect(payloads.filter((payload) => payload?.text === "ok")).toHaveLength(1);
 
     const call = firstMockCallArg(
       runEmbeddedAgentMock,
@@ -2233,47 +2335,70 @@ describe("runReplyAgent fallback reasoning tags", () => {
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {
-    registerMemoryFlushPlanResolverForTest(() => ({
-      softThresholdTokens: 1_000,
-      forceFlushTranscriptBytes: 1_000_000_000,
-      reserveTokensFloor: 20_000,
-      prompt: "Pre-compaction memory flush.",
-      systemPrompt: "Flush memory into the configured memory file.",
-      relativePath: "memory/active.md",
-    }));
-    runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
-      if (params.prompt?.includes("Pre-compaction memory flush.")) {
-        return { payloads: [], meta: {} };
-      }
-      return { payloads: [{ text: "ok" }], meta: {} };
-    });
-    runWithModelFallbackMock.mockImplementation(async (params: RunWithModelFallbackParams) => ({
-      result: await runFallbackModelAttempt(params, "google-gemini-cli", "gemini-3", "unknown"),
-      provider: "google-gemini-cli",
-      model: "gemini-3",
-    }));
-    compactState.compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: { tokensAfter: 1_000_000 },
-    });
+    const root = await fs.realpath(tempDirs.make("openclaw-memory-flush-tags-"));
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:memory-flush-tags";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1_000_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+    };
+    try {
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      registerMemoryFlushPlanResolverForTest(() => ({
+        softThresholdTokens: 1_000,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.",
+        systemPrompt: "Flush memory into the configured memory file.",
+        relativePath: "memory/active.md",
+      }));
+      runEmbeddedAgentMock.mockResolvedValue({ payloads: [], meta: {} });
+      runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
+      runWithModelFallbackMock.mockImplementation(async (params: RunWithModelFallbackParams) => ({
+        result: await runFallbackModelAttempt(params, "google-gemini-cli", "gemini-3", "unknown"),
+        provider: "google-gemini-cli",
+        model: "gemini-3",
+        attempts: [],
+      }));
+      compactState.compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: { tokensAfter: 1_000_000 },
+      });
 
-    await createRun({
-      sessionEntry: {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        totalTokens: 1_000_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1 as const,
-        compactionCount: 0,
-      },
-    });
+      const result = await createBaseRun({
+        run: {
+          agentId: "main",
+          agentDir: path.join(root, "agent"),
+          sessionKey,
+          workspaceDir: root,
+          config: createCliBackendTestConfig(),
+        },
+        reply: {
+          queueKey: sessionKey,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          storePath,
+        },
+      }).run();
 
-    const flushCall = runEmbeddedAgentMock.mock.calls.find(([params]) =>
-      (params as EmbeddedAgentParams | undefined)?.prompt?.includes("Pre-compaction memory flush."),
-    )?.[0] as EmbeddedAgentParams | undefined;
-
-    expect(flushCall?.enforceFinalTag).toBe(true);
+      const flushCall = runEmbeddedAgentMock.mock.calls.find(([params]) =>
+        (params as EmbeddedAgentParams | undefined)?.prompt?.includes(
+          "Pre-compaction memory flush.",
+        ),
+      )?.[0] as EmbeddedAgentParams | undefined;
+      expect(flushCall?.enforceFinalTag).toBe(true);
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      const payloads = Array.isArray(result) ? result : [result];
+      expect(payloads.filter((payload) => payload?.text === "ok")).toHaveLength(1);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -2293,7 +2418,7 @@ describe("runReplyAgent response usage footer", () => {
     return createBaseRun({
       run: {
         agentId: "main",
-        agentDir: "/tmp/agent",
+        agentDir: path.join(rootDir, "agent"),
         sessionKey: params.sessionKey,
         config: params.config ?? createCliBackendTestConfig(),
         provider: params.provider ?? "anthropic",
@@ -2481,6 +2606,8 @@ describe("runReplyAgent response usage footer", () => {
 describe("runReplyAgent transient HTTP retry", () => {
   it("retries once after transient 521 HTML failure and then succeeds", async () => {
     vi.useFakeTimers();
+    const retryStarted = createDeferred();
+    runtimeErrorMock.mockImplementationOnce(() => retryStarted.resolve());
     runEmbeddedAgentMock
       .mockRejectedValueOnce(
         new Error(
@@ -2501,6 +2628,7 @@ describe("runReplyAgent transient HTTP retry", () => {
       },
     }).run();
 
+    await retryStarted.promise;
     await vi.advanceTimersByTimeAsync(2_500);
     const result = await runPromise;
 
@@ -2625,7 +2753,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     replyOperation?: ReturnType<typeof createReplyOperation>;
     turnAdoptionLifecycle?: FollowupRun["turnAdoptionLifecycle"];
   }) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
+    const tmp = tempDirs.make("openclaw-stranded-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "stranded";
     const sessionEntry = {
@@ -2686,11 +2814,11 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         : {}),
       run: {
         agentId: "main",
-        agentDir: "/tmp/agent",
+        agentDir: path.join(rootDir, "agent"),
         sessionId: "session",
         sessionKey,
         messageProvider: "whatsapp",
-        sessionFile: "/tmp/session.jsonl",
+        sessionFile: path.join(rootDir, "session.jsonl"),
         workspaceDir: tmp,
         // Carry the canonical tool-only run fact and keep downstream policy aligned,
         // so the private final is never eligible for automatic source delivery.
@@ -2698,6 +2826,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
+        thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
         thinkLevel: "low",
         reasoningLevel: "on",
         verboseLevel: "off",

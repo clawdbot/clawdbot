@@ -296,7 +296,7 @@ describe("thread binding lifecycle", () => {
 
   it.each([
     {
-      name: "auto-unfocuses idle-expired bindings and sends inactivity message",
+      name: "auto-unbinds idle-expired bindings and sends inactivity message",
       idleTimeoutMs: 60_000,
       maxAgeMs: 0,
       introText: "intro",
@@ -304,7 +304,7 @@ describe("thread binding lifecycle", () => {
       expectNoProbe: true,
     },
     {
-      name: "auto-unfocuses max-age-expired bindings and sends max-age message",
+      name: "auto-unbinds max-age-expired bindings and sends max-age message",
       idleTimeoutMs: 0,
       maxAgeMs: 60_000,
       farewellText: "max age of 1m",

@@ -3,13 +3,16 @@
 # textual OIDs in a blob alone would not keep historical proof alive through GC.
 merge_outcome_stop() {
   echo "Merge outcome: $*" >&2
-  echo "No merge retry. Repeated merge-run only reconciles a recorded attempt. Inspect the PR timeline, main history, and $MERGE_OUTCOME_REF; unresolved uncertainty requires operator action outside this automatic path." >&2
+  echo "No automatic merge retry. Repeated merge-run only reconciles a recorded attempt. Inspect the PR timeline, main history, and $MERGE_OUTCOME_REF; a new attempt requires explicit operator recovery through merge-recover." >&2
   return 1
 }
 
 merge_outcome_repo_identity() {
+  # gh returns the repository's REST database id as a JSON number while PR ids are
+  # GraphQL node strings. Accept either scalar so a current gh cannot fail admission
+  # closed; nameWithOwner and the url suffix still pin which repository this is.
   jq -ce '
-    . as $repo | select((.id | type == "string" and length > 0) and
+    . as $repo | select((.id | (type == "string" and length > 0) or type == "number") and
       (.nameWithOwner | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
       (.url | test("^https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo.nameWithOwner)))
   '
@@ -94,11 +97,15 @@ merge_outcome_read_remote() {
   local response
   response=$(gh_plain api graphql --hostname "$MERGE_REPO_HOST" \
     -f owner="${MERGE_REPO_NAME%/*}" -f name="${MERGE_REPO_NAME#*/}" -F number="$1" \
-    -f 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){id url nameWithOwner ref(qualifiedName:"refs/heads/main"){target{oid}} pullRequest(number:$number){id number url state headRefOid baseRefName isDraft mergeCommit{oid} autoMergeRequest{mergeMethod} isInMergeQueue isMergeQueueEnabled mergeable mergeStateStatus}}}') || return 1
+    -f 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){id databaseId url nameWithOwner ref(qualifiedName:"refs/heads/main"){target{oid}} pullRequest(number:$number){id number url state headRefOid baseRefName isDraft mergeCommit{oid} autoMergeRequest{mergeMethod} isInMergeQueue isMergeQueueEnabled mergeable mergeStateStatus}}}') || return 1
   printf '%s\n' "$response" | jq -ce --argjson repo "$MERGE_REPO" --argjson pr "$1" '
     def oid: type == "string" and test("^[0-9a-f]{40}$");
     select(.errors == null) | .data.repository |
-    select({id,url,nameWithOwner} == $repo and (.ref.target.oid | oid)) |
+    # gh reports the repository id as its REST database id while GraphQL reports the node
+    # id, so the two sources never compare equal on identity alone. Match whichever
+    # representation gh supplied; url and nameWithOwner still pin the repository exactly.
+    select(.url == $repo.url and .nameWithOwner == $repo.nameWithOwner and
+      ($repo.id == .id or $repo.id == .databaseId) and (.ref.target.oid | oid)) |
     {main:.ref.target.oid, pr:.pullRequest} |
     select(.pr.number == $pr and (.pr.id | type == "string" and length > 0) and
       .pr.url == ($repo.url + "/pull/" + ($pr|tostring)) and

@@ -212,7 +212,7 @@ export async function createMatrixQaTransportAdapter(
     return {
       observedEvents,
       observer: createMatrixQaRoomObserver({
-        accessToken: provisioning[observerRole].accessToken,
+        accessToken: provisioning.observationAccounts[observerRole].accessToken,
         baseUrl: harness.baseUrl,
         observedEvents,
       }),

@@ -37,6 +37,10 @@ vi.mock("./doctor-session-delivery-state.js", () => ({
   repairCanonicalSessionResolvedSkills,
 }));
 
+vi.mock("./doctor-session-exec-policy.js", () => ({
+  repairLegacySessionExecPolicy: vi.fn(),
+}));
+
 vi.mock("./doctor-session-canonical-keys.js", () => ({
   repairCanonicalSessionKeys,
 }));

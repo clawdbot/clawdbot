@@ -1,9 +1,14 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import {
+  SESSION_COLOR_IDS,
+  normalizeSessionColorValue,
+} from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
+import { renderSessionColorDot } from "./session-color.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 export function renderSessionEditorOptions(params: { inline: boolean; disabled: boolean }) {
@@ -77,4 +82,36 @@ export function renderSessionGroupOptions(params: {
       : nothing}
     ${entry(t("sessionsView.newGroup"), false, "new-group", false)}
   `;
+}
+
+export function renderSessionColorOptions(params: {
+  inline: boolean;
+  color: string | null;
+  disabled: boolean;
+  disabledReason?: string;
+}) {
+  const current = normalizeSessionColorValue(params.color ?? "");
+  return html`${[null, ...SESSION_COLOR_IDS].map((color) => {
+    const checked = current === color;
+    return html`<wa-dropdown-item
+      slot=${params.inline ? nothing : "submenu"}
+      class="session-menu__item"
+      value=${`set-color:${color ?? ""}`}
+      role="menuitemradio"
+      aria-checked=${String(checked)}
+      ${ref((element) => syncDropdownItemRadio(element, checked))}
+      ?disabled=${params.disabled}
+      title=${params.disabledReason ?? nothing}
+    >
+      <span slot="icon" aria-hidden="true">${renderSessionColorDot(color)}</span>
+      <span class="session-menu__text"
+        >${color ? t(`sessionsView.colors.${color}`) : t("common.default")}</span
+      >
+      ${checked
+        ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+            >${icons.check}</span
+          >`
+        : nothing}
+    </wa-dropdown-item>`;
+  })}`;
 }
