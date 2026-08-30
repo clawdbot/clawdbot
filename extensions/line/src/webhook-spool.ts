@@ -8,7 +8,7 @@ import {
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { getLineRuntime } from "./runtime.js";
 import {
@@ -250,11 +250,21 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
   return {
     accept: async (body) => {
       const events = body.events ?? [];
-      if (events.length === 0) {
+      // LINE copies every event to each channel on an Official Account and marks the
+      // copies for channels without chat control as standby: they carry no reply token
+      // and must not send, so admitting one would answer over the channel that does.
+      const admissible = events.filter((event) => event.mode !== "standby");
+      const ignored = events.length - admissible.length;
+      if (ignored > 0) {
+        logVerbose(
+          `line: ignoring ${ignored} standby webhook events; another channel holds chat control`,
+        );
+      }
+      if (admissible.length === 0) {
         return;
       }
       await monitor.admitBatch(
-        events.map((event) => ({ event, destination: body.destination ?? "" })),
+        admissible.map((event) => ({ event, destination: body.destination ?? "" })),
         { receivedAt: Date.now() },
       );
     },

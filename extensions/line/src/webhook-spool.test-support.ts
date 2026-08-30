@@ -31,7 +31,9 @@ export function createEvent(params: {
   messageId?: string;
   userId?: string;
   text?: string;
+  mode?: webhook.EventMode;
 }): webhook.Event {
+  const mode = params.mode ?? "active";
   const event: webhook.MessageEvent = {
     type: "message",
     message: {
@@ -40,10 +42,11 @@ export function createEvent(params: {
       text: params.text ?? "hello",
       quoteToken: "test-quote-token-placeholder",
     },
-    replyToken: "test-reply-token",
+    // LINE omits the reply token from the copy it sends to a standby channel.
+    ...(mode === "standby" ? {} : { replyToken: "test-reply-token" }),
     timestamp: Date.now(),
     source: { type: "user", userId: params.userId ?? "user-1" },
-    mode: "active",
+    mode,
     webhookEventId: params.webhookEventId,
     deliveryContext: { isRedelivery: false },
   };
