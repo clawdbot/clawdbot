@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { setPluginToolMeta } from "../../../plugins/tools.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModeCatalogProjection } from "../../code-mode-catalog.js";
 import { markCodeModeControlTool } from "../../code-mode-control-tools.js";

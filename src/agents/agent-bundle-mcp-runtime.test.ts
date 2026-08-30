@@ -33,15 +33,6 @@ import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 
-const pluginToolMetadata = vi.hoisted(() => new WeakMap<object, unknown>());
-
-vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: (tool: object) => pluginToolMetadata.get(tool),
-  setPluginToolMeta: (tool: object, metadata: unknown) => {
-    pluginToolMetadata.set(tool, metadata);
-  },
-}));
-
 vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./embedded-agent-mcp.js")>();
   return {

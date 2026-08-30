@@ -14,7 +14,7 @@ import { resolveConversationCapabilityProfile } from "../../../../dist/agents/co
 import { applyFinalEffectiveToolPolicy } from "../../../../dist/agents/embedded-agent-runner/effective-tool-policy.js";
 import { splitSdkTools } from "../../../../dist/agents/embedded-agent-runner/tool-split.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
-import { getPluginToolMeta } from "../../../../dist/plugins/tools.js";
+import { getPluginToolMeta } from "../../../../dist/plugins/tool-metadata.js";
 import { createE2eStateDir } from "../../../../scripts/e2e/lib/temp-state-dir.ts";
 
 const require = createRequire(import.meta.url);

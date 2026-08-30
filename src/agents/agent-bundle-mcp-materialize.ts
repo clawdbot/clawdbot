@@ -6,7 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { getPluginToolMeta, setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import {
+  getPluginToolMeta,
+  setPluginToolMeta,
+  type PluginToolMcpMeta,
+} from "../plugins/tool-metadata.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
