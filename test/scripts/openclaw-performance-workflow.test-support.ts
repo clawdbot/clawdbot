@@ -1,6 +1,22 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  constants as fsConstants,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
+import { afterAll } from "vitest";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+const templateDirs = createTempDirTracker();
+let performanceTemplate: string | undefined;
+afterAll(() => {
+  templateDirs.cleanup();
+  performanceTemplate = undefined;
+});
 
 export type PerformanceFixtureOptions = {
   mode: "target" | "record" | "tested" | "kova" | "baseline" | "prepare" | "publish";
@@ -38,11 +54,6 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, value);
   };
-  mkdirSync(temp, { recursive: true });
-  mkdirSync(seed);
-  run(workspace, "init", "--bare", "--initial-branch=main", remote);
-  run(seed, "init", "--initial-branch=main");
-  write(path.join(seed, "README.md"), "fixture\n");
   const dest = "openclaw-performance/main/123-1/mock-provider";
   const previous = "openclaw-performance/main/100-1/mock-provider";
   const pointer = "openclaw-performance/main/latest-mock-provider.json";
@@ -53,19 +64,37 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     run(cwd, "add", ".");
     run(cwd, "commit", "-m", "fixture report");
   };
-  if (options.baseline !== "absent") {
-    commitReport(seed, options.duplicate ? dest : previous);
-    if (options.baseline === "invalid") write(path.join(seed, pointer), "{invalid");
-    if (options.baseline === "trailing-newline")
-      write(path.join(seed, pointer), JSON.stringify({ path: previous + "\n" }));
+  const reuseDefault = !options.baseline && !options.duplicate;
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  if (reuseDefault && performanceTemplate) {
+    cpSync(performanceTemplate, workspace, copyOptions);
+  } else {
+    mkdirSync(temp, { recursive: true });
+    mkdirSync(seed);
+    run(workspace, "init", "--bare", "--initial-branch=main", remote);
+    run(seed, "init", "--initial-branch=main");
+    write(path.join(seed, "README.md"), "fixture\n");
+    if (options.baseline !== "absent") {
+      commitReport(seed, options.duplicate ? dest : previous);
+      if (options.baseline === "invalid") write(path.join(seed, pointer), "{invalid");
+      if (options.baseline === "trailing-newline")
+        write(path.join(seed, pointer), JSON.stringify({ path: previous + "\n" }));
+    }
+    run(seed, "add", ".");
+    run(seed, "commit", "--allow-empty", "-m", "fixture seed");
+    run(seed, "push", remote, "HEAD:main");
+    run(workspace, "init", "--initial-branch=main");
+    write(path.join(workspace, "src/config/zod-schema.agent-defaults.ts"), "    mediaModels: z\n");
+    run(workspace, "add", "src");
+    run(workspace, "commit", "-m", "fixture target");
+    if (reuseDefault) {
+      // Snapshot complete repositories before any scenario mutation. Copies own
+      // their refs, index and objects; no live process or absolute remote is shared.
+      const template = templateDirs.make("openclaw-performance-template-");
+      cpSync(workspace, template, copyOptions);
+      performanceTemplate = template;
+    }
   }
-  run(seed, "add", ".");
-  run(seed, "commit", "--allow-empty", "-m", "fixture seed");
-  run(seed, "push", remote, "HEAD:main");
-  run(workspace, "init", "--initial-branch=main");
-  write(path.join(workspace, "src/config/zod-schema.agent-defaults.ts"), "    mediaModels: z\n");
-  run(workspace, "add", "src");
-  run(workspace, "commit", "-m", "fixture target");
   const target = run(workspace, "rev-parse", "HEAD");
   mkdirSync(reports);
   let reportCommit = "a".repeat(40);
