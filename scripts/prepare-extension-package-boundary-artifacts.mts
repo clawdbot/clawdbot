@@ -238,11 +238,12 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
       return { ...unit, outputRoot: fs.realpathSync(resolve(repoRoot, unit.outDir)) };
     }),
   );
-  let before = new BoundaryInputSnapshot(repoRoot);
   for (const batch of batches) {
     if (!batch.length) {
       continue;
     }
+    // Upstream pruning changes consumer topology; snapshot after the preceding batch's cleanup.
+    const before = new BoundaryInputSnapshot(repoRoot);
     const pending = batch
       .map((unit) => {
         const recordPath = resolve(repoRoot, BOUNDARY_CACHE_ROOT, `${unit.id}.json`);
@@ -344,7 +345,6 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
       writeArtifactRecord(unit.recordPath, unit.record);
       process.stdout.write(`[${unit.id} boundary dts] emitted ${unit.outputs.size} files\n`);
     }
-    before = after;
   }
 }
 
