@@ -2131,6 +2131,46 @@ describe("followup queue collect routing", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it("keeps the newest retained image when the window rolls past the budget", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-history-roll-${Date.now()}`,
+    );
+    // A rolling window: the first turn fills the budget, the second drops the
+    // oldest and adds a new one. The member is asking about the newest image, so
+    // filling the budget oldest-first would discard exactly what they want.
+    const windows = [
+      ["m-a", "m-b", "m-c", "m-d"],
+      ["m-b", "m-c", "m-d", "m-e"],
+    ];
+    windows.forEach((ids, index) => {
+      const retained = ids.map((id, position) => historyImage(id, "Ada", position + 1, ids.length));
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt: `turn ${index + 1}`,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: retained.map((image) => ({
+          type: "image" as const,
+          data: image.messageId,
+          mimeType: "image/png",
+        })),
+        imageOrder: retained.map(() => "inline" as const),
+        historyImages: retained,
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    });
+
+    await drainRecordedQueue(key, runFollowup, done);
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    const ids = collected?.historyImages?.map((image) => image.messageId) ?? [];
+    expect(ids).toContain("m-e");
+    expect(ids).toHaveLength(4);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it("preserves prepared empty image state across collected batches", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-prepared-empty-images-${Date.now()}`,
