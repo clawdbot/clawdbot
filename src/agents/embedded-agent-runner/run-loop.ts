@@ -49,7 +49,6 @@ import {
   createRunRetryBudget,
   isRunRetryBudgetExhausted,
   recordRunRetry,
-  type RunRetryBudget,
 } from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { settleEmbeddedRun } from "./run/run-settlement.js";
@@ -87,7 +86,6 @@ export async function runPreparedEmbeddedLoop(
     suspendForFailure,
   } = input;
   const { notifyExecutionPhase } = input.progressController;
-  const { laneTaskAbortController } = input.laneController;
   let startupStagesEmitted = false;
   const preparedRuntime = await measureEmbeddedAgentPreparation(
     "runtime",
@@ -121,7 +119,6 @@ export async function runPreparedEmbeddedLoop(
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
   const {
-    requestedModelId,
     model,
     attemptAuthProfileStore,
     profileCandidates,
@@ -163,17 +160,16 @@ export async function runPreparedEmbeddedLoop(
     maxOutputTokens?: number | null;
     degradedReason?: string | null;
   }) => {
-    const fallbackReason = resolveRuntimeFallbackReason();
     return buildContextEngineRuntimeSettings({
       contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
       provider,
-      requestedModel: requestedModelId,
+      requestedModel: preparedRuntime.requestedModelId,
       resolvedModel: modelId,
       selectedContextEngineId: contextEngine.info.id,
       contextEngineSelectionSource: contextEngine.info.id === "legacy" ? "default" : "configured",
       promptTokenBudget: settingsParams.tokenBudget,
       maxOutputTokens: settingsParams.maxOutputTokens,
-      fallbackReason,
+      fallbackReason: resolveRuntimeFallbackReason(),
       degradedReason: settingsParams.degradedReason,
     });
   };
@@ -190,11 +186,10 @@ export async function runPreparedEmbeddedLoop(
     modelId,
   });
   const executionContract = strictAgenticActive ? "strict-agentic" : "default";
-  const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
-  const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
-  const MAX_RUN_RETRY_ATTEMPTS = resolveMaxRunRetryIterations(profileCandidates.length);
-  const runRetryBudget: RunRetryBudget = createRunRetryBudget(MAX_RUN_RETRY_ATTEMPTS);
+  const runRetryBudget = createRunRetryBudget(
+    resolveMaxRunRetryIterations(profileCandidates.length),
+  );
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   let bootstrapPromptWarningSignaturesSeen =
     params.bootstrapPromptWarningSignaturesSeen ??
@@ -235,7 +230,7 @@ export async function runPreparedEmbeddedLoop(
     const verdict = postCompactionGuard.observe(observation);
     if (verdict.shouldAbort) {
       postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
-      laneTaskAbortController.abort(postCompactionAbortError);
+      input.laneController.laneTaskAbortController.abort(postCompactionAbortError);
       postCompactionAbortController?.abort(postCompactionAbortError);
     }
   };
@@ -672,8 +667,8 @@ export async function runPreparedEmbeddedLoop(
         attemptToolSummary,
         failureSignal,
         terminalToolFailure,
-        maxReasoningOnlyRetryAttempts,
-        maxEmptyResponseRetryAttempts,
+        maxReasoningOnlyRetryAttempts: DEFAULT_REASONING_ONLY_RETRY_LIMIT,
+        maxEmptyResponseRetryAttempts: DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
         attemptCompactionCount: terminalAttemptCompactionCount,
         replayState: accumulatedReplayState,
         activePromptPersisted: sessionPromptState.activePrompt.persisted,

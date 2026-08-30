@@ -321,9 +321,11 @@ describe("OpenGrep GitHub SARIF uploads", () => {
       }
       const upload = steps.find((step) => step.name === "Upload SARIF to GitHub Code Scanning")!;
       const artifact = steps.find((step) => step.name === "Upload SARIF as workflow artifact")!;
-      const uploaded = JSON.parse(
-        fs.readFileSync(path.join(repo, upload.with!.sarif_file), "utf8"),
-      );
+      const uploadPath = upload.with?.sarif_file;
+      if (!uploadPath) {
+        throw new Error("Workflow must name its SARIF upload payload");
+      }
+      const uploaded = JSON.parse(fs.readFileSync(path.join(repo, uploadPath), "utf8"));
       expect(uploaded).toEqual({
         ...report,
         runs: [{ ...report.runs[0], results: retained }, ...report.runs.slice(1)],
