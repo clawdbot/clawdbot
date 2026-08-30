@@ -193,7 +193,7 @@ suite.define(() => {
         });
         expect(settingsStyles).toEqual({
           contentScrollbar: "12px",
-          contentSelection: "none",
+          contentSelection: "auto",
           inputSelection: "text",
           sidebarScrollbar: "12px",
           sidebarSelection: "none",
@@ -201,6 +201,8 @@ suite.define(() => {
 
         await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
         expect(await dragAcross(page, settingsTitle)).toBe("");
+        const sectionTitle = page.locator(".settings-section__heading").first();
+        expect(await dragAcross(page, sectionTitle)).not.toBe("");
         await settingsSearch.selectText();
         expect(
           await settingsSearch.evaluate(

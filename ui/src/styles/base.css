@@ -713,12 +713,21 @@ body {
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
-  /* App chrome behaves like native controls: dragging across labels, tiles,
-     and navigation must not create accidental text selections. Text-entry
-     surfaces and document-like content opt back in below or in route CSS. */
-  user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Limit accidental drag selections to controls and navigation; page copy,
+   settings values, and instructions keep the browser's normal selection. */
+button,
+select,
+summary,
+[role="button"],
+[role="tab"],
+.btn,
+.sidebar,
+.settings-sidebar {
+  user-select: none;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
