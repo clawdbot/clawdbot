@@ -19,10 +19,12 @@ import {
   estimateMessagesTokens,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  sanitizeCompactionMessages,
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
+import { isLikelyContextOverflowError } from "./failover/classify.js";
 import type {
   AgentMessage,
   CompactionSummaryPrompt,
@@ -31,7 +33,8 @@ import type {
 } from "./runtime/index.js";
 import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
-import { generateSummary } from "./sessions/index.js";
+import { generateSummary, serializeConversation } from "./sessions/index.js";
+import { convertToLlm } from "./sessions/messages.js";
 
 export {
   BASE_CHUNK_RATIO,
@@ -79,6 +82,7 @@ type CompactionSummaryParams = {
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
+  maxChunkTokensSource?: "adaptive" | "explicit";
   contextWindow: number;
   customInstructions?: string;
   summaryPrompt?: CompactionSummaryPrompt;
@@ -88,6 +92,12 @@ type CompactionSummaryParams = {
   streamFn?: StreamFn;
   usageSink?: SessionModelUsageSink;
 };
+
+type SummaryFitPlan =
+  | { mode: "whole-first"; originalMaxChunkTokens: number; serializedHistory: string }
+  | { mode: "staged"; maxChunkTokens: number };
+
+type SummaryAttemptMode = "planned" | "whole-first";
 
 function resolveIdentifierPreservationInstructions(
   instructions?: CompactionSummarizationInstructions,
@@ -115,16 +125,75 @@ function buildCompactionSummarizationInstructions(
     : `Additional focus:\n${custom}`;
 }
 
-async function summarizeChunks(params: CompactionSummaryParams): Promise<string> {
+function serializeCompactionHistory(messages: AgentMessage[]): string {
+  return serializeConversation(convertToLlm(sanitizeCompactionMessages(messages)));
+}
+
+function hasProviderVisibleRecoveryProgress(params: {
+  chunks: AgentMessage[][];
+  wholeSerializedHistory: string;
+}): boolean {
+  const serializedVisibleChunks = params.chunks
+    .map((chunk) => serializeCompactionHistory(chunk))
+    .filter((serializedChunk) => serializedChunk.length > 0);
+  return (
+    serializedVisibleChunks.length > 1 &&
+    serializedVisibleChunks.every(
+      (serializedChunk) => serializedChunk.length < params.wholeSerializedHistory.length,
+    )
+  );
+}
+
+/**
+ * Allows one optimistic whole-request attempt only when the complete summary
+ * request has conservative room for its serialized input and output budget.
+ * The original adaptive cap remains available for staged recovery when the
+ * provider's tokenizer rejects that optimistic request.
+ */
+function resolveSummaryFitPlan(params: CompactionSummaryParams): SummaryFitPlan {
+  const serializedHistory = serializeCompactionHistory(params.messages);
+  const effectiveInstructions = buildCompactionSummarizationInstructions(
+    params.customInstructions,
+    params.summarizationInstructions,
+  );
+  const dynamicRequestText = [serializedHistory, params.previousSummary, effectiveInstructions]
+    .filter((text): text is string => Boolean(text))
+    .join("\n\n");
+  const dynamicInputTokens = estimateMessagesTokens([
+    { role: "user", content: dynamicRequestText, timestamp: 0 },
+  ]);
+  const requestTokens =
+    Math.ceil(dynamicInputTokens * SAFETY_MARGIN) +
+    SUMMARIZATION_OVERHEAD_TOKENS +
+    Math.max(0, Math.ceil(params.reserveTokens));
+  return requestTokens <= params.contextWindow && params.maxChunkTokensSource === "adaptive"
+    ? { mode: "whole-first", originalMaxChunkTokens: params.maxChunkTokens, serializedHistory }
+    : { mode: "staged", maxChunkTokens: params.maxChunkTokens };
+}
+
+function isContextOverflowFailure(err: unknown): boolean {
+  return isLikelyContextOverflowError(formatErrorMessage(err));
+}
+
+async function summarizeChunks(
+  params: CompactionSummaryParams,
+  attemptMode: SummaryAttemptMode = "planned",
+): Promise<string> {
   if (params.messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
-  const chunks = await buildSummaryChunksWithWorker({
-    messages: params.messages,
-    maxChunkTokens: params.maxChunkTokens,
-    signal: params.signal,
-  });
+  let chunks: AgentMessage[][];
+  if (attemptMode === "whole-first") {
+    const safeMessages = sanitizeCompactionMessages(params.messages);
+    chunks = safeMessages.length > 0 ? [safeMessages] : [];
+  } else {
+    chunks = await buildSummaryChunksWithWorker({
+      messages: params.messages,
+      maxChunkTokens: params.maxChunkTokens,
+      signal: params.signal,
+    });
+  }
   let summary = params.previousSummary;
   const effectiveInstructions = buildCompactionSummarizationInstructions(
     params.customInstructions,
@@ -158,9 +227,13 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
           // the sleep would stall compaction until the full delay elapses.
           sleep: (ms) => sleepWithAbort(ms, params.signal),
           // Caller aborts and transport timeouts are terminal; provider-side
-          // AbortErrors without caller cancellation remain retryable.
+          // AbortErrors without caller cancellation remain retryable. A known
+          // whole-request overflow must return immediately to staged planning
+          // instead of retrying the identical request.
           shouldRetry: (err) =>
-            !params.signal.aborted && (isAbortError(err) || !isTimeoutError(err)),
+            !params.signal.aborted &&
+            !(attemptMode === "whole-first" && isContextOverflowFailure(err)) &&
+            (isAbortError(err) || !isTimeoutError(err)),
         },
       );
     } catch (err) {
@@ -197,7 +270,10 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
  * Summarize with progressive fallback for handling oversized messages.
  * If full summarization fails, tries partial summarization excluding oversized messages.
  */
-async function summarizeWithFallback(params: CompactionSummaryParams): Promise<string> {
+async function summarizeWithFallback(
+  params: CompactionSummaryParams,
+  attemptMode: SummaryAttemptMode = "planned",
+): Promise<string> {
   const { messages, contextWindow } = params;
 
   if (messages.length === 0) {
@@ -208,10 +284,13 @@ async function summarizeWithFallback(params: CompactionSummaryParams): Promise<s
   let partialSummaryFallback: string | undefined;
   let lastError: unknown;
   try {
-    return await summarizeChunks(params);
+    return await summarizeChunks(params, attemptMode);
   } catch (err) {
     lastError = err;
     if (params.signal.aborted) {
+      throw lastError;
+    }
+    if (attemptMode === "whole-first" && isContextOverflowFailure(lastError)) {
       throw lastError;
     }
     log.warn(`Full summarization failed: ${formatErrorMessage(lastError)}`);
@@ -230,14 +309,20 @@ async function summarizeWithFallback(params: CompactionSummaryParams): Promise<s
   // Re-summarizing it would duplicate the same failing API work (and duplicate warn logs).
   if (smallMessages.length > 0 && smallMessages.length !== messages.length) {
     try {
-      const partialSummary = await summarizeChunks({
-        ...params,
-        messages: smallMessages,
-      });
+      const partialSummary = await summarizeChunks(
+        {
+          ...params,
+          messages: smallMessages,
+        },
+        attemptMode,
+      );
       return partialSummary + oversizedSuffix;
     } catch (partialError) {
       lastError = partialError;
       if (params.signal.aborted) {
+        throw lastError;
+      }
+      if (attemptMode === "whole-first" && isContextOverflowFailure(lastError)) {
         throw lastError;
       }
       log.warn(`Partial summarization also failed: ${formatErrorMessage(lastError)}`);
@@ -304,16 +389,69 @@ export async function summarizeInStages(
     return await summarizeWithFallback(params);
   }
 
+  params.signal.throwIfAborted();
+  const fitPlan = resolveSummaryFitPlan(params);
+  let wholeRequestOverflow: { error: unknown; serializedHistory: string } | undefined;
+  if (fitPlan.mode === "whole-first") {
+    try {
+      return await summarizeWithFallback(params, "whole-first");
+    } catch (err) {
+      if (!isContextOverflowFailure(err)) {
+        throw err;
+      }
+      wholeRequestOverflow = { error: err, serializedHistory: fitPlan.serializedHistory };
+      log.warn("Whole-request summarization exceeded provider context; using staged plan", {
+        err,
+        maxChunkTokens: fitPlan.originalMaxChunkTokens,
+      });
+    }
+  }
+
+  const maxChunkTokens =
+    fitPlan.mode === "whole-first" ? fitPlan.originalMaxChunkTokens : fitPlan.maxChunkTokens;
+  const sanitizedMessages = sanitizeCompactionMessages(messages);
+  const planningMessages = wholeRequestOverflow ? sanitizedMessages : messages;
+
   const plan = await buildStageSplitPlanWithWorker({
-    messages,
-    maxChunkTokens: params.maxChunkTokens,
+    messages: planningMessages,
+    maxChunkTokens,
     parts: params.parts,
     minMessagesForSplit: params.minMessagesForSplit,
     signal: params.signal,
   });
 
   if (plan.mode === "single") {
-    return await summarizeWithFallback(params);
+    if (wholeRequestOverflow) {
+      const fallbackChunks = await buildSummaryChunksWithWorker({
+        messages: sanitizedMessages,
+        maxChunkTokens,
+        signal: params.signal,
+      });
+      if (
+        !hasProviderVisibleRecoveryProgress({
+          chunks: fallbackChunks,
+          wholeSerializedHistory: wholeRequestOverflow.serializedHistory,
+        })
+      ) {
+        throw wholeRequestOverflow.error;
+      }
+      return await summarizeWithFallback({
+        ...params,
+        messages: sanitizedMessages,
+        maxChunkTokens,
+      });
+    }
+    return await summarizeWithFallback({ ...params, maxChunkTokens });
+  }
+
+  if (
+    wholeRequestOverflow &&
+    !hasProviderVisibleRecoveryProgress({
+      chunks: plan.chunks,
+      wholeSerializedHistory: wholeRequestOverflow.serializedHistory,
+    })
+  ) {
+    throw wholeRequestOverflow.error;
   }
 
   const partialSummaries: string[] = [];
