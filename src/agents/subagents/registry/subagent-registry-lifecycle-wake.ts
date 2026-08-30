@@ -18,7 +18,6 @@ import type {
 import {
   buildSafeLifecycleErrorMeta,
   maskLifecycleIdentifier,
-  safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -155,7 +154,6 @@ const completeRequesterSettleWakeBatch = (
         deliveryStatus: "failed",
         deliveryError: error,
       });
-      safeMarkRequiredCompletionDeliveryBlocked(params, { entry, reason: error });
     }
   }
   for (const [runId, entry] of entries) {
