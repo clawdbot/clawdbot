@@ -1,22 +1,25 @@
 // Msteams tests cover message handler.authz plugin behavior.
+import {
+  buildChannelInboundEventContext,
+  type BuildChannelInboundEventContextParams,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
+import {
+  createAttackerGroupActivity,
+  createAttackerPersonalActivity,
+  createChannelThreadActivity,
+  createMessageActivity,
+  createQuoteAttachment,
+  createThreadAllowlistConfig,
+  createThreadMessage,
+} from "./message-handler.authz.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { createMessageHandlerDeps } from "./message-handler.test-support.js";
-
-type HandlerInput = Parameters<ReturnType<typeof createMSTeamsMessageHandler>>[0];
-type TestThreadUser = {
-  id?: string;
-  displayName: string;
-};
-type TestAttachment = {
-  contentType: string;
-  content: string;
-};
 
 const runtimeApiMockState = getRuntimeApiMockState();
 const graphThreadMockState = vi.hoisted(() => ({
@@ -101,6 +104,7 @@ describe("msteams monitor handler authz", () => {
       shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
       createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
       resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+      resolveStorePath?: () => string | undefined;
     } = {},
   ) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
@@ -122,6 +126,7 @@ describe("msteams monitor handler authz", () => {
       shouldHandleTextCommands: options.shouldHandleTextCommands,
       createInboundDebouncer: options.createInboundDebouncer,
       resolveInboundDebounceMs: options.resolveInboundDebounceMs,
+      resolveStorePath: options.resolveStorePath,
     });
   }
 
@@ -134,21 +139,6 @@ describe("msteams monitor handler authz", () => {
     graphThreadMockState.fetchChatMessageText.mockClear();
   }
 
-  function createThreadMessage(params: {
-    id: string;
-    user: TestThreadUser;
-    content: string;
-  }): GraphThreadMessage {
-    return {
-      id: params.id,
-      from: { user: params.user },
-      body: {
-        content: params.content,
-        contentType: "text",
-      },
-    };
-  }
-
   function mockThreadContext(params: {
     parent: GraphThreadMessage;
     replies?: GraphThreadMessage[];
@@ -158,137 +148,16 @@ describe("msteams monitor handler authz", () => {
     graphThreadMockState.fetchThreadReplies.mockResolvedValue(params.replies ?? []);
   }
 
-  function createThreadAllowlistConfig(params: {
-    groupAllowFrom: string[];
-    dangerouslyAllowNameMatching?: boolean;
-  }): OpenClawConfig {
-    return {
-      channels: {
-        msteams: {
-          groupPolicy: "allowlist",
-          groupAllowFrom: params.groupAllowFrom,
-          contextVisibility: "allowlist",
-          requireMention: false,
-          ...(params.dangerouslyAllowNameMatching ? { dangerouslyAllowNameMatching: true } : {}),
-          teams: {
-            team123: {
-              channels: {
-                "19:channel@thread.tacv2": { requireMention: false },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-  }
-
-  function createMessageActivity(params: {
-    id: string;
-    text: string;
-    conversation: {
-      id: string;
-      conversationType: "personal" | "groupChat" | "channel";
-      tenantId?: string;
-    };
-    from: {
-      id: string;
-      aadObjectId: string;
-      name: string;
-    };
-    channelData?: Record<string, unknown>;
-    attachments?: TestAttachment[];
-    extraActivity?: Record<string, unknown>;
-  }): HandlerInput {
-    return {
-      activity: {
-        id: params.id,
-        type: "message",
-        text: params.text,
-        from: params.from,
-        recipient: {
-          id: "bot-id",
-          name: "Bot",
-        },
-        conversation: params.conversation,
-        channelData: params.channelData ?? {},
-        attachments: params.attachments ?? [],
-        ...params.extraActivity,
-      },
-      sendActivity: vi.fn(async () => undefined),
-    } as unknown as HandlerInput;
-  }
-
-  function createAttackerGroupActivity(params?: {
-    text?: string;
-    channelData?: Record<string, unknown>;
-  }): HandlerInput {
-    return createMessageActivity({
-      id: "msg-1",
-      text: params?.text ?? "hello",
-      from: {
-        id: "attacker-id",
-        aadObjectId: "attacker-aad",
-        name: "Attacker",
-      },
-      conversation: {
-        id: "19:group@thread.tacv2",
-        conversationType: "groupChat",
-      },
-      channelData: params?.channelData,
-    });
-  }
-
-  function createAttackerPersonalActivity(id: string): HandlerInput {
-    return createMessageActivity({
-      id,
-      text: "hello",
-      from: {
-        id: "attacker-id",
-        aadObjectId: "attacker-aad",
-        name: "Attacker",
-      },
-      conversation: {
-        id: "a:personal-chat",
-        conversationType: "personal",
-      },
-    });
-  }
-
-  function createChannelThreadActivity(params?: { attachments?: TestAttachment[] }): HandlerInput {
-    return createMessageActivity({
-      id: "current-msg",
-      text: "Current message",
-      from: {
-        id: "alice-botframework-id",
-        aadObjectId: "alice-aad",
-        name: "Alice",
-      },
-      conversation: {
-        id: "19:channel@thread.tacv2",
-        conversationType: "channel",
-      },
-      channelData: {
-        team: { id: "team123", name: "Team 123", aadGroupId: "graph-team-123" },
-        channel: { id: "19:graph-channel@thread.tacv2", name: "General" },
-      },
-      extraActivity: { replyToId: currentParentMessageId },
-      attachments: params?.attachments ?? [],
-    });
-  }
-
-  function createQuoteAttachment(): TestAttachment {
-    return {
-      contentType: "text/html",
-      content:
-        '<blockquote itemtype="http://schema.skype.com/Reply"><strong itemprop="mri">Alice</strong><p itemprop="copy">Quoted body</p></blockquote>',
-    };
-  }
-
   async function dispatchQuoteContextWithParent(parent: GraphThreadMessage) {
     mockThreadContext({ parent });
     const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
     const handler = createMSTeamsMessageHandler(deps);
-    await handler(createChannelThreadActivity({ attachments: [createQuoteAttachment()] }));
+    await handler(
+      createChannelThreadActivity({
+        attachments: [createQuoteAttachment()],
+        parentMessageId: currentParentMessageId,
+      }),
+    );
     return firstSettledDispatch().ctxPayload;
   }
 
@@ -621,6 +490,108 @@ describe("msteams monitor handler authz", () => {
     expect(meta.reason).toBe("dmPolicy=allowlist (not allowlisted)");
   });
 
+  it("keeps the active named account on the dispatch-time sender binding", async () => {
+    resetThreadMocks();
+    const contextInputs: BuildChannelInboundEventContextParams[] = [];
+    const buildContext = ((params: BuildChannelInboundEventContextParams) => {
+      contextInputs.push(params);
+      return buildChannelInboundEventContext(params);
+    }) as PluginRuntime["channel"]["inbound"]["buildContext"];
+    const cfg = {
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["default-owner-aad"],
+          accounts: {
+            jimmy: {
+              dmPolicy: "allowlist",
+              allowFrom: ["owner-aad"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { deps } = createMessageHandlerDeps(cfg, {
+      buildContext,
+      resolveAgentRoute: vi.fn(() => ({
+        sessionKey: "msteams:direct:owner-aad",
+        agentId: "ea-jimmy-puckett",
+        accountId: "jimmy",
+      })),
+    });
+    deps.accountId = "jimmy";
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await handler(
+      createMessageActivity({
+        id: "msg-named-account",
+        text: "send the reply now",
+        from: { id: "owner-id", aadObjectId: "owner-aad", name: "Owner" },
+        conversation: { id: "owner-dm", conversationType: "personal" },
+      }),
+    );
+
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    const contextInput = contextInputs[0];
+    expect(contextInput?.route.accountId).toBe("jimmy");
+    expect(contextInput?.channelIngress).toMatchObject({
+      senderAccess: {
+        allowed: true,
+        decision: "allow",
+      },
+    });
+  });
+
+  it("does not carry one account's owner admission into another routed account", async () => {
+    resetThreadMocks();
+    const contextInputs: BuildChannelInboundEventContextParams[] = [];
+    const buildContext = ((params: BuildChannelInboundEventContextParams) => {
+      contextInputs.push(params);
+      return buildChannelInboundEventContext(params);
+    }) as PluginRuntime["channel"]["inbound"]["buildContext"];
+    const cfg = {
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["default-owner-aad"],
+          accounts: {
+            jimmy: { dmPolicy: "allowlist", allowFrom: ["owner-aad"] },
+            david: { dmPolicy: "allowlist", allowFrom: ["david-owner-aad"] },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { deps } = createMessageHandlerDeps(cfg, {
+      buildContext,
+      resolveAgentRoute: vi.fn(() => ({
+        sessionKey: "msteams:direct:owner-aad",
+        agentId: "ea-david-knight",
+        accountId: "david",
+      })),
+    });
+    deps.accountId = "jimmy";
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await handler(
+      createMessageActivity({
+        id: "msg-cross-account",
+        text: "send the reply now",
+        from: { id: "owner-id", aadObjectId: "owner-aad", name: "Owner" },
+        conversation: { id: "owner-dm", conversationType: "personal" },
+      }),
+    );
+
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    const contextInput = contextInputs[0];
+    expect(contextInput?.route.accountId).toBe("david");
+    expect(contextInput?.channelIngress).toMatchObject({
+      senderAccess: {
+        allowed: false,
+        decision: "block",
+      },
+    });
+  });
+
   it("logs an info drop reason when group policy has an empty allowlist", async () => {
     const { deps } = createDeps({
       channels: {
@@ -922,7 +893,7 @@ describe("msteams monitor handler authz", () => {
     const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
 
     const handler = createMSTeamsMessageHandler(deps);
-    await handler(createChannelThreadActivity());
+    await handler(createChannelThreadActivity({ parentMessageId: currentParentMessageId }));
 
     const dispatched = firstSettledDispatch();
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
@@ -963,7 +934,7 @@ describe("msteams monitor handler authz", () => {
     );
 
     const handler = createMSTeamsMessageHandler(deps);
-    await handler(createChannelThreadActivity());
+    await handler(createChannelThreadActivity({ parentMessageId: currentParentMessageId }));
 
     const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched?.ctxPayload).BodyForAgent).toBe(

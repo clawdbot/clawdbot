@@ -5,6 +5,7 @@ import { fetchGraphJson, resolveGraphToken } from "./graph.js";
 
 type GetMemberInfoMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   userId: string;
   currentRequesterId?: string | null;
@@ -48,9 +49,14 @@ function normalizeUserId(value?: string | null): string {
 async function findStandardChannelMember(params: {
   token: string;
   to: string;
+  accountId?: string | null;
+  cfg?: OpenClawConfig;
   userId: string;
 }): Promise<GraphConversationMember | undefined> {
-  const conversationId = await resolveGraphConversationId(params.to);
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const conversation = resolveConversationPath(conversationId);
   if (conversation.kind !== "channel" || !conversation.teamId) {
     return undefined;
@@ -112,13 +118,18 @@ export async function getMemberInfoMSTeams(
       },
     };
   }
-  const conversationId = await resolveGraphConversationId(params.to);
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const conversation = resolveConversationPath(conversationId);
   const member =
     conversation.kind === "channel"
       ? await findStandardChannelMember({
-          token: await resolveGraphToken(params.cfg),
+          token: await resolveGraphToken(params.cfg, { accountId: params.accountId }),
           to: params.to,
+          cfg: params.cfg,
+          accountId: params.accountId,
           userId: params.userId,
         })
       : undefined;

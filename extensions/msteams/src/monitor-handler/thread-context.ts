@@ -28,6 +28,7 @@ import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 export function prepareMSTeamsThreadRouting(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   context: MSTeamsTurnContext;
   isDirectMessage: boolean;
   isChannel: boolean;
@@ -41,6 +42,7 @@ export function prepareMSTeamsThreadRouting(params: {
   const route = core.channel.routing.resolveAgentRoute({
     cfg: params.cfg,
     channel: "msteams",
+    accountId: params.accountId,
     teamId: params.teamId,
     peer: {
       kind: params.isDirectMessage ? "direct" : params.isChannel ? "channel" : "group",

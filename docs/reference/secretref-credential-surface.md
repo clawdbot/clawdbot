@@ -115,6 +115,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `channels.qqbot.clientSecret`
 - `channels.qqbot.accounts.*.clientSecret`
 - `channels.msteams.appPassword`
+- `channels.msteams.accounts.*.appPassword`
 - `channels.mattermost.botToken`
 - `channels.mattermost.accounts.*.botToken`
 - `channels.matrix.accessToken`

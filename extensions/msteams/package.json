@@ -59,7 +59,55 @@
         "warnOnEmptyGroupSenderAllowlist": true
       },
       "setup": {
-        "fields": []
+        "fields": [
+          {
+            "key": "appId",
+            "kind": "string",
+            "cli": {
+              "flags": "--app-id <id>",
+              "description": "Microsoft Teams application id"
+            }
+          },
+          {
+            "key": "appPassword",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--app-password <secret>",
+              "description": "Microsoft Teams app password"
+            }
+          },
+          {
+            "key": "tenantId",
+            "kind": "string",
+            "cli": {
+              "flags": "--tenant-id <id>",
+              "description": "Microsoft Teams tenant id"
+            }
+          },
+          {
+            "key": "webhookPort",
+            "kind": "integer",
+            "cli": {
+              "flags": "--webhook-port <port>",
+              "description": "Microsoft Teams webhook port"
+            }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": {
+              "flags": "--use-env",
+              "description": "Use Microsoft Teams environment credentials"
+            },
+            "envVars": [
+              "MSTEAMS_APP_ID",
+              "MSTEAMS_APP_PASSWORD",
+              "MSTEAMS_TENANT_ID"
+            ],
+            "envVarMode": "all"
+          }
+        ]
       }
     },
     "install": {

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
 import { fetchGraphJson } from "./graph.js";
 
@@ -15,6 +16,8 @@ type GraphConversationMembersPage = {
 const MAX_CONVERSATION_MEMBER_PAGES = 100;
 
 export async function findMSTeamsConversationMember(params: {
+  accountId?: string | null;
+  cfg?: OpenClawConfig;
   includeIndirectChannelMembers?: boolean;
   token: string;
   to: string;
@@ -23,7 +26,10 @@ export async function findMSTeamsConversationMember(params: {
   conversationId: string;
   member: MSTeamsConversationMember | undefined;
 }> {
-  const conversationId = await resolveGraphConversationId(params.to);
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const conversation = resolveConversationPath(conversationId);
   const collection =
     conversation.kind === "channel" && params.includeIndirectChannelMembers

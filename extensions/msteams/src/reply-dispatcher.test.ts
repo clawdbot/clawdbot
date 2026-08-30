@@ -5,6 +5,8 @@ import type { ReplyPayload } from "../runtime-api.js";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
+const resolveChunkModeMock = vi.hoisted(() => vi.fn(() => "length"));
+const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "code"));
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
@@ -102,6 +104,8 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveChunkModeMock.mockReset().mockReturnValue("length");
+    resolveMarkdownTableModeMock.mockReset().mockReturnValue("code");
     sendMSTeamsMessagesMock.mockReset().mockResolvedValue([]);
     renderReplyPayloadsToMessagesMock.mockReset().mockReturnValue([]);
     getGlobalHookRunnerMock.mockReturnValue(undefined);
@@ -124,8 +128,8 @@ describe("createMSTeamsReplyDispatcher", () => {
       },
       channel: {
         text: {
-          resolveChunkMode: vi.fn(() => "length"),
-          resolveMarkdownTableMode: vi.fn(() => "code"),
+          resolveChunkMode: resolveChunkModeMock,
+          resolveMarkdownTableMode: resolveMarkdownTableModeMock,
         },
         reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
       },
@@ -143,7 +147,11 @@ describe("createMSTeamsReplyDispatcher", () => {
   function createDispatcher(
     conversationType = "personal",
     msteamsConfig: Record<string, unknown> = {},
-    extraParams: { onSentMessageIds?: (ids: string[]) => void } = {},
+    extraParams: {
+      accountId?: string;
+      cfg?: Record<string, unknown>;
+      onSentMessageIds?: (ids: string[]) => void;
+    } = {},
   ) {
     const contextSendActivity = vi.fn(async () => ({ id: "activity-1" }));
     lastContextSendActivity = contextSendActivity;
@@ -154,8 +162,9 @@ describe("createMSTeamsReplyDispatcher", () => {
     const streamMock = conversationType === "personal" ? createStreamMock() : undefined;
     lastStreamMock = streamMock;
     const dispatcher = createMSTeamsReplyDispatcher({
-      cfg: { channels: { msteams: msteamsConfig } } as never,
+      cfg: (extraParams.cfg ?? { channels: { msteams: msteamsConfig } }) as never,
       agentId: "agent",
+      accountId: extraParams.accountId,
       sessionKey: "agent:main:main",
       runtime: { error: vi.fn() } as never,
       log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
@@ -174,7 +183,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       } as never,
       replyStyle: "thread",
       textLimit: 4000,
-      ...extraParams,
+      onSentMessageIds: extraParams.onSentMessageIds,
     });
     lastCreatedDispatcher = dispatcher;
     return dispatcher;
@@ -257,6 +266,32 @@ describe("createMSTeamsReplyDispatcher", () => {
       hasHooks: vi.fn((hookName: string) => registered.has(hookName)),
     });
   }
+
+  it("resolves reply presentation settings for the selected named account", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          chunkMode: "length",
+          markdown: { tables: "code" },
+          accounts: {
+            support: {
+              chunkMode: "newline",
+              markdown: { tables: "bullets" },
+            },
+          },
+        },
+      },
+    };
+
+    createDispatcher("personal", {}, { cfg, accountId: "support" });
+
+    expect(resolveChunkModeMock).toHaveBeenCalledWith(cfg, "msteams", "support");
+    expect(resolveMarkdownTableModeMock).toHaveBeenCalledWith({
+      cfg,
+      channel: "msteams",
+      accountId: "support",
+    });
+  });
 
   it("sends an informative status update once work expands in personal chats", async () => {
     vi.useFakeTimers();
@@ -753,6 +788,42 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     // streaming.mode=block disables native streaming entirely; the dispatcher
     // doesn't expose onPartialReply and the controller's stream is unused.
+    const stream = getStreamMock();
+    expect(stream.emit).not.toHaveBeenCalled();
+    expect(dispatcher.replyOptions.onPartialReply).toBeUndefined();
+    expect(dispatcher.replyOptions.disableBlockStreaming).toBe(false);
+    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("inherits root block streaming mode for named accounts", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
+
+    const dispatcher = createDispatcher(
+      "personal",
+      {},
+      {
+        accountId: "support",
+        cfg: {
+          channels: {
+            msteams: {
+              streaming: { mode: "block" },
+              accounts: {
+                support: {
+                  appId: "support-app",
+                  appPassword: "support-secret",
+                  webhook: { port: 3979 },
+                },
+              },
+            },
+          },
+        },
+      },
+    );
+    const options = dispatcherOptions();
+
+    await options.deliver({ text: "support account block reply" });
+
     const stream = getStreamMock();
     expect(stream.emit).not.toHaveBeenCalled();
     expect(dispatcher.replyOptions.onPartialReply).toBeUndefined();

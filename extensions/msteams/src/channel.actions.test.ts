@@ -248,7 +248,14 @@ async function expectSuccessfulAction(params: {
     senderIsOwner: params.senderIsOwner,
     gatewayClientScopes: params.gatewayClientScopes,
   });
-  expectActionRuntimeCall(params.mockFn, params.runtimeParams, params.cfg);
+  expectActionRuntimeCall(
+    params.mockFn,
+    {
+      ...params.runtimeParams,
+      ...(params.accountId === undefined ? {} : { accountId: params.accountId }),
+    },
+    params.cfg,
+  );
   expectActionSuccess(result, params.details, params.contentDetails);
 }
 
@@ -812,6 +819,98 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("uses selected account policy to block channel-list when root Teams policy is open", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          dmPolicy: "open",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+              groupPolicy: "allowlist",
+              teams: {
+                "22222222-2222-2222-2222-222222222222": {
+                  channels: {
+                    "19:other@thread.tacv2": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await expect(
+      runAction({
+        action: "channel-list",
+        cfg,
+        accountId: "secondary",
+        requesterAccountId: "secondary",
+        params: { teamId: graphTeamId },
+      }),
+    ).rejects.toThrow("Microsoft Teams channel list requires access to every channel in the team.");
+    expect(listChannelsMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses selected account policy to allow channel-list when root Teams policy is restrictive", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          teams: {
+            "22222222-2222-2222-2222-222222222222": {
+              channels: {
+                "19:other@thread.tacv2": { enabled: true },
+              },
+            },
+          },
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+              groupPolicy: "open",
+              teams: {
+                "*": {
+                  channels: {
+                    "*": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await expectSuccessfulAction({
+      mockFn: listChannelsMSTeamsMock,
+      mockResult: { channels: [{ id: "channel-1" }] },
+      action: "channel-list",
+      cfg,
+      accountId: "secondary",
+      requesterAccountId: "secondary",
+      actionParams: { teamId: graphTeamId },
+      runtimeParams: {
+        accountId: "secondary",
+        teamId: graphTeamId,
+      },
+      details: okMSTeamsActionDetails("channel-list", {
+        channels: [{ id: "channel-1" }],
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "channel-list",
+        channels: [{ id: "channel-1" }],
+      },
+    });
+  });
+
   it("routes channel-info through the Teams runtime", async () => {
     await expectSuccessfulAction({
       mockFn: getChannelInfoMSTeamsMock,
@@ -1223,6 +1322,63 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("preserves an explicitly selected legacy default account when a named default is configured", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "legacy-app-id",
+          appPassword: "legacy-secret",
+          defaultAccount: "support",
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    };
+
+    await expectSuccessfulAction({
+      mockFn: sendAdaptiveCardMSTeamsMock,
+      mockResult: {
+        messageId: "msg-legacy-default",
+        conversationId: "conv-legacy-default",
+      },
+      action: "send",
+      cfg,
+      accountId: "default",
+      actionParams: {
+        to: targetChannelId,
+        message: "Legacy default",
+        presentation: { blocks: [{ type: "text", text: "Legacy default" }] },
+      },
+      runtimeParams: {
+        to: targetChannelId,
+        card: {
+          type: "AdaptiveCard",
+          version: "1.4",
+          body: [
+            { type: "TextBlock", text: "Legacy default", wrap: true },
+            { type: "TextBlock", text: "Legacy default", wrap: true },
+          ],
+        },
+      },
+      details: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-legacy-default",
+      },
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-legacy-default",
+        conversationId: "conv-legacy-default",
+      },
+    });
+  });
+
   it("downgrades select blocks when sending presentation cards", async () => {
     await expectSuccessfulAction({
       mockFn: sendAdaptiveCardMSTeamsMock,
@@ -1331,6 +1487,99 @@ describe("msteamsPlugin message actions", () => {
       }),
     ).rejects.toThrow("Microsoft Teams read target is not allowed.");
     expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses selected account policy to block Graph reads when root Teams policy is open", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          dmPolicy: "open",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+              groupPolicy: "allowlist",
+              teams: {
+                "22222222-2222-2222-2222-222222222222": {
+                  channels: {
+                    "19:other@thread.tacv2": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await expect(
+      runAction({
+        action: "read",
+        cfg,
+        accountId: "secondary",
+        requesterAccountId: "secondary",
+        params: { to: graphChannelTarget, messageId: "msg-1" },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses selected account policy to allow Graph reads when root Teams policy is restrictive", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          teams: {
+            "22222222-2222-2222-2222-222222222222": {
+              channels: {
+                "19:other@thread.tacv2": { enabled: true },
+              },
+            },
+          },
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+              groupPolicy: "open",
+              teams: {
+                "*": {
+                  channels: {
+                    "*": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg,
+      accountId: "secondary",
+      requesterAccountId: "secondary",
+      actionParams: { to: graphChannelTarget, messageId: "msg-1" },
+      runtimeParams: {
+        accountId: "secondary",
+        to: graphChannelTarget,
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
   });
 
   it.each([
@@ -1646,6 +1895,7 @@ describe("msteamsPlugin.actions.extractToolSendResult", () => {
 describe("msteamsPlugin.threading.resolveAutoThreadId", () => {
   function resolveAutoThreadId(params: {
     cfg?: OpenClawConfig;
+    accountId?: string;
     to?: string;
     currentGraphChannelId?: string;
   }) {
@@ -1655,6 +1905,7 @@ describe("msteamsPlugin.threading.resolveAutoThreadId", () => {
     }
     return resolve({
       cfg: params.cfg ?? ({} as OpenClawConfig),
+      accountId: params.accountId,
       to: params.to ?? "conversation:19:channel@thread.tacv2",
       toolContext: {
         currentChannelId: "conversation:19:channel@thread.tacv2",
@@ -1677,6 +1928,26 @@ describe("msteamsPlugin.threading.resolveAutoThreadId", () => {
           channels: {
             msteams: {
               replyStyle: "top-level",
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("honors a named account top-level reply style", () => {
+    expect(
+      resolveAutoThreadId({
+        accountId: "ops",
+        cfg: {
+          channels: {
+            msteams: {
+              replyStyle: "thread",
+              accounts: {
+                ops: {
+                  replyStyle: "top-level",
+                },
+              },
             },
           },
         } as OpenClawConfig,

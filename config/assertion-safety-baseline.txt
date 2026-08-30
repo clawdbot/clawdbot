@@ -834,7 +834,6 @@ extensions/msteams/src/attachments/graph.ts	1
 extensions/msteams/src/attachments/shared.ts	2
 extensions/msteams/src/channel.ts	4
 extensions/msteams/src/delegated-state.ts	1
-extensions/msteams/src/directory-live.ts	1
 extensions/msteams/src/errors.ts	2
 extensions/msteams/src/feedback-invoke.ts	2
 extensions/msteams/src/file-consent.ts	1

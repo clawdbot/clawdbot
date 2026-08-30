@@ -14,6 +14,7 @@ import type {
 } from "./conversation-store.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import {
+  resolveMSTeamsAccountStateNamespace,
   resolveMSTeamsSqliteStateEnv,
   toPluginJsonValue,
   withMSTeamsSqliteMutationLock,
@@ -32,6 +33,7 @@ const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const CONVERSATION_MUTATION_KEY = "conversations";
 
 type MSTeamsConversationStoreStateOptions = {
+  accountId?: string;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   ttlMs?: number;
@@ -41,7 +43,10 @@ type MSTeamsConversationStoreStateOptions = {
 
 function createConversationStateStore(params?: MSTeamsConversationStoreStateOptions) {
   return getMSTeamsRuntime().state.openKeyedStore<StoredConversationReference>({
-    namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
+    namespace: resolveMSTeamsAccountStateNamespace(
+      MSTEAMS_CONVERSATIONS_NAMESPACE,
+      params?.accountId,
+    ),
     maxEntries: MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS,
     env: resolveMSTeamsSqliteStateEnv(params),
   });
@@ -106,6 +111,10 @@ export function createMSTeamsConversationStoreState(
   params?: MSTeamsConversationStoreStateOptions,
 ): MSTeamsConversationStore {
   const ttlMs = params?.ttlMs ?? MSTEAMS_CONVERSATION_TTL_MS;
+  const mutationKey = resolveMSTeamsAccountStateNamespace(
+    CONVERSATION_MUTATION_KEY,
+    params?.accountId,
+  );
   const conversationStore = createConversationStateStore(params);
 
   const isExpired = (reference: StoredConversationReference): boolean => {
@@ -198,7 +207,7 @@ export function createMSTeamsConversationStoreState(
     reference: StoredConversationReference,
   ): Promise<void> => {
     const normalizedId = normalizeStoredConversationId(conversationId);
-    await withMSTeamsSqliteMutationLock(params, CONVERSATION_MUTATION_KEY, async () => {
+    await withMSTeamsSqliteMutationLock(params, mutationKey, async () => {
       const existing = await lookupStored(normalizedId);
       await register(
         normalizedId,
@@ -213,7 +222,7 @@ export function createMSTeamsConversationStoreState(
 
   const remove = async (conversationId: string): Promise<boolean> => {
     const normalizedId = normalizeStoredConversationId(conversationId);
-    return await withMSTeamsSqliteMutationLock(params, CONVERSATION_MUTATION_KEY, async () => {
+    return await withMSTeamsSqliteMutationLock(params, mutationKey, async () => {
       return await conversationStore.delete(buildMSTeamsConversationStateKey(normalizedId));
     });
   };

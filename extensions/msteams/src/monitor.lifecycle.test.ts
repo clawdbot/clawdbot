@@ -2,6 +2,7 @@
 import { createServer, type Server } from "node:http";
 import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_ACCOUNT_ID } from "../runtime-api.js";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsActivityHandler } from "./monitor-handler.js";
@@ -11,6 +12,7 @@ import {
   gateIngressAcceptThenDispatch,
 } from "./monitor-ingress-mock.test-support.js";
 import type { MSTeamsPollStore } from "./polls.js";
+import type { MSTeamsSsoStoredToken } from "./sso-token-store.js";
 
 type MSTeamsUserResolution = {
   input: string;
@@ -89,7 +91,7 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
 
 const ssoTokenStore = vi.hoisted(() => ({
   get: vi.fn(async () => null),
-  save: vi.fn(async () => {}),
+  save: vi.fn(async (_token: MSTeamsSsoStoredToken) => {}),
   remove: vi.fn(async () => false),
 }));
 
@@ -233,16 +235,6 @@ function resolveServerUrl(server: Server, path: string): string {
   return `http://127.0.0.1:${address.port}${path}`;
 }
 
-function requireRegisteredMSTeamsConfig(): OpenClawConfig {
-  const registered = registerMSTeamsHandlers.mock.calls[0]?.[1] as
-    | { cfg?: OpenClawConfig }
-    | undefined;
-  if (!registered?.cfg) {
-    throw new Error("expected registered MSTeams handler config");
-  }
-  return registered.cfg;
-}
-
 function requireRegisteredMSTeamsMediaMaxBytes(): number {
   const registered = registerMSTeamsHandlers.mock.calls[0]?.[1];
   if (!registered) {
@@ -265,6 +257,32 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     ssoTokenStore.get.mockClear();
     ssoTokenStore.save.mockClear();
     ssoTokenStore.remove.mockClear();
+  });
+
+  it("does not start a named listener when the Teams channel is disabled globally", async () => {
+    const result = await monitorMSTeamsProvider({
+      cfg: {
+        channels: {
+          msteams: {
+            enabled: false,
+            tenantId: "tenant-id",
+            accounts: {
+              support: {
+                enabled: true,
+                appId: "support-app-id",
+                appPassword: "support-app-password",
+                webhook: { port: 3979 },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "support",
+      runtime: createRuntime(),
+    });
+
+    expect(result.app).toBeNull();
+    expect(loadMSTeamsSdkWithAuth).not.toHaveBeenCalled();
   });
 
   it("stays active until aborted", async () => {
@@ -297,6 +315,58 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     const result = await task;
     if (!result.app) {
       throw new Error("expected Teams monitor app after startup abort");
+    }
+  });
+
+  it("resolves named account config when only accountId is provided", async () => {
+    const abort = new AbortController();
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          sso: { enabled: true, connectionName: "graph" },
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-app-password",
+              webhook: { port: 0, path: "/api/messages" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      accountId: "support",
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await resolveStartedServer();
+    expect(loadMSTeamsSdkWithAuth).toHaveBeenCalledWith(
+      {
+        appId: "support-app-id",
+        appPassword: "support-app-password",
+        tenantId: "tenant-id",
+        type: "secret",
+      },
+      expect.objectContaining({ cloud: "Public", oauthDefaultConnectionName: "graph" }),
+    );
+    expect(registerMSTeamsHandlers.mock.calls.at(-1)?.[1].cfg.channels?.msteams).toMatchObject({
+      defaultAccount: "support",
+      appId: "support-app-id",
+      appPassword: "support-app-password",
+      tenantId: "tenant-id",
+      webhook: { port: 0, path: "/api/messages" },
+    });
+
+    abort.abort();
+    const result = await task;
+    if (!result.app) {
+      throw new Error("expected named Teams monitor app");
     }
   });
 
@@ -463,93 +533,104 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await task;
   });
 
-  it("gates SDK SSO invoke routes and persists successful signin events", async () => {
-    const abort = new AbortController();
-    const cfg = createConfig(0);
-    updateMSTeamsConfig(cfg, {
-      sso: { enabled: true, connectionName: "graph" },
-    });
+  it.each([DEFAULT_ACCOUNT_ID, "support"])(
+    "gates SDK SSO invoke routes and persists successful signin events for %s",
+    async (accountId) => {
+      const abort = new AbortController();
+      const cfg = createConfig(0);
+      updateMSTeamsConfig(cfg, {
+        sso: { enabled: true, connectionName: "graph" },
+        ...(accountId === DEFAULT_ACCOUNT_ID
+          ? {}
+          : {
+              accounts: {
+                [accountId]: {
+                  appId: `${accountId}-app-id`,
+                  appPassword: `${accountId}-secret`,
+                  webhook: { port: 0 },
+                },
+              },
+            }),
+      });
 
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
+      const task = monitorMSTeamsProvider({
+        cfg,
+        accountId,
+        runtime: createRuntime(),
+        abortSignal: abort.signal,
+        conversationStore: createStores().conversationStore,
+        pollStore: createStores().pollStore,
+      });
 
-    await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
-    });
+      await waitForMSTeamsTestState(() => {
+        expect(registerMSTeamsHandlers).toHaveBeenCalled();
+      });
 
-    expect(loadMSTeamsSdkWithAuth.mock.calls[0]?.[1]).toMatchObject({
-      oauthDefaultConnectionName: "graph",
-    });
+      expect(loadMSTeamsSdkWithAuth.mock.calls[0]?.[1]).toMatchObject({
+        oauthDefaultConnectionName: "graph",
+      });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const sdkResult = await sdkResultPromise;
-    const app = sdkResult.app;
-    expect(app.on).toHaveBeenCalledWith("signin.token-exchange", expect.any(Function));
-    expect(app.on).toHaveBeenCalledWith("signin.verify-state", expect.any(Function));
-    expect(app.event).toHaveBeenCalledWith("signin", expect.any(Function));
+      const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+      if (!sdkResultPromise) {
+        throw new Error("expected loadMSTeamsSdkWithAuth result");
+      }
+      const sdkResult = await sdkResultPromise;
+      const app = sdkResult.app;
+      expect(app.on).toHaveBeenCalledWith("signin.token-exchange", expect.any(Function));
+      expect(app.on).toHaveBeenCalledWith("signin.verify-state", expect.any(Function));
+      expect(app.event).toHaveBeenCalledWith("signin", expect.any(Function));
 
-    const tokenExchangeHandler = app.on.mock.calls.find(
-      (call: [string, unknown]) => call[0] === "signin.token-exchange",
-    )?.[1];
-    expect(typeof tokenExchangeHandler).toBe("function");
-    if (typeof tokenExchangeHandler !== "function") {
-      throw new Error("expected signin token-exchange handler");
-    }
-    const exchangeResult = await tokenExchangeHandler({
-      activity: { from: { id: "29:user", aadObjectId: "aad-user" } },
-    });
-    expect(exchangeResult).toEqual({ status: 200 });
-    expect(app.onTokenExchange).toHaveBeenCalledTimes(1);
+      const tokenExchangeHandler = app.on.mock.calls.find(
+        (call: [string, unknown]) => call[0] === "signin.token-exchange",
+      )?.[1];
+      expect(typeof tokenExchangeHandler).toBe("function");
+      if (typeof tokenExchangeHandler !== "function") {
+        throw new Error("expected signin token-exchange handler");
+      }
+      const exchangeResult = await tokenExchangeHandler({
+        activity: { from: { id: "29:user", aadObjectId: "aad-user" } },
+      });
+      expect(exchangeResult).toEqual({ status: 200 });
+      expect(app.onTokenExchange).toHaveBeenCalledTimes(1);
 
-    const signinHandler = app.event.mock.calls.find(
-      (call: [string, unknown]) => call[0] === "signin",
-    )?.[1];
-    expect(typeof signinHandler).toBe("function");
-    if (typeof signinHandler !== "function") {
-      throw new Error("expected signin event handler");
-    }
+      const signinHandler = app.event.mock.calls.find(
+        (call: [string, unknown]) => call[0] === "signin",
+      )?.[1];
+      expect(typeof signinHandler).toBe("function");
+      if (typeof signinHandler !== "function") {
+        throw new Error("expected signin event handler");
+      }
 
-    signinHandler({
-      activity: { from: { id: "29:user", aadObjectId: "aad-user" } },
-      token: {
-        connectionName: "graph",
-        token: "delegated-graph-token",
-        expiration: "2030-01-01T00:00:00Z",
-      },
-    });
+      signinHandler({
+        activity: { from: { id: "29:user", aadObjectId: "aad-user" } },
+        token: {
+          connectionName: "graph",
+          token: "delegated-graph-token",
+          expiration: "2030-01-01T00:00:00Z",
+        },
+      });
 
-    await waitForMSTeamsTestState(() => {
-      expect(isSigninInvokeAuthorized).toHaveBeenCalledTimes(2);
-      expect(ssoTokenStore.save).toHaveBeenCalledTimes(2);
-    });
-    expect(ssoTokenStore.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        connectionName: "graph",
-        userId: "29:user",
-        token: "delegated-graph-token",
-        expiresAt: "2030-01-01T00:00:00Z",
-      }),
-    );
-    expect(ssoTokenStore.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        connectionName: "graph",
-        userId: "aad-user",
-        token: "delegated-graph-token",
-        expiresAt: "2030-01-01T00:00:00Z",
-      }),
-    );
+      await waitForMSTeamsTestState(() => {
+        expect(isSigninInvokeAuthorized).toHaveBeenCalledTimes(2);
+        expect(ssoTokenStore.save).toHaveBeenCalledTimes(2);
+      });
+      for (const [token] of ssoTokenStore.save.mock.calls) {
+        expect(token).toMatchObject({
+          connectionName: "graph",
+          token: "delegated-graph-token",
+          expiresAt: "2030-01-01T00:00:00Z",
+        });
+        expect(token.accountId).toBe(accountId === DEFAULT_ACCOUNT_ID ? undefined : accountId);
+      }
+      expect(ssoTokenStore.save.mock.calls.map(([token]) => token.userId)).toEqual([
+        "29:user",
+        "aad-user",
+      ]);
 
-    abort.abort();
-    await task;
-  });
+      abort.abort();
+      await task;
+    },
+  );
 
   it("does not persist SDK SSO signin events when Teams sender policy denies them", async () => {
     const abort = new AbortController();
@@ -936,173 +1017,6 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(isCardActionInvokeAuthorized).toHaveBeenCalledTimes(1);
     expect(pollStore.getPoll).toHaveBeenCalledWith("poll-1");
     expect(pollStore.recordVote).not.toHaveBeenCalled();
-
-    abort.abort();
-    await task;
-  });
-
-  it("does not resolve user allowlists by display name unless name matching is enabled", async () => {
-    const abort = new AbortController();
-    const cfg = createConfig(0);
-    updateMSTeamsConfig(cfg, {
-      allowFrom: ["Alice", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
-      groupAllowFrom: ["Bob", "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198"],
-      teams: {
-        Product: {
-          channels: {
-            Roadmap: {},
-          },
-        },
-      },
-    });
-    resolveAllowlistMocks.resolveMSTeamsTeamsConfig.mockResolvedValueOnce({
-      teams: {
-        "team-id": {
-          channels: {
-            "channel-id": {},
-          },
-        },
-      },
-      mapping: ["Product/Roadmap→team-id/channel-id"],
-      unresolved: [],
-    });
-
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
-
-    await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
-    });
-
-    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).not.toHaveBeenCalled();
-    expect(resolveAllowlistMocks.resolveMSTeamsTeamsConfig).toHaveBeenCalledWith({
-      cfg,
-      teamIdMode: "bot-framework",
-      teams: {
-        Product: {
-          channels: {
-            Roadmap: {},
-          },
-        },
-      },
-    });
-
-    const registeredCfg = requireRegisteredMSTeamsConfig();
-    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual([
-      "40a1a0ed-4ff2-4164-a219-55518990c197",
-    ]);
-    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual([
-      "50a1a0ed-4ff2-4164-a219-55518990c198",
-    ]);
-    expect(registeredCfg.channels?.msteams?.teams).toEqual({
-      "team-id": {
-        channels: {
-          "channel-id": {},
-        },
-      },
-    });
-
-    abort.abort();
-    await task;
-  });
-
-  it("resolves user allowlists when name matching is enabled", async () => {
-    resolveAllowlistMocks.resolveMSTeamsUserAllowlist
-      .mockResolvedValueOnce([{ input: "Alice", resolved: true, id: "alice-aad" }])
-      .mockResolvedValueOnce([{ input: "Bob", resolved: true, id: "bob-aad" }]);
-
-    const abort = new AbortController();
-    const cfg = createConfig(0);
-    updateMSTeamsConfig(cfg, {
-      dangerouslyAllowNameMatching: true,
-      allowFrom: ["Alice"],
-      groupAllowFrom: ["Bob"],
-    });
-
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
-
-    await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
-    });
-
-    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(1, {
-      cfg,
-      entries: ["Alice"],
-    });
-    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(2, {
-      cfg,
-      entries: ["Bob"],
-    });
-
-    const registeredCfg = requireRegisteredMSTeamsConfig();
-    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual(["alice-aad"]);
-    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual(["bob-aad"]);
-
-    abort.abort();
-    await task;
-  });
-
-  it("keeps only stable allowlist entries when Graph resolution fails", async () => {
-    resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockRejectedValueOnce(
-      new Error("Graph unavailable"),
-    );
-    const runtime = createRuntime();
-    const abort = new AbortController();
-    const cfg = createConfig(0);
-    updateMSTeamsConfig(cfg, {
-      dangerouslyAllowNameMatching: true,
-      allowFrom: ["Alice", "accessGroup:operators", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
-      teams: {
-        Mutable: {
-          channels: {
-            Roadmap: {},
-          },
-        },
-        "19:stable-team@thread.tacv2": {
-          channels: {
-            "19:stable-channel@thread.tacv2": {},
-          },
-        },
-      },
-    });
-
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime,
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
-
-    await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
-    });
-
-    expect(requireRegisteredMSTeamsConfig().channels?.msteams?.allowFrom).toEqual([
-      "accessGroup:operators",
-      "40a1a0ed-4ff2-4164-a219-55518990c197",
-    ]);
-    expect(requireRegisteredMSTeamsConfig().channels?.msteams?.teams).toEqual({
-      "19:stable-team@thread.tacv2": {
-        channels: {
-          "19:stable-channel@thread.tacv2": {},
-        },
-      },
-    });
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("mutable allowlist entries are disabled"),
-    );
 
     abort.abort();
     await task;

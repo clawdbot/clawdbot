@@ -4,6 +4,7 @@ import type { MSTeamsConfig } from "../runtime-api.js";
 
 const hostMockState = vi.hoisted(() => ({
   tokenError: null as Error | null,
+  delegatedTokenAccountId: undefined as string | null | undefined,
   delegatedTokens: undefined as
     | {
         accessToken: string;
@@ -47,7 +48,10 @@ vi.mock("./token.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./token.js")>();
   return {
     ...actual,
-    loadDelegatedTokens: () => hostMockState.delegatedTokens,
+    loadDelegatedTokens: (params?: { accountId?: string | null }) => {
+      hostMockState.delegatedTokenAccountId = params?.accountId;
+      return hostMockState.delegatedTokens;
+    },
   };
 });
 
@@ -56,6 +60,7 @@ import { probeMSTeams } from "./probe.js";
 describe("msteams probe", () => {
   beforeEach(() => {
     hostMockState.tokenError = null;
+    hostMockState.delegatedTokenAccountId = undefined;
     hostMockState.delegatedTokens = undefined;
     vi.stubEnv("MSTEAMS_APP_ID", "");
     vi.stubEnv("MSTEAMS_APP_PASSWORD", "");
@@ -69,6 +74,18 @@ describe("msteams probe", () => {
   it("returns an error when credentials are missing", async () => {
     const cfg = { enabled: true } as unknown as MSTeamsConfig;
     await expect(probeMSTeams(cfg)).resolves.toEqual({
+      ok: false,
+      error: "missing credentials (appId, appPassword, tenantId)",
+    });
+  });
+
+  it("does not use default env credentials when probing a named account", async () => {
+    vi.stubEnv("MSTEAMS_APP_ID", "default-env-app");
+    vi.stubEnv("MSTEAMS_APP_PASSWORD", "default-env-password");
+    vi.stubEnv("MSTEAMS_TENANT_ID", "default-env-tenant");
+    const cfg = { enabled: true, tenantId: "tenant" } as unknown as MSTeamsConfig;
+
+    await expect(probeMSTeams(cfg, { accountId: "support" })).resolves.toEqual({
       ok: false,
       error: "missing credentials (appId, appPassword, tenantId)",
     });
@@ -135,5 +152,32 @@ describe("msteams probe", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it("loads delegated tokens for the selected account", async () => {
+    hostMockState.delegatedTokens = {
+      accessToken: "delegated-token",
+      refreshToken: "refresh-token",
+      expiresAt: Date.parse("2030-01-01T00:00:00.000Z"),
+      scopes: ["ChatMessage.Send"],
+      userPrincipalName: "user@example.com",
+    };
+    const cfg = {
+      enabled: true,
+      appId: "app",
+      appPassword: "pw",
+      tenantId: "tenant",
+      delegatedAuth: { enabled: true },
+    } as unknown as MSTeamsConfig;
+
+    await expect(probeMSTeams(cfg, { accountId: "support" })).resolves.toMatchObject({
+      ok: true,
+      delegatedAuth: {
+        ok: true,
+        scopes: ["ChatMessage.Send"],
+        userPrincipalName: "user@example.com",
+      },
+    });
+    expect(hostMockState.delegatedTokenAccountId).toBe("support");
   });
 });

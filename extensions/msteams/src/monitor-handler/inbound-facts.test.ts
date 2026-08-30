@@ -9,6 +9,7 @@ function context(activity: MSTeamsTurnContext["activity"]): MSTeamsTurnContext {
 describe("msteams inbound facts", () => {
   it("prefers activity text, then HTML, then adaptive-card values", async () => {
     const textEntry = await prepareMSTeamsDebounceEntry({
+      accountId: "default",
       context: context({
         type: "message",
         text: "  hello  ",
@@ -17,12 +18,14 @@ describe("msteams inbound facts", () => {
       }),
     });
     const htmlEntry = await prepareMSTeamsDebounceEntry({
+      accountId: "default",
       context: context({
         type: "message",
         attachments: [{ contentType: "text/html", content: "<p>hello &amp; goodbye</p>" }],
       }),
     });
     const valueEntry = await prepareMSTeamsDebounceEntry({
+      accountId: "default",
       context: context({
         type: "message",
         value: { action: "approve", id: 7 },
@@ -37,6 +40,7 @@ describe("msteams inbound facts", () => {
 
   it("preserves raw Bot Framework IDs while normalizing routing facts", async () => {
     const entry = await prepareMSTeamsDebounceEntry({
+      accountId: "default",
       context: context({
         type: "message",
         id: "message-1",

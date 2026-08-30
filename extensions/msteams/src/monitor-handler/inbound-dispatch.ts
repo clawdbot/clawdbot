@@ -77,6 +77,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
     groupPolicy,
     commandAuthorized,
     effectiveGroupAllowFrom,
+    msteamsCfg,
   } = admission;
   const { route } = routing;
   const { agentBody, inboundMedia } = content;
@@ -148,6 +149,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
   // Thread routing owns the final session key, so mint the bound result at dispatch preparation.
   const boundIngress = await resolveMSTeamsSenderAccess({
     cfg,
+    accountId: route.accountId,
     activity,
     hasControlCommand: admission.isControlCommand,
     conversationThreadId: facts.threadId,
@@ -247,11 +249,11 @@ export async function dispatchMSTeamsInboundTurn(params: {
     textLimit,
     onSentMessageIds: (ids) => {
       for (const id of ids) {
-        recordMSTeamsSentMessage(conversationId, id);
+        recordMSTeamsSentMessage(conversationId, id, { accountId: route.accountId });
       }
     },
     tokenProvider,
-    sharePointSiteId: cfg.channels?.msteams?.sharePointSiteId,
+    sharePointSiteId: msteamsCfg?.sharePointSiteId,
   });
 
   const activityClientInfo = activity.entities?.find((entity) => entity.type === "clientInfo") as

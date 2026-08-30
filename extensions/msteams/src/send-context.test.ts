@@ -323,6 +323,120 @@ describe("resolveMSTeamsSendContext", () => {
     expect(sendContextMockState.store.remove).toHaveBeenCalledWith("19:channel@thread.tacv2");
   });
 
+  it("uses named account credentials and scoped conversation references", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          tenantId: "tenant-id",
+          accounts: {
+            default: {
+              enabled: true,
+              appId: "default-app-id",
+              appPassword: "default-app-password",
+            },
+            secondary: {
+              enabled: true,
+              appId: "secondary-app-id",
+              appPassword: "secondary-app-password",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg,
+        accountId: "secondary",
+        to: "conversation:19:channel@thread.tacv2",
+      }),
+    ).resolves.toMatchObject({
+      appId: "secondary-app-id",
+      conversationId: "19:channel@thread.tacv2",
+    });
+
+    expect(sendContextMockState.store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
+    expect(sendContextMockState.loadMSTeamsSdkWithAuth).toHaveBeenCalledWith(
+      {
+        appId: "secondary-app-id",
+        appPassword: "secondary-app-password",
+        tenantId: "tenant-id",
+        type: "secret",
+      },
+      { cloud: "Public" },
+    );
+  });
+
+  it("rejects named sends when the Teams channel is disabled globally", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: false,
+          tenantId: "tenant-id",
+          accounts: {
+            support: {
+              enabled: true,
+              appId: "support-app-id",
+              appPassword: "support-app-password",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg,
+        accountId: "support",
+        to: "conversation:19:channel@thread.tacv2",
+      }),
+    ).rejects.toThrow("msteams provider is not enabled");
+    expect(sendContextMockState.store.get).not.toHaveBeenCalled();
+  });
+
+  it("treats omitted account enabled as enabled for proactive sends", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-app-password",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg,
+        accountId: "secondary",
+        to: "conversation:19:channel@thread.tacv2",
+      }),
+    ).resolves.toMatchObject({
+      appId: "secondary-app-id",
+      conversationId: "19:channel@thread.tacv2",
+    });
+  });
+
   it("does not query Graph while resolving an opaque Bot Framework conversation", async () => {
     sendContextMockState.store.get.mockResolvedValue(
       channelRef({

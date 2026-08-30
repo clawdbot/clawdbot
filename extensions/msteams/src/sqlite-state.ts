@@ -1,5 +1,7 @@
 // Msteams plugin module implements sqlite state behavior.
+import crypto from "node:crypto";
 import path from "node:path";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -10,6 +12,19 @@ type MSTeamsSqliteStateOptions = {
   stateDir?: string;
   storePath?: string;
 };
+
+export function resolveMSTeamsAccountStateNamespace(
+  namespace: string,
+  accountId = DEFAULT_ACCOUNT_ID,
+): string {
+  // Keep the shipped default namespace stable, but give each named account its
+  // own eviction quota so a busy bot cannot discard another bot's state.
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return namespace;
+  }
+  const accountDigest = crypto.createHash("sha256").update(accountId).digest("hex");
+  return `${namespace}-${accountDigest}`;
+}
 
 function resolveStateDirOverride(
   options: MSTeamsSqliteStateOptions | undefined,

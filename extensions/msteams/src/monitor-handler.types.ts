@@ -7,6 +7,7 @@ import type { MSTeamsApp } from "./sdk.js";
 
 export type MSTeamsMessageHandlerDeps = {
   cfg: OpenClawConfig;
+  accountId: string;
   runtime: RuntimeEnv;
   appId: string;
   app: MSTeamsApp;

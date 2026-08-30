@@ -2,6 +2,7 @@
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { normalizeMSTeamsMessagingTarget } from "./resolve-allowlist.js";
 
 const MSTEAMS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -14,14 +15,14 @@ function normalizeMSTeamsApproverId(value: string | number): string | undefined 
   return id && MSTEAMS_ID_RE.test(id) ? id : undefined;
 }
 
-function resolveMSTeamsChannelConfig(cfg: OpenClawConfig) {
-  return cfg.channels?.msteams;
+function resolveMSTeamsChannelConfig(cfg: OpenClawConfig, accountId?: string | null) {
+  return resolveMSTeamsAccountConfig(cfg, accountId);
 }
 
 const msTeamsApproval = createChannelApprovalAuth({
   channelLabel: "Microsoft Teams",
-  resolveInputs: ({ cfg }) => {
-    const channel = resolveMSTeamsChannelConfig(cfg);
+  resolveInputs: ({ cfg, accountId }) => {
+    const channel = resolveMSTeamsChannelConfig(cfg, accountId);
     return { allowFrom: channel?.allowFrom, defaultTo: channel?.defaultTo };
   },
   normalizeApprover: normalizeMSTeamsApproverId,

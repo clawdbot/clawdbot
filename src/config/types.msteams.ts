@@ -152,4 +152,11 @@ export type MSTeamsConfig = Omit<
     };
     /** Bot Framework OAuth SSO (signin/tokenExchange + signin/verifyState) settings. */
     sso?: MSTeamsSsoConfig;
+    /** Named Microsoft Teams bot accounts. Each account represents one Azure Bot identity. */
+    accounts?: Record<
+      string,
+      Omit<MSTeamsConfig, "accounts" | "defaultAccount"> & { name?: string }
+    >;
+    /** Preferred account when no binding/account context selects one. */
+    defaultAccount?: string;
   };

@@ -434,10 +434,58 @@ describe("sendMessageMSTeams", () => {
     expect(result.receipt?.parts[0]?.kind).toBe("text");
 
     expect(mockState.resolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg: {},
+      cfg: { channels: { msteams: {} } },
       channel: "msteams",
     });
     expect(mockState.convertMarkdownTables).toHaveBeenCalledWith("hello", "off");
+  });
+
+  it("formats proactive sends with the named account Teams config", async () => {
+    mockState.resolveMarkdownTableMode.mockReturnValue("code");
+    mockState.convertMarkdownTables.mockReturnValue("converted");
+
+    await sendMessageMSTeams({
+      cfg: {
+        channels: {
+          msteams: {
+            markdown: { tables: "off" },
+            accounts: {
+              support: {
+                appId: "support-app",
+                appPassword: "support-secret",
+                tenantId: "tenant-id",
+                webhook: { port: 3979 },
+                markdown: { tables: "code" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "support",
+      to: "conversation:19:conversation@thread.tacv2",
+      text: "| A |\n| - |\n| B |",
+    });
+
+    expect(mockState.resolveMarkdownTableMode).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        channels: expect.objectContaining({
+          msteams: expect.objectContaining({
+            appId: "support-app",
+            appPassword: "support-secret",
+            tenantId: "tenant-id",
+            markdown: { tables: "code" },
+          }),
+        }),
+      }),
+      channel: "msteams",
+    });
+    expect(mockState.convertMarkdownTables).toHaveBeenCalledWith("| A |\n| - |\n| B |", "code");
+    const sendPayload = firstObjectArg(mockState.sendMSTeamsMessages);
+    expect(sendPayload.messages).toEqual([
+      expect.objectContaining({
+        text: "converted",
+      }),
+    ]);
   });
 
   it("passes the resolved proactive replyStyle to text sends", async () => {

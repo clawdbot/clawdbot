@@ -240,7 +240,7 @@ Channels that support multiple accounts (e.g. WhatsApp) use `accountId` to ident
 
 Set `channels.<channel>.defaultAccount` to choose the account used when `accountId` is omitted. When unset, OpenClaw falls back to `default` if present, otherwise the first configured account id (sorted).
 
-Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `mattermost`, `matrix`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `telegram`, `whatsapp`, `zalo`, `zalouser`.
+Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `mattermost`, `matrix`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `telegram`, `whatsapp`, `zalo`, `zalouser`.
 
 ## Concepts
 

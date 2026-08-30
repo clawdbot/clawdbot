@@ -27,6 +27,7 @@ function createDeps(): MSTeamsMessageHandlerDeps {
   return {
     cfg: {} as OpenClawConfig,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
+    accountId: "default",
     appId: "test-app",
     app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {
@@ -146,6 +147,61 @@ function lastDispatchedCtxPayload(): Record<string, unknown> {
   }
   return dispatched.ctx;
 }
+
+describe("msteams members added handler", () => {
+  it("uses account-specific welcome card config", async () => {
+    const deps = {
+      ...createDeps(),
+      accountId: "support",
+      cfg: {
+        channels: {
+          msteams: {
+            welcomeCard: true,
+            accounts: {
+              support: {
+                appId: "support-app",
+                appPassword: "support-secret",
+                tenantId: "tenant-id",
+                webhook: { port: 3979 },
+                welcomeCard: false,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    };
+    let membersAddedHandler:
+      | ((context: unknown, next: () => Promise<void>) => Promise<void>)
+      | undefined;
+    const handler: MSTeamsActivityHandler = {
+      onMessage: () => handler,
+      onMembersAdded: (callback) => {
+        membersAddedHandler = callback;
+        return handler;
+      },
+      onReactionsAdded: () => handler,
+      onReactionsRemoved: () => handler,
+      run: vi.fn(async () => undefined),
+    };
+    registerMSTeamsHandlers(handler, deps);
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+
+    await membersAddedHandler?.(
+      {
+        activity: {
+          type: "conversationUpdate",
+          membersAdded: [{ id: "bot-id" }],
+          recipient: { id: "bot-id", name: "Support" },
+          conversation: { id: "conversation-id", conversationType: "personal" },
+        },
+        sendActivity,
+      },
+      vi.fn(async () => undefined),
+    );
+
+    expect(sendActivity).not.toHaveBeenCalled();
+  });
+});
 
 describe("msteams adaptive card action invoke", () => {
   beforeEach(() => {

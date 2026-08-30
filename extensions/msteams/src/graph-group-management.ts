@@ -10,6 +10,7 @@ import { deleteGraphRequest, escapeOData, mutateGraphJson, resolveGraphToken } f
 
 type AddParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   userId: string;
   role?: string;
@@ -51,8 +52,11 @@ function resolveConversationMemberRoles(
 export async function addParticipantMSTeams(
   params: AddParticipantMSTeamsParams,
 ): Promise<AddParticipantMSTeamsResult> {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const conv = resolveConversationPath(conversationId);
 
   const body = {
@@ -77,6 +81,7 @@ export async function addParticipantMSTeams(
 
 type RemoveParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   userId: string;
 };
@@ -92,10 +97,12 @@ type RemoveParticipantMSTeamsResult = {
 export async function removeParticipantMSTeams(
   params: RemoveParticipantMSTeamsParams,
 ): Promise<RemoveParticipantMSTeamsResult> {
-  const token = await resolveGraphToken(params.cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const { conversationId, member } = await findMSTeamsConversationMember({
     token,
     to: params.to,
+    cfg: params.cfg,
+    accountId: params.accountId,
     userId: params.userId,
   });
   if (!member?.id) {
@@ -117,6 +124,7 @@ export async function removeParticipantMSTeams(
 
 type RenameGroupMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   name: string;
 };
@@ -131,8 +139,11 @@ type RenameGroupMSTeamsResult = {
 export async function renameGroupMSTeams(
   params: RenameGroupMSTeamsParams,
 ): Promise<RenameGroupMSTeamsResult> {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const conv = resolveConversationPath(conversationId);
 
   const body = conv.kind === "chat" ? { topic: params.name } : { displayName: params.name };

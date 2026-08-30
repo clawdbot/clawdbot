@@ -1,6 +1,7 @@
 // Msteams plugin module implements monitor behavior.
 import type { Server } from "node:http";
 import type { Request, Response } from "express";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
   isDangerousNameMatchingEnabled,
@@ -8,16 +9,18 @@ import {
   mergeAllowlist,
   resolveChannelMediaMaxBytes,
   summarizeMapping,
+  type MSTeamsConfig,
   type OpenClawConfig,
   type RuntimeEnv,
 } from "../runtime-api.js";
+import { resolveMSTeamsRuntimeAccount, withAccountScopedMSTeamsConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
-import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
+import { createMSTeamsMonitorStores } from "./monitor-account-stores.js";
 import {
   isCardActionInvokeAuthorized,
   isSigninInvokeAuthorized,
@@ -33,11 +36,7 @@ import {
   type MSTeamsStatusSink,
 } from "./monitor-status.js";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
-import {
-  createMSTeamsPollStoreState,
-  extractMSTeamsPollVote,
-  type MSTeamsPollStore,
-} from "./polls.js";
+import { extractMSTeamsPollVote, type MSTeamsPollStore } from "./polls.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
 import {
@@ -58,11 +57,12 @@ import {
   type MSTeamsCardActionResponse,
 } from "./sdk.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
-import { resolveMSTeamsCredentials } from "./token.js";
 import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
 type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
+  accountId?: string;
+  msteamsCfg?: MSTeamsConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;
@@ -80,15 +80,16 @@ export async function monitorMSTeamsProvider(
 ): Promise<MonitorMSTeamsResult> {
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams" });
+  const account = resolveMSTeamsRuntimeAccount(opts);
+  const { accountId, credentials: creds } = account;
   let cfg = opts.cfg;
-  let msteamsCfg = cfg.channels?.msteams;
-  if (!msteamsCfg?.enabled) {
+  let msteamsCfg = account.config;
+  if (opts.cfg.channels?.msteams?.enabled === false || msteamsCfg.enabled === false) {
     log.debug?.("msteams provider disabled");
     publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams provider is disabled");
     return { app: null, shutdown: async () => {} };
   }
 
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
   if (!creds) {
     log.error("msteams credentials not configured");
     publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
@@ -103,6 +104,8 @@ export async function monitorMSTeamsProvider(
       throw new Error(`exit ${code}`);
     },
   };
+
+  cfg = withAccountScopedMSTeamsConfig({ cfg, accountId, accountConfig: msteamsCfg });
 
   const configuredAllowFrom = msteamsCfg.allowFrom;
   const configuredGroupAllowFrom = msteamsCfg.groupAllowFrom;
@@ -192,13 +195,7 @@ export async function monitorMSTeamsProvider(
     groupAllowFrom,
     teams: teamsConfig,
   };
-  cfg = {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: msteamsCfg,
-    },
-  };
+  cfg = withAccountScopedMSTeamsConfig({ cfg, accountId, accountConfig: msteamsCfg });
 
   const port = msteamsCfg.webhook?.port ?? 3978;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "msteams");
@@ -207,8 +204,7 @@ export async function monitorMSTeamsProvider(
       cfg,
       resolveChannelLimitMb: ({ cfg: channelCfg }) => channelCfg.channels?.msteams?.mediaMaxMb,
     }) ?? 8 * 1024 * 1024;
-  const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreState();
-  const pollStore = opts.pollStore ?? createMSTeamsPollStoreState();
+  const { conversationStore, pollStore } = createMSTeamsMonitorStores(accountId, opts);
 
   log.info(`starting provider (port ${port})`);
 
@@ -288,7 +284,7 @@ export async function monitorMSTeamsProvider(
 
   const ssoDeps = ssoConnectionName
     ? {
-        tokenStore: createMSTeamsSsoTokenStoreFs(),
+        tokenStore: createMSTeamsSsoTokenStoreFs({ accountId }),
         connectionName: ssoConnectionName,
       }
     : undefined;
@@ -304,6 +300,7 @@ export async function monitorMSTeamsProvider(
   const handler = buildActivityHandler();
   const handlerDeps: MSTeamsMessageHandlerDeps = {
     cfg,
+    accountId,
     runtime,
     appId,
     app,
@@ -515,6 +512,7 @@ export async function monitorMSTeamsProvider(
         await Promise.all(
           userIds.map((userId) =>
             ssoDeps.tokenStore.save({
+              ...(accountId === DEFAULT_ACCOUNT_ID ? {} : { accountId }),
               connectionName,
               userId,
               token: ctx.token.token,

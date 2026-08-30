@@ -77,6 +77,34 @@ This creates an Entra ID (Azure AD) application, generates a client secret, buil
 
 ```json5
 {
+  bindings: [{ agentId: "main", match: { channel: "msteams", accountId: "default" } }],
+  channels: {
+    msteams: {
+      enabled: true,
+      tenantId: "<TENANT_ID>",
+      webhook: { path: "/api/messages" },
+      accounts: {
+        default: {
+          appId: "<CLIENT_ID>",
+          appPassword: "<CLIENT_SECRET>",
+          webhook: { port: 3978 },
+        },
+      },
+    },
+  },
+}
+```
+
+This is the same account-based shape used for one bot or many bots. A single
+bot just uses one account, usually `default`.
+
+### Backward-compatible single-bot config
+
+Existing single-bot configs can keep credentials at the root and omit explicit
+`bindings`:
+
+```json5
+{
   channels: {
     msteams: {
       enabled: true,
@@ -89,7 +117,97 @@ This creates an Entra ID (Azure AD) application, generates a client secret, buil
 }
 ```
 
-Or use environment variables directly: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`.
+In this legacy shape, `bindings` are intentionally optional. When no binding
+matches, inbound Teams messages route to the default agent, matching the old
+single-agent behavior.
+
+<Note>
+Environment variables apply only to the default Microsoft Teams account. Named
+accounts must define their own bot identity in config.
+</Note>
+
+## Account routing and bindings
+
+Microsoft Teams accounts live under `channels.msteams.accounts`. Use one
+account per Teams bot registration/app identity, then bind each account to the
+agent that should answer. Root-level settings act as shared defaults, while each
+account provides its own bot identity and webhook port.
+
+```json5
+{
+  bindings: [
+    { agentId: "main", match: { channel: "msteams", accountId: "default" } },
+    { agentId: "support", match: { channel: "msteams", accountId: "support" } },
+  ],
+  channels: {
+    msteams: {
+      enabled: true,
+      tenantId: "<TENANT_ID>",
+      webhook: { path: "/api/messages" },
+      dmPolicy: "allowlist",
+      allowFrom: ["00000000-0000-0000-0000-000000000000"],
+      groupPolicy: "disabled",
+      defaultAccount: "default",
+      accounts: {
+        default: {
+          name: "Primary Teams bot",
+          appId: "<PRIMARY_CLIENT_ID>",
+          appPassword: "<PRIMARY_CLIENT_SECRET>",
+          webhook: { port: 3978 },
+        },
+        support: {
+          name: "Support Teams bot",
+          appId: "<SUPPORT_CLIENT_ID>",
+          appPassword: "<SUPPORT_CLIENT_SECRET>",
+          webhook: { port: 3979 },
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["accessGroup:support-team"],
+        },
+      },
+    },
+  },
+}
+```
+
+Rules:
+
+- `channels.msteams.enabled = false` disables the whole Teams channel.
+- `channels.msteams.accounts.<id>.enabled = false` disables one Teams bot account.
+- `appId`, `appPassword` for secret auth, and `webhook.port` are account
+  identity fields. Named accounts must set them explicitly; they do not inherit
+  those fields from the root default. Federated-auth accounts can use
+  `certificatePath` or `useManagedIdentity` instead of `appPassword`.
+- `tenantId`, `webhook.path`, access policies, Teams/channel allowlists,
+  streaming, SSO, delegated auth, and other delivery settings can be shared at
+  the root and overridden by an account.
+- Add a `bindings` entry for each account that should route to a specific
+  non-default agent. Without a matching binding, Teams messages use normal
+  routing fallback and land on the default agent.
+- Guided setup flows can create these bindings when you choose the routing
+  prompt. `openclaw channels add` can route configured channel accounts to
+  selected agents, and `openclaw agents add` can route selected channels to the
+  agent being created. Non-interactive account setup only writes the Teams
+  account config; add `bindings` separately when needed.
+- Enabled accounts must use unique `appId` values and unique webhook ports.
+- Legacy single-account configs under `channels.msteams.appId`,
+  `channels.msteams.appPassword`, `channels.msteams.tenantId`, and
+  `channels.msteams.webhook` are still supported as the default account, but new
+  examples should prefer `accounts.default`.
+- Configure either the root default identity or `accounts.default`, not both.
+
+When using a reverse proxy, route each public Teams bot endpoint to the matching
+local account port. For example:
+
+```text
+/msteams/agents/default/api/messages -> http://127.0.0.1:3978/api/messages
+/msteams/agents/support/api/messages -> http://127.0.0.1:3979/api/messages
+```
+
+<Note>
+The interactive Teams setup wizard can configure a selected Teams account.
+Environment variables remain default-account only. Named accounts should define
+their bot identity in config and use a unique webhook port.
+</Note>
 
 **5. Install the app in Teams**
 
@@ -133,19 +251,17 @@ Disable with:
 
 ## Access control (DMs + groups)
 
-Microsoft Teams has one account per channel configuration. Set policies directly under `channels.msteams`; an `accounts` map is not supported.
-
 **DM access**
 
-- Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
-- `channels.msteams.allowFrom` should use stable AAD object IDs or static sender access groups such as `accessGroup:core-team`.
+- Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved. Set it at the root to apply to all accounts, or override it at `channels.msteams.accounts.<id>.dmPolicy`.
+- `channels.msteams.allowFrom` should use stable AAD object IDs or static sender access groups such as `accessGroup:core-team`. Set it at the root to share the DM allowlist, or override it at `channels.msteams.accounts.<id>.allowFrom`.
 - Do not rely on UPN/display-name matching for allowlists; they can change. OpenClaw disables direct name matching by default; opt in with `channels.msteams.dangerouslyAllowNameMatching: true`.
 - The wizard can resolve names to IDs via Microsoft Graph when credentials allow.
 
 **Group access**
 
-- Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Set `channels.msteams.groupPolicy` explicitly to choose another policy; the root schema default takes precedence over `channels.defaults.groupPolicy`.
-- `channels.msteams.groupAllowFrom` controls which senders, static sender access groups, or group/channel conversation IDs can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`). Conversation IDs can use `19:...@thread.tacv2`, `19:...@thread.v2`, or `19:...@thread.skype`; preserve the exact ID casing. OpenClaw ignores `;messageid=...` suffixes. Conversation IDs never grant personal-DM access.
+- Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). The root schema default takes precedence over `channels.defaults.groupPolicy`. Set it at the root to apply to all accounts, or override it at `channels.msteams.accounts.<id>.groupPolicy`.
+- `channels.msteams.groupAllowFrom` controls which senders, static sender access groups, or group/channel conversation IDs can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`). Set it at the root to share it, or override it at `channels.msteams.accounts.<id>.groupAllowFrom`. Conversation IDs can use `19:...@thread.tacv2`, `19:...@thread.v2`, or `19:...@thread.skype`; preserve the exact ID casing. OpenClaw ignores `;messageid=...` suffixes. Conversation IDs never grant personal-DM access.
 - Set `groupPolicy: "open"` to allow any member (still mention-gated by default).
 - To block **all** channels, set `channels.msteams.groupPolicy: "disabled"`.
 
@@ -164,7 +280,7 @@ Example:
 
 **Team + channel allowlist**
 
-- Scope group/channel replies by listing teams and channels under `channels.msteams.teams`.
+- Scope group/channel replies by listing teams and channels under `channels.msteams.teams` for all accounts, or under `channels.msteams.accounts.<id>.teams` for one bot account.
 - Use stable Teams conversation IDs from Teams links as keys, not mutable display names (see [Team and Channel IDs](#team-and-channel-ids-common-gotcha)).
 - When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention-gated).
 - `groupAllowFrom` authorizes group senders, not delegated Graph reads of other channels. If an existing configuration only sets `groupAllowFrom`, keep the default `groupPolicy: "allowlist"` and configure the target under `channels.msteams.teams.<team>.channels`.
@@ -260,16 +376,23 @@ Creation of new multi-tenant bots was deprecated after 2025-07-31. Use **Single 
   channels: {
     msteams: {
       enabled: true,
-      appId: "<APP_ID>",
-      appPassword: "<APP_PASSWORD>",
       tenantId: "<TENANT_ID>",
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
+      accounts: {
+        default: {
+          appId: "<APP_ID>",
+          appPassword: "<APP_PASSWORD>",
+          webhook: { port: 3978 },
+        },
+      },
     },
   },
 }
 ```
 
-Environment variables: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`.
+For the default bot only, the legacy root-level credential shape and these
+environment variables remain supported: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`,
+`MSTEAMS_TENANT_ID`.
 
 ### Step 7: Run the gateway
 
@@ -297,11 +420,16 @@ Use a PEM certificate registered with your Entra ID app registration.
   channels: {
     msteams: {
       enabled: true,
-      appId: "<APP_ID>",
       tenantId: "<TENANT_ID>",
       authType: "federated",
-      certificatePath: "/path/to/cert.pem",
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
+      accounts: {
+        default: {
+          appId: "<APP_ID>",
+          certificatePath: "/path/to/cert.pem",
+          webhook: { port: 3978 },
+        },
+      },
     },
   },
 }
@@ -336,17 +464,34 @@ Use Azure Managed Identity for passwordless authentication on Azure infrastructu
   channels: {
     msteams: {
       enabled: true,
-      appId: "<APP_ID>",
       tenantId: "<TENANT_ID>",
       authType: "federated",
       useManagedIdentity: true,
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
+      accounts: {
+        default: {
+          appId: "<APP_ID>",
+          webhook: { port: 3978 },
+        },
+      },
     },
   },
 }
 ```
 
-**Config (user-assigned managed identity):** add `managedIdentityClientId: "<MI_CLIENT_ID>"` to the block above.
+**Config (user-assigned managed identity):** add `managedIdentityClientId: "<MI_CLIENT_ID>"` to the account block above. For example:
+
+```json5
+{
+  accounts: {
+    default: {
+      appId: "<APP_ID>",
+      managedIdentityClientId: "<MI_CLIENT_ID>",
+      webhook: { port: 3978 },
+    },
+  },
+}
+```
 
 **Env vars:**
 
@@ -442,7 +587,7 @@ Checks bot registration, AAD app, manifest, and SSO configuration in one pass.
 
 ## Environment variables
 
-These auth-related config keys can be set via environment variables instead of `openclaw.json` (other config keys, such as `groupPolicy` or `historyLimit`, are config-only):
+The default Microsoft Teams account can read these auth-related config keys from environment variables instead of `openclaw.json`. Other config keys, such as `groupPolicy` or `historyLimit`, are config-only.
 
 | Env var                              | Config key                | Notes                               |
 | ------------------------------------ | ------------------------- | ----------------------------------- |
@@ -454,6 +599,10 @@ These auth-related config keys can be set via environment variables instead of `
 | `MSTEAMS_CERTIFICATE_THUMBPRINT`     | `certificateThumbprint`   | accepted, not required for auth     |
 | `MSTEAMS_USE_MANAGED_IDENTITY`       | `useManagedIdentity`      | federated + managed identity        |
 | `MSTEAMS_MANAGED_IDENTITY_CLIENT_ID` | `managedIdentityClientId` | user-assigned managed identity only |
+
+Environment variables do not create named Teams accounts. Configure additional
+bot identities under `channels.msteams.accounts.<id>` so each account has an
+explicit `appId`, credential, and webhook port.
 
 ## Member info action
 
@@ -726,16 +875,21 @@ Teams markdown is more limited than Slack or Discord:
 Key settings (see [/gateway/configuration](/gateway/configuration) for shared channel patterns):
 
 - `channels.msteams.enabled`: enable/disable the channel.
-- `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: bot credentials.
+- `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: legacy single-bot credentials. These remain supported as the default account.
+- `channels.msteams.defaultAccount`: optional default Teams account when `accountId` is omitted.
+- `channels.msteams.accounts.<id>.enabled`: enable/disable one Teams bot account.
+- `channels.msteams.accounts.<id>.appId`, `channels.msteams.accounts.<id>.appPassword`, `channels.msteams.accounts.<id>.webhook.port`: per-bot identity and local listener port.
+- `channels.msteams.tenantId`: shared tenant ID. Override with `channels.msteams.accounts.<id>.tenantId` when one bot uses a different tenant.
 - `channels.msteams.cloud`: Teams SDK cloud environment (`Public`, `USGov`, `USGovDoD`, or `China`; default `Public`). Set with `serviceUrl` for USGov/DoD SDK clouds; China uses the SDK preset and stored Azure China Bot Framework conversation references, with Graph-backed helpers disabled until Azure China Graph routing ships.
 - `channels.msteams.serviceUrl`: Bot Connector service URL boundary for SDK proactive operations. Public cloud uses the SDK default; set for GCC (`https://smba.infra.gcc.teams.microsoft.com/teams`), GCC High, or DoD. China accepts Azure China Bot Framework channel hosts when the stored conversation reference comes from Teams operated by 21Vianet.
-- `channels.msteams.webhook.port` (default `3978`).
-- `channels.msteams.webhook.path` (default `/api/messages`).
-- `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default `pairing`).
-- `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). Stable AAD object IDs also authorize approval actions. The wizard resolves names to IDs during setup when Graph access is available.
+- `channels.msteams.webhook.port` (default `3978`): legacy/default account listener port. Named accounts use `channels.msteams.accounts.<id>.webhook.port`.
+- `channels.msteams.webhook.path` (default `/api/messages`): shared webhook path.
+- `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default `pairing`). Account override: `channels.msteams.accounts.<id>.dmPolicy`.
+- `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). Account override: `channels.msteams.accounts.<id>.allowFrom`. Stable AAD object IDs also authorize approval actions. The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.defaultTo`: default outbound target; a stable AAD object ID can also authorize approval actions.
 - `channels.msteams.dangerouslyAllowNameMatching`: break-glass toggle to re-enable mutable UPN/display-name matching and direct team/channel name routing.
 - `channels.msteams.textChunkLimit`: outbound text chunk size in characters (default `4000`, and hard-capped at `4000` regardless of a higher configured value).
+- `channels.msteams.streaming.mode`: personal-chat preview delivery mode. Set `"block"` to disable Teams native preview streaming and send normal message blocks instead. This setting can be shared at the root or overridden per account.
 - `channels.msteams.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains: Graph, SharePoint/OneDrive, Teams CDN, Bot Framework, Azure Media Services).
 - `channels.msteams.mediaAuthAllowHosts`: allowlist for attaching Authorization headers on media retries (defaults to Graph + Bot Framework hosts).
@@ -1086,6 +1240,11 @@ Bots have limited support in private channels:
 
 - **Images not showing in channels:** Graph permissions or admin consent missing. Reinstall the Teams app and fully quit/reopen Teams.
 - **No responses in channel:** mentions are required by default; set `channels.msteams.requireMention=false` or configure per team/channel.
+- **Personal chat shows typing or a stale preview after the reply was sent:**
+  set `channels.msteams.streaming.mode = "block"` to bypass Teams native
+  preview streaming and deliver replies as normal message blocks. This is most
+  useful when testing multiple bot accounts concurrently or when the Teams
+  client does not refresh an in-flight preview card until the chat is reopened.
 - **Version mismatch (Teams still shows old manifest):** remove + re-add the app and fully quit Teams to refresh.
 - **401 Unauthorized from webhook:** expected when testing manually without an Azure JWT; means the endpoint is reachable but auth failed. Use Azure Web Chat to test properly.
 

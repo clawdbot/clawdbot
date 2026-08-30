@@ -16,8 +16,12 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("./polls.js", () => ({
-  createMSTeamsPollStoreState: () => ({
-    createPoll: mocks.createPoll,
+  createMSTeamsPollStoreState: ({ accountId }: { accountId: string }) => ({
+    createPoll: async (poll: unknown) =>
+      await mocks.createPoll({
+        ...(poll && typeof poll === "object" && !Array.isArray(poll) ? poll : {}),
+        accountId,
+      }),
   }),
 }));
 
@@ -169,6 +173,123 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
+  it("passes accountId to sendMessageMSTeams for named account text sends", async () => {
+    await requireSendText()({
+      cfg,
+      accountId: "secondary",
+      to: "user:secondary-user",
+      text: "hello secondary",
+    });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
+      cfg,
+      accountId: "secondary",
+      to: "user:secondary-user",
+      text: "hello secondary",
+    });
+  });
+
+  it("stores polls under the configured default account when accountId is omitted", async () => {
+    const cfgWithNamedDefault = {
+      channels: {
+        msteams: {
+          defaultAccount: "secondary",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await requireSendPoll()({
+      cfg: cfgWithNamedDefault,
+      to: "conversation:abc",
+      poll: {
+        question: "Approve?",
+        options: ["Yes", "No"],
+      },
+    });
+
+    expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
+      cfg: cfgWithNamedDefault,
+      accountId: "secondary",
+      to: "conversation:abc",
+      question: "Approve?",
+      options: ["Yes", "No"],
+      maxSelections: 1,
+    });
+    expect(firstPollRecord()).toMatchObject({
+      accountId: "secondary",
+      id: "poll-1",
+      conversationId: "conv-1",
+      messageId: "msg-poll-1",
+    });
+  });
+
+  it("uses one canonical account identity for display-style poll delivery and state", async () => {
+    const cfgWithDisplayAccount = {
+      channels: {
+        msteams: {
+          accounts: {
+            "Support Bot": {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await requireSendPoll()({
+      cfg: cfgWithDisplayAccount,
+      accountId: "Support Bot",
+      to: "conversation:abc",
+      poll: {
+        question: "Approve?",
+        options: ["Yes", "No"],
+      },
+    });
+
+    expect(mocks.sendPollMSTeams).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "support-bot" }),
+    );
+    expect(firstPollRecord()).toMatchObject({
+      accountId: "support-bot",
+      id: "poll-1",
+    });
+  });
+
+  it("passes accountId through injected text send dependencies", async () => {
+    const injected = vi.fn().mockResolvedValue({
+      messageId: "dep-msg-1",
+      conversationId: "dep-conv-1",
+    });
+
+    const result = await requireSendText()({
+      cfg,
+      accountId: "secondary",
+      deps: { msteams: injected },
+      to: "user:secondary-user",
+      text: "hello secondary",
+    });
+
+    expect(injected).toHaveBeenCalledWith("user:secondary-user", "hello secondary", {
+      cfg,
+      accountId: "secondary",
+    });
+    expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      channel: "msteams",
+      messageId: "dep-msg-1",
+      target: { kind: "conversation", id: "dep-conv-1" },
+    });
+  });
+
   it.each([
     {
       title: "forwards resolved channel thread ids through the Teams target",
@@ -228,6 +349,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     await requireSendMedia()({
       cfg: cfgValue,
+      accountId: "secondary",
       to: "conversation:abc",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
@@ -236,10 +358,42 @@ describe("msteamsOutbound cfg threading", () => {
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
       cfg: cfgValue,
+      accountId: "secondary",
       to: "conversation:abc",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
       mediaLocalRoots: ["/tmp"],
+    });
+  });
+
+  it("passes accountId through injected media send dependencies", async () => {
+    const injected = vi.fn().mockResolvedValue({
+      messageId: "dep-media-1",
+      conversationId: "dep-conv-1",
+    });
+
+    const result = await requireSendMedia()({
+      cfg,
+      accountId: "secondary",
+      deps: { msteams: injected },
+      to: "user:secondary-user",
+      text: "photo",
+      mediaUrl: "file:///tmp/photo.png",
+      mediaLocalRoots: ["/tmp"],
+    });
+
+    expect(injected).toHaveBeenCalledWith("user:secondary-user", "photo", {
+      mediaUrl: "file:///tmp/photo.png",
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile: undefined,
+      cfg,
+      accountId: "secondary",
+    });
+    expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      channel: "msteams",
+      messageId: "dep-media-1",
+      target: { kind: "conversation", id: "dep-conv-1" },
     });
   });
 
@@ -316,6 +470,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     const result = await requireSendPayload()({
       cfg,
+      accountId: "secondary",
       to: "conversation:19:channel@thread.tacv2",
       threadId: "presentation-thread-root",
       text: "Deploy finished",
@@ -324,6 +479,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
+      accountId: "secondary",
       to: "conversation:19:channel@thread.tacv2;messageid=presentation-thread-root",
       card: (rendered!.channelData!.msteams as { presentationCard: unknown }).presentationCard,
     });
@@ -455,42 +611,49 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
-  it.each([
-    { configuredLimit: 6000, textLength: 5000, expectedChunkLengths: [4000, 1000] },
-    { configuredLimit: 1000, textLength: 1500, expectedChunkLengths: [1000, 500] },
-  ])(
-    "uses the capped $configuredLimit-character configured limit for fallback payloads",
-    async ({ configuredLimit, textLength, expectedChunkLengths }) => {
-      const configuredCfg = {
-        channels: {
-          msteams: {
-            appId: "resolved-app-id",
-            textChunkLimit: configuredLimit,
+  it("uses the named account chunk limit without changing root configuration", async () => {
+    const configuredCfg = {
+      channels: {
+        msteams: {
+          textChunkLimit: 4000,
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+              textChunkLimit: 1000,
+            },
           },
         },
-      } as OpenClawConfig;
-      const text = "x".repeat(textLength);
+      },
+    } as unknown as OpenClawConfig;
+    const text = "x".repeat(1500);
 
-      await requireSendPayload()({
-        cfg: configuredCfg,
-        to: "conversation:abc",
+    await requireSendPayload()({
+      cfg: configuredCfg,
+      accountId: "secondary",
+      to: "conversation:abc",
+      text,
+      payload: {
         text,
-        payload: {
-          text,
-          channelData: { msteams: { traceId: "trace-1" } },
-        },
-      });
+        channelData: { msteams: { traceId: "trace-1" } },
+      },
+    });
 
-      expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(expectedChunkLengths.length);
-      for (const [index, chunkLength] of expectedChunkLengths.entries()) {
-        expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(index + 1, {
-          cfg: configuredCfg,
-          to: "conversation:abc",
-          text: "x".repeat(chunkLength),
-        });
-      }
-    },
-  );
+    expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(1, {
+      cfg: configuredCfg,
+      accountId: "secondary",
+      to: "conversation:abc",
+      text: "x".repeat(1000),
+    });
+    expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(2, {
+      cfg: configuredCfg,
+      accountId: "secondary",
+      to: "conversation:abc",
+      text: "x".repeat(500),
+    });
+    expect(configuredCfg.channels?.msteams?.textChunkLimit).toBe(4000);
+  });
 
   it("keeps multi-media payloads on the media fallback path", async () => {
     mocks.sendMessageMSTeams
@@ -599,6 +762,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     await requireSendPoll()({
       cfg: cfgLocal,
+      accountId: "secondary",
       to: "conversation:abc",
       poll: {
         question: "Snack?",
@@ -608,6 +772,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
       cfg: cfgLocal,
+      accountId: "secondary",
       to: "conversation:abc",
       question: "Snack?",
       options: ["Pizza", "Sushi"],
@@ -615,6 +780,7 @@ describe("msteamsOutbound cfg threading", () => {
     });
     const pollRecord = firstPollRecord();
     expect(pollRecord).toEqual({
+      accountId: "secondary",
       id: "poll-1",
       question: "Snack?",
       options: ["Pizza", "Sushi"],
@@ -630,6 +796,7 @@ describe("msteamsOutbound cfg threading", () => {
   it("forwards resolved channel thread ids to poll sends", async () => {
     await requireSendPoll()({
       cfg,
+      accountId: "secondary",
       to: "conversation:19:channel@thread.tacv2",
       threadId: "poll-thread-root",
       poll: {
@@ -640,6 +807,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
       cfg,
+      accountId: "secondary",
       to: "conversation:19:channel@thread.tacv2;messageid=poll-thread-root",
       question: "Ship it?",
       options: ["Yes", "No"],

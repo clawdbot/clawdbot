@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   resolveApprovalOverGateway,
   type ApprovalResolveResult,
@@ -50,7 +50,9 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
     ignored("unknown or expired card token");
     return true;
   }
-  if (binding.accountId !== DEFAULT_ACCOUNT_ID) {
+  // A card is valid only on the bot instance that issued it. Without this
+  // receiver check, another account's listener could resolve the approval.
+  if (normalizeAccountId(binding.accountId) !== normalizeAccountId(deps.accountId)) {
     ignored("card token account mismatch");
     return true;
   }
@@ -73,7 +75,7 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
   const senderId = context.activity.from?.aadObjectId;
   const authorization = msTeamsApprovalAuth.authorizeActorAction?.({
     cfg: deps.cfg,
-    accountId: DEFAULT_ACCOUNT_ID,
+    accountId: binding.accountId,
     senderId,
     action: "approve",
     approvalKind: binding.approvalKind,
@@ -102,7 +104,7 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
       approvalKind: consumed.approvalKind,
       decision: consumed.decision,
       channel: "msteams",
-      accountId: DEFAULT_ACCOUNT_ID,
+      accountId: consumed.accountId,
       senderId,
     });
     await context.updateActivity({

@@ -11,6 +11,7 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveMSTeamsAccountConfig } from "../accounts.js";
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId, parseMSTeamsActivityTimestamp } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
@@ -32,6 +33,7 @@ import { prepareMSTeamsThreadRouting, resolveMSTeamsThreadContext } from "./thre
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
     cfg,
+    accountId,
     runtime,
     appId,
     app,
@@ -48,10 +50,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       log.debug?.(message);
     }
   };
-  const msteamsCfg = cfg.channels?.msteams;
+  const msteamsCfg = cfg.channels?.msteams
+    ? resolveMSTeamsAccountConfig(cfg, accountId)
+    : undefined;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "msteams",
+    accountId,
   });
   const historyLimit = Math.max(
     0,
@@ -109,6 +114,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const admission = await admitMSTeamsMessage({
       cfg,
+      accountId,
       activity,
       text,
       conversationId,
@@ -164,6 +170,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const threadRouting = prepareMSTeamsThreadRouting({
       cfg,
+      accountId,
       context,
       isDirectMessage,
       isChannel,
@@ -373,6 +380,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   ) {
     const entry = await prepareMSTeamsDebounceEntry({
       context,
+      accountId,
       turnAdoptionLifecycle,
     });
     await inboundDebouncer.enqueue(entry);

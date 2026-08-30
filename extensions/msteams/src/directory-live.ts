@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { ChannelDirectoryEntry } from "../runtime-api.js";
+import type { ChannelDirectoryEntry, OpenClawConfig } from "../runtime-api.js";
 import { searchGraphUsers } from "./graph-users.js";
 import {
   listChannelsForTeam,
@@ -14,6 +14,7 @@ import {
 
 export async function listMSTeamsDirectoryPeersLive(params: {
   cfg: unknown;
+  accountId?: string | null;
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
@@ -21,7 +22,10 @@ export async function listMSTeamsDirectoryPeersLive(params: {
   if (!query) {
     return [];
   }
-  const token = await resolveGraphToken(params.cfg);
+  // SAFETY: channel directory callers pass the runtime OpenClawConfig through this generic seam.
+  const token = await resolveGraphToken(params.cfg as OpenClawConfig, {
+    accountId: params.accountId,
+  });
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
 
   const users = await searchGraphUsers({ token, query, top: limit });
@@ -42,11 +46,12 @@ export async function listMSTeamsDirectoryPeersLive(params: {
         raw: user,
       } satisfies ChannelDirectoryEntry;
     })
-    .filter(Boolean) as ChannelDirectoryEntry[];
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 }
 
 export async function listMSTeamsDirectoryGroupsLive(params: {
   cfg: unknown;
+  accountId?: string | null;
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
@@ -54,7 +59,10 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
   if (!rawQuery) {
     return [];
   }
-  const token = await resolveGraphToken(params.cfg);
+  // SAFETY: channel directory callers pass the runtime OpenClawConfig through this generic seam.
+  const token = await resolveGraphToken(params.cfg as OpenClawConfig, {
+    accountId: params.accountId,
+  });
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
   const [teamQuery, channelQuery] = rawQuery.includes("/")
     ? normalizeStringEntries(rawQuery.split("/", 2))

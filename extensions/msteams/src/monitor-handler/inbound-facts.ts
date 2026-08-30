@@ -54,6 +54,7 @@ export type MSTeamsDebounceEntry = {
 
 export async function prepareMSTeamsDebounceEntry(params: {
   context: MSTeamsTurnContext;
+  accountId: string;
   turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
 }): Promise<MSTeamsDebounceEntry> {
   const activity = params.context.activity;
@@ -70,7 +71,11 @@ export async function prepareMSTeamsDebounceEntry(params: {
   const implicitMentionKinds: Array<"reply_to_bot"> =
     conversationId &&
     replyToId &&
-    (await wasMSTeamsMessageSentWithPersistence({ conversationId, messageId: replyToId }))
+    (await wasMSTeamsMessageSentWithPersistence({
+      conversationId,
+      messageId: replyToId,
+      accountId: params.accountId,
+    }))
       ? ["reply_to_bot"]
       : [];
 

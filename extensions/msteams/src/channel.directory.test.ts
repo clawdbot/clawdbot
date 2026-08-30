@@ -50,6 +50,28 @@ describe("msteams directory", () => {
       const result = await directorySelf({ cfg, runtime: runtimeEnv });
       expect(result).toBeNull();
     });
+
+    it("does not use default env credentials for a named default account", async () => {
+      vi.stubEnv("MSTEAMS_APP_ID", "env-default-app");
+      vi.stubEnv("MSTEAMS_APP_PASSWORD", "env-default-secret");
+      vi.stubEnv("MSTEAMS_TENANT_ID", "env-default-tenant");
+      const cfg = {
+        channels: {
+          msteams: {
+            defaultAccount: "support",
+            accounts: {
+              support: {
+                appId: "support-app-id",
+                tenantId: "support-tenant-id",
+                webhook: { port: 3979 },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      await expect(directorySelf({ cfg, runtime: runtimeEnv })).resolves.toBeNull();
+    });
   });
 
   it("lists peers and groups from config", async () => {

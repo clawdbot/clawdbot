@@ -17,6 +17,23 @@ let getMessageMSTeams: GraphMessagesTestModule["getMessageMSTeams"];
 let listPinsMSTeams: GraphMessagesTestModule["listPinsMSTeams"];
 let listReactionsMSTeams: GraphMessagesTestModule["listReactionsMSTeams"];
 
+const NAMED_ACCOUNT_CFG = {
+  channels: {
+    msteams: {
+      appId: "default-app-id",
+      appPassword: "default-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    },
+  },
+} as OpenClawConfig;
+
 beforeAll(async () => {
   ({ getMessageMSTeams, listPinsMSTeams, listReactionsMSTeams } =
     await loadGraphMessagesTestModule());
@@ -144,6 +161,24 @@ describe("getMessageMSTeams", () => {
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2",
     });
   });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "Hello world" },
+    });
+
+    await getMessageMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
 });
 
 describe("listPinsMSTeams", () => {
@@ -244,6 +279,20 @@ describe("listPinsMSTeams", () => {
         to: CHANNEL_TO,
       }),
     ).rejects.toThrow("not supported for channels");
+  });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await listPinsMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
   });
 });
 
@@ -363,6 +412,25 @@ describe("listReactionsMSTeams", () => {
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2",
+    });
+  });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "Hello" },
+      reactions: [],
+    });
+
+    await listReactionsMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
     });
   });
 });

@@ -817,6 +817,8 @@ export const en = {
       resolvedTeams: "Resolved teams: {entries}",
       tenantIdPrompt: "Enter MS Teams Tenant ID",
       unresolvedKept: "Unresolved (kept as typed): {entries}",
+      webhookPortInvalid: "Enter a TCP port from 1 to 65535",
+      webhookPortPrompt: "Enter MS Teams webhook port",
     },
     whatsapp: {
       allowedSenderNumbers: "Allowed sender numbers (comma-separated, E.164)",

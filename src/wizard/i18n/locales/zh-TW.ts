@@ -792,6 +792,8 @@ export const zh_TW = {
       resolvedTeams: "已解析團隊：{entries}",
       tenantIdPrompt: "輸入 MS Teams Tenant ID",
       unresolvedKept: "未解析（保留原始輸入）：{entries}",
+      webhookPortInvalid: "請輸入 1 到 65535 之間的 TCP 連接埠",
+      webhookPortPrompt: "輸入 MS Teams webhook 連接埠",
     },
     whatsapp: {
       allowedSenderNumbers: "允許的傳送者號碼（逗號分隔，E.164）",

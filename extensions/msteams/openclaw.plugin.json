@@ -10,6 +10,30 @@
     "onStartup": false
   },
   "channels": ["msteams"],
+  "channelConfigs": {
+    "msteams": {
+      "label": "Microsoft Teams",
+      "description": "Microsoft Teams bot conversation channel.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "defaultAccount": { "type": "string" },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      }
+    }
+  },
+  "channelEnvVars": {
+    "msteams": ["MSTEAMS_APP_ID", "MSTEAMS_APP_PASSWORD", "MSTEAMS_TENANT_ID"]
+  },
   "qaRunners": [
     {
       "commandName": "msteams",

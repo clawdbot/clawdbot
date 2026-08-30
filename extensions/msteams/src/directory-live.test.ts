@@ -93,6 +93,37 @@ describe("msteams directory live", () => {
     });
   });
 
+  it("resolves directory graph credentials with the named account id", async () => {
+    resolveGraphTokenMock.mockResolvedValue("graph-token");
+    searchGraphUsersMock.mockResolvedValue([]);
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "default-app-id",
+          appPassword: "default-secret",
+          tenantId: "tenant-id",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    };
+
+    await listMSTeamsDirectoryPeersLive({
+      cfg,
+      accountId: "secondary",
+      query: "alice",
+    });
+
+    expect(resolveGraphTokenMock).toHaveBeenCalledWith(cfg, {
+      accountId: "secondary",
+    });
+  });
+
   it("returns team entries without channel queries and honors limits", async () => {
     resolveGraphTokenMock.mockResolvedValue("graph-token");
     listTeamsByNameMock.mockResolvedValue([
@@ -153,5 +184,36 @@ describe("msteams directory live", () => {
     ]);
 
     expect(listTeamsByNameMock).toHaveBeenCalledWith("graph-token", "plat");
+  });
+
+  it("resolves group directory graph credentials with the named account id", async () => {
+    resolveGraphTokenMock.mockResolvedValue("graph-token");
+    listTeamsByNameMock.mockResolvedValue([]);
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "default-app-id",
+          appPassword: "default-secret",
+          tenantId: "tenant-id",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    };
+
+    await listMSTeamsDirectoryGroupsLive({
+      cfg,
+      accountId: "secondary",
+      query: "platform",
+    });
+
+    expect(resolveGraphTokenMock).toHaveBeenCalledWith(cfg, {
+      accountId: "secondary",
+    });
   });
 });

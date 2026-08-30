@@ -3,6 +3,7 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { isDangerousNameMatchingEnabled, resolveDefaultGroupPolicy } from "../runtime-api.js";
+import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
 import { listChannelsForTeamWithPageInfo, resolveGraphToken } from "./graph.js";
 import { resolveMSTeamsRouteConfig } from "./policy.js";
 import {
@@ -26,6 +27,17 @@ function sameAccount(ctx: MSTeamsReadContext): boolean {
   const requested = normalizeOptionalString(ctx.accountId) ?? "default";
   const requester = normalizeOptionalString(ctx.requesterAccountId);
   return requester !== undefined && requester === requested;
+}
+
+function resolveReadPolicyConfig(cfg: OpenClawConfig, ctx?: MSTeamsReadContext): OpenClawConfig {
+  const accountId = normalizeOptionalString(ctx?.accountId) ?? resolveDefaultMSTeamsAccountId(cfg);
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      msteams: resolveMSTeamsAccountConfig(cfg, accountId),
+    },
+  };
 }
 
 export function isCurrentMSTeamsReadTarget(params: {
@@ -289,6 +301,7 @@ export async function assertMSTeamsReadTargetAllowed(params: {
   ctx: MSTeamsReadContext;
   target: string;
 }): Promise<string> {
+  const cfg = resolveReadPolicyConfig(params.cfg, params.ctx);
   const target = normalizeTarget(params.target);
   const isChannel = target.includes("/");
   const isDm = /^user:/i.test(target);
@@ -298,43 +311,43 @@ export async function assertMSTeamsReadTargetAllowed(params: {
   const currentChatType = params.ctx.toolContext?.currentChatType;
   const allowedTarget = directOperator
     ? isChannel
-      ? resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled"
-        ? await resolveStableChannelTarget(params.cfg, target)
+      ? resolveMSTeamsReadGroupPolicy(cfg) !== "disabled"
+        ? await resolveStableChannelTarget(cfg, target)
         : undefined
       : isDm
-        ? await resolveDirectDmTarget(params.cfg, target)
+        ? await resolveDirectDmTarget(cfg, target)
         : isChat &&
-            resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled" &&
-            params.cfg.channels?.msteams?.dmPolicy !== "disabled"
+            resolveMSTeamsReadGroupPolicy(cfg) !== "disabled" &&
+            cfg.channels?.msteams?.dmPolicy !== "disabled"
           ? target
           : undefined
     : current
       ? isChannel
-        ? resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled"
+        ? resolveMSTeamsReadGroupPolicy(cfg) !== "disabled"
           ? target
           : undefined
         : isDm
-          ? params.cfg.channels?.msteams?.dmPolicy !== "disabled"
+          ? cfg.channels?.msteams?.dmPolicy !== "disabled"
             ? target
             : undefined
           : currentChatType === "direct"
-            ? params.cfg.channels?.msteams?.dmPolicy !== "disabled"
+            ? cfg.channels?.msteams?.dmPolicy !== "disabled"
               ? target
               : undefined
             : currentChatType === "group" || currentChatType === "channel"
-              ? resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled"
+              ? resolveMSTeamsReadGroupPolicy(cfg) !== "disabled"
                 ? target
                 : undefined
-              : resolveMSTeamsReadGroupPolicy(params.cfg) !== "disabled" &&
-                  params.cfg.channels?.msteams?.dmPolicy !== "disabled"
+              : resolveMSTeamsReadGroupPolicy(cfg) !== "disabled" &&
+                  cfg.channels?.msteams?.dmPolicy !== "disabled"
                 ? target
                 : undefined
       : isChannel
-        ? await resolveAllowedChannelTarget(params.cfg, target)
+        ? await resolveAllowedChannelTarget(cfg, target)
         : isDm
-          ? await resolveAllowedDmTarget(params.cfg, target)
+          ? await resolveAllowedDmTarget(cfg, target)
           : isChat
-            ? bothUnknownScopesAllowed(params.cfg)
+            ? bothUnknownScopesAllowed(cfg)
               ? target
               : undefined
             : false;
@@ -349,8 +362,9 @@ export async function assertMSTeamsTeamEnumerationAllowed(params: {
   ctx?: MSTeamsReadContext;
   teamId: string;
 }): Promise<string> {
-  const teams = params.cfg.channels?.msteams;
-  const groupPolicy = resolveMSTeamsReadGroupPolicy(params.cfg);
+  const cfg = resolveReadPolicyConfig(params.cfg, params.ctx);
+  const teams = cfg.channels?.msteams;
+  const groupPolicy = resolveMSTeamsReadGroupPolicy(cfg);
   if (groupPolicy === "disabled") {
     throw new ToolAuthorizationError("Microsoft Teams channel list is not allowed.");
   }
@@ -366,7 +380,7 @@ export async function assertMSTeamsTeamEnumerationAllowed(params: {
     : isDangerousNameMatchingEnabled(teams)
       ? (
           await resolveMSTeamsChannelAllowlist({
-            cfg: params.cfg,
+            cfg,
             entries: [params.teamId],
           })
         )[0]?.graphTeamId
@@ -382,10 +396,7 @@ export async function assertMSTeamsTeamEnumerationAllowed(params: {
   let allowed = directRoute.allowlistConfigured ? directRoute.allowed : groupPolicy === "open";
   if (!allowed && teams?.teams) {
     try {
-      const botFrameworkTeamKey = await resolveConfiguredBotFrameworkTeamKey(
-        params.cfg,
-        stableTeamId,
-      );
+      const botFrameworkTeamKey = await resolveConfiguredBotFrameworkTeamKey(cfg, stableTeamId);
       if (botFrameworkTeamKey) {
         allowed = resolveMSTeamsRouteConfig({
           cfg: teams,
@@ -393,9 +404,9 @@ export async function assertMSTeamsTeamEnumerationAllowed(params: {
           conversationId: "__openclaw_all_channels__",
         }).allowed;
       }
-      if (!allowed && hasMutableChannelConfig(params.cfg)) {
+      if (!allowed && hasMutableChannelConfig(cfg)) {
         const resolved = await resolveMSTeamsTeamsConfig({
-          cfg: params.cfg,
+          cfg,
           teamIdMode: "graph",
           teams: teams.teams,
         });

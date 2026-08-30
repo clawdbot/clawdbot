@@ -444,6 +444,73 @@ describe("models.catalogRefresh", () => {
   });
 });
 
+describe("channels.msteams", () => {
+  it("accepts named account display names", () => {
+    const result = OpenClawSchema.safeParse({
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          accounts: {
+            support: {
+              name: "Support Teams bot",
+              appId: "app-id",
+              appPassword: "app-password",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("preserves omitted named-account policies so they inherit from the channel root", () => {
+    const result = OpenClawSchema.safeParse({
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          groupAllowFrom: ["*"],
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-password",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const account = result.data.channels?.msteams?.accounts?.support;
+      expect(account?.dmPolicy).toBeUndefined();
+      expect(account?.groupPolicy).toBeUndefined();
+    }
+  });
+
+  it("allows draft named accounts when the channel is globally disabled", () => {
+    const result = OpenClawSchema.safeParse({
+      channels: {
+        msteams: {
+          enabled: false,
+          accounts: {
+            support: {},
+            legal: {
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("diagnostics.otel.captureContent", () => {
   it("accepts supported OTEL log exporters and rejects unknown values", () => {
     for (const logsExporter of ["otlp", "stdout", "both"]) {

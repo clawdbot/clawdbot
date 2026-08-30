@@ -34,13 +34,16 @@ export type MSTeamsCredentials = MSTeamsSecretCredentials | MSTeamsFederatedCred
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
+function resolveAuthType(
+  cfg?: MSTeamsConfig,
+  options?: { allowEnvFallback?: boolean },
+): "secret" | "federated" {
   const fromCfg = cfg?.authType;
   if (fromCfg === "secret" || fromCfg === "federated") {
     return fromCfg;
   }
 
-  const fromEnv = process.env.MSTEAMS_AUTH_TYPE;
+  const fromEnv = options?.allowEnvFallback === false ? undefined : process.env.MSTEAMS_AUTH_TYPE;
   if (fromEnv === "federated") {
     return "federated";
   }
@@ -94,16 +97,21 @@ export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
 
 // ── resolveMSTeamsCredentials ─────────────────────────────────────────────
 
-export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentials | undefined {
-  const authType = resolveAuthType(cfg);
+export function resolveMSTeamsCredentials(
+  cfg?: MSTeamsConfig,
+  options?: { allowEnvFallback?: boolean; pathPrefix?: string },
+): MSTeamsCredentials | undefined {
+  const allowEnvFallback = options?.allowEnvFallback ?? true;
+  const pathPrefix = options?.pathPrefix ?? "channels.msteams";
+  const authType = resolveAuthType(cfg, { allowEnvFallback });
 
   const appId =
     normalizeSecretInputString(cfg?.appId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_APP_ID);
+    (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_APP_ID) : undefined);
 
   const tenantId =
     normalizeSecretInputString(cfg?.tenantId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
+    (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID) : undefined);
 
   if (!appId || !tenantId) {
     return undefined;
@@ -112,17 +120,22 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
   if (authType === "federated") {
     const certificatePath = resolveFederatedPath(
       cfg?.certificatePath,
-      process.env.MSTEAMS_CERTIFICATE_PATH,
+      allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_PATH : undefined,
     );
 
     const certificateThumbprint =
-      cfg?.certificateThumbprint || process.env.MSTEAMS_CERTIFICATE_THUMBPRINT || undefined;
+      cfg?.certificateThumbprint ||
+      (allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_THUMBPRINT : undefined) ||
+      undefined;
 
     const useManagedIdentity =
-      cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
+      cfg?.useManagedIdentity ??
+      (allowEnvFallback ? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true" : false);
 
     const managedIdentityClientId =
-      cfg?.managedIdentityClientId || process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID || undefined;
+      cfg?.managedIdentityClientId ||
+      (allowEnvFallback ? process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID : undefined) ||
+      undefined;
 
     // At least one federated mechanism must be configured.
     if (!certificatePath && !useManagedIdentity) {
@@ -144,8 +157,9 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
   const appPassword =
     normalizeResolvedSecretInputString({
       value: cfg?.appPassword,
-      path: "channels.msteams.appPassword",
-    }) || normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
+      path: `${pathPrefix}.appPassword`,
+    }) ||
+    (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD) : undefined);
 
   if (!appPassword) {
     return undefined;
@@ -158,20 +172,26 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
 // Delegated token storage / resolution
 // ---------------------------------------------------------------------------
 
-export function loadDelegatedTokens(): MSTeamsDelegatedTokens | undefined {
-  return loadMSTeamsDelegatedTokens();
+export function loadDelegatedTokens(params?: {
+  accountId?: string | null;
+}): MSTeamsDelegatedTokens | undefined {
+  return loadMSTeamsDelegatedTokens(params?.accountId);
 }
 
-export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): void {
-  saveMSTeamsDelegatedTokens(tokens);
+export function saveDelegatedTokens(
+  tokens: MSTeamsDelegatedTokens,
+  params?: { accountId?: string | null },
+): void {
+  saveMSTeamsDelegatedTokens(tokens, params?.accountId);
 }
 
 export async function resolveDelegatedAccessToken(params: {
   tenantId: string;
   clientId: string;
   clientSecret: string;
+  accountId?: string | null;
 }): Promise<string | undefined> {
-  const tokens = loadDelegatedTokens();
+  const tokens = loadDelegatedTokens({ accountId: params.accountId });
   if (!tokens) {
     return undefined;
   }
@@ -190,7 +210,7 @@ export async function resolveDelegatedAccessToken(params: {
       refreshToken: tokens.refreshToken,
       scopes: tokens.scopes,
     });
-    saveDelegatedTokens(refreshed);
+    saveDelegatedTokens(refreshed, { accountId: params.accountId });
     return refreshed.accessToken;
   } catch {
     return undefined;

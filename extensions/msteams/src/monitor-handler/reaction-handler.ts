@@ -1,3 +1,4 @@
+import { resolveMSTeamsAccountConfig } from "../accounts.js";
 // Msteams plugin module implements reaction handler behavior.
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
@@ -13,9 +14,11 @@ type ReactionDirection = "added" | "removed";
  * The returned function accepts a turn context and a direction string.
  */
 export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
-  const { cfg, log } = deps;
+  const { cfg, accountId, log } = deps;
   const core = getMSTeamsRuntime();
-  const msteamsCfg = cfg.channels?.msteams;
+  const msteamsCfg = cfg.channels?.msteams
+    ? resolveMSTeamsAccountConfig(cfg, accountId)
+    : undefined;
 
   return async function handleReaction(
     context: MSTeamsTurnContext,
@@ -50,7 +53,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     const senderName = from.name ?? from.id;
 
     if (msteamsCfg) {
-      const senderAccess = await resolveMSTeamsSenderAccess({ cfg, activity });
+      const senderAccess = await resolveMSTeamsSenderAccess({ cfg, accountId, activity });
       if (senderAccess.senderAccess.decision !== "allow") {
         log.debug?.("dropping reaction (access denied)", {
           sender: senderId,
@@ -66,6 +69,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
+      accountId,
       peer: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: isDirectMessage ? senderId : conversationId,
