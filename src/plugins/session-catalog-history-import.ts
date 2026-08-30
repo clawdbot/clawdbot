@@ -102,10 +102,18 @@ async function readBoundedSessionCatalogHistory(params: {
   read: (params: { cursor?: string; limit: number }) => Promise<SessionsCatalogReadResult>;
 }): Promise<SessionCatalogTranscriptItem[]> {
   const pages: SessionCatalogTranscriptItem[][] = [];
+  const seenCursors = new Set<string>();
   let cursor: string | undefined;
   let itemCount = 0;
   let bytes = 0;
-  while (itemCount < SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS) {
+  // Empty pages never advance the item budget, so bound reads as well as
+  // opaque cursors to keep cyclic or endless provider pagination finite.
+  for (
+    let pageNumber = 0;
+    pageNumber < SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS &&
+    itemCount < SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS;
+    pageNumber += 1
+  ) {
     const page = await params.read({
       limit: Math.min(
         SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT,
@@ -146,9 +154,10 @@ async function readBoundedSessionCatalogHistory(params: {
       }
     }
     pages.push(retained);
-    if (!page.nextCursor || page.nextCursor === cursor) {
+    if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
       break;
     }
+    seenCursors.add(page.nextCursor);
     cursor = page.nextCursor;
   }
   return pages.toReversed().flat();

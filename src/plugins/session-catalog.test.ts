@@ -271,4 +271,110 @@ describe("importSessionCatalogHistory", () => {
     expect(transcript.lockCalls).toBe(0);
     expect(transcript.messages).toEqual([]);
   });
+
+  it("keeps collected history when a provider repeats an earlier pagination cursor", async () => {
+    const read = vi.fn<Parameters<typeof importSessionCatalogHistory>[0]["read"]>(
+      async ({ cursor }) => {
+        if (read.mock.calls.length > 3) {
+          throw new Error("pagination cursor cycle was requested again");
+        }
+        if (cursor === undefined) {
+          return {
+            hostId: "gateway",
+            threadId: "thread-1",
+            items: [{ id: "newest", type: "agentMessage", text: "newest" }],
+            nextCursor: "page-a",
+          };
+        }
+        if (cursor === "page-a") {
+          return {
+            hostId: "gateway",
+            threadId: "thread-1",
+            items: [{ id: "middle", type: "agentMessage", text: "middle" }],
+            nextCursor: "page-b",
+          };
+        }
+        return {
+          hostId: "gateway",
+          threadId: "thread-1",
+          items: [{ id: "oldest", type: "agentMessage", text: "oldest" }],
+          nextCursor: "page-a",
+        };
+      },
+    );
+
+    await expect(importHistory([], { read }).result).resolves.toBeUndefined();
+
+    expect(read.mock.calls.map(([params]) => params.cursor)).toEqual([
+      undefined,
+      "page-a",
+      "page-b",
+    ]);
+    expect(transcript.messages.map(messageText)).toEqual(["oldest", "middle", "newest"]);
+  });
+
+  it("bounds provider requests even when empty pages keep returning unique cursors", async () => {
+    const read = vi.fn<Parameters<typeof importSessionCatalogHistory>[0]["read"]>(async () => {
+      const pageNumber = read.mock.calls.length;
+      if (pageNumber > 200) {
+        throw new Error("pagination exceeded the existing history item budget");
+      }
+      return {
+        hostId: "gateway",
+        threadId: "thread-1",
+        items: [],
+        nextCursor: `page-${String(pageNumber)}`,
+      };
+    });
+
+    await expect(importHistory([], { read }).result).resolves.toBeUndefined();
+
+    expect(read).toHaveBeenCalledTimes(200);
+    expect(transcript.messages).toEqual([]);
+    expect(transcript.lockCalls).toBe(1);
+  });
+
+  it("keeps history returned by the final page within the provider request budget", async () => {
+    const read = vi.fn<Parameters<typeof importSessionCatalogHistory>[0]["read"]>(async () => {
+      const pageNumber = read.mock.calls.length;
+      if (pageNumber > 200) {
+        throw new Error("pagination read past the existing history item budget");
+      }
+      return {
+        hostId: "gateway",
+        threadId: "thread-1",
+        items:
+          pageNumber === 200
+            ? [{ id: "final-page", type: "agentMessage" as const, text: "final bounded page" }]
+            : [],
+        nextCursor: `page-${String(pageNumber)}`,
+      };
+    });
+
+    await expect(importHistory([], { read }).result).resolves.toBeUndefined();
+
+    expect(read).toHaveBeenCalledTimes(200);
+    expect(transcript.messages.map(messageText)).toEqual(["final bounded page"]);
+  });
+
+  it("continues through sparse empty pages before importing later history", async () => {
+    const read = vi
+      .fn<Parameters<typeof importSessionCatalogHistory>[0]["read"]>()
+      .mockResolvedValueOnce({
+        hostId: "gateway",
+        threadId: "thread-1",
+        items: [],
+        nextCursor: "older-history",
+      })
+      .mockResolvedValueOnce({
+        hostId: "gateway",
+        threadId: "thread-1",
+        items: [{ id: "older-message", type: "userMessage", text: "sparse history" }],
+      });
+
+    await expect(importHistory([], { read }).result).resolves.toBeUndefined();
+
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(transcript.messages.map(messageText)).toEqual(["sparse history"]);
+  });
 });
