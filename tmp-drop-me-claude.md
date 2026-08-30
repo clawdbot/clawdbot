@@ -54,3 +54,89 @@ both disjoint migrations before the single version stamp. The merge will keep
 v19 and compose both existing parent contracts; it will not invent an
 unapproved v20 surface. Required proof is a deterministic v18 fixture carrying
 both legacy shapes, restart/idempotency coverage, and exact parent comparison.
+
+## 2026-08-29 - Sections 1 and 2: exact back-merge and cure decisions
+
+The exact back-merge commit is
+`3b854dd1862cae7208f3e031a0a08d276cd8626e`, tree
+`8e8109258231a293847733faf0f3f75d54c58449`, with ordered parents
+`9de8dd7fcfb34fa1769ff0bfac3790818dc44a15` and
+`43a7cb3c92c7b5b8d5ddd56d9d157c009e0c85e5`. It is a normal merge commit;
+the accepted candidate remains on its first-parent lineage and the exact pinned
+upstream floor is its second parent.
+
+Complete textual-conflict decision ledger:
+
+| Conflict path                                                                                             | Decision                                                                                                          |
+| --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `docs/reference/database-schemas.md`                                                                      | Keep upstream state v14/v15 and document both already-approved agent-v19 migrations.                              |
+| `package.json`                                                                                            | Keep upstream state schema 15 and composed agent schema 19; no new version bump.                                  |
+| `scripts/plugin-sdk-surface-report.mts`                                                                   | Union parent rationale, then recompute exact merged budgets.                                                      |
+| `scripts/prepare-extension-package-boundary-artifacts.mts`                                                | Take upstream content-hash refactor; it supersedes the candidate mtime workaround.                                |
+| `src/agents/agent-hooks/compaction-safeguard.ts`                                                          | Use upstream safeguard/model-usage rewrite plus candidate Copilot IDE auth headers.                               |
+| `src/agents/agent-tools.ts`                                                                               | Preserve both `sandboxWritable` and upstream media-read capability.                                               |
+| `src/agents/embedded-agent-runner/compact-reasons.test.ts`                                                | Initially unioned tests; Gate 2 later required the exact accepted blob.                                           |
+| `src/agents/embedded-agent-runner/compact.abort-signal.test.ts`                                           | Keep candidate isolated-state harness plus upstream agent-DB close.                                               |
+| `src/agents/embedded-agent-runner/compact.hooks.test.ts`                                                  | Initially unioned nonduplicate tests; Gate 2 later required the exact accepted blob.                              |
+| `src/agents/embedded-agent-subscribe.ts`                                                                  | Keep candidate lifecycle extraction plus upstream session model-usage sink and cleanup.                           |
+| `src/agents/openclaw-tools.types.ts`                                                                      | Preserve both sandbox capability fields and continuation options.                                                 |
+| `src/agents/subagents/spawn/subagent-spawn-contract.ts`                                                   | Compose upstream discriminated context with candidate cancelled admission and rollback shape.                     |
+| `src/agents/subagents/spawn/subagent-spawn.test-helpers.ts`                                               | Union every registry mock binding used by either parent.                                                          |
+| `src/agents/subagents/spawn/subagent-spawn.test.ts`                                                       | Preserve continuation coverage and adopt upstream isolation-subject/creator provenance.                           |
+| `src/agents/subagents/spawn/subagent-spawn.ts`                                                            | Keep candidate admission flow; add upstream child-entry ownership, context result, resolver, and prompt contract. |
+| `src/auto-reply/get-reply-options.types.ts`                                                               | Union continuation trigger with upstream reply-dispatch transcript/run types.                                     |
+| `src/auto-reply/reply/agent-runner-embedded-candidate.ts`                                                 | Union continuation/compaction options with upstream reply-dispatch transcript hooks.                              |
+| `src/auto-reply/reply/agent-runner-execute.ts`                                                            | Preserve both continuation controller and visible-reply resolver.                                                 |
+| `src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts`                                             | Preserve real registration/retirement via candidate import spread and upstream intent.                            |
+| `src/auto-reply/reply/commands-system-prompt.ts`                                                          | Keep used continuation inventory helper; adopt upstream runtime prompt resolver and remove dead import.           |
+| `src/auto-reply/reply/get-reply.fast-path.test.ts`                                                        | Use candidate isolated session-store helper consistently.                                                         |
+| `src/auto-reply/reply/session-system-events.ts`                                                           | Union delivery queue ownership with upstream heartbeat awareness.                                                 |
+| `src/auto-reply/reply/session.test.ts`                                                                    | Union continuation stores with upstream command/directive coverage.                                               |
+| `src/cli/update-cli/update-command-post-update.test.ts`                                                   | Take upstream managed service identity fixture, which subsumes the candidate HOME fix.                            |
+| `src/config/sessions/session-accessor.sqlite-entry.ts`                                                    | Adopt upstream lifecycle snapshot refactor and retain candidate same-transaction authority hook.                  |
+| `src/gateway/server-chat.agent-events.test.ts`                                                            | Preserve candidate terminal-owner coverage and upstream chat-error coverage.                                      |
+| `src/gateway/server-chat.ts`                                                                              | Compose candidate terminal-sequence ownership with upstream reply-dispatch persistence claim cleanup.             |
+| `src/gateway/server-maintenance.ts`                                                                       | Adopt upstream owner-policy API and retain candidate delegate-artifact purge.                                     |
+| `src/gateway/server-methods/chat-send-agent-dispatch.ts`                                                  | Use candidate finalization owner with upstream reply-dispatch, terminal classification, and rich dedupe inputs.   |
+| `src/gateway/server-methods/chat-send-dispatch-errors.ts`                                                 | Preserve both terminal-broadcast marker and reply-dispatch predicate.                                             |
+| `src/gateway/server-methods/chat-send-reply-finalization.ts`                                              | Adopt upstream rename/runtime terminal projection and reapply candidate terminal marker.                          |
+| `src/gateway/server-methods/chat-send-source-finalization.ts`                                             | Apply terminal marker only with the upstream non-suppressed final broadcast.                                      |
+| `src/gateway/server-runtime-subscriptions.ts`                                                             | Compose candidate tracked-run cleanup with upstream persistence preparation and synchronous live-authority guard. |
+| `src/state/openclaw-agent-db-contract.ts`                                                                 | Keep schema 19 and describe both participant/recipient and creator-namespace concerns.                            |
+| `src/state/openclaw-agent-db-schema-helpers.ts`                                                           | Keep generic migration repair diagnostic.                                                                         |
+| `src/state/openclaw-agent-db-schema.ts`                                                                   | Run participant convergence, creator migration, schema install, and recipient migration before one v19 stamp.     |
+| `src/state/openclaw-agent-db-session-migrations.ts`                                                       | Preserve recipient migration and upstream transcript-eligibility/creator migrations.                              |
+| `src/state/openclaw-agent-participants-migration.test.ts`                                                 | Keep symbolic current-version assertions.                                                                         |
+| `src/tasks/task-flow-registry.audit.test.ts`                                                              | Combine candidate reset lifecycle with upstream nonpersistent resets.                                             |
+| `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md.diff` | Regenerate from the merged prompt owner.                                                                          |
+| `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md`    | Regenerate from the merged prompt owner.                                                                          |
+| `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md.diff`    | Regenerate from the merged prompt owner.                                                                          |
+| `test/scripts/install-sh.test.ts`                                                                         | Preserve both parent test additions with one local variable spelling.                                             |
+| `test/scripts/telegram-mantis-sut.test.ts`                                                                | Delete with upstream because the owning Mantis SUT was removed.                                                   |
+
+Gate 2 first rejected `3b854dd1862cae7208f3e031a0a08d276cd8626e`
+because the two hand-merged compaction test cores were neither accepted blobs
+nor exact upstream projections. Successor
+`c842f07c267d98ca2c3edb6c29eedfaf2be32a52` restores those two exact accepted
+blobs. The rerun reports 40 invariants, 0 failures, 5 exact upstream
+projections, and 3 tombstones.
+
+Gate 2.7 on the successor uses the exact pinned second parent as its base and
+examines 956 reviewer-visible paths: 0 FROZEN-STALE, 0 MIXED-CLOBBER,
+642 GENUINE, and 314 SAFE-NEW. This discharges every material pre-merge MIXED
+row because the final branch is now a direct overlay on the pinned upstream
+tree; no dropped post-floor content remains in the classifier.
+
+The schema conflict also received a deterministic owner-boundary negative
+control. At rejected merge `3b854dd1862`, the existing
+`openclaw-agent-participants-migration.test.ts` fails the covenant physical-v18
+lineage with noncanonical participant columns/indexes. Restoring unconditional,
+structure-gated participant convergence makes all 18 cases pass in the current
+worktree, including covenant-v18, upstream-v18, maintenance refusal, rollback,
+restart, foreign-key check, and integrity check. Both SHAs share the exact
+`pnpm-lock.yaml` blob `1edc779c3467d2f30837b1ae09208fc223fca85c`.
+
+Generated surfaces were regenerated from the merged owners. Prompt snapshot
+check reports all 7 files current. Plugin SDK surface reports 148 public
+entrypoints, 4,374 exports, 2,598 callable exports, 1,141 deprecated exports,
+50 wildcard reexports, and zero forbidden package subpaths.

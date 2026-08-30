@@ -636,10 +636,7 @@ function ensureAgentSchema(
       migrateSessionNodesAndWindows(db, previousVersion);
       ensureSessionAdditiveColumns(db);
       ensureSessionEntryValidityProjection(db);
-      if (
-        targetVersion >= AGENT_PARTICIPANT_IDENTITY_SCHEMA_VERSION &&
-        previousVersion < AGENT_PARTICIPANT_IDENTITY_SCHEMA_VERSION
-      ) {
+      if (targetVersion >= AGENT_PARTICIPANT_IDENTITY_SCHEMA_VERSION) {
         migrateSessionParticipantsSchema(db, pathname);
       }
       if (targetVersion >= 19) {
