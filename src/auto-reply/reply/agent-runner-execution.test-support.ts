@@ -492,12 +492,18 @@ export function createFollowupRun(): FollowupRun {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
+      // Missing fixture modalities trigger real provider catalog discovery during execution.
       thinkingCatalog: [
         { provider: "anthropic", id: "claude", input: ["text"] },
+        { provider: "anthropic", id: "claude-opus-4-7", input: ["text", "image"] },
+        { provider: "claude-cli", id: "sonnet-4.6", input: ["text", "image"] },
         { provider: "claude-cli", id: "claude-sonnet-4-6", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-opus-4-6", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-opus-4-7", input: ["text", "image"] },
         { provider: "claude-cli", id: "claude-opus-5", input: ["text", "image"] },
         { provider: "claude-cli", id: "claude-opus-4-8", input: ["text", "image"] },
         { provider: "codex-cli", id: "gpt-5.4", input: ["text", "image"] },
+        { provider: "codex-cli", id: "gpt-5.5", input: ["text", "image"] },
       ],
       verboseLevel: "off",
       elevatedLevel: "off",
