@@ -75,6 +75,51 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
+  it.each([
+    ["<b></b>", { style: "markdown" as const }],
+    ["<strong></strong>", {}],
+    ["<i></i>", { style: "markdown" as const }],
+    ["<em></em>", { style: "markdown" as const }],
+    ["<s></s>", { style: "markdown" as const }],
+    ["<strike></strike>", { style: "markdown" as const }],
+    ["<del></del>", { style: "markdown" as const }],
+    ["<code></code>", {}],
+    ["<h2></h2>", { style: "markdown" as const }],
+    ["<li></li>", { style: "markdown" as const }],
+    ["<b>   </b>", { style: "markdown" as const }],
+    ["<strong title='empty'></strong>", { style: "markdown" as const }],
+    ["<b><span></span></b>", { style: "markdown" as const }],
+    ["<b><img src='empty'/></b>", { style: "markdown" as const }],
+    ["<li><img src='empty'/></li>", { style: "markdown" as const }],
+    ["<i><b></b></i>", { style: "markdown" as const }],
+    ["<b><i></i></b>", { style: "markdown" as const }],
+  ])("does not create visible structure from %s", (input, options) => {
+    expect(sanitizeForPlainText(input, options)).toBe("");
+  });
+
+  it("preserves visible content around an empty element", () => {
+    expect(
+      sanitizeForPlainText("before\n<b></b>\nafter", {
+        style: "markdown",
+      }),
+    ).toBe("before\n\nafter");
+  });
+
+  it.each([
+    ["<b><br></b>", "\n"],
+    ["<b>\n</b>", "\n"],
+    ["<b>\r\n</b>", "\r\n"],
+    ["<p></p>", "\n\n"],
+    ["<div></div>", "\n\n"],
+    ["<p><br></p>", "\n\n"],
+  ])("preserves structural breaks in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+  });
+
+  it("preserves a wrapped line break between visible text", () => {
+    expect(sanitizeForPlainText("before<b>\n</b>after")).toBe("before\nafter");
+  });
+
   // --- tag stripping ------------------------------------------------------
 
   it("strips unknown/remaining tags", () => {

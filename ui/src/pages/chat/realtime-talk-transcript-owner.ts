@@ -111,13 +111,13 @@ export function retireUncommittedRealtimeTalkTransport(params: {
   params.closeVoiceSession();
 }
 
-export function transcriptPersistenceAbortError(): Error {
+function transcriptPersistenceAbortError(): Error {
   const error = new Error("voice transcript persistence aborted");
   error.name = "AbortError";
   return error;
 }
 
-export async function waitForTranscriptRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+async function waitForTranscriptRetry(delayMs: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
     throw transcriptPersistenceAbortError();
   }
@@ -135,4 +135,31 @@ export async function waitForTranscriptRetry(delayMs: number, signal: AbortSigna
     };
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+export async function retryVoiceTranscriptPersistence(
+  signal: AbortSignal,
+  operation: () => Promise<unknown>,
+  failureMessage: string,
+): Promise<void> {
+  let lastError: unknown;
+  // Transcript writes and logical close share retry timing, but retain their
+  // separate owner deadlines so accepted writes drain before close is attempted.
+  for (const delayMs of [0, 500, 2_000]) {
+    if (delayMs > 0) {
+      await waitForTranscriptRetry(delayMs, signal);
+    } else if (signal.aborted) {
+      throw transcriptPersistenceAbortError();
+    }
+    try {
+      await operation();
+      return;
+    } catch (error) {
+      if (signal.aborted) {
+        throw transcriptPersistenceAbortError();
+      }
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(failureMessage, { cause: lastError });
 }

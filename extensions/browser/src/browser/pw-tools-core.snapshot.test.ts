@@ -1,4 +1,5 @@
 // Browser tests cover pw tools core.snapshot plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getPageForTargetId = vi.fn();
@@ -216,6 +217,123 @@ describe("pw-tools-core aria snapshot storage", () => {
     ).rejects.toThrow("Frame changed while its browser snapshot was being captured");
 
     expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+  });
+
+  it("returns selector no-match snapshots without collecting URLs", async () => {
+    const ariaSnapshot = vi.fn(async () => {
+      throw new Error("ariaSnapshot should not run for a selector with no matches");
+    });
+    const locator = {
+      count: vi.fn(async () => 0),
+      ariaSnapshot,
+    };
+    const page = {
+      locator: vi.fn(() => locator),
+      mainFrame: vi.fn(() => ({ id: "main-frame" })),
+      on: vi.fn(),
+      off: vi.fn(),
+      evaluate: vi.fn(async () => [{ text: "link", url: "https://example.test" }]),
+    };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      selector: "#missing",
+      urls: true,
+    });
+
+    expect(result.snapshot).toBe("(empty)");
+    expect(result.snapshot).not.toContain("Links:");
+    expect(locator.count).toHaveBeenCalledOnce();
+    expect(ariaSnapshot).not.toHaveBeenCalled();
+    expect(page.evaluate).not.toHaveBeenCalled();
+  });
+
+  it("keeps URLs for valid snapshots whose depth filter removes every ref", async () => {
+    const locator = {
+      count: vi.fn(async () => 1),
+      ariaSnapshot: vi.fn(async () => '- main:\n  - link "Docs"'),
+    };
+    const page = {
+      locator: vi.fn(() => locator),
+      mainFrame: vi.fn(() => ({ id: "main-frame" })),
+      on: vi.fn(),
+      off: vi.fn(),
+      evaluate: vi.fn(async () => [{ text: "Docs", url: "https://example.test/docs" }]),
+    };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      selector: "main",
+      options: { maxDepth: 0 },
+      urls: true,
+    });
+
+    expect(result.refs).toEqual({});
+    expect(result.snapshot).toContain("- main:");
+    expect(result.snapshot).toContain("https://example.test/docs");
+    expect(locator.count).toHaveBeenCalledOnce();
+    expect(page.evaluate).toHaveBeenCalledOnce();
+  });
+
+  it("times out a stalled selector probe without publishing late refs", async () => {
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const pendingCount = createDeferred<number>();
+    const ariaSnapshot = vi.fn(async () => '- button "Late"');
+    const page = {
+      ...makeAriaSnapshotPage(ariaSnapshot),
+      locator: vi.fn(() => ({ count: () => pendingCount.promise, ariaSnapshot })),
+    };
+    getPageForTargetId.mockResolvedValue(page);
+    vi.useFakeTimers();
+    try {
+      const promise = mod.snapshotRoleViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        selector: "#present",
+        timeoutMs: 750,
+      });
+      const rejected = expect(promise).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(750);
+      await rejected;
+      pendingCount.resolve(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ariaSnapshot).not.toHaveBeenCalled();
+      expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+      expect(page.off).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares the capture timeout between selector lookup and snapshot", async () => {
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const pendingCount = createDeferred<number>();
+    const ariaSnapshot = vi.fn(async () => '- button "Present"');
+    getPageForTargetId.mockResolvedValue({
+      ...makeAriaSnapshotPage(ariaSnapshot),
+      locator: () => ({ count: () => pendingCount.promise, ariaSnapshot }),
+    });
+    vi.useFakeTimers();
+    try {
+      const promise = mod.snapshotRoleViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        selector: "#present",
+        timeoutMs: 750,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      pendingCount.resolve(1);
+      await promise;
+      expect(ariaSnapshot).toHaveBeenCalledWith({ timeout: 250 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stores frame-scoped refs with the exact captured frame", async () => {

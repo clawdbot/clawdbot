@@ -6268,6 +6268,7 @@ export const en: TranslationMap = {
       dismissVoiceInputError: "Dismiss voice input error",
       microphoneAccessFailed: "Unable to access microphone inputs.",
       microphoneBusy: "Microphone inputs are busy or unavailable to the browser.",
+      microphoneStopped: "Microphone input stopped. Choose an available input and start again.",
       microphoneFallback: "Microphone {number}",
       microphoneInput: "Microphone input",
       microphoneAppliesNextSession: "Changes apply when you start your next Talk session.",

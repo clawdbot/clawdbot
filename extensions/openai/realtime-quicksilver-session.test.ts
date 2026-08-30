@@ -566,6 +566,8 @@ describe("GPT-Live offer broker", () => {
   it.each(["error", "close"] as const)(
     "fails safely when the sideband emits %s immediately after opening",
     async (terminalEvent) => {
+      const onError = vi.fn();
+      const onClose = vi.fn();
       const { realtime, sockets, logger } = createBroker({
         socketFactory: () => {
           const socket = new FakeSocket("manual");
@@ -588,6 +590,7 @@ describe("GPT-Live offer broker", () => {
             providerConfig: {},
             model: "gpt-live-1-codex",
             runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+            gatewayControl: { bindBridge: vi.fn(), onError, onClose },
           },
           { type: "api-key", token: "platform-key" },
         );
@@ -600,6 +603,8 @@ describe("GPT-Live offer broker", () => {
         expect(response.res.statusCode).toBe(502);
         expect(response.readBody()).toContain("sideband failed during startup");
         expect(sockets).toHaveLength(1);
+        expect(onError).toHaveBeenCalledOnce();
+        expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
         if (terminalEvent === "error") {
           expect(logger.warn).toHaveBeenCalledWith(
             "OpenAI GPT-Live sideband socket failed: post-open failure",

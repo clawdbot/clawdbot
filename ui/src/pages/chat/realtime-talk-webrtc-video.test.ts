@@ -79,7 +79,7 @@ function dispatchDescribeViewToolCall(
   );
 }
 
-describe("OpenAI Realtime Video Talk", () => {
+describe("OpenAI Realtime media lifecycle", () => {
   beforeEach(() => {
     FakePeerConnection.instance = undefined;
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
@@ -94,10 +94,38 @@ describe("OpenAI Realtime Video Talk", () => {
     vi.restoreAllMocks();
   });
 
+  it("ends the call visibly when the microphone track ends", async () => {
+    const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+    const getUserMedia = vi.fn(async () => ({
+      getTracks: () => [track],
+      getAudioTracks: () => [track],
+    }));
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const onStatus = vi.fn();
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
+      { client: {} as never, sessionKey: "main", callbacks: { onStatus } },
+    );
+    try {
+      await transport.start();
+
+      track.dispatchEvent(new Event("ended"));
+
+      expect(onStatus).toHaveBeenCalledWith("error", expect.stringContaining("Microphone"));
+      expect(FakePeerConnection.instance?.connectionState).toBe("closed");
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(document.querySelector("audio")).toBeNull();
+    } finally {
+      transport.stop();
+    }
+  });
+
   it("starts audio-only, toggles local camera, and reports camera-off tool calls", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
-    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: audioStop,
+    }) as unknown as MediaStreamTrack;
     const videoTrack = Object.assign(new EventTarget(), {
       stop: videoStop,
       readyState: "live",
@@ -228,7 +256,9 @@ describe("OpenAI Realtime Video Talk", () => {
   });
 
   it("clears ended camera state and reacquires on the next enable", async () => {
-    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const firstVideoTrack = Object.assign(new EventTarget(), {
       stop: vi.fn(),
       readyState: "live",
@@ -280,7 +310,9 @@ describe("OpenAI Realtime Video Talk", () => {
 
   it("keeps voice alive when lazy camera acquisition fails", async () => {
     const audioStop = vi.fn();
-    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: audioStop,
+    }) as unknown as MediaStreamTrack;
     const audio = {
       getAudioTracks: () => [audioTrack],
       getTracks: () => [audioTrack],
@@ -316,7 +348,7 @@ describe("OpenAI Realtime Video Talk", () => {
     const videoStop = vi.fn();
     const audio = {
       getAudioTracks: () => [{} as MediaStreamTrack],
-      getTracks: () => [{ stop: audioStop }],
+      getTracks: () => [Object.assign(new EventTarget(), { stop: audioStop })],
     } as unknown as MediaStream;
     const camera = {
       getVideoTracks: () => [{} as MediaStreamTrack],
@@ -353,7 +385,9 @@ describe("OpenAI Realtime Video Talk", () => {
   });
 
   it("switches an active camera and updates the capture stream", async () => {
-    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const frontStop = vi.fn();
     const frontTrack = Object.assign(new EventTarget(), {
       stop: frontStop,
@@ -413,7 +447,9 @@ describe("OpenAI Realtime Video Talk", () => {
   });
 
   it("restores the previous camera when a live switch fails", async () => {
-    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const firstFrontTrack = Object.assign(new EventTarget(), {
       stop: vi.fn(),
       readyState: "live",
