@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -40,25 +39,38 @@ async function createProxyHarness(
     preauth?: RfbPreauthDescriptor;
   } = {},
 ) {
-  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desktop-observe-"));
+  // macOS sockaddr_un cannot hold the test runner's nested temporary path.
+  const root = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-desktop-observe-"));
   const localSocketPath = path.join(root, "desktop.sock");
   let desktopPeer: net.Socket | undefined;
+  let resolvePeer: (socket: net.Socket) => void = () => {};
   const peerConnected = new Promise<net.Socket>((resolve) => {
-    const server = net.createServer((socket) => {
-      desktopPeer = socket;
-      resolve(socket);
+    resolvePeer = resolve;
+  });
+  const server = net.createServer((socket) => {
+    desktopPeer = socket;
+    resolvePeer(socket);
+  });
+  cleanup.push(async () => {
+    desktopPeer?.destroy();
+    await new Promise<void>((resolveClose) => {
+      server.close(() => resolveClose());
     });
-    server.listen(localSocketPath);
-    cleanup.push(
-      async () =>
-        await new Promise<void>((resolveClose) => {
-          server.close(() => resolveClose());
-        }),
-    );
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(localSocketPath, resolve);
   });
   const release = vi.fn();
   const closeObserver = vi.fn();
   const httpServer = http.createServer();
+  cleanup.push(
+    async () =>
+      await new Promise<void>((resolveClose) => {
+        httpServer.close(() => resolveClose());
+      }),
+  );
   httpServer.on("upgrade", (req, socket, head) => {
     handleDesktopObserveUpgrade(req, socket, head, {
       registry: {
@@ -73,20 +85,14 @@ async function createProxyHarness(
       ...(params.getBufferedAmount ? { getBufferedAmount: () => params.getBufferedAmount!() } : {}),
     });
   });
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
     httpServer.listen(0, "127.0.0.1", resolve);
   });
   const address = httpServer.address();
   if (!address || typeof address === "string") {
     throw new Error("expected TCP test server address");
   }
-  cleanup.push(async () => {
-    desktopPeer?.destroy();
-    await new Promise<void>((resolveClose) => {
-      httpServer.close(() => resolveClose());
-    });
-    await fs.rm(root, { recursive: true, force: true });
-  });
   const minted = mintDesktopObserverToken({
     sourceKey: "worker:pump",
     ownerEpoch: 2,
