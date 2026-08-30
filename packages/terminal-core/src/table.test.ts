@@ -448,6 +448,7 @@ describe("renderTable", () => {
       const link = `${openSeq}OpenClaw${closeSeq}`;
       const out = renderTable({
         width: 20,
+        border: "unicode",
         columns: [
           { key: "K", header: "K", minWidth: 3 },
           { key: "V", header: "V", flex: true, minWidth: 10 },
@@ -455,26 +456,15 @@ describe("renderTable", () => {
         rows: [{ K: "X", V: `before ${link} after` }],
       });
 
-      const lines = out
-        .split("\n")
-        .filter((line) => line.includes("before") || line.includes("after"));
-      // Every line that contains visible text should close any active link before
-      // the table border and reopen it at the start of the continuation.
-      for (const line of lines) {
-        const contentStart = Math.max(line.lastIndexOf("│"), line.lastIndexOf("|")) + 1;
-        const content = line.slice(contentStart);
-        // "after" must not be part of the hyperlink: it should appear after a
-        // close sequence on its line, or the line has no open sequence at all.
-        if (content.includes("after")) {
-          const afterIndex = content.indexOf("after");
-          const openIndex = content.indexOf(openSeq);
-          const closeIndex = content.indexOf(closeSeq);
-          expect(closeIndex).toBeGreaterThan(-1);
-          expect(closeIndex).toBeLessThan(afterIndex);
-          if (openIndex >= 0 && openIndex < afterIndex) {
-            expect(closeIndex).toBeGreaterThan(openIndex);
-          }
-        }
+      const afterLines = out.split("\n").filter((line) => line.includes("after"));
+      expect(afterLines.length).toBeGreaterThan(0);
+      for (const line of afterLines) {
+        const content = line.split("│")[2] ?? "";
+        expect(content).toContain("after");
+        // The link may have closed on a previous line. Any opener before the
+        // suffix on this line must also have closed before the suffix starts.
+        const prefix = content.slice(0, content.indexOf("after"));
+        expect(prefix.lastIndexOf(openSeq)).toBeLessThanOrEqual(prefix.lastIndexOf(closeSeq));
       }
     },
   );
