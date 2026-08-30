@@ -45,6 +45,10 @@ it does not guess one agent workspace.
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
 
+`channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
+or `gateway/channels/<name>`, including slash-separated descendants. Similar names
+such as `discord-archive` do not match `discord`.
+
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
 `probeAccount` and optional `auditAccount` checks, so output can include transport
 state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.

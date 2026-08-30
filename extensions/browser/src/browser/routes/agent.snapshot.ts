@@ -216,21 +216,14 @@ async function saveNormalizedScreenshotResponse(params: {
   truncated?: boolean;
   annotations?: AnnotationItem[];
 }) {
-  // Measure original dimensions BEFORE normalization so we can rescale
-  // annotation coordinates if the response pipeline shrinks the image
-  // (longest-side or byte-budget cap). Annotation boxes are in the captured
-  // image's pixel space, so they would otherwise drift from the saved media.
-  const originalMeta = params.annotations?.length
-    ? ((await getImageMetadata(params.buffer)) ?? undefined)
-    : undefined;
   const normalized = await normalizeBrowserScreenshot(params.buffer, {
     maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
     maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   });
   const annotations = await rescaleAnnotationsForNormalization({
     annotations: params.annotations,
-    originalMeta,
-    normalizedBuffer: normalized.buffer,
+    originalBuffer: params.buffer,
+    normalized,
   });
   await saveBrowserMediaResponse({
     res: params.res,
@@ -256,17 +249,18 @@ async function saveNormalizedScreenshotResponse(params: {
  */
 async function rescaleAnnotationsForNormalization(params: {
   annotations?: AnnotationItem[];
-  originalMeta?: { width?: number; height?: number };
-  normalizedBuffer: Buffer;
+  originalBuffer: Buffer;
+  normalized: Awaited<ReturnType<typeof normalizeBrowserScreenshot>>;
 }): Promise<AnnotationItem[] | undefined> {
   if (!params.annotations || params.annotations.length === 0) {
     return params.annotations;
   }
-  const orig = params.originalMeta;
-  if (!orig?.width || !orig?.height) {
+  const orig = params.normalized.sourceDimensions;
+  // The normalizer already owns the source dimensions; identical bytes cannot rescale boxes.
+  if (params.originalBuffer === params.normalized.buffer || !orig?.width || !orig?.height) {
     return params.annotations;
   }
-  const next = await getImageMetadata(params.normalizedBuffer);
+  const next = await getImageMetadata(params.normalized.buffer);
   if (!next?.width || !next?.height) {
     return params.annotations;
   }
@@ -928,17 +922,14 @@ export function registerBrowserAgentSnapshotRoutes(
                 type: "png",
                 timeoutMs: plan.timeoutMs,
               });
-              const originalMeta = labeled.annotations.length
-                ? ((await getImageMetadata(labeled.buffer)) ?? undefined)
-                : undefined;
               const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
                 maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
                 maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
               });
               const scaledAnnotations = await rescaleAnnotationsForNormalization({
                 annotations: labeled.annotations,
-                originalMeta,
-                normalizedBuffer: normalized.buffer,
+                originalBuffer: labeled.buffer,
+                normalized,
               });
               await ensureMediaDir();
               const saved = await saveMediaBuffer(

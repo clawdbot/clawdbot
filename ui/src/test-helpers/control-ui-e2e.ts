@@ -123,19 +123,22 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
   try {
     const handle = await page.waitForFunction(
       (expected) => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            router: {
-              getState: () => {
-                status: string;
-                resolvedLocation: { pathname: string } | null;
-                matches: { routeId: string }[];
-                pendingMatches: unknown[];
+        const app = document.querySelector<
+          HTMLElement & {
+            runtime?: {
+              router: {
+                getState: () => {
+                  status: string;
+                  resolvedLocation: { pathname: string } | null;
+                  matches: { routeId: string }[];
+                  pendingMatches: unknown[];
+                };
               };
             };
-          };
-        };
-        const state = app.runtime?.router.getState();
+          }
+        >("openclaw-app");
+        // Native popup events can arrive before the app element is parsed.
+        const state = app?.runtime?.router.getState();
         const pathname = window.location.pathname;
         // Router paths retain literal characters that browser history percent-encodes.
         // Serialize as a pathname; decoding would alias encoded delimiters and percent data.
@@ -163,17 +166,19 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
     await handle.dispose();
   } catch (error) {
     const state = await page.evaluate(() => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime?: {
-          router: {
-            getState: () => unknown;
+      const app = document.querySelector<
+        HTMLElement & {
+          runtime?: {
+            router: {
+              getState: () => unknown;
+            };
           };
-        };
-      };
+        }
+      >("openclaw-app");
       return {
         hash: window.location.hash,
         pathname: window.location.pathname,
-        router: app.runtime?.router.getState() ?? null,
+        router: app?.runtime?.router.getState() ?? null,
         search: window.location.search,
       };
     });

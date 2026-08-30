@@ -3,6 +3,7 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import {
@@ -160,22 +161,23 @@ export function normalizeRoleForGrouping(role: string): string {
 }
 
 export function isToolResultMessage(message: unknown): boolean {
-  const m = rawMessageSchema.parse(message);
-  const role = m.role?.toLowerCase() ?? "";
+  const m = asOptionalRecord(message);
+  const role = typeof m?.role === "string" ? m.role.toLowerCase() : "";
   return role === "toolresult" || role === "tool_result";
 }
 
 export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
-  const m = rawMessageSchema.parse(message);
-  const role = m.role ? normalizeRoleForGrouping(m.role) : "unknown";
+  // Tool classification needs envelope fields, not parsed content or media.
+  const m = asOptionalRecord(message);
+  const role = typeof m?.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
   return (
     role === "tool" ||
-    m.toolCallId !== undefined ||
-    m.tool_call_id !== undefined ||
-    m.toolUseId !== undefined ||
-    m.tool_use_id !== undefined ||
-    m.toolName !== undefined ||
-    m.tool_name !== undefined
+    typeof m?.toolCallId === "string" ||
+    typeof m?.tool_call_id === "string" ||
+    typeof m?.toolUseId === "string" ||
+    typeof m?.tool_use_id === "string" ||
+    typeof m?.toolName === "string" ||
+    typeof m?.tool_name === "string"
   );
 }
 

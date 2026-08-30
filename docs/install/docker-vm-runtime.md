@@ -185,4 +185,3 @@ for recovery when a migration cannot complete automatically.
 
 - [Docker](/install/docker)
 - [Podman](/install/podman)
-- [ClawDock](/install/clawdock)
