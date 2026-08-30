@@ -419,4 +419,59 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.attempt).toBe(attempt);
     expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });
   });
+
+  it("preserves cancellation while fallback transcript persistence is pending", async () => {
+    const attempt = settledFailedAttempt();
+    const input = finalizationInput(attempt);
+    const controller = new AbortController();
+    input.finalization.preparedAttempt.abortSignal = controller.signal;
+    input.finalization.preparedAttempt.sessionKey = "agent:main:settled";
+    input.finalization.preparedAttempt.agentId = "main";
+    input.finalization.preparedAttempt.sessionTarget = {
+      agentId: "main",
+      sessionId: "session-settled",
+      sessionKey: "agent:main:settled",
+      storePath: "/tmp/sessions.json",
+    } as never;
+    const emptyAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "" }],
+    });
+    backendMocks.runSettledFinalization.mockResolvedValue({
+      outcome: "empty",
+      result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
+    });
+
+    let markAppendStarted!: () => void;
+    const appendStarted = new Promise<void>((resolve) => {
+      markAppendStarted = resolve;
+    });
+    let releaseAppend!: () => void;
+    const appendRelease = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    transcriptMocks.appendAssistantMirrorMessageByIdentity.mockImplementationOnce(
+      async (params: { signal?: AbortSignal }) => {
+        markAppendStarted();
+        await appendRelease;
+        return params.signal?.aborted
+          ? { ok: false, reason: "cancelled", code: "blocked" }
+          : { ok: true, messageId: "fallback-message" };
+      },
+    );
+
+    const resultPromise = prepareTerminalWithSettledTurnFinalization(input);
+    await appendStarted;
+    controller.abort(new Error("cancelled by user"));
+    releaseAppend();
+    const result = await resultPromise;
+
+    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    expect(result.finalizationOutcome).toBe("failed");
+    expect(result.attempt).toBe(attempt);
+    expect(result.prepared.payloadsWithToolMedia).not.toEqual([
+      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+    ]);
+  });
 });

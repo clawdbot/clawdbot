@@ -167,10 +167,34 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     );
   }
   if (finalizationOutcome !== "answered" && terminalFallbackAllowed) {
+    if (input.finalization.preparedAttempt.abortSignal?.aborted) {
+      log.warn(
+        `settled-turn fallback was cancelled before transcript persistence: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+          `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
+      );
+      return {
+        ...initial,
+        prepared,
+        lastRunPromptUsage,
+        finalizationOutcome: "failed" as const,
+      };
+    }
     const transcriptIdempotencyKey = await persistSettledToolFallbackTranscript({
       attempt: input.finalization.preparedAttempt,
       sessionId: initial.sessionIdUsed,
     });
+    if (input.finalization.preparedAttempt.abortSignal?.aborted) {
+      log.warn(
+        `settled-turn fallback was cancelled during transcript persistence: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+          `provider=${errorContext.provider}/${errorContext.model} — preserving cancellation`,
+      );
+      return {
+        ...initial,
+        prepared,
+        lastRunPromptUsage,
+        finalizationOutcome: "failed" as const,
+      };
+    }
     attempt = buildSettledToolFallbackAttemptResult({
       settledAttempt: initial.attempt,
       sourceAttempt: attempt,
@@ -371,6 +395,7 @@ async function persistSettledToolFallbackTranscript(input: {
         : {}),
       config: input.attempt.config,
       idempotencyKey,
+      signal: input.attempt.abortSignal,
       text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
     });
     if (!result.ok) {

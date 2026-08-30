@@ -480,6 +480,27 @@ describe("session transcript runtime SDK", () => {
     ).resolves.toMatchObject({ ok: false, code: "session-rebound" });
   });
 
+  it("does not append an assistant mirror after cancellation", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "cancelled-mirror-session",
+      sessionKey: "agent:main:cancelled",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const cancellation = new Error("cancelled by user");
+    const signal = AbortSignal.abort(cancellation);
+
+    await expect(
+      appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        signal,
+        text: "must not be persisted",
+      }),
+    ).rejects.toBe(cancellation);
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
+  });
+
   it("dedupes unkeyed assistant mirrors against only the visible SQLite branch", async () => {
     const scope = {
       agentId: "main",
