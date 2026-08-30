@@ -160,10 +160,27 @@ export class SubagentLifecycleController {
     this.scheduledRequesterSettleWakeRuns.has(runId);
   markRequesterSettleWakeRunScheduled = (runId: string): void =>
     void this.scheduledRequesterSettleWakeRuns.add(runId);
-  runRequesterSettleWake = (runId: string, run: () => Promise<unknown>): Promise<unknown> =>
-    this.restoredRequesterSettleWakeRuns.delete(runId)
-      ? this.restoredRequesterSettleWakeLimit(run)
-      : run();
+  runRequesterSettleWake = (runId: string, run: () => Promise<unknown>): Promise<unknown> => {
+    if (!this.restoredRequesterSettleWakeRuns.has(runId)) {
+      return runWithGatewayIndependentRootWorkContinuation(run);
+    }
+    // Reserve the independent Gateway root before entering the limiter. The
+    // limiter may queue this callback for an arbitrary amount of time; that
+    // queue wait must still count as active work during a restart drain.
+    return runWithGatewayIndependentRootWorkContinuation(() =>
+      this.restoredRequesterSettleWakeLimit(async () => {
+        try {
+          return await run();
+        } finally {
+          // Keep restored classification across retryable wakes. A retry is
+          // still part of startup catch-up until its durable wake state retires.
+          if (!this.options.runs.get(runId)?.requesterSettleWake) {
+            this.restoredRequesterSettleWakeRuns.delete(runId);
+          }
+        }
+      }),
+    );
+  };
   unmarkRequesterSettleWakeRunScheduled = (runId: string): void =>
     void this.scheduledRequesterSettleWakeRuns.delete(runId);
   markRequesterSettleWakeRearm = (runId: string): void =>

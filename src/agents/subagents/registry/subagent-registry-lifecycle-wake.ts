@@ -1,9 +1,6 @@
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import {
-  runWithGatewayIndependentRootWorkContinuation,
-  runWithGatewayIndependentRootWorkAdmission,
-} from "../../../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
@@ -336,17 +333,15 @@ export function scheduleRequesterSettleWake(
   runWithoutOwnedSessionTranscriptWrites(() => {
     void context
       .runRequesterSettleWake(runId, () =>
-        runWithGatewayIndependentRootWorkContinuation(() =>
-          params.maybeWakeRequesterAfterAllChildrenSettled({
-            requesterSessionKey,
-            requesterOrigin: entry.requesterOrigin,
-            settledEntry: entry,
-            transitionBatch: (runIds, state) =>
-              transitionRequesterSettleWakeBatch(context, runIds, state),
-            completeBatch: (runIds, rearmGeneration, outcome) =>
-              completeRequesterSettleWakeBatch(context, runIds, rearmGeneration, outcome),
-          }),
-        ),
+        params.maybeWakeRequesterAfterAllChildrenSettled({
+          requesterSessionKey,
+          requesterOrigin: entry.requesterOrigin,
+          settledEntry: entry,
+          transitionBatch: (runIds, state) =>
+            transitionRequesterSettleWakeBatch(context, runIds, state),
+          completeBatch: (runIds, rearmGeneration, outcome) =>
+            completeRequesterSettleWakeBatch(context, runIds, rearmGeneration, outcome),
+        }),
       )
       .catch((error: unknown) => {
         params.warn("requester settle wake failed", {
