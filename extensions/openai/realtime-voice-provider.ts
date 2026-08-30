@@ -179,10 +179,25 @@ async function createOpenAIRealtimeBrowserSession(
   }
 
   const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-  if (req.gatewayControl) {
-    if (isOpenAIGptLiveModel(model)) {
-      throw new Error("gateway-control-v1 supports OpenAI GA Realtime models only");
+  if (isOpenAIGptLiveModel(model)) {
+    if (!quicksilverBroker) {
+      throw new Error("OpenAI GPT-Live browser session broker is unavailable");
     }
+    const configuredVoice = normalizeOptionalString(rawConfig?.speakerVoice ?? rawConfig?.voice);
+    const quicksilverRequest = {
+      ...req,
+      model,
+      instructions: buildOpenAIQuicksilverInstructions(req.instructions),
+      ...(req.voice ? {} : configuredVoice ? { voice: configuredVoice } : {}),
+    };
+    const auth = await resolveOpenAIQuicksilverBridgeAuth({
+      configuredApiKey: config.apiKey,
+      cfg: req.cfg,
+      agentId: req.agentId,
+    });
+    return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
+  }
+  if (req.gatewayControl) {
     if (!quicksilverBroker) {
       throw new Error("OpenAI realtime browser session broker is unavailable");
     }
@@ -252,24 +267,6 @@ async function createOpenAIRealtimeBrowserSession(
       },
       { type: "api-key", token: auth.value },
     );
-  }
-  if (isOpenAIGptLiveModel(model)) {
-    if (!quicksilverBroker) {
-      throw new Error("OpenAI GPT-Live browser session broker is unavailable");
-    }
-    const configuredVoice = normalizeOptionalString(rawConfig?.speakerVoice ?? rawConfig?.voice);
-    const quicksilverRequest = {
-      ...req,
-      model,
-      instructions: buildOpenAIQuicksilverInstructions(req.instructions),
-      ...(req.voice ? {} : configuredVoice ? { voice: configuredVoice } : {}),
-    };
-    const auth = await resolveOpenAIQuicksilverBridgeAuth({
-      configuredApiKey: config.apiKey,
-      cfg: req.cfg,
-      agentId: req.agentId,
-    });
-    return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
   }
   const { session, voice } = buildOpenAIRealtimeBrowserSessionConfig(req, config, model);
   const auth = await resolveOpenAIRealtimePlatformAuth({
