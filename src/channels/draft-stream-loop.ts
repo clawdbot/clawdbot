@@ -66,25 +66,21 @@ export function createDraftStreamLoop<T = string>(params: {
       }
       pendingValue = emptyValue;
       let current: Promise<void | boolean> | undefined;
+      let sent: void | boolean;
       try {
         current = Promise.resolve(params.sendOrEditStreamMessage(value)).finally(() => {
           if (inFlightPromise === current) {
             inFlightPromise = undefined;
           }
         });
-      } catch (err) {
-        if (!hasPendingValue(pendingValue)) {
-          pendingValue = value;
-        }
-        throw err;
-      }
-      inFlightPromise = current;
-      let sent: void | boolean;
-      try {
+        inFlightPromise = current;
         sent = await current;
       } catch (err) {
         if (!hasPendingValue(pendingValue)) {
           pendingValue = value;
+        } else if (background && params.coalesceInFlight) {
+          // Only newer work owns another attempt; never retry the failed value.
+          schedule();
         }
         throw err;
       }

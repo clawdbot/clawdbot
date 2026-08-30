@@ -403,10 +403,9 @@ export function createChannelProgressDraftCompositor(params: {
     if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender && !diffStatChanged) {
       return false;
     }
-    // A work line lands between reasoning bursts: commit the current thinking
-    // line so the next thought appends as its own line, interleaved with tools
-    // in arrival order, instead of replacing the prior thought.
-    if (shouldStoreLine && lineChanged) {
+    // Work delimits reasoning bursts even when summary presentation hides its
+    // row; otherwise unrelated thoughts are concatenated as one streamed delta.
+    if (summary || (shouldStoreLine && lineChanged)) {
       reasoningRawText = "";
       lastReasoningLine = undefined;
     }

@@ -945,12 +945,8 @@ vi.mock("../../sent-thread-cache.js", () => ({
   recordSlackThreadParticipation: recordSlackThreadParticipationMock,
 }));
 
-vi.mock("../../stream-mode.js", () => ({
-  applyAppendOnlyStreamUpdate: ({ incoming }: { incoming: string }) => ({
-    changed: true,
-    rendered: incoming,
-    source: incoming,
-  }),
+vi.mock("../../stream-mode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../stream-mode.js")>()),
   resolveSlackStreamingConfig: () => ({
     mode: mockedSlackStreamingMode,
     nativeStreaming: mockedNativeStreaming,
@@ -3501,16 +3497,22 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
-  it("streams rolling reasoning snapshots as deduplicated narration", async () => {
+  it("streams distinct reasoning bursts and cumulative deltas without duplication", async () => {
+    vi.useFakeTimers();
     await dispatchNativeProgressScenario({
       finalPayload: { text: FINAL_REPLY_TEXT },
       events: [
-        { kind: "reasoning", text: "Checking", isReasoningSnapshot: true },
+        { kind: "reasoning", text: "Checking the Slack handler" },
+        { kind: "tool_start", phase: "start", name: "read" },
+        { kind: "reasoning", text: "Preparing" },
         {
-          kind: "reasoning",
-          text: "Checking the Slack handler",
-          isReasoningSnapshot: true,
+          kind: "checkpoint",
+          run: async () => {
+            await vi.advanceTimersByTimeAsync(1_000);
+            expectNativeStreamText("\nPreparing");
+          },
         },
+        { kind: "reasoning", text: " the fix" },
       ],
     });
 
@@ -3518,8 +3520,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       taskUpdate("openclaw_summary", "Working", "in_progress"),
       taskUpdate("openclaw_summary", "Working", "complete"),
     ]);
-    expectNativeStreamText("Checking");
-    expectNativeStreamText(" the Slack handler");
+    expectNativeStreamText("Checking the Slack handler");
+    expectNativeStreamText("\nPreparing");
+    expectNativeStreamText(" the fix");
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   });
 

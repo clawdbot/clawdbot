@@ -538,30 +538,48 @@ describe("createChannelProgressDraftCompositor", () => {
     );
   });
 
-  it("interleaves reasoning bursts with tool calls in arrival order", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: {
-        streaming: { mode: "progress", progress: { label: "Shelling", maxLines: 8 } },
-      },
-      reasoningLinePrefix: "🧠 ",
-      update,
-    });
+  it.each([
+    {
+      presentation: undefined,
+      text: "Shelling\n\n🧠 _Listing the workspace_\n🛠️ ls\n🧠 _Picking the largest_\n🛠️ wc",
+      lines: ["🧠 _Listing the workspace_", "🛠️ ls", "🧠 _Picking the largest_", "🛠️ wc"],
+    },
+    {
+      presentation: "summary" as const,
+      text: "Shelling\n\nPicking the largest",
+      lines: [
+        {
+          id: "reasoning",
+          kind: "item",
+          text: "Picking the largest",
+          label: "Reasoning",
+          prefix: false,
+        },
+      ],
+    },
+  ])(
+    "keeps reasoning bursts separate across tools ($presentation)",
+    async ({ presentation, text, lines }) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: { mode: "progress", progress: { label: "Shelling", maxLines: 8 } },
+        },
+        presentation,
+        reasoningLinePrefix: "🧠 ",
+        update,
+      });
 
-    // thought1 → tool1 → thought2 → tool2: each thought is its own line,
-    // appended in order, not collapsed into a single replaced line.
-    await progress.pushReasoningProgress("Listing the workspace");
-    await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
-    await progress.pushReasoningProgress("Picking the largest");
-    await progress.pushToolProgress("🛠️ wc", { startImmediately: true });
+      // Hidden tools still delimit reasoning bursts in summary presentation.
+      await progress.pushReasoningProgress("Listing the workspace");
+      await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
+      await progress.pushReasoningProgress("Picking the largest");
+      await progress.pushToolProgress("🛠️ wc", { startImmediately: true });
 
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🧠 _Listing the workspace_\n🛠️ ls\n🧠 _Picking the largest_\n🛠️ wc",
-      {
-        lines: ["🧠 _Listing the workspace_", "🛠️ ls", "🧠 _Picking the largest_", "🛠️ wc"],
-      },
-    );
-  });
+      expect(update).toHaveBeenLastCalledWith(text, { lines });
+      progress.cancel();
+    },
+  );
 
   it("preserves tagged reasoning content without leaking tags", async () => {
     const update = vi.fn();
