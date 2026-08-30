@@ -116,18 +116,10 @@ export async function createTelegramQaTransportAdapter(
   let logicalConversationKind: "channel" | "direct" | "group" = "channel";
   const nativeMessageIds = new Map<string, number>();
   const busMessageIds = new Map<number, string>();
+  let sendsInFlight = 0;
+  let deferredReplies: TelegramUserbotUpdate[] = [];
 
-  const observeUpdate = async (update: TelegramUserbotUpdate) => {
-    observerState.updateCount += 1;
-    observerState.relevantUpdateKinds.add(update.kind);
-    if (
-      update.chatId !== Number(credentialLease.payload.groupId) ||
-      update.senderId !== Number(credentialLease.payload.sutBotId)
-    ) {
-      observerState.filteredCount += 1;
-      return;
-    }
-    observerState.matchedCount += 1;
+  const publishUpdate = async (update: TelegramUserbotUpdate) => {
     const existingMessageId = busMessageIds.get(update.messageId);
     if (update.kind === "edit" && existingMessageId) {
       await context.messages.editMessage({
@@ -149,6 +141,28 @@ export async function createTelegramQaTransportAdapter(
     });
     nativeMessageIds.set(outbound.id, update.messageId);
     busMessageIds.set(update.messageId, outbound.id);
+  };
+
+  const observeUpdate = async (update: TelegramUserbotUpdate) => {
+    observerState.updateCount += 1;
+    observerState.relevantUpdateKinds.add(update.kind);
+    if (
+      update.chatId !== Number(credentialLease.payload.groupId) ||
+      update.senderId !== Number(credentialLease.payload.sutBotId)
+    ) {
+      observerState.filteredCount += 1;
+      return;
+    }
+    observerState.matchedCount += 1;
+    if (
+      sendsInFlight > 0 &&
+      update.replyToMessageId &&
+      !busMessageIds.has(update.replyToMessageId)
+    ) {
+      deferredReplies.push(update);
+      return;
+    }
+    await publishUpdate(update);
   };
 
   try {
@@ -216,21 +230,34 @@ export async function createTelegramQaTransportAdapter(
       logicalConversationKind = input.conversation.kind;
       const text = renderTelegramQaInboundText(input, credentialLease.payload.sutUsername);
       const nativeReplyToId = input.replyToId ? nativeMessageIds.get(input.replyToId) : undefined;
-      const sent = await activeUserbot.send({ text, replyToMessageId: nativeReplyToId });
-      const message = await context.messages.addInboundMessage({
-        ...input,
-        accountId,
-        senderId: credentialLease.payload.testerUserId,
-      });
-      nativeMessageIds.set(message.id, sent.messageId);
-      busMessageIds.set(sent.messageId, message.id);
-      return message;
+      sendsInFlight += 1;
+      try {
+        const sent = await activeUserbot.send({ text, replyToMessageId: nativeReplyToId });
+        const message = await context.messages.addInboundMessage({
+          ...input,
+          accountId,
+          senderId: credentialLease.payload.testerUserId,
+        });
+        nativeMessageIds.set(message.id, sent.messageId);
+        busMessageIds.set(sent.messageId, message.id);
+        const readyReplies = deferredReplies.filter(
+          (update) => update.replyToMessageId && busMessageIds.has(update.replyToMessageId),
+        );
+        deferredReplies = deferredReplies.filter((update) => !readyReplies.includes(update));
+        for (const update of readyReplies) {
+          await publishUpdate(update);
+        }
+        return message;
+      } finally {
+        sendsInFlight -= 1;
+      }
     },
     resetTransport: () => {
       logicalConversationId = credentialLease.payload.groupId;
       logicalConversationKind = "channel";
       nativeMessageIds.clear();
       busMessageIds.clear();
+      deferredReplies = [];
       observerState.updateCount = 0;
       observerState.filteredCount = 0;
       observerState.matchedCount = 0;

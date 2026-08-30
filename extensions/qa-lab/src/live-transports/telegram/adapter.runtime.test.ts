@@ -170,7 +170,19 @@ describe("Telegram QA transport adapter", () => {
       };
     });
     mocks.userbotSend
-      .mockResolvedValueOnce({ messageId: 10 })
+      .mockImplementationOnce(async () => {
+        await onUpdate?.({
+          kind: "message",
+          chatId: -100123,
+          messageId: 11,
+          senderId: 200,
+          senderUsername: "sut_bot",
+          replyToMessageId: 10,
+          timestamp: 100_000,
+          text: "preview",
+        });
+        return { messageId: 10 };
+      })
       .mockResolvedValueOnce({ messageId: 12 });
     const addInboundMessage = vi.fn().mockResolvedValue({ id: "in-1" });
     const addOutboundMessage = vi.fn().mockResolvedValue({ id: "out-1" });
@@ -193,16 +205,6 @@ describe("Telegram QA transport adapter", () => {
       expect.objectContaining({ accountId: "sut", senderId: "100" }),
     );
 
-    await onUpdate?.({
-      kind: "message",
-      chatId: -100123,
-      messageId: 11,
-      senderId: 200,
-      senderUsername: "sut_bot",
-      replyToMessageId: 10,
-      timestamp: 100_000,
-      text: "preview",
-    });
     expect(addOutboundMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "group:logical-room",
