@@ -108,13 +108,35 @@ Warm images are on by default when a class is known from `settings.class` or the
 
 Forwarded host environment values reach setup, so whatever setup derives from them could persist in a shared image. Profiles with nonempty `setupEnv` capture only when you explicitly set `settings.warmImage: true`, after checking that setup leaves no credential on disk. Explicit `true` requires a known configured or placement class before any provider command. Explicit `false` always keeps provisioning cold, for example when snapshot storage charges or provider-side retention of repository content are unwanted.
 
-Warm images work on `machine0` through Crabbox's `--strategy image`; other backends keep their native checkpoint strategy. Images refresh automatically at the next eligible worker stop once they are 24 hours old, keeping captured caches current. After recording the replacement, OpenClaw deletes the superseded checkpoint on a best-effort basis. A deletion failure warns and leaves cleanup to Crabbox's `checkpoint prune`. OpenClaw also retains its 14-day cleanup for unused images. A failed refresh preserves the previous image for later forks.
+Warm images work on `machine0` through Crabbox's `--strategy image`; other backends keep their native checkpoint strategy. Images refresh at the next eligible worker stop once they are 24 hours old. The previous image remains recorded and usable throughout capture. OpenClaw atomically records the replacement and its predecessor's deletion obligation in the same profile record, then deletes the predecessor. Failed deletion warns, survives Gateway restart and warm reuse, and retries during subsequent warm-image allocation or capture, even before the replacement expires. Further refreshes for that profile wait for deletion to succeed; replacement forks and lease teardown continue.
+
+OpenClaw deletes unused images after 14 days and reclaims the least recently used eligible image before admitting a 129th profile. Provider deletion must succeed before its ownership record is removed. Pending captures retain their image and slot even beyond 14 days; pending retirement must complete before that profile can be reclaimed. If all 128 slots are retained, new captures are deferred with a warning, while workers can still provision cold. Each profile owns at most its current image plus one capture or predecessor retirement; there is no growing cleanup queue or scheduled catalog sweep.
 
 Before capture, OpenClaw removes per-lease worker identities, device tokens, and session state, including node-host workspaces and SSH-transport workspaces under `~/.openclaw-worker/workspaces`. Machine-level caches intentionally survive: npm caches, content-addressed worker bundle installs under `~/.openclaw-worker`, and per-repository Git seeds under `~/.openclaw-worker/git-seeds`. A seed is a pristine post-sync repository copy, not a session snapshot. Images also retain whatever `settings.setup` wrote elsewhere, so keep setup credential-free and enable reuse only for mutually trusted workloads.
 
-Scrubbing has a three-minute timeout. Checkpoint creation has a separate three-minute timeout, extended to ten minutes on `machine0` because image capture stops the source and waits for image availability even with `--wait=false`. Capture failure does not prevent teardown; without a usable image, later workers provision cold. Capture needs a Crabbox release with fixed-ID checkpoint forks, and coordinator-brokered leases additionally need `broker.adminToken`; without either, capture degrades to cold-only provisioning with a warning.
+Scrubbing has a three-minute timeout. Checkpoint creation has a separate three-minute timeout, extended to ten minutes on `machine0` because image capture stops the source and waits for image availability even with `--wait=false`. Scrub failure releases only its own capture reservation. Once creation starts, failure, timeout, or unusable output leaves its outcome uncertain: the profile stays paused until explicit recovery. Neither case prevents lease teardown, and a retained usable image can still be forked; otherwise later workers provision cold. Capture needs a Crabbox release with fixed-ID checkpoint forks, and coordinator-brokered leases additionally need `broker.adminToken`. Correct missing capabilities or permissions before recovering an uncertain capture.
 
 Reuse is exact-class: a placement override does not reuse another class's image, and only successful node enrollment records the class used for later capture, including after a Gateway restart.
+
+#### Recover a paused capture
+
+Inspect local ownership without contacting the cloud:
+
+```bash
+openclaw crabbox warm-images --json
+```
+
+The bounded status includes checkpoint IDs, capture selectors, source lease IDs, backend names, and timestamps; it does not include setup commands or environment values. Doctor reports pending captures and retirements but never clears them through `doctor --fix`. A capture older than 20 minutes produces a warning, not permission to take over. The same reservation remains authoritative across restarts; older empty reservation markers also require explicit recovery. This deliberately trades automatic recapture for bounded, durable resource ownership when an outcome cannot be established.
+
+Before recovery, stop the owning Gateway and any original capture processes. Use the source lease and capture time to reconcile the uncertain operation in Crabbox's checkpoint catalog, and resolve any untracked provider artifact. Only after those steps, copy the exact capture selector from status:
+
+```bash
+openclaw crabbox warm-images --recover <capture-selector> --acknowledge-provider-cleanup
+```
+
+The acknowledgement attests that the original capture is quiescent and its untracked artifacts are resolved; elapsed time alone does not establish either fact. Recovery clears only that capture reservation, preserves known checkpoint references, and rejects a replaced selector. It does not stop processes, run provider commands, delete snapshots, or allocate a worker. Restart the Gateway afterward; the next eligible worker stop can capture again. Failed checkpoint retirements use the normal automatic retry path after provider deletion errors are resolved, not capture recovery.
+
+The record additions use the existing warm-images plugin-state namespace without a SQLite schema migration. Existing image records remain usable. Checkpoints already forgotten by older code are not rediscovered: reconcile those manually through the Crabbox catalog. Before downgrading to code that does not preserve capture and retirement obligations, quiesce captures and resolve all outstanding obligations. Do not run mixed older and newer writers against this state; SQLite readability does not imply safe retention behavior.
 
 ### Per-project default profiles
 
