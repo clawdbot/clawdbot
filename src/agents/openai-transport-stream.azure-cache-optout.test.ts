@@ -21,6 +21,16 @@ function makeAzureResponsesModel(supportsPromptCacheKey?: boolean) {
   });
 }
 
+function makeCustomProxyResponsesModel(supportsPromptCacheKey?: boolean) {
+  return makeResponsesModel({
+    provider: "openai",
+    baseUrl: "https://proxy.example.test/v1",
+    ...(supportsPromptCacheKey === undefined
+      ? {}
+      : { compat: { supportsPromptCacheKey } }),
+  });
+}
+
 describe("Azure Responses transport prompt-cache compatibility", () => {
   it("strips prompt-cache fields when compat explicitly disables them", () => {
     const params = buildOpenAIResponsesParams(
@@ -36,6 +46,29 @@ describe("Azure Responses transport prompt-cache compatibility", () => {
   it("preserves the existing prompt-cache default without an opt-out", () => {
     const params = buildOpenAIResponsesParams(
       makeAzureResponsesModel(),
+      context,
+      { sessionId: "session-123" } as never,
+    ) as Record<string, unknown>;
+
+    expect(params.prompt_cache_key).toBe("session-123");
+  });
+});
+
+describe("custom Responses proxy prompt-cache compatibility", () => {
+  it("strips prompt-cache fields unless the proxy explicitly opts in", () => {
+    const params = buildOpenAIResponsesParams(
+      makeCustomProxyResponsesModel(),
+      context,
+      { sessionId: "session-123", cacheRetention: "long" } as never,
+    ) as Record<string, unknown>;
+
+    expect(params).not.toHaveProperty("prompt_cache_key");
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+  });
+
+  it("preserves prompt_cache_key when the proxy explicitly opts in", () => {
+    const params = buildOpenAIResponsesParams(
+      makeCustomProxyResponsesModel(true),
       context,
       { sessionId: "session-123" } as never,
     ) as Record<string, unknown>;
