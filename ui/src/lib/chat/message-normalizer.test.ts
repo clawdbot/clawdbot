@@ -637,10 +637,16 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("keeps valid local MEDIA paths as assistant attachments", () => {
+    it.each([
+      ["/tmp/openclaw/test-image.png", "test-image.png"],
+      ["file:///tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["FILE:///tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["FILE:/tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["file://localhost/tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+    ])("keeps local MEDIA references as assistant attachments: %s", (url, label) => {
       const result = normalizeMessage({
         role: "assistant",
-        content: "Hello\nMEDIA:/tmp/openclaw/test-image.png\nWorld",
+        content: `Hello\nMEDIA:${url}\nWorld`,
       });
 
       expect(result.content).toEqual([
@@ -648,9 +654,9 @@ describe("message-normalizer", () => {
         {
           type: "attachment",
           attachment: {
-            url: "/tmp/openclaw/test-image.png",
+            url,
             kind: "image",
-            label: "test-image.png",
+            label,
             mimeType: "image/png",
           },
         },
@@ -673,23 +679,6 @@ describe("message-normalizer", () => {
             label: "clip.webm",
             mimeType: "video/webm",
           },
-        },
-      ]);
-    });
-
-    it.each([
-      "file:///tmp/caf%C3%A9%20image.png",
-      "FILE:///tmp/caf%C3%A9%20image.png",
-      "FILE:/tmp/caf%C3%A9%20image.png",
-      "file://localhost/tmp/caf%C3%A9%20image.png",
-    ])("keeps the original file URL in displayed attachments: %s", (url) => {
-      expect(
-        normalizeMessage({ role: "assistant", content: `Caption\nMEDIA:${url}` }).content,
-      ).toEqual([
-        { type: "text", text: "Caption" },
-        {
-          type: "attachment",
-          attachment: { url, kind: "image", label: "caf%C3%A9%20image.png", mimeType: "image/png" },
         },
       ]);
     });

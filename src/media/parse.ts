@@ -174,10 +174,10 @@ function isAllowedRemoteMediaUrl(candidate: string): boolean {
 }
 
 function isValidMedia(
-  candidate: string,
+  source: string,
   opts?: { allowSpaces?: boolean; allowBareFilename?: boolean },
 ) {
-  candidate = normalizeMediaSource(candidate);
+  const candidate = normalizeMediaSource(source);
   if (!candidate) {
     return false;
   }
