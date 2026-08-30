@@ -1,6 +1,7 @@
 // Shared CLI execution wrappers and inherited Commander option lookup.
 import type { Command } from "commander";
 import { formatErrorMessage } from "../infra/errors.js";
+import { ExitError } from "../runtime.js";
 import { formatCliOperatorError, isExpectedCliError } from "./failure-output.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 
@@ -42,7 +43,12 @@ export async function runCommandWithRuntime(
   try {
     await action();
   } catch (err) {
-    if (isJsonOutputModeActive(process.argv) || isExpectedCliError(err)) {
+    // Completed commands unwind to the outer cleanup and output-drain owner.
+    if (
+      err instanceof ExitError ||
+      isJsonOutputModeActive(process.argv) ||
+      isExpectedCliError(err)
+    ) {
       throw err;
     }
     if (onError) {

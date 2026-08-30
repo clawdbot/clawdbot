@@ -277,7 +277,8 @@ const mocks = vi.hoisted(() => ({
   modelsAuthLoginCommand: vi.fn(),
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.runtime,
   writeRuntimeJson: (runtime: { writeJson: (value: unknown) => void }, value: unknown) =>
     runtime.writeJson(value),
