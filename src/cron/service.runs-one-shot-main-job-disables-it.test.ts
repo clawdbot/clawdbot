@@ -925,6 +925,42 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
+  it("falls back to the auto-disable notice when best-effort suppresses the terminal alert (#131590)", async () => {
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "wrong model id",
+    }));
+    const { store, cron, enqueueSystemEvent, events } =
+      await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const runAt = new Date("2025-12-13T00:00:01.000Z");
+    const job = await cron.add({
+      enabled: true,
+      name: "best-effort parked one-shot",
+      schedule: { kind: "at", at: runAt.toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "do it" },
+      // Best-effort suppresses the inherited failure alert; the terminal
+      // disable must still surface through the generic auto-disable notice.
+      delivery: { mode: "announce", bestEffort: true },
+    });
+    vi.setSystemTime(runAt);
+    await vi.runOnlyPendingTimersAsync();
+    await events.waitFor(
+      (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === "error",
+    );
+
+    const updated = (await cron.list({ includeDisabled: true })).find(
+      (entry) => entry.id === job.id,
+    );
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.autoDisabled).toMatchObject({ reason: "consecutive-failures" });
+    const notifications = enqueueSystemEvent.mock.calls.map((call) => String(call[0]));
+    expect(notifications.some((text) => text.includes("auto-disabled"))).toBe(true);
+
+    await stopCronAndCleanup(cron, store);
+  });
+
   it("does not post fallback main summary for isolated delivery-target errors", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,

@@ -9,6 +9,7 @@ import { computeNextRunAtMs } from "../schedule.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { autoDisableCronJob, maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
+  bestEffortSuppressesFailureAlert,
   finalizeCronFailureNotifications,
   maybeEmitFailureAlert,
   resolveFailureAlert,
@@ -328,11 +329,14 @@ export function applyJobResult(
           // to preserve the error state for inspection.
           // This disable is terminal for a one-shot, so the threshold-gated
           // failure alert may never fire again; record the durable auto-disable
-          // fact, let a resolvable failure-alert route own the (threshold-
-          // bypassed) notification, and fall back to the generic auto-disable
-          // notice when no route exists (#131490). Operator cancels and
+          // fact, let a failure-alert route that can actually emit own the
+          // (threshold-bypassed) notification, and fall back to the generic
+          // auto-disable notice otherwise — including best-effort jobs whose
+          // inherited alert is suppressed (#131490). Operator cancels and
           // lifecycle retirements already have a visible outcome, so they keep
           // the quiet disable.
+          const alertOwnsTerminalNotice =
+            alertConfig !== null && !bestEffortSuppressesFailureAlert(job);
           const recordedAutoDisable =
             retryDecision.reason !== "aborted" &&
             autoDisableCronJob({
@@ -342,10 +346,10 @@ export function applyJobResult(
               atMs: result.endedAt,
               consecutiveErrors: retryDecision.consecutiveErrors,
               deferredNotifications: opts?.deferredNotifications,
-              notify: alertConfig === null,
+              notify: !alertOwnsTerminalNotice,
             });
-          autoDisableNotificationOwnsFailure = recordedAutoDisable && alertConfig === null;
-          oneShotTerminalDisable = recordedAutoDisable && alertConfig !== null;
+          autoDisableNotificationOwnsFailure = recordedAutoDisable && !alertOwnsTerminalNotice;
+          oneShotTerminalDisable = recordedAutoDisable && alertOwnsTerminalNotice;
           // System-owned payloads and aborts opt out of the auto-disable owner;
           // keep the plain disable for them.
           job.enabled = false;

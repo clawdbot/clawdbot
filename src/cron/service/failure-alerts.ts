@@ -378,6 +378,18 @@ function requestFailureNotification(
   return true;
 }
 
+/**
+ * Best-effort delivery suppresses inherited alert noise, not an independently
+ * configured job alert the operator explicitly requested. Terminal-disable
+ * dispositions consult this too: when it suppresses the alert, the generic
+ * auto-disable notice must own the notification or the job parks silently.
+ */
+export function bestEffortSuppressesFailureAlert(
+  job: Pick<CronJob, "delivery" | "failureAlert">,
+): boolean {
+  return job.delivery?.bestEffort === true && !job.failureAlert;
+}
+
 /** Emits a failure alert when threshold, best-effort, and cooldown policy allow it. */
 export function maybeEmitFailureAlert(
   state: CronServiceState,
@@ -403,9 +415,7 @@ export function maybeEmitFailureAlert(
   ) {
     return;
   }
-  // Best-effort delivery suppresses inherited alert noise, not an independently
-  // configured job alert that the operator explicitly requested.
-  if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
+  if (bestEffortSuppressesFailureAlert(params.job)) {
     return;
   }
   if (!requestFailureNotification(state, params.job, alertConfig)) {
