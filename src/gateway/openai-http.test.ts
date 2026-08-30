@@ -2630,10 +2630,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         payloads: [],
         expected: "Working...",
       },
-    ].flatMap((scenario) =>
-      (["required", "pinned"] as const).map((choice) => ({ ...scenario, choice })),
-    ),
-  )("uses $name for $choice tool-stream terminal commentary", async (scenario) => {
+    ].flatMap((scenario) => (["required", "pinned"] as const).map((mode) => ({ scenario, mode }))),
+  )("uses $scenario.name for $mode tool-stream terminal commentary", async ({ scenario, mode }) => {
     agentCommandMock.mockClear();
     agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
       const runId = (opts as { runId: string }).runId;
@@ -2664,9 +2662,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       stream: true,
       tools: [{ type: "function", function: { name: "get_weather", parameters: {} } }],
       tool_choice:
-        scenario.choice === "required"
-          ? "required"
-          : { type: "function", function: { name: "get_weather" } },
+        mode === "required" ? "required" : { type: "function", function: { name: "get_weather" } },
     });
     let content = "";
     const finishReasons: string[] = [];
