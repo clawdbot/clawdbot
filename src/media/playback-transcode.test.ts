@@ -171,6 +171,68 @@ describe("playback transcode policy", () => {
     },
   );
 
+  it.each([
+    ["audio/m4a", "audio", "mov"],
+    ["audio/mpeg", "audio", "mp3"],
+    ["audio/mp4", "audio", "mov"],
+    ["audio/wav", "audio", "wav"],
+    ["audio/wave", "audio", "wav"],
+    ["audio/x-m4a", "audio", "mov"],
+    ["audio/x-wav", "audio", "wav"],
+    ["audio/aac", "audio", "aac"],
+    ["audio/aiff", "audio", "aiff"],
+    ["audio/amr", "audio", "amr"],
+    ["audio/amr-wb", "audio", "amr"],
+    ["audio/flac", "audio", "flac"],
+    ["audio/ogg", "audio", "ogg"],
+    ["audio/opus", "audio", "ogg"],
+    ["audio/vorbis", "audio", "ogg"],
+    ["audio/webm", "audio", "matroska,webm"],
+    ["audio/x-aiff", "audio", "aiff"],
+    ["audio/x-caf", "audio", "caf"],
+    ["audio/x-ms-wma", "audio", "asf"],
+    ["video/mp4", "video", "mov"],
+    ["video/avi", "video", "avi"],
+    ["video/flv", "video", "flv"],
+    ["video/matroska", "video", "matroska,webm"],
+    ["video/quicktime", "video", "mov"],
+    ["video/webm", "video", "matroska,webm"],
+    ["video/x-flv", "video", "flv"],
+    ["video/x-matroska", "video", "matroska,webm"],
+    ["video/x-ms-asf", "video", "asf"],
+    ["video/x-ms-wmv", "video", "asf"],
+    ["video/x-msvideo", "video", "avi"],
+  ] as const)(
+    "uses the $2 demuxer for accepted $0 conversion",
+    async (mimeType, kind, inputFormat) => {
+      const source = await createSource(`demux-${mimeType.replaceAll("/", "-")}`);
+      const probe =
+        kind === "audio"
+          ? { durationMs: 1000, audioCodec: "opus", audioStreamIndex: 0 }
+          : { durationMs: 1000, videoCodec: "hevc", videoStreamIndex: 0 };
+      runFfmpeg.mockImplementationOnce(async (args: string[]) => {
+        await fs.writeFile(args.at(-1) ?? "", `normalized-${kind}`);
+        return "";
+      });
+
+      await expect(
+        playback.resolvePlaybackTranscode({ ...source, mimeType, kind, probe }),
+      ).resolves.toEqual({ kind: "preparing" });
+      await waitForPlaybackTranscodeJobsForTest("all");
+
+      const ffmpegArgs = runFfmpeg.mock.calls[0]?.[0] as string[];
+      const inputFormatIndex = ffmpegArgs.indexOf("-f");
+      expect(ffmpegArgs[inputFormatIndex + 1]).toBe(inputFormat);
+      await expect(
+        playback.resolvePlaybackTranscode({ ...source, mimeType, kind, probe }),
+      ).resolves.toMatchObject(
+        kind === "audio"
+          ? { kind: "transcoded", contentType: "audio/mp4", extension: ".m4a" }
+          : { kind: "transcoded", contentType: "video/mp4", extension: ".mp4" },
+      );
+    },
+  );
+
   it("derives a stable cache key from path, size, and modification time", () => {
     const source = {
       path: "/media/clip.mkv",
