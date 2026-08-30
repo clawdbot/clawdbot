@@ -667,6 +667,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ".github/actions/ensure-base-commit/policy.py",
     ".github/actions/ensure-base-commit/action.yml",
     "scripts/generate-ci-git-owner.mts",
+    ".github/workflows/workflow-sanity.yml",
   ])("selects executable Git boundary proof for %s", (source) => {
     expect(resolveChangedTestTargetPlan([source])).toEqual({
       mode: "targets",
@@ -4329,18 +4330,8 @@ describe("scripts/test-projects Vitest cache isolation", () => {
     );
 
     expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
-      path.join(
-        "/repo",
-        "node_modules",
-        ".experimental-vitest-cache",
-        "0-test-vitest-vitest.unit-fast.config.ts",
-      ),
-      path.join(
-        "/repo",
-        "node_modules",
-        ".experimental-vitest-cache",
-        "1-test-vitest-vitest.extension-memory.config.ts",
-      ),
+      path.join("/repo", ".cache", "vitest", "0-test-vitest-vitest.unit-fast.config.ts"),
+      path.join("/repo", ".cache", "vitest", "1-test-vitest-vitest.extension-memory.config.ts"),
     ]);
   });
 

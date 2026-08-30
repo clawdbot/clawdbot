@@ -517,8 +517,13 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
 
 export async function lintMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
+  options: { signal?: AbortSignal } = {},
 ): Promise<LintMemoryWikiResult> {
-  const compileResult = await compileMemoryWikiVault(config);
+  const compileResult = await compileMemoryWikiVault(
+    config,
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  options.signal?.throwIfAborted();
   const sourceSyncState = await readMemoryWikiSourceSyncState(config.vault.path);
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
@@ -537,6 +542,7 @@ export async function lintMemoryWikiVault(
   ].toSorted((left, right) => left.path.localeCompare(right.path));
   const issuesByCategory = buildIssuesByCategory(issues);
   const reportPath = await writeLintReport(config.vault.path, issues);
+  options.signal?.throwIfAborted();
 
   await appendMemoryWikiLog(config.vault.path, {
     type: "lint",

@@ -52,6 +52,28 @@ afterEach(() => {
 });
 
 describe("native host registration", () => {
+  it("guides first-time setup when no browser user-data directory exists", async () => {
+    const value = await fixture();
+    let now = 0;
+    const status = await installChromeExtensionBootstrap({
+      bundledDir: value.bundledDir,
+      pluginRoot: value.pluginRoot,
+      waitMs: 1_000,
+      deps: {
+        ...value.deps,
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+      },
+    });
+
+    expect(status.manualSetupRequired).toBe(true);
+    expect(status.registrations.every((entry) => entry.state === "missing")).toBe(true);
+    expect(status.issues).toEqual([expect.stringContaining("No native host was pre-registered.")]);
+    expect(status.issues[0]).toContain("if Chrome has not been launched yet, launch it first");
+  });
+
   it("pre-registers predicted IDs before waiting, then verifies Chrome's recorded ID", async () => {
     const value = await fixture();
     const installed = stableChromeExtensionDir(value.deps);
@@ -192,6 +214,8 @@ describe("native host registration", () => {
     });
     expect(status.manualSetupRequired).toBe(true);
     expect(status.issues.join("\n")).toContain("pre-registration refused");
+    expect(status.issues.join("\n")).toContain("No native host was pre-registered.");
+    expect(status.issues.join("\n")).not.toContain("No existing Chrome-family user-data directory");
     const repair = await repairOwnedChromeExtensionNativeHosts({
       bundledDir: value.bundledDir,
       pluginRoot: value.pluginRoot,
@@ -621,7 +645,7 @@ describe("native host registration", () => {
       } else {
         await fs.chmod(
           registeredTarget,
-          failure === "non-executable" ? 0o600 : failure === "unreadable" ? 0o000 : 0o666,
+          failure === "non-executable" ? 0o600 : failure === "unreadable" ? 0o000 : 0o664,
         );
       }
 
@@ -644,7 +668,7 @@ describe("native host registration", () => {
       expect(await fs.readFile(manifest.path, "utf8")).toBe(launcherBytes);
       expect(existsSync(executed)).toBe(false);
 
-      if (failure === "non-executable" || failure === "unreadable") {
+      if (failure === "non-executable" || failure === "unreadable" || failure === "unsafe-mode") {
         const onProgress = vi.fn();
         const reinstall = await installChromeExtensionBootstrap({
           ...params,
@@ -656,6 +680,10 @@ describe("native host registration", () => {
           expect.stringContaining("Native bootstrap is ready"),
         );
         expect(reinstall.issues.join("\n")).toContain("pre-registration refused");
+        expect(reinstall.issues.join("\n")).toContain("No native host was pre-registered.");
+        expect(reinstall.issues.join("\n")).not.toContain(
+          "No existing Chrome-family user-data directory",
+        );
         expect(await fs.readFile(registration.manifestPath, "utf8")).toBe(manifestBytes);
         expect(await fs.readFile(manifest.path, "utf8")).toBe(launcherBytes);
       }

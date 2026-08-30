@@ -334,7 +334,7 @@ export async function loadChatRoute(
     }
     return {
       kind: "session",
-      sessionKey,
+      sessionKey: buildCatalogSessionKey(catalogKey, target.agentId),
       agentId: target.agentId,
       ...draftRouteDataFromLocation(routeLocation),
       face: resolvedFace,

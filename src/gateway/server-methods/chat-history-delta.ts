@@ -4,7 +4,7 @@ import type { SessionTranscriptReadScope } from "../../config/sessions/session-a
 import {
   readTranscriptDisplayDelta,
   type SessionTranscriptDisplayDeltaResult,
-} from "../../config/sessions/session-accessor.sqlite-delta.js";
+} from "../../config/sessions/session-accessor.sqlite-history-events.js";
 import {
   projectSessionMessagePayload,
   type SessionMessageProjectionState,

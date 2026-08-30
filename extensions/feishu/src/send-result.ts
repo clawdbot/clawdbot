@@ -37,6 +37,7 @@ export function createFeishuSendReceipt(params: {
   messageId?: string;
   chatId: string;
   kind?: MessageReceiptPartKind;
+  replyToId?: string;
 }): MessageReceipt {
   const messageId = params.messageId?.trim();
   const chatId = params.chatId.trim();
@@ -51,7 +52,7 @@ export function createFeishuSendReceipt(params: {
           },
         ]
       : [],
-    ...(chatId ? { threadId: chatId } : {}),
+    ...(params.replyToId?.trim() ? { replyToId: params.replyToId.trim() } : {}),
     kind: params.kind ?? "unknown",
   });
 }
@@ -70,6 +71,7 @@ export function toFeishuSendResult(
   chatId: string,
   kind?: MessageReceiptPartKind,
   errorPrefix = "Feishu send failed",
+  replyToId?: string,
 ): {
   messageId: string;
   chatId: string;
@@ -86,6 +88,6 @@ export function toFeishuSendResult(
   return {
     messageId,
     chatId,
-    receipt: createFeishuSendReceipt({ messageId, chatId, kind }),
+    receipt: createFeishuSendReceipt({ messageId, chatId, kind, replyToId }),
   };
 }

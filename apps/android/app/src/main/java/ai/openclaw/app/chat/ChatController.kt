@@ -125,8 +125,6 @@ class ChatController internal constructor(
   private val scope: CoroutineScope,
   private val json: Json,
   private val requestGateway: suspend (method: String, paramsJson: String?) -> String,
-  private val requestGatewayWithTimeout: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String =
-    { method, paramsJson, _ -> requestGateway(method, paramsJson) },
   private val requestGatewayForGateway: suspend (gatewayId: String, method: String, paramsJson: String?) -> String =
     { _, method, paramsJson -> requestGateway(method, paramsJson) },
   private val gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
@@ -187,9 +185,6 @@ class ChatController internal constructor(
     scope = scope,
     json = json,
     requestGateway = { method, paramsJson -> session.request(method, paramsJson) },
-    requestGatewayWithTimeout = { method, paramsJson, timeoutMs ->
-      session.request(method, paramsJson, timeoutMs)
-    },
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
@@ -1081,6 +1076,7 @@ class ChatController internal constructor(
     unreadExpectation: ChatSessionUnreadExpectation? = null,
   ): Boolean {
     val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return false
+    val requestCacheScope = currentCacheScope()
     val capturedOwnerAgentId =
       resolveAgentIdFromMainSessionKey(sessionKey)
         ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() }
@@ -1131,12 +1127,33 @@ class ChatController internal constructor(
           }
         }
       if (archived == true) {
-        requestGatewayWithTimeout("sessions.patch", params.toString(), 10 * 60_000L)
+        val defaultAgentRevision = currentDefaultAgentRevision().takeIf { activeSessionTracksDefaultAgent(sessionKey) }
+        val selection =
+          synchronized(gatewayScopeApplyLock) {
+            currentSessionActionSnapshot(sessionKey)?.takeIf {
+              it.gatewayScope == requestCacheScope &&
+                it.ownerAgentId == capturedOwnerAgentId?.lowercase() &&
+                _sessionId.value == lifecycleSessionId
+            }
+          }
+        val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
+        lease.request("sessions.patch", params.toString(), 10 * 60_000L)
+        lease.commitIfCurrent {
+          synchronized(gatewayScopeApplyLock) {
+            // Same-key history and default-owner changes need not move selection generation.
+            // Only the selection captured at entry may navigate after the archive completes.
+            if (
+              selection != null &&
+              isCurrentSessionAction(selection) &&
+              _sessionId.value == lifecycleSessionId &&
+              (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
+            ) {
+              fallBackFromRetiredActiveSession(sessionKey)
+            }
+          }
+        }
       } else {
         requestGateway("sessions.patch", params.toString())
-      }
-      if (archived == true) {
-        fallBackFromRetiredActiveSession(sessionKey)
       }
       fetchSessionsForCurrentWindow()
       return true

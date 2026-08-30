@@ -18,6 +18,8 @@ import {
 const INTERNAL_NON_DELIVERY_CHANNELS = [
   "heartbeat",
   "cron",
+  "cron-event",
+  "exec-event",
   "webhook",
   "voice",
   "sessions_send",

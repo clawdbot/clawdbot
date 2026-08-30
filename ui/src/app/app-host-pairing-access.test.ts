@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render, type TemplateResult } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -109,6 +109,9 @@ function createPairingShell(params: {
     location: { pathname: "/chat", search: "", hash: "" },
   };
   const container = document.createElement("div");
+  onTestFinished(() => {
+    render(null, container);
+  });
 
   const renderSidebar = () => {
     render(shell.render(), container);
@@ -123,6 +126,7 @@ function createPairingShell(params: {
   // replaces the eager loading shell with the full dialog.
   const renderPairingDialog = async () => {
     renderSidebar();
+    await vi.dynamicImportSettled();
     return await waitForFast(() => {
       render(shell.render(), container);
       const dialog = container.querySelector<HTMLElement>(
@@ -146,7 +150,8 @@ function createPairingShell(params: {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   vi.useRealTimers();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
@@ -329,6 +334,7 @@ describe("application shell pairing access", () => {
     });
 
     renderSidebar();
+    await vi.dynamicImportSettled();
     await waitForFast(() => {
       render(shell.render(), container);
       expect(container.querySelector('[role="timer"]')?.textContent).toContain("0:01");

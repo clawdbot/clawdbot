@@ -37,6 +37,7 @@ const hoistedMessageActionRunnerMocks = vi.hoisted(() => ({
   isCurrentSourceReplyActionName: vi.fn(() => false),
   isDeliveredCurrentSourceReply: vi.fn(() => false),
   isDeliveredCurrentSourceReplyAction: vi.fn(() => false),
+  isThreadPlacementSourceReplyActionName: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
   loadWebMedia: vi.fn<typeof import("../../media/web-media.js").loadWebMedia>(),
 }));
@@ -71,6 +72,8 @@ vi.mock("./source-reply-mirror.js", () => ({
   isCurrentSourceReplyActionName: messageActionRunnerMocks.isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply: messageActionRunnerMocks.isDeliveredCurrentSourceReply,
   isDeliveredCurrentSourceReplyAction: messageActionRunnerMocks.isDeliveredCurrentSourceReplyAction,
+  isThreadPlacementSourceReplyActionName:
+    messageActionRunnerMocks.isThreadPlacementSourceReplyActionName,
   reconcileTerminalSourceReplyDelivery:
     messageActionRunnerMocks.reconcileTerminalSourceReplyDelivery,
 }));

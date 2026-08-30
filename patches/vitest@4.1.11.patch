@@ -1,3 +1,15 @@
+diff --git a/dist/chunks/cac.uFydS1Z4.js b/dist/chunks/cac.uFydS1Z4.js
+index bf394fb6f662f2eed77d066b45be9898ede971c4..9f38659e3fa65d6dee938ba6188a41472a118a74 100644
+--- a/dist/chunks/cac.uFydS1Z4.js
++++ b/dist/chunks/cac.uFydS1Z4.js
+@@ -2293 +2293,6 @@ function parseCLI(argv, config = {}) {
+-	let { args, options } = createCLI(config).parse(arrayArgs, { run: false });
++	const cli = createCLI(config);
++	let { args, options } = cli.parse(arrayArgs, { run: false });
++	// Validate without executing; help/version clear the matched command in parse().
++	cli.matchedCommand?.checkUnknownOptions();
++	cli.matchedCommand?.checkOptionValue();
++	cli.matchedCommand?.checkRequiredArgs();
 diff --git a/dist/chunks/cli-api.CnMVyzaz.js b/dist/chunks/cli-api.CnMVyzaz.js
 index 2b8bb8d9cb13dc89892f4983afd404c8594bdcc5..554a865b72deee1bff2d7cbfffda156b451c1316 100644
 --- a/dist/chunks/cli-api.CnMVyzaz.js

@@ -11,6 +11,7 @@ import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultRuntime,
   formatErrorMessage,
+  getMemoryEmbeddingCommandSecretTargetIds,
   getMemorySearchManager,
   getRuntimeConfig,
   resolveCommandSecretRefsViaGateway,
@@ -27,9 +28,6 @@ export type MemoryManager = NonNullable<
   Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]
 >;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
-function getMemoryCommandSecretTargetIds(): Set<string> {
-  return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
-}
 function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
   const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   if (
@@ -60,7 +58,7 @@ async function loadMemoryCommandConfig(
     const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
       config,
       commandName,
-      targetIds: getMemoryCommandSecretTargetIds(),
+      targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
       ...(mode ? { mode } : {}),
     });
     return { config: resolvedConfig, diagnostics };

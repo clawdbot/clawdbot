@@ -4290,7 +4290,7 @@ NODE
     const install = step("Install dependencies");
     const installScript = expectDefined(install.run, "Install dependencies script");
     const cachePaths =
-      "node_modules\nui/node_modules\npackages/*/node_modules\nexamples/*/node_modules\n.cache/openclaw-pnpm-store\n";
+      "node_modules\nui/node_modules\npackages/*/node_modules\nextensions/*/node_modules\nexamples/*/node_modules\n.cache/openclaw-pnpm-store\n";
 
     expect(action.inputs["cache-mode"].default).toBe("off");
     expect(action.inputs["dependency-cache"].default).toBe("false");
@@ -5970,10 +5970,7 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("retains fetch deadlines in other standalone workflows", () => {
-    const workflowPaths = [
-      [".github/workflows/workflow-sanity.yml", "30s"],
-      [".github/workflows/crabbox-hydrate.yml", "30s"],
-    ] as const;
+    const workflowPaths = [[".github/workflows/crabbox-hydrate.yml", "30s"]] as const;
 
     for (const [workflowPath, timeoutSeconds] of workflowPaths) {
       const workflow = readFileSync(workflowPath, "utf8");
@@ -6338,6 +6335,62 @@ server.listen(0, "127.0.0.1", () => {
         "persist-credentials": false,
       });
     }
+  });
+
+  it("pins workflow sanity's typed Git policy after Python setup", () => {
+    const steps: WorkflowStep[] = readWorkflowSanityWorkflow().jobs.actionlint.steps;
+    const python = expectDefined(
+      steps.find((step) => step.name === "Setup Python"),
+      "Python",
+    );
+    const owner = expectDefined(
+      steps.find((step) => step.name === "Prepare Git owner"),
+      "owner",
+    );
+    const policy = expectDefined(
+      steps.find((step) => step.name === "Prepare trusted workflow audit configs"),
+      "policy",
+    );
+    expect(python.with).toEqual({ "python-version": "3.12" });
+    expect(owner.uses).toBe(
+      "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+    );
+    expect(owner.with).toBeUndefined();
+    expect(steps.indexOf(python)).toBeLessThan(steps.indexOf(owner));
+    expect(steps.indexOf(owner)).toBeLessThan(steps.indexOf(policy));
+    expect(policy.if).toBe("github.event_name == 'pull_request'");
+    expect(policy.env).toEqual({
+      BASE_REF: "${{ github.event.pull_request.base.ref }}",
+      BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+    });
+    expect(policy.run).toContain("exec python3 -I -S \"$CI_GIT_OWNER\" --policy - <<'PYTHON'");
+    expect(policy.run).not.toMatch(
+      /timeout --|fetch_status|fetch_base_ref|sleep 5|subprocess\.PIPE|except (?:Exception|BaseException|SystemExit|RuntimeError)/u,
+    );
+    expect(policy.run?.match(/timeout=\d+/gu)).toEqual(["timeout=30"]);
+    expect(policy.run).toContain("range(1, 4)");
+    expect(policy.run).toContain("backoff(5)");
+    for (const contract of [
+      "--no-tags",
+      "--depth=1",
+      "reclaim_locks=True",
+      "refs/remotes/origin/security-base",
+      "refs/heads/",
+      ".pre-commit-config.yaml",
+      ".github/zizmor.yml",
+      "pre-commit-base.yaml",
+      "zizmor-base.yml",
+      "PRE_COMMIT_CONFIG_PATH=",
+    ]) {
+      expect(policy.run).toContain(contract);
+    }
+    const audit = expectDefined(
+      steps.find((step) => step.name === "Audit all workflows with zizmor"),
+      "audit",
+    );
+    expect(audit.run).toContain(
+      'pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor',
+    );
   });
 
   it("prepares Testbox checkouts with one maintained owner and scoped history", () => {

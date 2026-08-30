@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
-import { runCiGitStep } from "./ci-git-owner.test-support.js";
+import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
 
 const linuxIt = it.skipIf(process.platform !== "linux");
 const base = "c".repeat(40);
@@ -382,4 +382,312 @@ it("preserves no per-operation deadline on all six CI remote lookups", () => {
     Array.from((run ?? "").matchAll(/--git (\S+) ls-remote/gu)),
   );
   expect(calls.map((call) => call[1])).toEqual(Array(6).fill("0"));
+});
+
+const posixIt = it.skipIf(process.platform === "win32");
+const auditFiles = [".pre-commit-config.yaml", ".github/zizmor.yml"];
+const branch = "refs/remotes/origin/main";
+const auditObjects = Object.fromEntries(
+  [base, branch].flatMap((ref) =>
+    auditFiles.map((file) => [
+      `${ref}:${file}`,
+      {
+        text: `# ${ref}\n${file === auditFiles[0] ? "config: .github/zizmor.yml" : "rules: {}"}\n`,
+      },
+    ]),
+  ),
+);
+function requireAuditObject(ref: string, file: string) {
+  const object = auditObjects[`${ref}:${file}`];
+  if (!object) {
+    throw new Error(`Missing audit fixture object: ${ref}:${file}`);
+  }
+  return object;
+}
+const sanity = (options: Omit<Parameters<typeof runCiGitStep>[0], "workflow">) =>
+  runCiGitStep({
+    ...options,
+    workflow: "workflow-sanity",
+    objects: { ...auditObjects, ...options.objects },
+  });
+
+// These execute the actual YAML body. Every fake transport leaves ready writers
+// behind its leader, so fallback and config consumption must wait for the owner.
+posixIt(
+  "workflow sanity drains ordinary exact failure before branch fallback and config consumption",
+  async () => {
+    const report = await sanity({ fetchResults: [23, 0], realClock: true });
+    expect(report.code, report.output).toBe(0);
+    expect(report.readyAttempts).toEqual([1, 2]);
+    expect(report.fetches.map(({ args }) => args.at(-1))).toEqual([
+      `+${base}:refs/remotes/origin/security-base`,
+      `+refs/heads/main:${branch}`,
+    ]);
+    expect(report.githubEnv).toBe(
+      `PRE_COMMIT_CONFIG_PATH=${report.runnerTemp}/pre-commit-base.yaml\n`,
+    );
+  },
+  55_000,
+);
+
+type SanityFetchCase = {
+  label: string;
+  fetchResults: FetchResult[];
+  baseAvailableAfter?: number;
+  refs: string[];
+  warnings: number;
+  code: number;
+};
+const sanityFetchCases: SanityFetchCase[] = [
+  {
+    label: "already present",
+    fetchResults: [],
+    baseAvailableAfter: 0,
+    refs: [],
+    warnings: 0,
+    code: 0,
+  },
+  { label: "exact success", fetchResults: [0], refs: [base], warnings: 0, code: 0 },
+  ...[2, 23, 125, 143].map((code) => ({
+    label: `ordinary ${code}`,
+    fetchResults: [code, 0],
+    refs: [base, "refs/heads/main"],
+    warnings: 0,
+    code: 0,
+  })),
+  ...[124, 137].flatMap((code) => [
+    {
+      label: `ordinary ${code} retry`,
+      fetchResults: [code, 0],
+      refs: [base, base],
+      warnings: 1,
+      code: 0,
+    },
+    {
+      label: `ordinary ${code} exhaustion`,
+      fetchResults: Array(6).fill(code),
+      refs: [...Array(3).fill(base), ...Array(3).fill("refs/heads/main")],
+      warnings: 4,
+      code,
+    },
+  ]),
+  {
+    label: "FetchTimeout exhaustion then branch",
+    fetchResults: ["hang", "hang", "hang", 0],
+    refs: [base, base, base, "refs/heads/main"],
+    warnings: 2,
+    code: 0,
+  },
+  {
+    label: "FetchTimeout both refs exhausted",
+    fetchResults: Array(6).fill("hang"),
+    refs: [...Array(3).fill(base), ...Array(3).fill("refs/heads/main")],
+    warnings: 4,
+    code: 124,
+  },
+];
+
+posixIt.each(sanityFetchCases)(
+  "workflow sanity preserves fetch policy: $label",
+  async ({ fetchResults, baseAvailableAfter, refs, warnings, code }) => {
+    const report = await sanity({ fetchResults, baseAvailableAfter });
+    expect(report.code, report.output).toBe(code);
+    expect(report.fetches.map(({ args }) => args)).toEqual(
+      refs.map((ref) => [
+        "fetch",
+        "--no-tags",
+        "--depth=1",
+        "origin",
+        `+${ref}:${ref === base ? "refs/remotes/origin/security-base" : branch}`,
+      ]),
+    );
+    expect(
+      report.fetches.every(
+        ({ configuration, cwd }) => configuration?.length === 0 && cwd === report.workspace,
+      ),
+    ).toBe(true);
+    expect(report.output.match(/timed out on attempt [12]; retrying/gu) ?? []).toHaveLength(
+      warnings,
+    );
+    expect(
+      report.commands.filter(({ args }) => args[0] === "cat-file").map(({ args }) => args),
+    ).toEqual([
+      ["cat-file", "-e", `${base}^{commit}`],
+      ...(code === 0 ? auditFiles.map((file) => ["cat-file", "-e", `${base}:${file}`]) : []),
+    ]);
+    expect(report.githubEnv).toBe(
+      code === 0 ? `PRE_COMMIT_CONFIG_PATH=${report.runnerTemp}/pre-commit-base.yaml\n` : "",
+    );
+    if (code === 0) {
+      expect(report.trustedConfig).toBe(
+        `# ${base}\nconfig: ${report.runnerTemp}/zizmor-base.yml\n`,
+      );
+      expect(report.trustedZizmor).toBe(`# ${base}\nrules: {}\n`);
+    } else {
+      expect(report.trustedConfig).toBe("");
+      expect(report.trustedZizmor).toBe("");
+    }
+  },
+  55_000,
+);
+
+posixIt.each([
+  { label: "real 30-second fetch timeout", fetchResults: ["hang", 0], warnings: 1 },
+  { label: "real five-second backoff", fetchResults: [137, 0], warnings: 1 },
+] as const)(
+  "workflow sanity retains $label",
+  async ({ fetchResults, warnings }) => {
+    const started = performance.now();
+    const report = await sanity({
+      fetchResults: [...fetchResults],
+      realClock: true,
+      cooperativeTrees: true,
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(report.fetches).toHaveLength(2);
+    expect(report.output.match(/; retrying/gu) ?? []).toHaveLength(warnings);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(
+      fetchResults[0] === "hang" ? 35_000 : 5_000,
+    );
+  },
+  55_000,
+);
+
+posixIt.each([
+  { label: "owner inspection failure", fetchResults: ["cleanup-failure"], code: 125 },
+  { label: "fetch cancellation", fetchResults: ["hang"], scenario: "cancel-SIGTERM", code: 143 },
+  {
+    label: "timeout drain cancellation",
+    fetchResults: ["hang"],
+    cancelDuringCleanup: true,
+    code: 143,
+  },
+  {
+    label: "backoff cancellation",
+    fetchResults: [124],
+    cancelDuringBackoff: true,
+    realClock: true,
+    cooperativeTrees: true,
+    code: 143,
+  },
+  { label: "missing owner", fetchResults: [], setupFailure: "owner", code: 2 },
+  {
+    label: "missing Python interpreter",
+    fetchResults: [],
+    setupFailure: "python",
+    code: "launcher",
+  },
+  { label: "Git spawn failure", fetchResults: [], setupFailure: "git", code: 125 },
+] satisfies (Partial<Parameters<typeof runCiGitStep>[0]> & {
+  label: string;
+  code: number | "launcher";
+  fetchResults: FetchResult[];
+})[])(
+  "workflow sanity never recovers or publishes after $label",
+  async ({ label: _label, code, ...options }) => {
+    const report = await sanity(options);
+    if (code === "launcher") {
+      // Bash versions differ for a found executable whose interpreter is missing.
+      expect([126, 127], report.output).toContain(report.code);
+    } else {
+      expect(report.code, report.output).toBe(code);
+    }
+    expect(report.fetches).toHaveLength(options.fetchResults.length);
+    expect(report.commands.filter(({ args }) => args[0] === "show")).toEqual([]);
+    expect(report.githubEnv).toBe("");
+    expect(report.trustedConfig).toBe("");
+    expect(report.trustedZizmor).toBe("");
+    expect(report.cancelledDuringCleanup).toBe(Boolean(options.cancelDuringCleanup));
+    expect(report.boundaries.some(({ name }) => name === "backoff-cancel")).toBe(
+      Boolean(options.cancelDuringBackoff),
+    );
+  },
+  55_000,
+);
+
+posixIt.each([[], [0], [1], [0, 1]].map((missing) => ({ missing })))(
+  "workflow sanity selects missing exact configs independently ($missing)",
+  async ({ missing }) => {
+    const report = await sanity({
+      fetchResults: [],
+      baseAvailableAfter: 0,
+      objects: Object.fromEntries(
+        missing.map((index) => {
+          const file = auditFiles[index];
+          if (!file) {
+            throw new Error(`Missing audit fixture file at index ${index}`);
+          }
+          return [
+            `${base}:${file}`,
+            { ...requireAuditObject(base, file), probe: index === 0 ? 125 : 143 },
+          ];
+        }),
+      ),
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(report.fetches).toEqual([]);
+    expect(
+      report.commands.filter(({ args }) => args[0] === "show").map(({ args }) => args),
+    ).toEqual(
+      auditFiles.map((file, index) => [
+        "show",
+        `${missing.includes(index) ? branch : base}:${file}`,
+      ]),
+    );
+    for (const index of missing) {
+      expect(report.output).toContain(
+        `Base SHA ${base} does not expose ${auditFiles[index]}; using origin/main instead.`,
+      );
+    }
+    expect(report.githubEnv).toBe(
+      `PRE_COMMIT_CONFIG_PATH=${report.runnerTemp}/pre-commit-base.yaml\n`,
+    );
+  },
+  55_000,
+);
+
+posixIt.each(
+  auditFiles.flatMap((file) => [
+    { file, fallback: false },
+    { file, fallback: true },
+  ]),
+)(
+  "workflow sanity rejects partial $file show (fallback=$fallback)",
+  async ({ file, fallback }) => {
+    const report = await sanity({
+      fetchResults: [],
+      baseAvailableAfter: 0,
+      objects: {
+        [`${base}:${file}`]: { text: "partial\n", probe: fallback ? 1 : 0, code: 23 },
+        [`${branch}:${file}`]: { text: "partial\n", code: 23 },
+      },
+    });
+    expect(report.code, report.output).toBe(fallback ? 1 : 23);
+    expect(report.fetches).toEqual([]);
+    expect(report.githubEnv).toBe("");
+    expect(file === auditFiles[0] ? report.trustedConfig : report.trustedZizmor).toBe("");
+    const shows = report.commands
+      .filter(({ args }) => args[0] === "show")
+      .map(({ args }) => args.at(-1));
+    expect(shows.at(-1)).toBe(`${fallback ? branch : base}:${file}`);
+    expect(shows).not.toContain(`${fallback ? base : branch}:${file}`);
+    if (fallback) {
+      expect(report.output).toContain(`Could not read ${file} from ${base} or origin/main.`);
+    }
+  },
+  55_000,
+);
+
+posixIt("workflow sanity rejects a config without the Zizmor reference", async () => {
+  const report = await sanity({
+    fetchResults: [],
+    baseAvailableAfter: 0,
+    objects: { [`${base}:${auditFiles[0]}`]: { text: "repos: []\n" } },
+    poisonPython: true,
+  });
+  expect(report.code, report.output).toBe(1);
+  expect(report.output).toContain(
+    "trusted pre-commit config does not reference .github/zizmor.yml",
+  );
+  expect(report.githubEnv).toBe("");
 });

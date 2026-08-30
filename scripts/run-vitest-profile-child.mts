@@ -44,11 +44,6 @@ try {
   if (mode === "runner") {
     const setup = fileURLToPath(new URL("./lib/vitest-profiler.mts", import.meta.url));
     // Vite appends this array to the configured setup, including scalar setup paths.
-    // Explicit API options take precedence, so append at that source when present.
-    if (cliOptions.globalSetup !== undefined) {
-      const selected = cliOptions.globalSetup;
-      cliOptions.globalSetup = [...(Array.isArray(selected) ? selected : [selected]), setup];
-    }
     profilingConfig.test = {
       globalSetup: [setup],
       provide: { openclawVitestProfileDir: outputDir },

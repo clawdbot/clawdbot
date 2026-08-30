@@ -87,7 +87,10 @@ interface LineHandlerContext {
   mediaMaxBytes: number;
   processMessage: (
     ctx: LineInboundContext,
-    control: { turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle },
+    control: {
+      cfg: OpenClawConfig;
+      turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
+    },
   ) => Promise<void>;
   turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
   groupHistories?: Map<string, HistoryEntry[]>;
@@ -502,10 +505,11 @@ async function handleMessageEvent(
         return false;
       }
 
-      await processMessage(
-        messageContext,
-        params.lifecycle ? { turnAdoptionLifecycle: params.lifecycle } : {},
-      );
+      await processMessage(messageContext, {
+        // The config this event resolved to, not the one the monitor booted on.
+        cfg: context.cfg,
+        ...(params.lifecycle ? { turnAdoptionLifecycle: params.lifecycle } : {}),
+      });
       return true;
     };
 
@@ -607,10 +611,12 @@ async function handlePostbackEvent(
     return;
   }
 
-  await context.processMessage(
-    postbackContext,
-    context.turnAdoptionLifecycle ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle } : {},
-  );
+  await context.processMessage(postbackContext, {
+    cfg: context.cfg,
+    ...(context.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
+      : {}),
+  });
 }
 
 /**

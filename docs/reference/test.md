@@ -277,7 +277,7 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 
 Runner profiling preserves the selected `forks` or `threads` pool, isolation, environment, and custom runners extending Vitest's `TestRunner`. Capture starts in a Node preload before Vitest worker imports, spans all files assigned to that worker, and finishes both profile files in awaited worker cleanup before teardown is acknowledged. It does not depend on exit-time profile flushing. Root global setup configures every selected project without replacing its reporters or setup. Main capture spans Vitest/Vite startup through run completion and close. Process termination before cleanup, bootstrap failures before runner construction, and teardown timeouts can still prevent output. Browser/VM pools, custom runners without `onCleanupWorkerContext`, and additional native `--cpu-prof`/`--heap-prof` flags are rejected for runner profiling.
 
-Forward Vitest options after the profiler separator, for example:
+Forward Vitest options after the profiler separator. Forwarded options use Vitest's native CLI validation before loading config. Config-only settings, such as `runner` and `globalSetup`, belong in the Vitest config file, not CLI flags. For example:
 
 ```bash
 pnpm test:perf:profile:runner -- --output-dir .artifacts/profiles -- --config test/vitest/vitest.unit.config.ts --pool threads

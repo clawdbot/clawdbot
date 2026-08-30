@@ -674,9 +674,15 @@ export function setupSidebarTest() {
     localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
   });
 
-  afterEach(() => {
-    document.body.replaceChildren();
+  afterEach(async () => {
     vi.useRealTimers();
+    await vi.dynamicImportSettled();
+    // Removing a prompt's DOM does not settle its promise or release its reentrancy guard.
+    for (const modal of document.body.querySelectorAll("openclaw-modal-dialog")) {
+      modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+    }
+    await vi.dynamicImportSettled();
+    document.body.replaceChildren();
     if (originalLocalStorage) {
       Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
     } else {

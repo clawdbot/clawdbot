@@ -13,6 +13,7 @@ import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admi
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
+import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import {
   loadAgentRunnerRuntime,
@@ -21,7 +22,7 @@ import {
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
-import { finalizeInboundContextForSdk } from "./inbound-context.js";
+import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
 import {
   buildInboundUserContextPrefix,
   resolveInboundUserContextPromptJoiner,
@@ -1366,6 +1367,59 @@ describe("runPreparedReply media-only handling", () => {
       expect(result).toEqual({ text: "ok" });
       expect(requireRunReplyAgentCall().followupRun.prompt).toBe(body);
       expect(onDeliberateSilentTerminalReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "ordinary code", directive: "", authorized: true, enabled: true },
+    { name: "authorized directive", directive: "/think high\r\n", authorized: true, enabled: true },
+    {
+      name: "unauthorized directive",
+      directive: "/think high\r\n",
+      authorized: false,
+      enabled: true,
+    },
+    {
+      name: "disabled text commands",
+      directive: "/think high\r\n",
+      authorized: true,
+      enabled: false,
+    },
+  ])(
+    "preserves prompt bytes through routing and preparation: $name",
+    async ({ directive, authorized, enabled }) => {
+      const code =
+        "Run  this:\r\n```python\r\n    if True:\r\n        print('a  b')\r\n\t\t# tabs  stay\r\n```";
+      const body = `${directive}${code}`;
+      const params = baseParams({
+        ctx: createInboundTurn(body, "slack", "direct"),
+        sessionCtx: createSessionTurn(body, "slack", "direct"),
+        isNewSession: false,
+        commandAuthorized: authorized,
+        allowTextCommands: enabled,
+      });
+      params.command = { ...params.command, isAuthorizedSender: authorized };
+      const routed = resolveReplyDirectiveRouting({
+        commandText: body,
+        agentText: body,
+        modelAliases: [],
+        canInterpretTextDirectives: authorized && enabled,
+        isAuthorizedSender: authorized,
+        isGroup: false,
+        wasMentioned: false,
+        ctx: finalizeInboundContext(params.ctx),
+        cfg: params.cfg,
+        agentId: params.agentId,
+        resetTriggered: false,
+      });
+      params.directives = routed.directives;
+      params.sessionCtx.agentText = routed.cleanedBody;
+      await runPreparedReply(params);
+
+      const expected = authorized && enabled ? code : body;
+      const call = requireRunReplyAgentCall();
+      expect(call.commandBody).toBe(expected);
+      expect(call.followupRun.prompt).toBe(expected);
     },
   );
 
@@ -4409,9 +4463,10 @@ describe("runPreparedReply media-only handling", () => {
     // does not shadow the low|medium|high shorthand.
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
 
+    const code = "Run  this:\r\n    if True:\r\n        print('a  b')";
     await runPrepared({
-      ctx: { Body: "low tell me about cats", RawBody: "low tell me about cats" },
-      sessionCtx: { Body: "low tell me about cats", BodyStripped: "low tell me about cats" },
+      ctx: createInboundBody(`low ${code}`),
+      sessionCtx: createSessionBody(`low ${code}`),
       resolvedThinkLevel: undefined,
     });
 
@@ -4419,7 +4474,7 @@ describe("runPreparedReply media-only handling", () => {
     // Think hint extracted before events arrived — level must be "low", not the model default.
     expect(call.followupRun.run.thinkLevel).toBe("low");
     // The stripped user text (no "low" token) must still appear after the event block.
-    expect(call.commandBody).toContain("tell me about cats");
+    expect(call.commandBody).toBe(`System: [t] Node connected.\n\n${code}`);
     expect(call.commandBody).not.toMatch(/^low\b/);
     // System events are still present in the body.
     expect(call.commandBody).toContain("System: [t] Node connected.");

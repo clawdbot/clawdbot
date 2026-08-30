@@ -369,14 +369,14 @@ The LINE plugin sends images, videos, and audio through the agent message tool:
 - **Videos**: require a preview image; set `channelData.line.previewImageUrl` to an image URL.
 - **Audio**: sent as LINE audio messages; duration defaults to 60 seconds unless `channelData.line.durationMs` is set.
 
-The media kind is taken from `channelData.line.mediaKind` when set, otherwise inferred
-from the other LINE options or the URL file suffix, with image as the fallback.
+When `mediaKind` is omitted, LINE infers it from LINE-specific options or the URL
+suffix. Native suffix inference supports JPEG/PNG, MP4, and MP3/M4A; suffixless URLs
+retain the image fallback. Other suffixed URLs and inferred MP4 without a preview
+become text links. Explicit video still requires `previewImageUrl`.
 
 Outbound media URLs must be public HTTPS URLs of at most 2000 characters. OpenClaw
 validates the target hostname before handing the URL to LINE and rejects loopback,
 link-local, and private-network targets.
-
-Generic media sends without LINE-specific options use the image route.
 
 ## Troubleshooting
 

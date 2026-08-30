@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
+import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -17,7 +18,6 @@ import {
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
 import {
-  listAuthProfilesForProvider,
   normalizeApiKeyConfig,
   resolveApiKeyFromCredential,
   resolveApiKeyFromProfiles,
@@ -191,7 +191,7 @@ export function createProviderAuthResolver(
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
-    const ids = listAuthProfilesForProvider(authStore, authProvider);
+    const ids = listProfilesForProvider(authStore, authProvider);
 
     let oauthCandidate:
       | {

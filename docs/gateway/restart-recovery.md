@@ -54,6 +54,12 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+Replies to pending node commands remain accepted during the drain, including
+worker cleanup started by shutdown. Each reply must still match its live
+invocation, node connection, pairing generation, and owning lifecycle. This
+lets cleanup finish without waiting for a command timeout; it does not reopen
+admission for new requests.
+
 Only work that cannot finish inside the drain budget (or any run interrupted
 by a forced restart or a crash) is aborted — and before that happens, each
 affected session is marked for recovery.

@@ -65,8 +65,15 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
     .action(async (opts, command) => {
       const resolved = resolveGatewayRunOptions(opts, command);
-      await hooks.beforeRun?.(resolved);
-      const { runGatewayCommand } = await import("./run.js");
-      await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
+      try {
+        await hooks.beforeRun?.(resolved);
+        const { runGatewayCommand } = await import("./run.js");
+        await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
+      } catch (error) {
+        const { handleGatewayStartupMaintenance } = await import("./startup-maintenance.js");
+        if (!(await handleGatewayStartupMaintenance(error))) {
+          throw error;
+        }
+      }
     });
 }

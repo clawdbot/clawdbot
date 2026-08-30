@@ -8,7 +8,6 @@ scenario:
   execution:
     kind: flow
     channel: matrix
-    timeoutMs: 60000
     retryCount: 0
 
 flow:

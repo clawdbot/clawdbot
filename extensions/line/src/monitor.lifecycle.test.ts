@@ -434,6 +434,52 @@ describe("monitorLineProvider lifecycle", () => {
     }
   });
 
+  it("carries a group's skill scope into the turn that answers it", async () => {
+    // The scope is configured per group but enforced per turn: it only applies
+    // if the reply options reaching the agent carry it.
+    const { setLineRuntime } = await import("./runtime.js");
+    type ResolvedTurn = { replyOptions?: { skillFilter?: string[] } };
+    let resolvedTurn: ResolvedTurn | undefined;
+    const runTurn = async (params: {
+      adapter: { resolveTurn: () => ResolvedTurn };
+    }): Promise<{ dispatched: false }> => {
+      resolvedTurn = params.adapter.resolveTurn();
+      return { dispatched: false };
+    };
+    setLineRuntime({
+      channel: { inbound: { run: runTurn } },
+    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+    if (!onMessage) {
+      throw new Error("expected the LINE bot to receive an inbound message handler");
+    }
+
+    try {
+      await onMessage(
+        {
+          ctxPayload: { From: "line:group:C1", MessageSid: "m1", RawBody: "hi" },
+          route: { accountId: "default", agentId: "main", sessionKey: "line:C1" },
+          isGroup: true,
+          accountId: "default",
+          skillFilter: ["triage"],
+          turn: { record: {} },
+        } as unknown as Parameters<typeof onMessage>[0],
+        {} as Parameters<typeof onMessage>[1],
+      );
+
+      expect(resolvedTurn?.replyOptions?.skillFilter).toEqual(["triage"]);
+    } finally {
+      // A leaked registration makes later shared-path signature tests ambiguous.
+      await monitor.stop();
+    }
+  });
+
   it("dispatches shared-path webhook posts to the account matching the signature", async () => {
     const firstMonitor = await monitorLineProvider({
       channelAccessToken: "first-token",

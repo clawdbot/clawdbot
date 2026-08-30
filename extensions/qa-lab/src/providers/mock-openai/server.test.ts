@@ -898,6 +898,79 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it.each([
+    { label: "structured", output: JSON.stringify({ ok: true }) },
+    { label: "empty", output: "" },
+  ])("plans the native thread reply and completes after $label output", async ({ output }) => {
+    const server = await startMockServer();
+    const prompt =
+      "qa thread reply receipt check. Use the native reply path. channel id: `qa-room`; thread id: `thread-1`; exact marker: `QA-THREAD-RECEIPT-OK`";
+
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [{ type: "function", name: "message" }],
+      input: [makeUserInput(prompt)],
+    });
+
+    expect(outputItem(payload).type).toBe("function_call");
+    expect(outputItem(payload).name).toBe("message");
+    expect(outputToolArgs(payload)).toEqual({
+      action: "thread-reply",
+      channelId: "qa-room",
+      threadId: "thread-1",
+      message: "QA-THREAD-RECEIPT-OK",
+    });
+
+    const toolCall = outputToolCall(payload, "message");
+    const finalPayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: outputToolCallId(toolCall, "call_thread_reply_receipt"),
+          output,
+        },
+      ],
+    });
+    expect(outputText(finalPayload)).toBe("QA-THREAD-RECEIPT-OK");
+    expect(finalPayload).not.toMatchObject({ output: [{ type: "function_call" }] });
+  });
+
+  it("returns a divergent automatic final after the native thread reply", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "qa thread reply receipt check. channel id: `qa-room`; thread id: `thread-1`; " +
+      "exact marker: `QA-THREAD-TOOL-OK`; divergent final: `QA-THREAD-FINAL-OK`";
+
+    const initialPayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const toolCall = outputToolCall(initialPayload, "message");
+    const finalPayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: outputToolCallId(toolCall, "call_thread_reply_divergent"),
+          output: JSON.stringify({ ok: true }),
+        },
+        makeUserInput("Continue from the tool result."),
+      ],
+    });
+
+    expect(outputText(finalPayload)).toBe("QA-THREAD-FINAL-OK");
+  });
+
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
     const server = await startMockServer();
 

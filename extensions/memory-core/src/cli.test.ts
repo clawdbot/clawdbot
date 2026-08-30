@@ -91,6 +91,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     {
       defaultRuntime,
       formatErrorMessage,
+      getMemoryEmbeddingCommandSecretTargetIds,
       setVerbose,
       shortenHomeInString,
       shortenHomePath,
@@ -109,6 +110,7 @@ vi.mock("./cli.host.runtime.js", async () => {
   return {
     defaultRuntime,
     formatErrorMessage,
+    getMemoryEmbeddingCommandSecretTargetIds,
     getMemorySearchManager,
     listMemoryFiles,
     getRuntimeConfig,
@@ -129,6 +131,7 @@ vi.mock("./cli.host.runtime.js", async () => {
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
 let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
+let getMemoryEmbeddingCommandSecretTargetIds: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").getMemoryEmbeddingCommandSecretTargetIds;
 let isVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").isVerbose;
 let setVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").setVerbose;
 let fixtureRoot = "";
@@ -140,10 +143,12 @@ beforeAll(async () => {
   ({ registerMemoryCli } = await import("./cli.js"));
   const {
     defaultRuntime: loadedDefaultRuntime,
+    getMemoryEmbeddingCommandSecretTargetIds: loadedGetMemoryEmbeddingCommandSecretTargetIds,
     isVerbose: loadedIsVerbose,
     setVerbose: loadedSetVerbose,
   } = await import("openclaw/plugin-sdk/memory-core-host-runtime-cli");
   defaultRuntime = loadedDefaultRuntime;
+  getMemoryEmbeddingCommandSecretTargetIds = loadedGetMemoryEmbeddingCommandSecretTargetIds;
   isVerbose = loadedIsVerbose;
   setVerbose = loadedSetVerbose;
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
@@ -980,9 +985,7 @@ describe("memory cli", () => {
     ) as { config?: unknown; commandName?: unknown; targetIds?: unknown; mode?: unknown };
     expect(secretRefsCall.config).toBe(config);
     expect(secretRefsCall.commandName).toBe("memory status");
-    expect(secretRefsCall.targetIds).toStrictEqual(
-      new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]),
-    );
+    expect(secretRefsCall.targetIds).toStrictEqual(getMemoryEmbeddingCommandSecretTargetIds());
     expect(secretRefsCall.mode).toBe("read_only_status");
   });
 

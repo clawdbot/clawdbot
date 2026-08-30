@@ -92,6 +92,16 @@ async function createSharedAppPage(): Promise<Page> {
     page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
     await page.route("https://cdn.example/**", async (route) => {
       const request = route.request();
+      if (request.url() === SHARED_APP_IMAGE_URL) {
+        await route.fulfill({
+          contentType: "image/png",
+          body: Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHElEQVR4nGP4z8DwnxLMMGrAsDCAQv2jBgwPAwAxtf4Q24P5oAAAAABJRU5ErkJggg==",
+            "base64",
+          ),
+        });
+        return;
+      }
       const fileName = decodeURIComponent(new URL(request.url()).pathname.split("/").at(-1) ?? "");
       const media = SHARED_APP_PLAYBACK_MEDIA.find(([candidate]) => candidate === fileName);
       if (!media) {
@@ -2657,8 +2667,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await messageText.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
         expect(await context.isVisible()).toBe(false);
 
-        // The shared group also contains an aborted image; finish its fallback
-        // layout before measuring whether opening the tooltip moves the row.
+        // Finish the shared image layout before measuring whether opening the
+        // tooltip moves the row.
         await messageText.hover();
         await page.waitForFunction(
           () => document.querySelector<HTMLImageElement>(".chat-message-image")?.complete,
@@ -2792,17 +2802,33 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       );
       const card = player.locator(".chat-assistant-attachment-card");
       await card.waitFor({ state: "visible", timeout: 10_000 });
-      await card.scrollIntoViewIfNeeded();
+      await player.evaluate((element) => {
+        element
+          .querySelector(".chat-assistant-attachment-card")!
+          .scrollIntoView({ block: "center" });
+      });
+      const requireMetadata = fileName !== "reply.m4a" && fileName !== "reply.mp4";
+      // Read the stable player: an error replaces its media child and card.
+      // Only AAC/H.264 fixtures may fall back; other codecs must actually load.
+      await expect
+        .poll(
+          () =>
+            player.evaluate(
+              (element, { type: mediaType, requireMetadata: needsMetadata }) => {
+                const media = element.querySelector<HTMLMediaElement>(mediaType);
+                return (
+                  (!needsMetadata &&
+                    element.querySelector(".chat-assistant-attachment-card--compact") !== null) ||
+                  (media !== null && (!needsMetadata || media.readyState >= 1))
+                );
+              },
+              { type, requireMetadata },
+            ),
+          { timeout: 10_000 },
+        )
+        .toBe(true);
       const compactFallback =
         (await player.locator(".chat-assistant-attachment-card--compact").count()) > 0;
-      if (!compactFallback && fileName !== "reply.m4a" && fileName !== "reply.mp4") {
-        const media = player.locator(type);
-        await expect
-          .poll(() => media.evaluate((element) => (element as HTMLMediaElement).readyState), {
-            timeout: 10_000,
-          })
-          .toBeGreaterThanOrEqual(1);
-      }
       if (!compactFallback) {
         expect(
           sharedAppPlaybackRequests.some((url) => {

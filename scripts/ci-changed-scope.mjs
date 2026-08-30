@@ -48,7 +48,7 @@ const APPLE_SHARED_CONTRACT_FIXTURE_RE =
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
 const GIT_OWNER_SCOPE_RE =
-  /^(?:\.github\/actions\/(?:git-owner|ensure-base-commit)\/|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|fixtures\/ci-platform-checkout\.mjs)$)/;
+  /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit)\/|workflows\/workflow-sanity\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|fixtures\/ci-platform-checkout\.mjs)$)/;
 const MACOS_SCRIPT_SCOPE_RE =
   /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|stage-cua-driver-macos|stage-mac-node-worker)\.sh|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-node-worker(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-worker-portability))\.mjs|scripts\/(?:materialize-mac-node-worker|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-host|mac-node-worker|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|verify-mac-node-worker-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-node-worker-materialization)\.test-support\.ts)$/;
 const WORKSPACE_RSYNC_RECEIVER_SCOPE_RE =

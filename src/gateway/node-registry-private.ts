@@ -384,6 +384,8 @@ async function invokeNodeRegistryCore(
       progressChunks: new Map(),
       nextInputSeq: 0,
       ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+      // Private transport retains its exact lifecycle owner through reply settlement.
+      ...(allowPrivateCommand ? { isCompletionAuthorized: params.isDispatchAuthorized } : {}),
     };
     const generationController = params.expectedPairingGeneration
       ? new AbortController()
