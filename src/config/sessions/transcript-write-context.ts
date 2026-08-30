@@ -4,6 +4,19 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { TranscriptAppendRefusal } from "./session-accessor.sqlite-contract.js";
 
+export type SessionTranscriptWriterFence = Readonly<{
+  expectedLifecycleRevision: string | undefined;
+  expectedWriterRunId: string;
+}>;
+
+/** A first-insert lease, bound to the original admission rather than its run id. */
+export type InitialSessionTranscriptWriter = Readonly<{
+  writerRunId: string;
+  committedFence: SessionTranscriptWriterFence | undefined;
+  assertActive: () => void;
+  recordCommitted: (fence: SessionTranscriptWriterFence) => void;
+}>;
+
 type SessionTranscriptWriteTarget = {
   agentId?: string;
   sessionId?: string;
@@ -17,6 +30,9 @@ export type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
   sessionKey?: string;
   sessionTarget?: SessionTranscriptWriteTarget;
+  initialWriter?: InitialSessionTranscriptWriter;
+  /** Revalidate the captured owner, including an absent writer, inside each commit. */
+  assertCommitAllowed?: () => void;
   withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
 };
 
@@ -101,26 +117,77 @@ export function getOwnedSessionTranscriptWriterFence(
     sessionKey?: string;
     sessionTarget?: SessionTranscriptWriteTarget;
   } = {},
-):
-  | {
-      expectedLifecycleRevision?: string;
-      expectedWriterRunId: string;
-    }
-  | undefined {
+): SessionTranscriptWriterFence | undefined {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context || (Object.keys(params).length > 0 && !contextMatches({ context, ...params }))) {
     return undefined;
   }
+  const initial = context.initialWriter;
+  if (initial) {
+    return (
+      initial.committedFence ?? {
+        expectedLifecycleRevision: undefined,
+        expectedWriterRunId: initial.writerRunId,
+      }
+    );
+  }
   const target = context.sessionTarget;
   const expectedWriterRunId = target?.expectedWriterRunId?.trim();
-  if (!expectedWriterRunId) {
+  return expectedWriterRunId
+    ? { expectedLifecycleRevision: target?.expectedLifecycleRevision, expectedWriterRunId }
+    : undefined;
+}
+
+/** Inherit only the exact host-minted first-insert owner across attempt preparation. */
+export function getOwnedSessionTranscriptInitialWriter(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteTarget;
+}): InitialSessionTranscriptWriter | undefined {
+  const context = ownedTranscriptWriteContext.getStore();
+  if (!context?.initialWriter) {
     return undefined;
   }
-  const expectedLifecycleRevision = target?.expectedLifecycleRevision;
-  return {
-    ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
-    expectedWriterRunId,
-  };
+  if (
+    !contextMatches({ context, ...params }) ||
+    context.sessionTarget?.sessionId !== params.sessionTarget?.sessionId ||
+    context.sessionTarget?.agentId !== params.sessionTarget?.agentId
+  ) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  return context.initialWriter;
+}
+
+function assertTranscriptWriteContext(
+  context: OwnedSessionTranscriptWriteContext | undefined,
+  scope: SessionTranscriptWriteTarget,
+): void {
+  if (!context?.assertCommitAllowed && !context?.initialWriter) {
+    return;
+  }
+  if (
+    !contextMatches({ context, sessionTarget: scope }) ||
+    context.sessionTarget?.sessionId !== scope.sessionId ||
+    context.sessionTarget?.agentId !== scope.agentId
+  ) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  context.assertCommitAllowed?.();
+  context.initialWriter?.assertActive();
+}
+
+/** A guarded context cannot silently become an unfenced write to another target. */
+export function assertOwnedTranscriptWriteCommit(scope: SessionTranscriptWriteTarget): void {
+  assertTranscriptWriteContext(ownedTranscriptWriteContext.getStore(), scope);
+}
+
+/** Retained post-commit work must revalidate its original owner, not its invocation context. */
+export function captureOwnedTranscriptWriteAssertion(
+  scope: SessionTranscriptWriteTarget,
+): () => void {
+  const context = ownedTranscriptWriteContext.getStore();
+  const target = { ...scope };
+  return () => assertTranscriptWriteContext(context, target);
 }
 
 /** Applies the admitted-run fence inherited by a matching synchronous writer. */

@@ -53,6 +53,7 @@ import {
 import type { SessionTranscriptWriteTransactionContext } from "./session-accessor.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import {
+  assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
@@ -145,6 +146,7 @@ export function replaceTranscriptEventsSync(
   const resolved = resolveSqliteTranscriptScope(fencedScope);
   let replaced = false;
   runOpenClawAgentWriteTransaction((database) => {
+    assertOwnedTranscriptWriteCommit(fencedScope);
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     if (
       !fresh ||
@@ -261,6 +263,7 @@ export function appendTranscriptEventSync(
   let result: Result<boolean, TranscriptAppendRefusal> = ok(false);
   runOpenClawAgentWriteTransaction((database) => {
     options.beforeCommitInTransaction?.();
+    assertOwnedTranscriptWriteCommit(fencedScope);
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
     if (refusal) {
@@ -343,6 +346,7 @@ export function appendTranscriptMessageSync<TMessage>(
   let result: Result<TranscriptMessageAppendResult<TMessage> | undefined, TranscriptAppendRefusal> =
     ok(undefined);
   runOpenClawAgentWriteTransaction((database) => {
+    assertOwnedTranscriptWriteCommit(fencedScope);
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
     if (refusal) {
@@ -350,6 +354,8 @@ export function appendTranscriptMessageSync<TMessage>(
       return;
     }
     result = ok(appendTranscriptMessageInTransaction(database, resolved, options));
+    // Synchronous message preparation can revoke the owner. Roll back before COMMIT.
+    assertOwnedTranscriptWriteCommit(fencedScope);
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !result.ok) {
     throw new SessionTranscriptWriterClaimReboundError(result.error);

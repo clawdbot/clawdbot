@@ -1,12 +1,14 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { preserveQueuedUserTurn } from "./chat-send-support.ts";
+import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { admitStoredChatComposerQueueItem } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -74,9 +76,12 @@ async function loadHistoryWithBrowserTimers(state: ReturnType<typeof createState
 }
 
 describe("chat history cursor revalidation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it.each(["live", "history-delta"] as const)(
     "retains an attributed pending steer across a leaf advance before %s persistence",
     async (delivery) => {
+      vi.stubGlobal("sessionStorage", createStorageMock());
       const sessionKey = "agent:main:participant-steer";
       const sendRunId = "bob-send";
       const aliceFinal = {
@@ -150,6 +155,7 @@ describe("chat history cursor revalidation", () => {
         sessionKey,
         sender: { id: "bob-profile", name: "Bob Proof" },
       };
+      expect(admitStoredChatComposerQueueItem(state, sessionKey, queued)).toBe(true);
       state.chatQueue = [queued];
       const renderedBobMessages = () =>
         buildChatItems({
@@ -173,8 +179,8 @@ describe("chat history cursor revalidation", () => {
       expect(renderedBobMessages()).toHaveLength(1);
 
       // Delivery retirement materializes the acknowledged turn before its durable row arrives.
-      preserveQueuedUserTurn(state, queued);
-      state.chatQueue = [];
+      expect(await retireDeliveredQueuedUserTurn(state, sendRunId, { sessionKey })).toBe("retired");
+      expect(state.chatQueue).toEqual([]);
       expect(renderedBobMessages()).toHaveLength(1);
       await loadChatHistory(state);
       expect(handler).toHaveBeenCalledWith(expect.objectContaining({ cursor: "cursor-3" }));

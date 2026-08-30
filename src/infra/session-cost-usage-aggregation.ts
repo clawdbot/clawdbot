@@ -46,7 +46,7 @@ import type { CostUsageTotals, ParsedTranscriptEntry } from "./session-cost-usag
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-const USAGE_COST_ROLLUP_VERSION = 2;
+const USAGE_COST_ROLLUP_VERSION = 3;
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
 
 type UsageCostJsonlCheckpoint = {

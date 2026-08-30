@@ -393,6 +393,13 @@
   --theme-chip-accent-2: #8fd6a5;
 }
 
+.settings-theme-card--crt,
+.settings-accent-theme--crt {
+  --theme-chip-bg: #090a09;
+  --theme-chip-accent: #3aff7d;
+  --theme-chip-accent-2: #ffcf5c;
+}
+
 :root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
   --theme-chip-bg: #faf9f7;
   --theme-chip-accent: #bd4531;
@@ -435,6 +442,12 @@
   --theme-chip-bg: #f4f7f4;
   --theme-chip-accent: #10693a;
   --theme-chip-accent-2: #2f6b47;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--crt, .settings-accent-theme--crt) {
+  --theme-chip-bg: #f5f5f4;
+  --theme-chip-accent: #0a612b;
+  --theme-chip-accent-2: #7a5d10;
 }
 /* stylelint-enable color-no-hex */
 

@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { initialState, Task, TaskStatus } from "@lit/task";
+import { initialState, Task } from "@lit/task";
 import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -17,8 +17,11 @@ import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import type { ModelSetupDetectionConnection } from "./detect-cache.ts";
-import { FirstRunSetup, type ModelSetupRouteData } from "./first-run-setup.ts";
+import {
+  FirstRunSetup,
+  type ModelSetupConnection,
+  type ModelSetupRouteData,
+} from "./first-run-setup.ts";
 import { ModelSetupIconLoader } from "./model-setup-icon-loader.ts";
 import {
   captureModelSetupResult,
@@ -69,8 +72,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private iconUrls: Record<string, string> = {};
   @state() private setupRefreshWarning: string | null = null;
 
-  private observedConnection: (ModelSetupRouteData["connection"] & { connected: boolean }) | null =
-    null;
+  private observedConnection:
+    | (ModelSetupConnection & { connected: boolean; firstRun: boolean })
+    | null = null;
   private pendingPrepareOption: ModelSetupPrepareOption | null = null;
   private wizardMutationGeneration = 0;
   private wizardMutationActive = false;
@@ -146,7 +150,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     readonly [GatewayBrowserClient | null, string | null, object | null],
     ModelSetupTaskResult<SystemAgentSetupDetectResult> & {
       agentId: string | null;
-      hello: ModelSetupDetectionConnection["hello"];
+      hello: ModelSetupConnection["hello"];
       token: object;
     }
   >(this, {
@@ -262,23 +266,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         };
         return;
       }
-      const activationState = mapActivationResult({
-        result: outcome.value.result,
-        targetId: current.targetId,
-        fallbackError: t("modelSetup.errors.activationFailed"),
-      });
-      this.activationState =
-        activationState.phase === "success" && outcome.value.refreshError
-          ? { ...activationState, warning: outcome.value.refreshError }
-          : activationState;
-      if (this.activationState.phase === "success") {
-        this.manualApiKey = "";
-      }
-      this.firstRun.finishActivation(
-        outcome.value.result,
-        current.targetId,
-        outcome.value.refreshError,
-      );
+      this.finishActivation(outcome.value.result, current.targetId, outcome.value.refreshError);
     },
   });
 
@@ -299,40 +287,21 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.firstRun.dispose();
     this.resetActivity();
+    this.observedConnection = null;
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
-  override willUpdate(changed: PropertyValues) {
-    const snapshot = this.context.gateway.snapshot;
-    if (changed.has("routeData")) {
-      this.firstRun.routeChanged();
-      if (changed.get("routeData")) {
-        this.resetActivity();
-      }
-    }
-    if (changed.has("routeData") && this.routeData) {
-      const { connection } = this.routeData;
-      const current =
-        snapshot.phase === "connected" &&
-        snapshot.client === connection.client &&
-        snapshot.hello === connection.hello &&
-        this.context.agentSelection.state.selectedId === connection.agentId;
-      if (current) {
-        this.pageState = this.routeData.state;
-        this.firstRun.setReadyConnection(this.pageState.phase === "ready" ? connection : null);
-        this.observedConnection = { ...connection, connected: true };
-        this.syncManualProvider(this.pageState);
-      } else if (this.routeData.firstRun) {
-        // A stale route completion cannot lend previously rendered candidates
-        // to the current Gateway; detection must mint this generation's result.
-        this.pageState = { phase: "loading" };
-      }
-    }
+  override willUpdate() {
+    this.synchronizeGateway(this.context.gateway.snapshot);
   }
 
   override updated(changed: PropertyValues) {
-    this.synchronizeGateway(this.context.gateway.snapshot);
+    // Lit can finish queued updates after detachment; teardown must not rearm
+    // detection, icon fetches, or first-run activation on an abandoned page.
+    if (!this.isConnected) {
+      return;
+    }
     if (changed.has("activationState") && this.activationState.phase !== "idle") {
       revealModelSetupFeedback(this.renderRoot);
     }
@@ -341,28 +310,36 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]): void {
+    const routeData = this.routeData;
+    if (!this.isConnected || !routeData) {
+      return;
+    }
     const connection = {
       client: snapshot.client,
       hello: snapshot.hello,
       agentId: this.context.agentSelection.state.selectedId,
       connected: snapshot.phase === "connected",
+      firstRun: routeData.firstRun,
     };
-    if (!this.observedConnection) {
-      this.observedConnection = connection;
-      this.ensureRouteSettledDetection();
-      return;
-    }
+    const previous = this.observedConnection;
     if (
-      connection.client === this.observedConnection.client &&
-      connection.hello === this.observedConnection.hello &&
-      connection.agentId === this.observedConnection.agentId &&
-      connection.connected === this.observedConnection.connected
+      previous &&
+      connection.client === previous.client &&
+      connection.hello === previous.hello &&
+      connection.agentId === previous.agentId &&
+      connection.connected === previous.connected &&
+      connection.firstRun === previous.firstRun
     ) {
-      this.ensureRouteSettledDetection();
       return;
     }
     this.observedConnection = connection;
-    this.firstRun.connectionChanged(connection);
+    // The router refreshes cached loader objects during the same visit. Only
+    // a mode change or mounted/connection lifecycle can retire setup ownership.
+    if (connection.firstRun !== previous?.firstRun) {
+      this.firstRun.routeChanged();
+    } else {
+      this.firstRun.connectionChanged(connection);
+    }
     this.resetActivity();
     this.pageState = { phase: "loading" };
     if (this.canUseSetup(connection.client)) {
@@ -381,24 +358,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.iconLoader.reset();
     this.pendingPrepareOption = null;
     void this.wizard.cancel();
-  }
-
-  // Route data can settle after mount and be discarded as another
-  // connection's result. Nothing else re-arms detection then, so a loading
-  // page with a connected, capable Gateway self-heals here instead of
-  // dead-ending silently.
-  private ensureRouteSettledDetection(): void {
-    if (
-      !this.hasUpdated ||
-      !this.routeData ||
-      this.pageState.phase !== "loading" ||
-      this.detectTask.status !== TaskStatus.INITIAL
-    ) {
-      return;
-    }
-    if (this.canUseSetup(this.context.gateway.snapshot.client)) {
-      void this.detect();
-    }
   }
 
   private canUseSetup(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
@@ -468,6 +427,24 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     await this.activationTask.run([client, { ...params, ...(agentId ? { agentId } : {}) }]);
   }
 
+  private finishActivation(
+    result: SystemAgentSetupActivateResult,
+    targetId: string,
+    refreshError: string | null,
+  ): void {
+    this.activationState = mapActivationResult({
+      result,
+      targetId,
+      fallbackError: t("modelSetup.errors.activationFailed"),
+      restartWarning: t("labsPage.restartRequired"),
+      refreshWarning: refreshError,
+    });
+    if (this.activationState.phase === "success") {
+      this.manualApiKey = "";
+    }
+    this.firstRun.finishActivation(result, targetId, refreshError);
+  }
+
   private activateCandidate(candidate: Candidate): void {
     void this.activate(
       { kind: candidate.kind, modelRef: candidate.modelRef },
@@ -533,8 +510,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         return;
       }
       this.wizard.close();
-      this.activationState = { phase: "success", ...modelActivation };
-      this.firstRun.finishActivation(
+      this.finishActivation(
         { ok: true, ...modelActivation },
         "provider-auth",
         this.setupRefreshWarning,

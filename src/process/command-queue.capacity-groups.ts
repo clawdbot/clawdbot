@@ -131,28 +131,36 @@ export function resolveLaneBlockReason(lane: string): CommandLaneBlockReason {
   if (!group) {
     return null;
   }
-  let groupActive = 0;
-  let siblingReserveHeld = 0;
+  return resolveGroupBlockReason(group, lane, readGroupCapacity(group));
+}
+
+type GroupCapacity = { active: number; reserved: number };
+
+function readGroupCapacity(group: LaneGroupState): GroupCapacity {
+  let active = 0;
+  let reserved = 0;
   for (const member of group.members) {
-    const active = getMemberActiveCount(member);
-    groupActive += active;
-    if (member !== lane) {
-      // Unused portion of a sibling's reservation. Held back even while that
-      // sibling is idle — a hard reservation that siblings can borrow is not a
-      // reservation at all.
-      siblingReserveHeld += Math.max(0, (group.reservations.get(member) ?? 0) - active);
-    }
+    const memberActive = getMemberActiveCount(member);
+    active += memberActive;
+    reserved += Math.max(0, (group.reservations.get(member) ?? 0) - memberActive);
   }
-  if (groupActive >= group.budget) {
+  return { active, reserved };
+}
+
+function resolveGroupBlockReason(
+  group: LaneGroupState,
+  lane: string,
+  capacity: GroupCapacity,
+): CommandLaneBlockReason {
+  if (capacity.active >= group.budget) {
     return "group-budget";
   }
-  // Own reservation still unfilled: admit regardless of what siblings hold.
   if (getMemberActiveCount(lane) < (group.reservations.get(lane) ?? 0)) {
     return null;
   }
-  // Otherwise this task would be borrowing unreserved capacity, which must not
-  // eat into what siblings are guaranteed.
-  return groupActive + siblingReserveHeld < group.budget ? null : "sibling-reservation";
+  // The lane's own reservation is filled, so every unused reservation belongs
+  // to a sibling and must remain unavailable for borrowing.
+  return capacity.active + capacity.reserved < group.budget ? null : "sibling-reservation";
 }
 
 export function canAdmitInGroup(lane: string): boolean {
@@ -233,10 +241,17 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
         sequence: number;
       }
     | undefined;
+  let capacity: GroupCapacity | undefined;
   for (const lane of group.members) {
     const state = getQueueState().lanes.get(lane);
     const head = state ? peekLaneQueue(state.queue) : undefined;
-    if (!state || !head || state.draining || resolveLaneBlockReason(lane) !== null) {
+    if (!state || !head || state.draining || state.activeTaskIds.size >= state.maxConcurrent) {
+      continue;
+    }
+    // No callbacks run during selection. Recompute on the next selection after
+    // drainLane commits a slot or re-enters publication/reset through onWait.
+    capacity ??= readGroupCapacity(group);
+    if (resolveGroupBlockReason(group, lane, capacity) !== null) {
       continue;
     }
     if (

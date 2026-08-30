@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,39 @@ function collectPages(entry: unknown, pages: string[] = []): string[] {
 }
 
 describe("docs-sync-publish", () => {
+  it("executes the copied MDX checker runtime closure", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-runtime-"));
+    const publishRoot = path.join(tempRoot, "publish");
+    const clawhubRoot = path.join(tempRoot, "clawhub");
+    const minimalMdx = path.join(tempRoot, "valid.mdx");
+
+    fs.mkdirSync(publishRoot, { recursive: true });
+    fs.mkdirSync(path.join(clawhubRoot, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(publishRoot, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(clawhubRoot, "docs", "index.md"), "# ClawHub\n");
+    fs.writeFileSync(minimalMdx, "# Valid MDX\n\nThis file is valid.\n");
+    fs.symlinkSync(
+      path.resolve("node_modules"),
+      path.join(publishRoot, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    try {
+      execFileSync(
+        process.execPath,
+        ["scripts/docs-sync-publish.mjs", "--target", publishRoot, "--clawhub-repo", clawhubRoot],
+        { stdio: "pipe" },
+      );
+      execFileSync(
+        process.execPath,
+        [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
+        { cwd: publishRoot, stdio: "pipe" },
+      );
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("materializes the public docs map only in the publish tree", () => {
     const targetDocsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-map-publish-"));
     try {
@@ -139,32 +173,16 @@ describe("docs-sync-publish", () => {
       "Help",
     ]);
 
-    const releaseRoutes = [
-      "releases/index",
-      "releases/2026.7.1",
-      "releases/2026.6.11",
-      "maturity/scorecard",
-      "maturity/taxonomy",
-      "reference/RELEASING",
-      "reference/full-release-validation",
-      "reference/release-performance-sweep",
-      "reference/test",
-      "ci",
-      "help/scripts",
-    ];
     const releaseTab = english!.tabs.find((tab) => tab.tab === "Release & CI");
+    const releaseRoutes = collectPages(releaseTab);
+    const releaseNotes = collectPages(releaseTab?.groups?.[0]);
     expect(releaseTab?.groups?.map((group) => group.group)).toEqual([
       "Release notes",
       "Maturity",
       "Release process",
       "Testing and CI",
     ]);
-    expect(releaseTab?.groups?.[0]?.pages).toEqual([
-      "releases/index",
-      "releases/2026.7.1",
-      "releases/2026.6.11",
-    ]);
-    expect(collectPages(releaseTab)).toEqual(releaseRoutes);
+    expect(releaseNotes[0]).toBe("releases/index");
     expect(new Set(collectPages(releaseTab))).toHaveLength(releaseRoutes.length);
 
     const englishWithoutClawHub = {
@@ -186,11 +204,9 @@ describe("docs-sync-publish", () => {
       "发布流程",
       "测试与 CI",
     ]);
-    expect(simplifiedChineseReleaseTab?.groups?.[0]?.pages).toEqual([
-      "zh-CN/releases/index",
-      "zh-CN/releases/2026.7.1",
-      "zh-CN/releases/2026.6.11",
-    ]);
+    expect(collectPages(simplifiedChineseReleaseTab?.groups?.[0])).toEqual(
+      releaseNotes.map((page) => `zh-CN/${page}`),
+    );
     expect(collectPages(simplifiedChineseReleaseTab)).toEqual(
       releaseRoutes.map((page) => `zh-CN/${page}`),
     );

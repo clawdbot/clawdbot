@@ -1,9 +1,11 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { getCodeModeSourceAppend } from "../../agents/transcript-code-mode-source.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
@@ -32,11 +34,10 @@ import {
   readNextTranscriptSeq,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
-  upsertTranscriptSessionWindowInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
+  createTranscriptIndexAppenderInTransaction,
   deleteSessionTranscriptIndexInTransaction,
-  indexAppendedTranscriptEventInTransaction,
   markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
   shouldRebuildSessionTranscriptIndexSynchronously,
@@ -51,13 +52,34 @@ import { resolveVisibleTranscriptAppendParentId } from "./transcript-visible-eve
 
 type TranscriptAppendOptions = {
   allowStoredAlias?: boolean;
-  dedupeByMessageIdempotency?: boolean;
+  idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner";
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
   touchMutation?: boolean;
 };
 
-type TranscriptAppendCursor = { initialized: boolean; nextSeq?: number };
+type TranscriptAppendCursor = {
+  initialized?: boolean;
+  nextSeq?: number;
+  appendToIndex?: ReturnType<typeof createTranscriptIndexAppenderInTransaction>;
+  updateWindow?: (createdAt: number) => unknown;
+  insertEvent?: ReturnType<typeof createTranscriptEventInserter>;
+};
+
+function createTranscriptEventInserter(database: OpenClawAgentDatabase, sessionId: string) {
+  return prepareSqliteQuerySync<{ seq: number; eventJson: string; createdAt: number }>(
+    database.db,
+    (parameter) =>
+      getSessionKysely(database.db)
+        .insertInto("transcript_events")
+        .values({
+          session_id: sessionId,
+          seq: parameter((row) => row.seq),
+          event_json: parameter((row) => row.eventJson),
+          created_at: parameter((row) => row.createdAt),
+        }),
+  );
+}
 
 export function appendTranscriptEventInTransaction(
   database: OpenClawAgentDatabase,
@@ -73,57 +95,47 @@ function appendTranscriptEvent(
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   options: TranscriptAppendOptions,
-  cursor?: TranscriptAppendCursor,
+  cursor: TranscriptAppendCursor = {},
 ): boolean {
   const persistedEvent = canonicalizeTranscriptEventMedia(event);
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
-  if (cursor?.initialized) {
-    // Even rejected identities update window recency. Only root/generation setup
-    // is shared by the synchronous batch; per-attempt writes stay in order.
-    upsertTranscriptSessionWindowInTransaction(database, scope, createdAt);
+  if (cursor.initialized) {
+    // The first attempt established this window and the batch cannot delete it.
+    // Even rejected identities update recency; keep each attempt's write in order.
+    cursor.updateWindow ??= prepareSqliteQuerySync<number>(database.db, (parameter) =>
+      db
+        .updateTable("session_windows")
+        .set({ updated_at: parameter((timestamp) => timestamp) })
+        .where("session_id", "=", scope.sessionId),
+    );
+    cursor.updateWindow(createdAt);
   } else {
     ensureTranscriptSessionRoot(database, scope, createdAt, {
       allowStoredAlias: options.allowStoredAlias === true,
     });
     ensureTranscriptGenerationInTransaction(database, scope.sessionId);
-    if (cursor) {
-      cursor.initialized = true;
-    }
+    cursor.initialized = true;
   }
   const identity = readTranscriptEventIdentity(persistedEvent);
   if (identity && readTranscriptIdentityByEventId(database, scope.sessionId, identity.eventId)) {
     return false;
   }
-  if (
-    identity?.messageIdempotencyKey &&
-    options.dedupeByMessageIdempotency &&
-    readTranscriptIdentityByMessageIdempotencyKey(
-      database,
-      scope.sessionId,
-      identity.messageIdempotencyKey,
-    )
-  ) {
+  const idempotencyKeyOwner = identity?.messageIdempotencyKey
+    ? readIdempotencyKeyOwner(database, scope.sessionId, identity.messageIdempotencyKey)
+    : undefined;
+  if (idempotencyKeyOwner && options.idempotencyKeyMode === "dedupe") {
     return false;
   }
-  const seq = cursor?.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
-  executeSqliteQuerySync(
-    database.db,
-    db.insertInto("transcript_events").values({
-      session_id: scope.sessionId,
-      seq,
-      event_json: JSON.stringify(persistedEvent),
-      created_at: createdAt,
-    }),
-  );
-  if (cursor) {
-    cursor.nextSeq = seq + 1;
-  }
+  const seq = cursor.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
+  cursor.insertEvent ??= createTranscriptEventInserter(database, scope.sessionId);
+  cursor.insertEvent({ seq, eventJson: JSON.stringify(persistedEvent), createdAt });
+  cursor.nextSeq = seq + 1;
   if (options.touchMutation !== false) {
     touchTranscriptMutationInTransaction(database, scope.sessionId);
   }
-  const projectionNeedsRebuild = indexAppendedTranscriptEventInTransaction(database.db, {
-    sessionId: scope.sessionId,
+  cursor.appendToIndex ??= createTranscriptIndexAppenderInTransaction(database.db, scope.sessionId);
+  const projectionNeedsRebuild = cursor.appendToIndex({
     seq,
     event: persistedEvent,
     eventId: identity?.eventId ?? null,
@@ -133,16 +145,20 @@ function appendTranscriptEvent(
     options.onProjectionReconcileNeeded?.();
   }
   if (identity) {
-    // Caller-checked appends may retain a duplicate key in the payload, but the
-    // identity index can point at only one row.
+    // Replayed copies take ownership so later retries resolve on the active branch.
+    // scan-assistant preserves a colliding user's ownership instead.
+    if (idempotencyKeyOwner && options.idempotencyKeyMode === "relocate-owner") {
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("transcript_event_identities")
+          .set({ message_idempotency_key: null })
+          .where("session_id", "=", scope.sessionId)
+          .where("event_id", "=", idempotencyKeyOwner.eventId),
+      );
+    }
     const indexedMessageIdempotencyKey =
-      identity.messageIdempotencyKey &&
-      !options.dedupeByMessageIdempotency &&
-      readTranscriptIdentityByMessageIdempotencyKey(
-        database,
-        scope.sessionId,
-        identity.messageIdempotencyKey,
-      )
+      idempotencyKeyOwner && options.idempotencyKeyMode !== "relocate-owner"
         ? undefined
         : identity.messageIdempotencyKey;
     executeSqliteQuerySync(
@@ -192,7 +208,9 @@ export function appendTranscriptEventsInTransaction(
 ): number {
   let appended = 0;
   let projectionNeedsRebuild = false;
-  const cursor: TranscriptAppendCursor = { initialized: false };
+  // Prepared arrays and the import spool cannot mutate the destination between
+  // rows. Sequence and projection facts belong only to this synchronous batch.
+  const cursor: TranscriptAppendCursor = {};
   const iterator = events[Symbol.iterator]();
   const appendOptions = {
     ...options,
@@ -240,7 +258,11 @@ function appendTranscriptEventRowInTransaction(
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   seq: number,
-  state: { seenEventIds: Set<string>; seenMessageIdempotencyKeys: Set<string> },
+  state: {
+    seenEventIds: Set<string>;
+    seenMessageIdempotencyKeys: Set<string>;
+    insertEvent: ReturnType<typeof createTranscriptEventInserter>;
+  },
   createdAtOverride?: number,
 ): boolean {
   const persistedEvent = canonicalizeTranscriptEventMedia(event);
@@ -250,17 +272,9 @@ function appendTranscriptEventRowInTransaction(
   if (identity && state.seenEventIds.has(identity.eventId)) {
     return false;
   }
-  executeSqliteQuerySync(
-    database.db,
-    db.insertInto("transcript_events").values({
-      session_id: scope.sessionId,
-      seq,
-      event_json: JSON.stringify(persistedEvent),
-      created_at: createdAt,
-    }),
-  );
-  indexAppendedTranscriptEventInTransaction(database.db, {
-    sessionId: scope.sessionId,
+  state.insertEvent({ seq, eventJson: JSON.stringify(persistedEvent), createdAt });
+  const appendToIndex = createTranscriptIndexAppenderInTransaction(database.db, scope.sessionId);
+  appendToIndex({
     seq,
     event: persistedEvent,
     eventId: identity?.eventId ?? null,
@@ -419,8 +433,11 @@ export function replaceSqliteTranscriptEventsInTransaction(
     markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
   }
   let seq = 0;
-  const seenEventIds = new Set<string>();
-  const seenMessageIdempotencyKeys = new Set<string>();
+  const state = {
+    seenEventIds: new Set<string>(),
+    seenMessageIdempotencyKeys: new Set<string>(),
+    insertEvent: createTranscriptEventInserter(database, resolved.sessionId),
+  };
   for (const [eventIndex, event] of events.entries()) {
     if (
       appendTranscriptEventRowInTransaction(
@@ -428,10 +445,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
         resolved,
         event,
         seq,
-        {
-          seenEventIds,
-          seenMessageIdempotencyKeys,
-        },
+        state,
         options.createdAtByIndex?.[eventIndex],
       )
     ) {
@@ -578,7 +592,7 @@ export function readTranscriptIdentityByEventId(
   return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
 }
 
-function readTranscriptIdentityByMessageIdempotencyKey(
+function readIdempotencyKeyOwner(
   database: OpenClawAgentDatabase,
   sessionId: string,
   idempotencyKey: string,
@@ -602,11 +616,7 @@ function readTranscriptMessageByIdempotencyKey(
   scope: ResolvedTranscriptScope,
   idempotencyKey: string,
 ): { messageId: string; message: unknown } | undefined {
-  const identity = readTranscriptIdentityByMessageIdempotencyKey(
-    database,
-    scope.sessionId,
-    idempotencyKey,
-  );
+  const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
   return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
 }
 
@@ -670,52 +680,45 @@ function readTranscriptEventIdentity(event: unknown):
       messageIdempotencyKey: string | null;
     }
   | undefined {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
+  if (!isRecord(event)) {
     return undefined;
   }
-  const record = event as Record<string, unknown>;
-  const eventId = typeof record.id === "string" && record.id.trim() ? record.id.trim() : undefined;
+  const eventId = typeof event.id === "string" && event.id.trim() ? event.id.trim() : undefined;
   return eventId
     ? {
         eventId,
-        eventType: typeof record.type === "string" ? record.type : null,
-        parentId: typeof record.parentId === "string" ? record.parentId : null,
-        messageIdempotencyKey: readMessageIdempotencyKey(record.message),
+        eventType: typeof event.type === "string" ? event.type : null,
+        parentId: typeof event.parentId === "string" ? event.parentId : null,
+        messageIdempotencyKey: readMessageIdempotencyKey(event.message),
       }
     : undefined;
 }
 
 function canonicalizeTranscriptEventMedia(event: TranscriptEvent): TranscriptEvent {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
+  if (!isRecord(event)) {
     return event;
   }
-  const record = event as Record<string, unknown>;
-  const message = record.message;
-  if (
-    record.type !== "message" ||
-    !message ||
-    typeof message !== "object" ||
-    Array.isArray(message)
-  ) {
+  const message = event.message;
+  if (event.type !== "message" || !isRecord(message)) {
     return event;
   }
   const canonical = canonicalizePersistedUserMessageMedia(message);
-  return canonical.changed ? { ...record, message: canonical.message } : event;
+  return canonical.changed ? { ...event, message: canonical.message } : event;
 }
 
 export function readMessageIdempotencyKey(message: unknown): string | null {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
+  if (!isRecord(message)) {
     return null;
   }
-  const value = (message as { idempotencyKey?: unknown }).idempotencyKey;
+  const value = message.idempotencyKey;
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function readEventTimestamp(event: unknown): number | undefined {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
+  if (!isRecord(event)) {
     return undefined;
   }
-  const value = (event as { timestamp?: unknown }).timestamp;
+  const value = event.timestamp;
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
@@ -740,10 +743,5 @@ export function redactTranscriptMessageForStorage<TMessage>(
 }
 
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    typeof (value as { role?: unknown }).role === "string"
-  );
+  return isRecord(value) && typeof value.role === "string";
 }

@@ -550,6 +550,11 @@ describe("bundled plugin postinstall", () => {
     await fs.writeFile(currentFile, "export {};\n");
     await fs.writeFile(currentManifest, "{}\n");
     await writePackageDistInventory(packageRoot);
+    if (process.platform !== "win32") {
+      expect(
+        (await fs.stat(path.join(packageRoot, "dist", "postinstall-inventory.json"))).mode & 0o777,
+      ).toBe(0o644);
+    }
     await fs.writeFile(stalePackage, "{}\n");
     await fs.writeFile(staleManifest, "{}\n");
 

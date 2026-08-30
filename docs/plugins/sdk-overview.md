@@ -178,6 +178,8 @@ Computer Use providers use `registerComputerUseProvider(api, provider)` from
 `openclaw/plugin-sdk/computer-use`. It registers the shared
 `screen.snapshot`/`computer.act` node-host envelope once while the provider
 keeps its driver, frame, availability, and execution lifecycle local.
+Its optional `prepare(context)` hook settles native startup before the node's
+first capability declaration, without opening a Computer Use execution.
 
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add

@@ -1024,25 +1024,33 @@ describe("sessions tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("denies patch targets outside a non-main caller's session tree", async () => {
-    const callGateway = vi.fn(async () => ({ sessions: [] }));
-    const tool = createSessionsTool({
-      agentSessionKey: "agent:main:dashboard:caller",
-      callGateway: callGateway as never,
-    });
-
-    await expect(
-      tool.execute("patch-other", {
+  it.each([undefined, "tree"] as const)(
+    "applies %s visibility when a non-main session categorizes a sibling",
+    async (visibility) => {
+      const callGateway = vi.fn(async () => ({ sessions: [] }));
+      const tool = createSessionsTool({
+        agentSessionKey: "agent:main:cron:organize",
+        config: { tools: { sessions: { visibility } } },
+        callGateway: callGateway as never,
+      });
+      const patch = tool.execute("patch-other", {
         action: "patch",
         sessionKey: "agent:main:other",
-        group: "Private",
-        expectedSessionId: "other-session",
-        archived: true,
-      }),
-    ).rejects.toThrow("Session status visibility is restricted");
-    expect(callGateway).not.toHaveBeenCalledWith({
-      method: "sessions.patch",
-      params: expect.objectContaining({ key: "agent:main:other" }),
-    });
-  });
+        group: "Projects",
+      });
+      if (visibility === "tree") {
+        await expect(patch).rejects.toThrow("Session status visibility is restricted");
+        expect(callGateway).not.toHaveBeenCalledWith({
+          method: "sessions.patch",
+          params: expect.objectContaining({ key: "agent:main:other" }),
+        });
+      } else {
+        await patch;
+        expect(callGateway).toHaveBeenCalledWith({
+          method: "sessions.patch",
+          params: { key: "agent:main:other", category: "Projects" },
+        });
+      }
+    },
+  );
 });

@@ -415,15 +415,15 @@ Configures inbound media understanding (image/audio/video):
 
 Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
 
-Default: `tree` (current session + sessions spawned by it, such as subagents;
-the main session can reach every session of the same agent).
+Default: `agent` (all sessions belonging to the current agent, including from
+non-main and retained cron sessions). Explicit visibility settings are unchanged.
 
 ```json5
 {
   tools: {
     sessions: {
       // "self" | "tree" | "agent" | "all"
-      visibility: "tree",
+      visibility: "agent",
     },
   },
 }
@@ -435,7 +435,7 @@ the main session can reach every session of the same agent).
     - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the canonical main session, it includes every same-agent session for list, history, search, send, and status.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
-    - `self` remains strict for main. Incognito denial remains absolute, and cross-agent access still requires `all` plus `tools.agentToAgent` policy.
+    - `self` remains strict for main. Incognito denial remains absolute. Ordinary cross-agent access requires `all` plus `tools.agentToAgent` policy; `tree` also permits owned native/ACP children across agent boundaries. `agent` does not include that exception, so keep explicit `tree` if your workflow relies on it.
     - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), access stays limited to spawned sessions even if the caller is main or `tools.sessions.visibility="all"`.
     - When not `all`, `sessions_list` includes a compact `visibility` field
       describing the effective mode and a warning that some sessions may be
@@ -445,10 +445,12 @@ the main session can reach every session of the same agent).
 </AccordionGroup>
 
 Ambient group watches still queue activity notices and tell the main session
-where something happened. They do not grant access: main's same-agent access is
-built into `tree`. In a multi-user setup, `session.dmScope: "main"` shares that
-main session across users; use a per-peer DM scope for isolation, or set
-`tools.sessions.visibility: "self"` for strict current-session access.
+where something happened. They do not grant access. The default `agent` scope
+already covers same-agent sessions, including conversations with other users.
+A per-peer `session.dmScope` separates DM context but does not restrict session
+tools. For narrower access, explicitly choose `tree` or `self`, or use separate
+agents. `tree` retains the canonical main-session exception; `self` restricts
+even main to its current session.
 
 ### `tools.sessions_spawn`
 

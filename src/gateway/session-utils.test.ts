@@ -43,7 +43,7 @@ import {
   resolveGatewayModelSupportsImages,
 } from "./session-utils-model.js";
 import {
-  buildSessionListRowContext,
+  buildSessionListRowMetadataContext,
   buildSingleRowStoreChildSessionsByKey,
 } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
@@ -265,8 +265,7 @@ function buildGatewaySessionRow(
   params: Parameters<typeof buildGatewaySessionRowOwner>[0],
 ): ReturnType<typeof buildGatewaySessionRowOwner> {
   const entry = params.entry ?? ({} as SessionEntry);
-  const rowContext = buildSessionListRowContext({
-    store: params.store,
+  const rowContext = buildSessionListRowMetadataContext({
     now: params.now ?? Date.now(),
   });
   // Row projection tests do not own ACP persistence. Mark the supplied fixture

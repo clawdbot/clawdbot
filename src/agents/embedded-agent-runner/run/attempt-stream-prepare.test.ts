@@ -8,11 +8,13 @@ import {
   projectNestedToolActivityForHooks,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
+import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
 import {
   isAgentRunRestartAbortReason,
   isAgentRunSupersededAbortReason,
 } from "../../run-termination.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import { ACTIVE_EMBEDDED_RUNS } from "../run-state.js";
 
 const mocks = vi.hoisted(() => ({
@@ -113,7 +115,26 @@ describe("prepareEmbeddedAttemptStream", () => {
     );
     mocks.subscribe.mockReturnValue({
       toolMetas: [],
-      runToolLifecycle: vi.fn(async ({ execute }) => await execute(() => undefined)),
+      runToolLifecycle: vi.fn(async ({ args, execute, onTerminal }) => {
+        try {
+          const result = await execute(() => undefined);
+          await onTerminal?.({
+            result,
+            isError: isToolResultError(result),
+            executedArguments: structuredClone(args),
+            effectReceipt: { state: "uncertain" },
+          });
+          return result;
+        } catch (error) {
+          await onTerminal?.({
+            result: buildToolLifecycleErrorResult(error),
+            isError: true,
+            executedArguments: structuredClone(args),
+            effectReceipt: { state: "uncertain" },
+          });
+          throw error;
+        }
+      }),
       isCompacting: vi.fn(() => false),
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });

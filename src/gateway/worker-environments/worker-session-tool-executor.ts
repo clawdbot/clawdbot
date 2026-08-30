@@ -17,7 +17,6 @@ import {
   withAgentToolGatewayRuntimeIdentity,
 } from "../../agents/tools/in-process-gateway.js";
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
-import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
 import { jsonResult } from "../../agents/tools/tool-results.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
@@ -45,14 +44,15 @@ import {
 import {
   serializeWorkerSessionToolResult as serializeResult,
   workerSessionToolErrorResult as errorResult,
+  WorkerSessionToolOutcomeUnknownError,
 } from "./worker-session-tool-result.js";
+import { executeWorkerSessionSend } from "./worker-session-tool-send.js";
 import {
   assertWorkerSessionToolChild as assertExactChild,
   resolveWorkerSessionToolSource as exactSource,
   resolveWorkerSessionToolTarget as exactAuthorizedTarget,
   workerSessionRelationKey as relationKey,
   type WorkerSessionToolSource as ExactSource,
-  type WorkerSessionToolTarget as ExactTarget,
 } from "./worker-session-tool-topology.js";
 
 type WorkerSessionToolRequest =
@@ -62,13 +62,6 @@ type WorkerSessionToolRequest =
       | { toolName: "sessions_send"; request: WorkerSessionsSendParams }
       | { toolName: "github_publish"; request: WorkerGitHubPublishParams }
     ));
-
-class WorkerSessionToolOutcomeUnknownError extends Error {
-  constructor(cause: unknown) {
-    super("Worker session operation outcome is unknown; it was not replayed", { cause });
-    this.name = "WorkerSessionToolOutcomeUnknownError";
-  }
-}
 
 function computeRequestDigest(value: unknown): string {
   return sha256Base64Url(`openclaw.worker-session-tool-request.v1\0${JSON.stringify(value)}`);
@@ -446,81 +439,6 @@ export function createWorkerSessionToolExecutor(params: {
         );
   };
 
-  const send = async (operation: {
-    source: ExactSource;
-    identity: WorkerConnectionIdentity;
-    target: ExactTarget;
-    request: WorkerSessionsSendParams;
-    idempotencyKey: string;
-    signal?: AbortSignal;
-  }) => {
-    operation.signal?.throwIfAborted();
-    exactSource({ identity: operation.identity, placements: params.placements });
-    const config = getRuntimeConfig();
-    const executeFencedSend = async () => {
-      const assertCurrentTarget = () => {
-        const target = exactAuthorizedTarget({
-          source: operation.source,
-          requestedSessionKey: operation.request.sessionKey,
-        });
-        if (
-          target.sessionId !== operation.target.sessionId ||
-          target.topologyParent?.sessionKey !== operation.target.topologyParent?.sessionKey ||
-          target.topologyParent?.sessionId !== operation.target.topologyParent?.sessionId
-        ) {
-          throw new Error("Worker sessions_send target incarnation changed");
-        }
-      };
-      assertCurrentTarget();
-      const tool = createSessionsSendTool({
-        agentSessionKey: operation.source.sessionKey,
-        expectedTargetSessionId: operation.target.sessionId,
-        idempotencyKey: operation.idempotencyKey,
-        config,
-        ...(operation.signal ? { signal: operation.signal } : {}),
-        callGateway: (request) =>
-          callAgentToolGatewayRequest({
-            ...request,
-            ...(operation.signal ? { signal: operation.signal } : {}),
-          }),
-      });
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          operation.signal?.throwIfAborted();
-          exactSource({ identity: operation.identity, placements: params.placements });
-          assertCurrentTarget();
-          return await tool.execute(operation.request.toolCallId, {
-            sessionKey: operation.target.sessionKey,
-            message: operation.request.message,
-            ...(operation.request.timeoutSeconds === undefined
-              ? {}
-              : { timeoutSeconds: operation.request.timeoutSeconds }),
-          });
-        } catch (error) {
-          if (attempt === 1) {
-            throw new WorkerSessionToolOutcomeUnknownError(error);
-          }
-        }
-      }
-      throw new WorkerSessionToolOutcomeUnknownError(
-        new Error("Worker sessions_send did not return a result"),
-      );
-    };
-    const topologyParent = operation.target.topologyParent;
-    if (!topologyParent) {
-      return await executeFencedSend();
-    }
-    // Sibling authority exists only while the exact shared parent exists. Hold
-    // that third incarnation through target admission and the message effect.
-    return await runWithScopedSessionAccess({
-      cfg: config,
-      expectedSessionId: topologyParent.sessionId,
-      targetSessionKey: topologyParent.sessionKey,
-      ...(operation.signal ? { signal: operation.signal } : {}),
-      run: executeFencedSend,
-    });
-  };
-
   return async (request: WorkerSessionToolRequest): Promise<WorkerSessionToolResult> => {
     const source = exactSource({ identity: request.identity, placements: params.placements });
     if (request.toolName === "portal") {
@@ -646,7 +564,7 @@ export function createWorkerSessionToolExecutor(params: {
                 childSessionKey: childKey!,
                 ...(request.signal ? { signal: request.signal } : {}),
               })
-            : await send({
+            : await executeWorkerSessionSend(params.placements, {
                 source,
                 identity: request.identity,
                 target: target!,

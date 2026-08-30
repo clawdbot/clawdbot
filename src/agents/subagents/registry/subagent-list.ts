@@ -4,10 +4,7 @@
  * Combines live registry runs and persisted session metadata for sessions_list/subagents views.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveSubagentLabel,
-  sortSubagentRuns,
-} from "../../../auto-reply/reply/subagents-utils.js";
+import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -28,10 +25,8 @@ import {
 } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  isLiveUnendedSubagentRun,
-  shouldKeepSubagentRunChildLink,
-} from "./subagent-run-liveness.js";
+import { shouldKeepSubagentRunChildLink } from "./subagent-run-liveness.js";
+import { buildSubagentRunView } from "./subagent-run-view.js";
 import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 type SubagentListItem = {
@@ -72,7 +67,7 @@ function resolveStorePathForKey(cfg: OpenClawConfig, parsed?: ParsedAgentSession
 }
 
 /** Resolve persisted session metadata for a session key, caching per store path. */
-export function resolveSessionEntryForKey(params: {
+function resolveSessionEntryForKey(params: {
   cfg: OpenClawConfig;
   key: string;
   cache: Map<string, Record<string, SessionEntry>>;
@@ -139,14 +134,6 @@ function buildLatestSubagentRunIndex(
   };
 }
 
-/** Return whether a run should be shown in the active subagent section. */
-function isActiveSubagentRun(
-  entry: SubagentRunRecord,
-  pendingDescendantCount: (sessionKey: string) => number,
-) {
-  return isLiveUnendedSubagentRun(entry) || pendingDescendantCount(entry.childSessionKey) > 0;
-}
-
 function resolveModelRef(entry?: SessionEntry, fallbackModel?: string) {
   return resolveModelDisplayRef({
     runtimeProvider: entry?.modelProvider,
@@ -197,23 +184,17 @@ export function buildSubagentList(params: {
   taskMaxChars?: number;
 }): BuiltSubagentList {
   const now = Date.now();
-  const recentCutoff = now - params.recentMinutes * 60_000;
-  const dedupedRuns: SubagentRunRecord[] = [];
-  const seenChildSessionKeys = new Set<string>();
-  for (const entry of sortSubagentRuns(params.runs)) {
-    if (seenChildSessionKeys.has(entry.childSessionKey)) {
-      continue;
-    }
-    // Multiple records can point at one child session after steering or retry;
-    // the sorted first entry is the display authority.
-    seenChildSessionKeys.add(entry.childSessionKey);
-    dedupedRuns.push(entry);
-  }
   const cache = new Map<string, Record<string, SessionEntry>>();
   const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
   const { childSessionsByController, readIndex } = buildLatestSubagentRunIndex(snapshot);
   const pendingDescendantCount = (sessionKey: string) =>
     readIndex.countPendingDescendantRuns(sessionKey);
+  const runView = buildSubagentRunView({
+    runs: params.runs,
+    recentMinutes: params.recentMinutes,
+    countPendingDescendantRuns: pendingDescendantCount,
+    now,
+  });
   let index = 1;
   const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
     const sessionEntry = resolveSessionEntryForKey({
@@ -253,24 +234,14 @@ export function buildSubagentList(params: {
     index += 1;
     return view;
   };
-  const active = dedupedRuns
-    .filter((entry) => isActiveSubagentRun(entry, pendingDescendantCount))
-    .map((entry) => buildListEntry(entry, getSubagentSessionRuntimeMs(entry, now) ?? 0));
-  const recent = dedupedRuns
-    .filter(
-      (entry) =>
-        !isActiveSubagentRun(entry, pendingDescendantCount) &&
-        Boolean(entry.execution.endedAt) &&
-        (entry.execution.endedAt ?? 0) >= recentCutoff,
-    )
-    .map((entry) =>
-      buildListEntry(
-        entry,
-        getSubagentSessionRuntimeMs(entry, entry.execution.endedAt ?? now) ?? 0,
-      ),
-    );
+  const active = runView.active.map((entry) =>
+    buildListEntry(entry, getSubagentSessionRuntimeMs(entry, now) ?? 0),
+  );
+  const recent = runView.recent.map((entry) =>
+    buildListEntry(entry, getSubagentSessionRuntimeMs(entry, entry.execution.endedAt ?? now) ?? 0),
+  );
   return {
-    total: dedupedRuns.length,
+    total: runView.latest.length,
     active,
     recent,
     text: buildListText({ active, recent, recentMinutes: params.recentMinutes }),

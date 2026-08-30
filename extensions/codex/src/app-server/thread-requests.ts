@@ -2,6 +2,7 @@ import {
   isHostScopedAgentToolActive,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
@@ -337,48 +338,42 @@ export function buildCodexRuntimeThreadConfig(
     "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
   };
   if (options.nativeCodeModeEnabled === false) {
-    const disabledConfig = mergeCodexThreadConfigs(
-      configured,
-      CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-      CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-      CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-    ) ?? {
-      ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-      ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-      ...CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-    };
+    const disabledConfig = expectDefined(
+      mergeCodexThreadConfigs(
+        configured,
+        CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+        CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+        CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
+      ),
+      "Codex disabled code mode config",
+    );
     // Native patch streaming is part of native code mode, so do not send it
     // when runtime policy disables that tool surface.
     delete disabledConfig["features.apply_patch_streaming_events"];
     return disabledConfig;
   }
   if (options.nativeCodeModeOnlyEnabled === true) {
-    const merged = mergeCodexThreadConfigs(
+    const merged = expectDefined(
+      mergeCodexThreadConfigs(
+        codeModeConfig,
+        configured,
+        CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+        CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
+        { "features.code_mode_only": true },
+      ),
+      "Codex code mode only config",
+    );
+    return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
+  }
+  const merged = expectDefined(
+    mergeCodexThreadConfigs(
       codeModeConfig,
       configured,
       CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
       CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-      {
-        "features.code_mode_only": true,
-      },
-    ) ?? {
-      ...codeModeConfig,
-      ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-      ...CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-      "features.code_mode_only": true,
-    };
-    return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
-  }
-  const merged = mergeCodexThreadConfigs(
-    codeModeConfig,
-    configured,
-    CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-    CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-  ) ?? {
-    ...codeModeConfig,
-    ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-    ...CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-  };
+    ),
+    "Codex code mode config",
+  );
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }
 
@@ -389,13 +384,21 @@ function ensureDirectOnlyToolNamespaces(
   if (!requiredNamespaces?.length) {
     return config;
   }
-  const configured = config["code_mode.direct_only_tool_namespaces"];
-  const namespaces = Array.isArray(configured)
-    ? configured.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+  const feature = expectDefined(config["features.code_mode"], "Codex code mode config");
+  const configured: JsonObject = isJsonObject(feature) ? feature : { enabled: feature };
+  const namespaces = Array.isArray(configured.direct_only_tool_namespaces)
+    ? configured.direct_only_tool_namespaces.filter(
+        (entry): entry is string => typeof entry === "string" && entry.length > 0,
+      )
     : [];
   return {
     ...config,
-    "code_mode.direct_only_tool_namespaces": [...new Set([...namespaces, ...requiredNamespaces])],
+    // Codex reads this feature table, not a root code_mode table. One override
+    // also avoids a boolean/child-path collision in its unordered request map.
+    "features.code_mode": {
+      ...configured,
+      direct_only_tool_namespaces: [...new Set([...namespaces, ...requiredNamespaces])],
+    },
   };
 }
 

@@ -319,6 +319,7 @@ describe("tool-cards", () => {
   it("labels a completed Codex file creation from its recorded operation", () => {
     const container = document.createElement("div");
     const onOpenWorkspaceFile = vi.fn();
+    const onToggleExpanded = vi.fn();
     render(
       renderToolCard(
         {
@@ -335,7 +336,7 @@ describe("tool-cards", () => {
           },
           completed: true,
         },
-        { expanded: false, onOpenWorkspaceFile, onToggleExpanded: vi.fn() },
+        { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
       ),
       container,
     );
@@ -346,6 +347,11 @@ describe("tool-cards", () => {
     );
     container.querySelector<HTMLButtonElement>(".chat-tool-row__file-link")?.click();
     expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/new.ts" });
+    expect(onToggleExpanded).not.toHaveBeenCalled();
+
+    container.querySelector<HTMLButtonElement>(".chat-tool-row__toggle")?.click();
+    expect(onToggleExpanded).toHaveBeenCalledWith("msg:patch:add");
+    expect(onOpenWorkspaceFile).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -1053,8 +1059,6 @@ describe("tool-cards", () => {
         },
         {
           expanded: true,
-          sessionKey: "main",
-          agentId: "work",
           onToggleExpanded: vi.fn(),
           onOpenSidebar,
         },

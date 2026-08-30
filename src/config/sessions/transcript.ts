@@ -37,6 +37,7 @@ import {
   readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
   updateSessionEntry,
+  type SessionTranscriptTurnPersistOptions,
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
   type TranscriptEntryAnchor,
@@ -413,6 +414,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
+  onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -448,6 +450,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.runId ? { runId: params.runId } : {}),
     updateMode: params.updateMode,
+    onMessageCommitted: params.onMessageCommitted,
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
     message: {
@@ -493,6 +496,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
+  onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -611,6 +615,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ...(params.config ? { config: params.config } : {}),
         ...(params.runId ? { runId: params.runId } : {}),
         updateMode: params.updateMode ?? "inline",
+        onMessageCommitted: params.onMessageCommitted,
         touchSessionEntry: true,
         messages: [
           {

@@ -175,7 +175,7 @@ function createFixture() {
       activeSession,
       clientToolCallSlots: [],
       coreReadAuthorized: true,
-      getCodeModeReconciliationCandidate: vi.fn(() => false),
+      getCodeModeRecoveryCandidate: vi.fn(() => undefined),
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
       setCodeModeReconciliationReadAuthorized: vi.fn(),

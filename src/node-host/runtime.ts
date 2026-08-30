@@ -262,6 +262,8 @@ export async function prepareNodeHostRuntime(params?: {
   enableWorkerRuns?: boolean;
   /** Process-scoped worker hosting for environment-managed disposable nodes. */
   forceWorkerRuns?: boolean;
+  /** Disposable cloud nodes expose computer control only through the private carrier. */
+  ephemeral?: boolean;
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
   installedAppsSharingEnabled?: boolean;
@@ -355,13 +357,17 @@ export async function prepareNodeHostRuntime(params?: {
     }
   }
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
+  // Disposable desktops belong to their environment carrier. Publishing them
+  // would also expose cloud workers as ordinary paired computers.
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
       ...new Set([
         "system",
         "mcp",
         ...(installedAppsSharingEnabled ? ["device"] : []),
-        ...pluginManifest.caps,
+        ...pluginManifest.caps.filter(
+          (cap) => params?.ephemeral !== true || (cap !== "computer" && cap !== "screen"),
+        ),
       ]),
     ].toSorted(),
     commands: [
@@ -374,10 +380,16 @@ export async function prepareNodeHostRuntime(params?: {
         ...(desktopStreamingEnabled ? [NODE_DESKTOP_STREAM_COMMAND] : []),
         ...(installedAppsSharingEnabled ? [NODE_DEVICE_APPS_COMMAND] : []),
         ...(claudePath ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : []),
-        ...pluginManifest.commands,
+        ...pluginManifest.commands.filter(
+          (command) =>
+            params?.ephemeral !== true ||
+            (command !== "screen.snapshot" && command !== "computer.act"),
+        ),
       ]),
     ].toSorted(),
-    ...(pluginManifest.computerUse ? { computerUse: pluginManifest.computerUse } : {}),
+    ...(params?.ephemeral !== true && pluginManifest.computerUse
+      ? { computerUse: pluginManifest.computerUse }
+      : {}),
     pathEnv,
   });
   const manifest = buildManifest(pluginNodeHost);
@@ -621,6 +633,9 @@ export async function prepareNodeHostRuntime(params?: {
               installedAppsSharingEnabled,
               installedAppsPlatform: platform,
               pluginCommandContext,
+              ...(params?.ephemeral === true
+                ? { workerComputer: { capabilities: () => resolvePluginNodeHost().computerUse } }
+                : {}),
               ...(workerBundleInstaller ? { workerBundleInstaller } : {}),
               ...(workerSupervisor ? { workerSupervisor } : {}),
               ...(workerWorkspace ? { workerWorkspace } : {}),

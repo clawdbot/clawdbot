@@ -292,8 +292,13 @@ export async function activateCodexAttemptTurn(
       return buildCodexUserInput(text, result.images);
     },
     beforeConfirmConsumed: async (items) => {
-      const inboundItems = items.filter((item) => item.isInboundUserMessage === true);
-      if (inboundItems.length === 0) {
+      // Internal steering can own a user turn too. Commit its recorder after the
+      // preceding answers so source provenance and transcript ordering survive.
+      const transcriptItems = items.filter(
+        (item) =>
+          item.isInboundUserMessage === true || item.userTurnTranscriptRecorder !== undefined,
+      );
+      if (transcriptItems.length === 0) {
         return;
       }
       await promptMirrorPromise;
@@ -313,7 +318,7 @@ export async function activateCodexAttemptTurn(
         });
         activeProjector.markSteeringTranscriptPersisted();
       }
-      for (const item of inboundItems) {
+      for (const item of transcriptItems) {
         const recorder = item.userTurnTranscriptRecorder;
         if (!recorder) {
           continue;

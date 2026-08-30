@@ -187,6 +187,27 @@ describe("worker node enrollment", () => {
     await opened?.handle.close();
   });
 
+  it("does not split surrogate pairs when bounding the enrollment display name", async () => {
+    const profileId = `${"x".repeat(50)}😀tail`;
+    const requested = store.createIntent({
+      environmentId: "worker-enrollment-display-name",
+      providerId: "fake-provider",
+      profileId,
+      profileSnapshot: { settings: {} },
+      provisionOperationId: "provision:worker-enrollment-display-name",
+    });
+    const record = store.transition({
+      environmentId: requested.environmentId,
+      from: "requested",
+      to: "provisioning",
+    });
+    const manager = createManager();
+
+    await expect(manager.begin(record)).resolves.toMatchObject({
+      displayName: `Cloud worker ${"x".repeat(50)}`,
+    });
+  });
+
   it("aborts pending enrollment waits idempotently and rejects enrollment after shutdown", async () => {
     const intent = store.createIntent({
       environmentId: "worker-enrollment-stop",

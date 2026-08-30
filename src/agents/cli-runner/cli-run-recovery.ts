@@ -80,6 +80,14 @@ export async function runCliRecovery<TAttempt>(params: {
   const reusableCliSessionId = resolveCliSessionId(context.reusableCliSession);
   const resumeCheckpointId = runParams.cliSessionBinding?.resumeCheckpointId;
   let retryableSessionId = reusableCliSessionId;
+  const failTerminal = async (error: unknown): Promise<never> => {
+    // Record only after every eligible recovery path is exhausted.
+    cliBackendLog.warn(
+      `cli terminal failure: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - context.started} runId=${runParams.runId} error=${formatErrorMessage(error)}`,
+    );
+    await params.onTerminalFailure(error);
+    throw error;
+  };
   try {
     return await params.finishAttempt(
       await params.executeAttempt(
@@ -207,12 +215,10 @@ export async function runCliRecovery<TAttempt>(params: {
           if (deliveredRetryFailure) {
             return deliveredRetryFailure;
           }
-          await params.onTerminalFailure(retryErr);
-          throw retryErr;
+          return await failTerminal(retryErr);
         }
       }
     }
-    await params.onTerminalFailure(recoveryError);
-    throw recoveryError;
+    return await failTerminal(recoveryError);
   }
 }

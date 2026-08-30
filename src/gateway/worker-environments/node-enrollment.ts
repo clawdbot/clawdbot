@@ -1,5 +1,6 @@
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
 import { removePairedDeviceRole } from "../../infra/device-pairing.js";
@@ -191,7 +192,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           enabledPluginIds: artifact.enabledPluginIds,
           ...(tlsFingerprint ? { tlsFingerprint } : {}),
         },
-        displayName: `Cloud worker ${owner.profileId}`.slice(0, 64),
+        displayName: truncateUtf16Safe(`Cloud worker ${owner.profileId}`, 64),
         signal: enrollmentSignal,
         waitForDeviceId: async () => {
           const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;

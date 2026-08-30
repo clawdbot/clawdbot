@@ -1,4 +1,3 @@
-// Chat-owned model, reasoning, and fast-mode picker orchestration.
 import { html, nothing } from "lit";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
@@ -16,7 +15,6 @@ import {
   resolveChatThinkingSelectState,
   type ChatThinkingTarget,
 } from "../../../lib/chat/thinking.ts";
-import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
 import type {
   ChatModelPickerOption,
@@ -51,6 +49,7 @@ type ChatModelControlsProps = {
   fastModeTarget?: ChatFastModeTarget;
   sending: boolean;
   sessionKey: string;
+  selectedSession: SessionsListResult["sessions"][number] | undefined;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
   contextWindowTarget?: ChatContextWindowTarget;
@@ -190,6 +189,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     modelOverrideSource,
     options: selectOptions,
   } = resolveChatModelSelectState({
+    activeSession: props.selectedSession,
     agentDefaultModel: props.agentDefaultModel,
     chatModelCatalog: props.modelCatalog,
     modelOverrides: props.modelOverrides ?? {},
@@ -208,11 +208,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     catalog: props.modelCatalog,
     connected: props.connected,
     currentModelOverride: currentOverride,
-    fastModeTarget: props.fastModeTarget,
+    fastModeTarget: props.fastModeTarget ?? props.selectedSession,
     gatewayAvailable: props.gatewayAvailable,
     loading: props.loading,
     sending: props.sending,
-    sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
     stream: props.stream,
   });
@@ -221,9 +220,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const fastMode = props.modelSwitching
     ? { ...resolvedFastMode, disabled: true }
     : resolvedFastMode;
-  const activeSession = props.sessionsResult?.sessions.find((row) =>
-    areUiSessionKeysEquivalent(row.key, props.sessionKey),
-  );
+  const activeSession = props.selectedSession;
   const currentProviderHint = activeSession?.modelProvider ?? "";
   const defaultProviderHint = props.sessionsResult?.defaults?.modelProvider ?? "";
   const defaultCatalogEntry = resolveChatModelCatalogEntry(defaultModel, props.modelCatalog);

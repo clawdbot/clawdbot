@@ -1843,9 +1843,14 @@ describe("Codex app-server native code mode config", () => {
     });
   });
 
-  it.each([false, true])(
-    "keeps direct-only dynamic namespaces model-visible when code-mode-only=%s",
-    (nativeCodeModeOnlyEnabled) => {
+  it.each([
+    { nativeCodeModeOnlyEnabled: false, configured: false },
+    { nativeCodeModeOnlyEnabled: true, configured: false },
+    { nativeCodeModeOnlyEnabled: false, configured: true },
+    { nativeCodeModeOnlyEnabled: true, configured: true },
+  ])(
+    "keeps direct-only dynamic namespaces model-visible when code-mode-only=$nativeCodeModeOnlyEnabled, configured=$configured",
+    ({ nativeCodeModeOnlyEnabled, configured }) => {
       const dynamicTools = [
         {
           type: "namespace" as const,
@@ -1854,9 +1859,16 @@ describe("Codex app-server native code mode config", () => {
           tools: [],
         },
       ];
-      const config = {
-        "code_mode.direct_only_tool_namespaces": ["vendor_direct"],
-      };
+      const config = configured
+        ? {
+            "features.code_mode": {
+              enabled: true,
+              default_exec_yield_time_ms: 10000,
+              excluded_tool_namespaces: ["vendor_excluded"],
+              direct_only_tool_namespaces: ["vendor_direct"],
+            },
+          }
+        : undefined;
       const startRequest = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
         cwd: "/repo",
         dynamicTools,
@@ -1875,10 +1887,20 @@ describe("Codex app-server native code mode config", () => {
       });
 
       for (const request of [startRequest, resumeRequest]) {
-        expect(request.config?.["code_mode.direct_only_tool_namespaces"]).toEqual([
-          "vendor_direct",
-          CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-        ]);
+        expect(request.config?.["features.code_mode"]).toEqual({
+          enabled: true,
+          ...(configured
+            ? {
+                default_exec_yield_time_ms: 10000,
+                excluded_tool_namespaces: ["vendor_excluded"],
+              }
+            : {}),
+          direct_only_tool_namespaces: [
+            ...(configured ? ["vendor_direct"] : []),
+            CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+          ],
+        });
+        expect(request.config?.["code_mode.direct_only_tool_namespaces"]).toBeUndefined();
         expect(request.config?.["features.code_mode_only"]).toBe(nativeCodeModeOnlyEnabled);
       }
     },

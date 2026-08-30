@@ -221,7 +221,18 @@ function renderLoading(card: HTMLDivElement): void {
   const label = t("githubPreview.loading");
   // The card is a dialog, so every render state has to leave it with a name.
   card.setAttribute("aria-label", label);
-  appendTextElement(card, "div", "github-link-hovercard__loading", label);
+  const skeleton = appendTextElement(card, "div", "github-link-hovercard__skeleton", "");
+  skeleton.setAttribute("aria-hidden", "true");
+  for (const [rowClass, parts] of [
+    ["header", ["badge", "repo", "time"]],
+    ["title", ["title"]],
+    ["footer", ["author", "metrics"]],
+  ] as const) {
+    const row = appendTextElement(skeleton, "div", `github-link-hovercard__${rowClass}`, "");
+    for (const part of parts) {
+      appendTextElement(row, "span", `skeleton github-link-hovercard__placeholder--${part}`, "");
+    }
+  }
 }
 
 function renderUnavailable(card: HTMLDivElement): void {

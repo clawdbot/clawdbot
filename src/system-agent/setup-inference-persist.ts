@@ -157,38 +157,17 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
   }
 }
 
-export async function reloadCodexRegistryAfterActivation(params: {
+export async function restoreSetupPluginMetadata(params: {
   readSnapshot: () => Promise<
     Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>
   >;
   workspaceDir: string;
   deps: ActivateSetupInferenceDeps;
-  requireValidConfig?: boolean;
-}): Promise<OpenClawConfig | null> {
-  let snapshot: Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>;
+}): Promise<void> {
   try {
-    snapshot = await params.readSnapshot();
-  } catch {
-    setupInferenceLog.warn(
-      "Could not read config while reloading the plugin registry after Codex activation.",
-    );
-    return null;
-  }
-  if (params.requireValidConfig && (!snapshot.exists || !snapshot.valid)) {
-    setupInferenceLog.warn(
-      "Could not reload the plugin registry after Codex activation because the committed config is unavailable.",
-    );
-    return null;
-  }
-  const runtimeConfig =
-    snapshot.exists && snapshot.valid
-      ? (snapshot.runtimeConfig ?? snapshot.config)
-      : ({} satisfies OpenClawConfig);
-  const sourceConfig =
-    snapshot.exists && snapshot.valid
-      ? (snapshot.sourceConfig ?? snapshot.config)
-      : ({} satisfies OpenClawConfig);
-  try {
+    const snapshot = await params.readSnapshot();
+    const sourceConfig =
+      snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const refreshPluginRegistry =
       params.deps.refreshPluginRegistryAfterConfigMutation ??
       (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
@@ -199,26 +178,7 @@ export async function reloadCodexRegistryAfterActivation(params: {
       logger: setupInferenceLog,
     });
   } catch {
-    setupInferenceLog.warn(
-      "Could not refresh persisted plugin registry metadata after Codex activation.",
-    );
-  }
-  try {
-    const ensurePluginRegistryLoaded =
-      params.deps.ensurePluginRegistryLoaded ??
-      (await import("../plugins/runtime/runtime-registry-loader.js")).ensurePluginRegistryLoaded;
-    ensurePluginRegistryLoaded({
-      scope: "all",
-      config: runtimeConfig,
-      activationSourceConfig: sourceConfig,
-      workspaceDir: params.workspaceDir,
-    });
-    return runtimeConfig;
-  } catch {
-    setupInferenceLog.warn(
-      "Could not reload the active plugin registry after Codex inference activation.",
-    );
-    return null;
+    setupInferenceLog.warn("Could not restore plugin metadata after the inference setup probe.");
   }
 }
 

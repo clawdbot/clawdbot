@@ -66,6 +66,7 @@ export type ChatPageHost = ChatHost &
     basePath: string;
     resourceBasePath: string;
     chatAvatarUrl: string | null;
+    senderAgentAvatars?: ReadonlyMap<string, string | null>;
     chatAvatarSource: string | null;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
     chatAvatarReason: string | null;

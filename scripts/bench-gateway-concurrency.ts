@@ -810,11 +810,10 @@ async function runTurn(
     throw new Error(`agent ${index + 1} was not accepted: ${JSON.stringify(started)}`);
   }
   const remaining = requireRemainingMs(deadlineAt, `waiting for agent ${index + 1} completion`);
-  const waitTimeoutMs = Math.max(
-    0,
-    Math.min(60_000, Math.floor(remaining - AGENT_WAIT_RPC_GRACE_MS)),
-  );
-  const rpcTimeoutMs = Math.min(65_000, Math.max(1, Math.ceil(remaining)));
+  // Agent waits share the load deadline; a shorter observation cap would abort
+  // an active turn while the benchmark still has time to measure completion.
+  const waitTimeoutMs = Math.max(0, Math.floor(remaining - AGENT_WAIT_RPC_GRACE_MS));
+  const rpcTimeoutMs = Math.max(1, Math.ceil(remaining));
   const completed = await rpc<{ status?: string }>(
     "agent.wait",
     {

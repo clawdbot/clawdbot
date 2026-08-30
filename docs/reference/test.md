@@ -58,6 +58,91 @@ Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
 
+## Crabbox repository setup
+
+The shared [Crabbox skill](https://github.com/openclaw/agent-skills/tree/main/skills/crabbox)
+owns portable lease, trust, sync, and cleanup procedures. This section owns the
+OpenClaw wrapper and workflow inputs. Routine task-needed Crabbox/Testbox use
+and task-owned worktrees do not require another confirmation; preserve unrelated
+work and existing credential, production, budget, and publication boundaries.
+
+Run trusted OpenClaw remote proof through the wrapper from the repository root:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --help
+```
+
+Read `.crabbox.yaml` and the resolved provider before running. The repository
+default is `blacksmith-testbox`, with `.github/workflows/ci-check-testbox.yml`
+owning its prepared environment. Direct providers use
+`.github/workflows/crabbox-hydrate.yml`. Keep the resolved provider unless the
+requested proof requires another environment; capacity or hydration failure
+does not make a different provider equivalent.
+
+The wrapper checks an executable sibling `../crabbox/bin/crabbox`, then `PATH`,
+then the sibling of the Git common checkout. Verify the selected binary and
+its source rather than trusting a directory name. If it needs repair or is
+missing, use a clean task-owned checkout of
+[Crabbox](https://github.com/openclaw/crabbox), build `./cmd/crabbox` into a
+task-owned binary directory, and leave other checkouts and the operator's
+installed binary untouched. The existing
+`OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY=1` setting skips the first sibling
+candidate; a task binary on `PATH` then takes precedence over the common-checkout
+candidate. A dirty or occupied sibling is not a reason to stop and ask.
+
+For a selected trusted Testbox lane:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 \
+  OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 \
+  OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 \
+  pnpm test <path-or-filter>
+```
+
+For several commands, warm once with
+`node scripts/crabbox-wrapper.mjs warmup --keep --timing-json`, save the returned
+lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
+`node scripts/crabbox-wrapper.mjs stop --id <tbx_id>`; stop has no `--timing-json`.
+
+- Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
+  deliberately transfers that ownership and never changes repository identity.
+  Sparse staging uses the wrapper's ownership path. Do not sync or reclaim
+  while another command owns the lease.
+- Wrapper reuse requires the local SSH key created by Crabbox. A missing key
+  requires a fresh warmup. Leases created directly by Blacksmith remain usable
+  through `blacksmith testbox run --id <tbx_id>`, not Crabbox wrapper reuse.
+- Every native Testbox run syncs again, including reused leases. `--no-sync`
+  cannot preserve a remote baseline. Compare revisions in separate remote
+  worktrees within one synced command; never switch refs in the synced root.
+- Compound remote shell commands use `bash -lc`, not `sh -lc`; hydration can
+  depend on Bash declarations. Testbox's workflow owns Chromium, so do not pass
+  Crabbox `--browser` to that provider.
+- Keep the lease fingerprint checks described above. No stale-lease override
+  for release proof. Direct-provider flags such as `--fresh-pr`, `--full-resync`,
+  `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
+  a substitute for the delegated Testbox workflow.
+
+The shared skill's command placeholders map to the focused commands in this
+guide. Its trusted bootstrap is `scripts/crabbox-untrusted-bootstrap.sh`; the
+untrusted path above invokes the installed trusted CLI, never the PR's wrapper.
+For an explicitly selected local-container lane, the existing example image is
+`node:24-bookworm` and the install command is
+`corepack pnpm install --frozen-lockfile --store-dir .pnpm-store`, followed by
+the chosen test. Keep `--no-hydrate` and a repository-local dependency store
+when host caches cannot cross filesystems. The OpenClaw broker login endpoint
+is `https://crabbox.openclaw.ai`; normal brokered validation does not require
+asking for AWS keys.
+
+Live Gateway, channel, and agent-turn proof uses an isolated
+`OPENCLAW_STATE_DIR`, a free port, and the real user path. Test-only plugin
+artifacts may use `OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1`; that does not make
+them official installs. Before sharing WebVNC, inspect a screenshot of the
+working app. Keep proof media out of the product repository and compare source
+hashes before and after generator runs. If a final timing result is written but
+portal synchronization hangs, interrupt only the task wrapper and independently
+verify lease cleanup; never stop the operator's Gateway.
+
 ## Routine local order
 
 1. `pnpm test:changed` for changed-scope Vitest proof.
@@ -271,6 +356,54 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 
 - `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`
 - `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache pnpm test:changed`
+
+## JSON reports across native processes
+
+For a multi-project or chunked run, explicitly request native JSON with an output
+file, for example:
+
+```bash
+pnpm test test/vitest/vitest.unit-fast-isolated.config.ts test/vitest/vitest.agents-embedded-agent.config.ts --reporter=verbose --reporter=json --outputFile=.artifacts/test-results.json
+```
+
+The project runner and plugin batch runner give each attempt separate native JSON
+and blob files, then publish the requested JSON from Vitest's native report merge.
+They print a companion `<output>.reports-<unique>` directory. Keep that directory:
+it contains original reports, per-attempt coverage files when coverage is enabled,
+and an `index.json` with child exit codes, signals, timeouts and unstarted work.
+Only the accepted retry attempt contributes to the aggregate.
+
+The aggregate preserves the accepted case inventory, but is not a lossless
+replacement for the originals. Native merging does not restore snapshot summaries
+or JSON `coverageMap`, and its `startTime` is the merge time. Passing snapshot tests
+still succeed. Read native originals for those details and the index for process
+outcomes: JSON `success` does not encode every wrapper or unhandled-error failure.
+Separate built-in coverage reports remain per attempt in the companion directory.
+Custom coverage providers/reporters and coverage reporter tuple options require
+separate invocations with unique destinations.
+
+A complete failed-test aggregate is retained with a failing command exit. Missing
+or invalid evidence, cancellation, unstarted required work, or publication failure
+does not publish a complete aggregate; an existing output file is not proof of the
+new run. The diagnostic prints the retained report-set location. Report sets are
+not automatically swept.
+
+Overlapping selections can share native task IDs, so merging them can replace
+independent failure details even when case counts match. Such report sets retain
+their originals and fail publication. Select each configuration once, or run
+overlapping selections separately with distinct output files.
+
+This ownership applies to explicit CLI JSON file requests with named, file-based
+Node projects and native console reporters. Scalar `--outputFile` and
+`--outputFile.json` both work. Config-owned reporter options, other file formats,
+custom reporters and inline/browser project composition require separate native
+invocations with unique output destinations. Do not assume those outputs are
+aggregated. Single-process and console-only runs keep their existing native behavior.
+Native help and other non-test controls stay with the child CLI and do not allocate
+report sets. `run --version` still runs tests, as it does in native Vitest.
+Config-only reporters are not intercepted: multiple children can still overwrite
+the same configured file. Run those configurations separately with distinct paths;
+adding `--reporter=json` alone does not override a reporter tuple's own `outputFile`.
 
 ## Test performance tooling
 

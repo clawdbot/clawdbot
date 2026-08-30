@@ -32,7 +32,7 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
+import * as chatAvatars from "./chat-avatar.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import {
   type ChatAttachmentGatewayOwner,
@@ -87,6 +87,7 @@ import {
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
 import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
+import { subscribeToolTitleChanges } from "./tool-titles.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
@@ -297,14 +298,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     });
   }
 
-  protected readonly handlePaneFocus = () => {
-    this.onFocusPane?.(this.paneId);
-  };
+  protected readonly handlePaneFocus = () => this.onFocusPane?.(this.paneId);
 
   /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
-    const accepted = admitBrowserAnnotation(this.state, this.active && this.presented, event);
-    if (!accepted) {
+    if (!admitBrowserAnnotation(this.state, this.active && this.presented, event)) {
       return;
     }
     // A null mount binds only when its first annotation ownership begins.
@@ -381,8 +379,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     if (event.defaultPrevented || event.key !== "Escape") {
       return;
     }
-    const state = this.state;
-    if (!state) {
+    if (!this.state) {
       return;
     }
     const openDetails = this.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR);
@@ -437,6 +434,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
     document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
     const chatState = this.chatState;
+    chatState.addCleanup(subscribeToolTitleChanges(() => this.state?.requestUpdate?.()));
     chatState.addCleanup(() => {
       document.removeEventListener("keydown", this.handleDocumentKeydown, true);
       document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
@@ -581,10 +579,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         }
         if (state) {
           if (event.event === "config.changed") {
-            invalidateChatAvatarCache(state);
+            chatAvatars.invalidateChatAvatarCache(state);
             invalidateAssistantIdentityCache(state.client);
             state.assistantIdentityRequestVersion += 1;
-            void refreshChatAvatar(state).finally(() => state.requestUpdate?.());
+            void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
           }
           handleQuestionPromptEvent(this.questionPromptState, event);
         }
@@ -671,6 +669,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
+    void chatAvatars.refreshSenderAgentAvatars(this.state);
     if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
       // The outer router commit is not a meaningful chat paint. Keep the
       // handoff cover until this pane has committed its usable composer.
@@ -700,6 +699,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
 
   override disconnectedCallback() {
     if (this.state) {
+      chatAvatars.invalidateChatAvatarCache(this.state);
       retireChatMetadataRequests(this.state);
       if (this.suppressStagedAttachmentHandoffOnDisconnect) {
         // MCP app teardown can delay DOM removal after pane close. Finalize any

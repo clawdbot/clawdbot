@@ -19,10 +19,15 @@ function writeFile(filePath: string, content: string): void {
 function copyRunOpengrepFiles(repo: string): void {
   const scriptSource = path.resolve("scripts/run-opengrep.sh");
   const helperSource = path.resolve("scripts/lib/merge-head-diff-base.mjs");
+  const argUtilsSource = path.resolve("scripts/lib/arg-utils.runtime.mjs");
   writeFile(path.join(repo, "scripts/run-opengrep.sh"), fs.readFileSync(scriptSource, "utf8"));
   writeFile(
     path.join(repo, "scripts/lib/merge-head-diff-base.mjs"),
     fs.readFileSync(helperSource, "utf8"),
+  );
+  writeFile(
+    path.join(repo, "scripts/lib/arg-utils.runtime.mjs"),
+    fs.readFileSync(argUtilsSource, "utf8"),
   );
   fs.chmodSync(path.join(repo, "scripts/run-opengrep.sh"), 0o755);
 }

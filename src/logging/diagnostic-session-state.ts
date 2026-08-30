@@ -26,6 +26,9 @@ export type ToolCallRecord = {
   runId?: string;
   outcomeKind?: "tool-loop-veto" | "terminal-exec-failure";
   resultHash?: string;
+  // Keep the raw result identity while this bounded identity survives alias
+  // merges and lets the no-progress owner ignore diagnostic drift.
+  failureIdentityHash?: string;
   noProgress?: true;
   unknownToolName?: string;
   timestamp: number;
@@ -185,7 +188,7 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
     queueDepth: 0,
   };
   diagnosticSessionStates.set(key, created);
-  pruneDiagnosticSessionStates(Date.now(), true);
+  pruneDiagnosticSessionStates();
   return created;
 }
 
