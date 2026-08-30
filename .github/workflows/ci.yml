@@ -1534,6 +1534,8 @@ jobs:
     if: needs.preflight.outputs.run_check_docs == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
+    env:
+      COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1586,7 +1588,7 @@ jobs:
 
       - name: Check docs
         run: |
-          if [[ "${{ needs.preflight.outputs.compatibility_target }}" == "true" ]]; then
+          if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # A frozen release must validate against its own docs graph, not
             # today's ClawHub links to features that are intentionally absent.
             pnpm check:docs
