@@ -4364,15 +4364,15 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("bash .release-harness/scripts/ci-live-command-retry.sh");
     expect(workflow).toContain("use_github_hosted_runners:");
-    expect(workflow).toMatch(
-      /validate_repo_e2e:[\s\S]*?runs-on: \$\{\{ inputs\.use_github_hosted_runners && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
-    );
-    expect(workflow).toMatch(
-      /validate_special_e2e:[\s\S]*?runs-on: \$\{\{ inputs\.use_github_hosted_runners && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
-    );
-    expect(workflow).toMatch(
-      /validate_live_provider_suites:[\s\S]*?runs-on: \$\{\{ inputs\.use_github_hosted_runners && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
-    );
+    for (const [jobName, runner] of [
+      ["validate_repo_e2e", "blacksmith-32vcpu-ubuntu-2404"],
+      ["validate_special_e2e", "blacksmith-32vcpu-ubuntu-2404"],
+      ["validate_live_provider_suites", "blacksmith-8vcpu-ubuntu-2404"],
+    ] as const) {
+      expect(workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"]).toBe(
+        `\${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || '${runner}' }}`,
+      );
+    }
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
     expect(workflow).toContain(

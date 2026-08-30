@@ -232,7 +232,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
       return;
     }
     host.modelAuthStatusResult = result;
-    host.modelAuthStatusError = null;
+    host.modelAuthStatusError = result.unavailable?.message ?? null;
   } catch (err) {
     if (!ownsRequest()) {
       return;

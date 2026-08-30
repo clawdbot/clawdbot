@@ -3921,28 +3921,39 @@ describe("refreshChatMetadata", () => {
 });
 
 describe("refreshChatModelAuthStatus", () => {
-  it("scopes auth status to the fixed session agent", async () => {
-    const fixedStatus = { ts: 1, providers: [] };
-    const request = vi.fn(async () => fixedStatus);
-    const state = {
-      client: { request },
-      connected: true,
-      connectionEpoch: 1,
-      sessionKey: "agent:work:dashboard:current",
-      assistantAgentId: "main",
-      modelAuthStatusRequestVersion: 0,
-      modelAuthStatusResult: null,
-      modelAuthStatusError: null,
-    } as unknown as ChatPageHost;
+  it.each([
+    undefined,
+    {
+      code: "PREPARED_MODEL_AUTH_UNAVAILABLE" as const,
+      message: "Model authentication status is unavailable. Refresh Models after setup finishes.",
+    },
+  ])(
+    "scopes auth status to the fixed session agent and records unavailable health: %j",
+    async (unavailable) => {
+      const result = { ts: 1, providers: [], ...(unavailable ? { unavailable } : {}) };
+      const request = vi.fn(async () => result);
+      const state = {
+        client: { request },
+        connected: true,
+        connectionEpoch: 1,
+        sessionKey: "agent:work:dashboard:current",
+        assistantAgentId: "main",
+        modelAuthStatusRequestVersion: 0,
+        modelAuthStatusResult: null,
+        modelAuthStatusError: null,
+      } as unknown as ChatPageHost;
 
-    await refreshChatModelAuthStatus(state);
-    applySelectedChatAgent(state, "research");
+      await refreshChatModelAuthStatus(state);
+      applySelectedChatAgent(state, "research");
 
-    expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "work" });
-    expect(request).toHaveBeenCalledOnce();
-    expect(state.assistantAgentId).toBe("main");
-    expect(state.modelAuthStatusResult).toBe(fixedStatus);
-  });
+      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "work" });
+      expect(request).toHaveBeenCalledOnce();
+      expect(state.assistantAgentId).toBe("main");
+      expect(state.modelAuthStatusResult).toBe(result);
+      expect(state.modelAuthStatusError).toBe(unavailable?.message ?? null);
+      expect(state.connected).toBe(true);
+    },
+  );
 
   it.each(["success", "failure"] as const)(
     "rebinds selected-global auth and rejects the superseded Main %s",

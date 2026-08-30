@@ -198,6 +198,10 @@ export function retireChatBranchRequests(state: ChatState): void {
   getChatHistoryPaneRequests(state).branchVersion += 1;
 }
 
+export function getChatHistoryVersion(state: ChatState): number {
+  return getChatHistoryPaneRequests(state).historyVersion;
+}
+
 type ChatHistoryRequestOwnership = {
   version: number;
   client: GatewayBrowserClient;

@@ -983,6 +983,7 @@ describe("detectChangedScope", () => {
     execFileSync("git", ["config", "user.name", "CI"], { cwd: repoDir });
     for (const sourcePath of [
       "scripts/ci-changed-scope.mjs",
+      "scripts/lib/arg-utils.runtime.mjs",
       "scripts/lib/changed-path-facts.mjs",
       "scripts/lib/direct-run.mjs",
       "scripts/lib/merge-head-diff-base.mjs",

@@ -12,6 +12,7 @@ import {
 } from "./first-run-activation-receipt.ts";
 import { FirstRunSetup } from "./first-run-setup.ts";
 import {
+  candidate,
   createFirstRunContext,
   detection,
   mountPage,
@@ -31,6 +32,47 @@ describe("ModelSetupPage first-run activation ownership", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+  it("keeps first-run activation owned through an equivalent route-data refresh", async () => {
+    const { context, client, request } = createFirstRunContext();
+    const response = createDeferred<unknown>();
+    request.mockImplementation(async (method) => {
+      if (method === "openclaw.setup.detect") {
+        return detection;
+      }
+      if (method === "openclaw.setup.activate") {
+        return response.promise;
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const { page } = await mountPage(context, {
+      state: {
+        phase: "ready",
+        result: {
+          ...detection,
+          candidates: [candidate("openai-api-key", "provider/verified", true)],
+        },
+      },
+      client,
+      firstRun: true,
+    });
+    const success = { ok: true, modelRef: "provider/verified", latencyMs: 31 };
+    try {
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+      const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
+      page.routeData = { firstRun: true };
+      await page.updateComplete;
+      expect(request).toHaveBeenCalledOnce();
+      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(receipt);
+      response.resolve(success);
+      await waitForFast(() =>
+        expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
+      );
+      expect(request).toHaveBeenCalledOnce();
+    } finally {
+      response.resolve(success);
+    }
+  });
+
   it.each(["manual key", "provider sign-in"])(
     "requires an explicit current-model choice after losing a %s activation reply",
     async (entry) => {
@@ -312,6 +354,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         page.routeData = { ...page.routeData!, firstRun: true };
         await page.updateComplete;
       }
+      await waitForFast(() => expect(signIn()).not.toBeNull());
       signIn().click();
       await waitForFast(() => expect(page.textContent).toContain("Complete login"));
       const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
@@ -485,7 +528,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         context.gateway.snapshot.hello = { ...context.gateway.snapshot.hello! };
       }
       if (changed === "route") {
-        page.routeData = { ...page.routeData! };
+        page.routeData = { firstRun: false };
       }
       if (changed === "expiry") {
         const receipt = readFirstRunActivationReceipt(context)!;
@@ -624,15 +667,15 @@ describe("ModelSetupPage first-run activation ownership", () => {
   it.each([
     ["cancelled", "in place"],
     ["error", "in place"],
-    ["error", "route reset"],
+    ["error", "route refresh"],
     ["error", "reconnect"],
     ["error", "unmount"],
     ["busy", "in place"],
-    ["busy", "route reset"],
+    ["busy", "route refresh"],
     ["busy", "reconnect"],
     ["busy", "unmount"],
     ["running", "in place"],
-    ["cancelled", "route reset"],
+    ["cancelled", "route refresh"],
     ["cancelled", "reconnect"],
     ["cancelled", "unmount"],
     ["running", "unmount"],
@@ -694,7 +737,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       await page.updateComplete;
       expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).not.toBeNull();
-      if (lifecycle === "route reset") {
+      if (lifecycle === "route refresh") {
         page.routeData = { ...page.routeData! };
       } else if (lifecycle === "reconnect") {
         publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });

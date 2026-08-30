@@ -821,6 +821,21 @@ A lane heavier than its effective cap can still start from an empty pool, then r
 
 ### Reusable live/E2E workflow
 
+Repository E2E runs as nine independent jobs: four native Gateway shards, four
+duration-weighted Control UI shards, and the standalone agent-plugin Gateway
+test. At most six run concurrently, and a failure does not cancel the remaining
+jobs. Every job checks out the same selected source and prepares its own full
+private-QA build, Chromium, and sandbox image. Gateway shards retain the existing
+four fresh-process boundaries and two-worker limit; UI shards retain serial
+files within each process. No tests are filtered out, and the existing
+90-minute job deadline is unchanged. Local `pnpm test:e2e` remains sequential.
+
+This trades nine builds and eight additional jobs per invocation for a shorter
+critical path and complete results from every E2E surface. Release checks use
+GitHub-hosted runners, so this adds no Blacksmith registrations there. A
+standalone dispatch using Blacksmith can register nine runners per invocation;
+the six-job concurrency cap does not reduce that total registration budget.
+
 The reusable live/E2E workflow asks `scripts/test-docker-all.mjs --plan-json` which package, image kind, live image, lane, and credential coverage is required. `scripts/docker-e2e.mjs` then converts that plan into GitHub outputs and summaries. It either packs OpenClaw through `scripts/package-openclaw-for-docker.mjs`, downloads a current-run package artifact, or downloads a package artifact from `package_artifact_run_id`, then validates the tarball inventory. The default `no-push-artifact` path builds package-digest-tagged bare/functional images through Blacksmith's Docker layer cache, packs the exact image bytes into an immutable workflow artifact, and has each consumer verify and load that artifact. `existing-only` instead requires explicit `docker_e2e_bare_image`/`docker_e2e_functional_image` GHCR refs and never builds or pushes. Those registry pulls use a bounded 180-second per-attempt timeout so a stuck stream retries quickly instead of consuming most of the CI critical path. After successful scheduled validation, `openclaw-scheduled-live-checks.yml` passes the immutable tested-image manifest to the separate package-write publisher; read-only release and prerelease callers never traverse that writer.
 
 ### Release-path chunks

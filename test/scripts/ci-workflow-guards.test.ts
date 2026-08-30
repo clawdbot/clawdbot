@@ -4819,18 +4819,41 @@ server.listen(0, "127.0.0.1", () => {
     const releaseChecks = parse(
       readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
     );
-    expect(releaseChecks.jobs.validate_repo_e2e.env).toMatchObject({
+    const repoE2e = releaseChecks.jobs.validate_repo_e2e;
+    expect(repoE2e.env).toMatchObject({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
     });
-    expect(releaseChecks.jobs.validate_repo_e2e["timeout-minutes"]).toBe(90);
-    const repoE2eSteps = releaseChecks.jobs.validate_repo_e2e.steps as WorkflowStep[];
+    expect(repoE2e["timeout-minutes"]).toBe(90);
+    expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 6 });
+    const repoE2eRows = repoE2e.strategy.matrix.include as Array<{
+      name: string;
+      command: string;
+    }>;
+    expect(repoE2eRows.map((row) => row.command)).toEqual([
+      ...Array.from({ length: 4 }, (_, index) => `pnpm test:e2e:gateway --shard=${index + 1}/4`),
+      ...Array.from({ length: 4 }, (_, index) => `pnpm test:ui:e2e --shard=${index + 1}/4`),
+      "pnpm test:e2e:agent-plugin-gateway",
+    ]);
+    expect(new Set(repoE2eRows.map((row) => row.name)).size).toBe(9);
+    expect(repoE2e.name).toBe("Repo E2E (${{ matrix.name }})");
+    expect(repoE2e.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
+    expect(repoE2e["continue-on-error"]).toBe("${{ inputs.advisory }}");
+    const repoE2eSteps = repoE2e.steps as WorkflowStep[];
+    expect(repoE2eSteps.find((step) => step.name === "Checkout selected ref")?.with?.ref).toBe(
+      "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+    );
     const sandboxSetupIndex = repoE2eSteps.findIndex(
       (step) => step.name === "Build sandbox image" && step.run === "scripts/sandbox-setup.sh",
     );
     const repoE2eIndex = repoE2eSteps.findIndex((step) => step.name === "Run repo E2E suite");
     expect(sandboxSetupIndex).toBeGreaterThanOrEqual(0);
     expect(repoE2eIndex).toBeGreaterThan(sandboxSetupIndex);
+    expect(repoE2eSteps[repoE2eIndex]).toMatchObject({
+      run: "${{ matrix.command }}",
+      env: { OPENCLAW_E2E_WORKERS: "2", OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
+    });
     const targetedGroupStep = releaseChecks.jobs.plan_docker_lane_groups.steps.find(
       (step: WorkflowStep) => step.name === "Build targeted Docker lane groups",
     );
