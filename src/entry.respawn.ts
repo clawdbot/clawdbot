@@ -1,6 +1,7 @@
 // Respawns the CLI with adjusted process flags when startup requires it.
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
   isTerminalInteractiveRespawnArgv,
@@ -98,6 +99,9 @@ export function buildCliRespawnPlan(
   }
 
   const childEnv: NodeJS.ProcessEnv = { ...env };
+  if (!readNonBlankString(childEnv.NODE_EXTRA_CA_CERTS)) {
+    delete childEnv.NODE_EXTRA_CA_CERTS;
+  }
   const childExecArgv = [...execArgv];
   let needsRespawn = false;
 
@@ -129,7 +133,7 @@ export function buildCliRespawnPlan(
   if (
     autoNodeExtraCaCerts &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]) &&
-    !env.NODE_EXTRA_CA_CERTS
+    !childEnv.NODE_EXTRA_CA_CERTS
   ) {
     childEnv.NODE_EXTRA_CA_CERTS = autoNodeExtraCaCerts;
     childEnv[OPENCLAW_NODE_EXTRA_CA_CERTS_READY] = "1";
