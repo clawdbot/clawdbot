@@ -15,18 +15,31 @@ import {
 import {
   createWorkspaceStateIdentity,
   resolveWorkspaceStateAliases,
+  type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
 import {
-  registerWorkspaceStateAliasesInTransaction,
+  isValidWorkspaceAttestationHash,
+  registerWorkspaceStateAliasIdentitiesInTransaction,
   workspacePathEntryExists,
+  WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
 } from "./workspace-state-store.js";
 
 type WorkspaceAliasDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "workspace_setup_state" | "workspace_path_aliases" | "workspace_generated_bootstrap_hashes"
+  | "workspace_setup_state"
+  | "workspace_path_aliases"
+  | "workspace_generated_bootstrap_hashes"
+  | "migration_sources"
 >;
 
 type WorkspaceAliasDatabaseHandle = Pick<ReturnType<typeof openOpenClawStateDatabase>, "db">;
+
+type WorkspaceAliasFilesystemFacts = {
+  aliases: readonly WorkspaceStateIdentity[];
+  lexicalAlias: WorkspaceStateIdentity;
+  currentCanonicalIdentity: WorkspaceStateIdentity;
+  pathEntryExists: boolean;
+};
 
 export type RepointedWorkspaceAliasFacts = {
   aliasPath: string;
@@ -36,13 +49,21 @@ export type RepointedWorkspaceAliasFacts = {
   currentTargetHasOwnState: boolean;
 };
 
+function resolveWorkspaceAliasFilesystemFacts(workspaceDir: string): WorkspaceAliasFilesystemFacts {
+  const aliases = resolveWorkspaceStateAliases(workspaceDir);
+  return {
+    aliases,
+    lexicalAlias: aliases[0]!,
+    currentCanonicalIdentity: aliases.at(-1)!,
+    pathEntryExists: workspacePathEntryExists(workspaceDir),
+  };
+}
+
 function readRepointedWorkspaceAlias(params: {
-  workspaceDir: string;
+  filesystem: WorkspaceAliasFilesystemFacts;
   database: WorkspaceAliasDatabaseHandle;
 }): RepointedWorkspaceAliasFacts | undefined {
-  const aliases = resolveWorkspaceStateAliases(params.workspaceDir);
-  const lexicalAlias = aliases[0]!;
-  const currentCanonicalIdentity = aliases.at(-1)!;
+  const { lexicalAlias, currentCanonicalIdentity } = params.filesystem;
   const kysely = getNodeSqliteKysely<WorkspaceAliasDatabase>(params.database.db);
   const storedAlias = executeSqliteQueryTakeFirstSync(
     params.database.db,
@@ -59,7 +80,7 @@ function readRepointedWorkspaceAlias(params: {
     throw new Error("workspace path alias target is invalid");
   }
   if (
-    !workspacePathEntryExists(params.workspaceDir) ||
+    !params.filesystem.pathEntryExists ||
     storedIdentity.workspaceKey === currentCanonicalIdentity.workspaceKey
   ) {
     return undefined;
@@ -72,6 +93,13 @@ function readRepointedWorkspaceAlias(params: {
       .where("workspace_key", "=", storedIdentity.workspaceKey)
       .orderBy("filename", "asc"),
   ).rows;
+  const storedAttestationHashes = new Map<string, string>();
+  for (const row of hashRows) {
+    if (!isValidWorkspaceAttestationHash(row.filename, row.sha256)) {
+      throw new Error("workspace attestation hash row is invalid");
+    }
+    storedAttestationHashes.set(row.filename, row.sha256);
+  }
   const currentSetupRow = executeSqliteQueryTakeFirstSync(
     params.database.db,
     kysely
@@ -83,41 +111,117 @@ function readRepointedWorkspaceAlias(params: {
     aliasPath: lexicalAlias.workspacePath,
     storedWorkspacePath: storedIdentity.workspacePath,
     currentWorkspacePath: currentCanonicalIdentity.workspacePath,
-    storedAttestationHashes: new Map(hashRows.map((row) => [row.filename, row.sha256])),
+    storedAttestationHashes,
     currentTargetHasOwnState: currentSetupRow !== undefined,
   };
 }
 
-/** Read-only doctor probe: reports a configured alias whose stored state belongs to a different canonical target. */
+function factsMatch(
+  actual: RepointedWorkspaceAliasFacts,
+  expected: RepointedWorkspaceAliasFacts,
+): boolean {
+  if (
+    actual.aliasPath !== expected.aliasPath ||
+    actual.storedWorkspacePath !== expected.storedWorkspacePath ||
+    actual.currentWorkspacePath !== expected.currentWorkspacePath ||
+    actual.currentTargetHasOwnState !== expected.currentTargetHasOwnState ||
+    actual.storedAttestationHashes.size !== expected.storedAttestationHashes.size
+  ) {
+    return false;
+  }
+  for (const [filename, sha256] of actual.storedAttestationHashes) {
+    if (expected.storedAttestationHashes.get(filename) !== sha256) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function transferWorkspaceMigrationReceipts(params: {
+  database: WorkspaceAliasDatabaseHandle;
+  storedWorkspaceKey: string;
+  currentWorkspaceKey: string;
+}): void {
+  const kysely = getNodeSqliteKysely<WorkspaceAliasDatabase>(params.database.db);
+  const rows = executeSqliteQuerySync(
+    params.database.db,
+    kysely
+      .selectFrom("migration_sources")
+      .select(["source_key", "report_json"])
+      .where("migration_kind", "=", WORKSPACE_LEGACY_STATE_MIGRATION_KIND),
+  ).rows;
+  for (const row of rows) {
+    let report: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(row.report_json) as unknown;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        continue;
+      }
+      report = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (report.workspaceKey !== params.storedWorkspaceKey) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      params.database.db,
+      kysely
+        .updateTable("migration_sources")
+        .set({
+          report_json: JSON.stringify({ ...report, workspaceKey: params.currentWorkspaceKey }),
+        })
+        .where("source_key", "=", row.source_key),
+    );
+  }
+}
+
+/** Read-only doctor probe for a configured alias whose state belongs to another target. */
 export function detectRepointedWorkspaceAlias(
   workspaceDir: string,
   options: OpenClawStateDatabaseOptions = {},
 ): RepointedWorkspaceAliasFacts | undefined {
+  const filesystem = resolveWorkspaceAliasFilesystemFacts(workspaceDir);
   return withExistingOpenClawStateDatabaseReadOnly(
     (database) =>
       runSqliteDeferredTransactionSync(database.db, () =>
-        readRepointedWorkspaceAlias({ workspaceDir, database }),
+        readRepointedWorkspaceAlias({ filesystem, database }),
       ),
     options,
   );
 }
 
-export type WorkspaceAliasRebindOutcome = "rebound" | "no-repoint" | "current-target-owns-state";
+export type WorkspaceAliasRebindOutcome =
+  | "rebound"
+  | "no-repoint"
+  | "repoint-changed"
+  | "current-target-owns-state";
 
 /**
- * Non-destructive doctor repair: moves the stored setup state and attestation
- * onto the alias's current canonical target and rewrites the alias rows.
- * Workspace files are never touched; refuses when the current target already
- * owns state so a repair cannot silently merge two workspaces.
+ * Moves the stored setup state and attestation to an approved current target.
+ * The transaction revalidates the exact facts that doctor presented.
  */
 export function rebindRepointedWorkspaceAlias(
   workspaceDir: string,
+  expectedFacts: RepointedWorkspaceAliasFacts,
   options: OpenClawStateDatabaseOptions = {},
 ): WorkspaceAliasRebindOutcome {
+  const filesystem = resolveWorkspaceAliasFilesystemFacts(workspaceDir);
+  if (
+    filesystem.lexicalAlias.workspacePath !== expectedFacts.aliasPath ||
+    filesystem.currentCanonicalIdentity.workspacePath !== expectedFacts.currentWorkspacePath
+  ) {
+    return "repoint-changed";
+  }
+  // eslint-disable-next-line no-warning-comments -- Review policy requires this decision marker.
+  // TODO(review): Link the accepted material persistent-store repair design before merge.
   return runOpenClawStateWriteTransaction((database) => {
-    const facts = readRepointedWorkspaceAlias({ workspaceDir, database });
+    const facts = readRepointedWorkspaceAlias({ filesystem, database });
     if (!facts) {
       return "no-repoint";
+    }
+    if (!factsMatch(facts, expectedFacts)) {
+      return "repoint-changed";
     }
     if (facts.currentTargetHasOwnState) {
       return "current-target-owns-state";
@@ -133,9 +237,7 @@ export function rebindRepointedWorkspaceAlias(
         .where("workspace_key", "=", storedIdentity.workspaceKey),
     );
     if (storedSetupRow) {
-      // The hash table's FK references the setup row's key, so adopt by
-      // inserting the new parent first, repointing children, then deleting the
-      // old parent — an in-place key UPDATE would violate the constraint.
+      // Insert the new FK parent before repointing children and deleting the old parent.
       executeSqliteQuerySync(
         database.db,
         kysely.insertInto("workspace_setup_state").values({
@@ -158,18 +260,21 @@ export function rebindRepointedWorkspaceAlias(
           .where("workspace_key", "=", storedIdentity.workspaceKey),
       );
     }
-    // The old canonical identity no longer owns state, so drop every alias that
-    // resolved to it before re-registering the configured spelling; a stale row
-    // would otherwise collide with the fresh registration below.
+    transferWorkspaceMigrationReceipts({
+      database,
+      storedWorkspaceKey: storedIdentity.workspaceKey,
+      currentWorkspaceKey: currentIdentity.workspaceKey,
+    });
+    // Remove all stale aliases before registering the prepared current identities.
     executeSqliteQuerySync(
       database.db,
       kysely
         .deleteFrom("workspace_path_aliases")
         .where("workspace_key", "=", storedIdentity.workspaceKey),
     );
-    registerWorkspaceStateAliasesInTransaction({
+    registerWorkspaceStateAliasIdentitiesInTransaction({
       database,
-      workspaceDirs: [workspaceDir],
+      aliases: filesystem.aliases,
       identity: currentIdentity,
       updatedAtMs: Date.now(),
     });

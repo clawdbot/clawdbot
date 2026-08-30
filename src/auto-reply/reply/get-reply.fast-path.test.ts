@@ -69,10 +69,8 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
-vi.mock("../../agents/workspace.js", async (importOriginal) => ({
+vi.mock("../../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
-  WorkspaceVanishedError: (await importOriginal<typeof import("../../agents/workspace.js")>())
-    .WorkspaceVanishedError,
   ensureAgentWorkspace: (...args: unknown[]) => mocks.ensureAgentWorkspace(...args),
 }));
 registerGetReplyRuntimeOverrides(mocks);

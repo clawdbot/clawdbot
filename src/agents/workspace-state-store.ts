@@ -51,6 +51,10 @@ export function isSafeWorkspaceAttestationFilename(filename: string): boolean {
   );
 }
 
+export function isValidWorkspaceAttestationHash(filename: string, sha256: string): boolean {
+  return isSafeWorkspaceAttestationFilename(filename) && SHA256_HEX_PATTERN.test(sha256);
+}
+
 function isCanonicalIsoTimestamp(value: string): boolean {
   const timestamp = new Date(value);
   return Number.isFinite(timestamp.getTime()) && timestamp.toISOString() === value;
@@ -217,6 +221,15 @@ function registerWorkspacePathAliases(params: {
   }
 }
 
+export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
+  database: WorkspaceStateDatabaseHandle;
+  aliases: readonly WorkspaceStateIdentity[];
+  identity: WorkspaceStateIdentity;
+  updatedAtMs: number;
+}): void {
+  registerWorkspacePathAliases(params);
+}
+
 export function registerWorkspaceStateAliasesInTransaction(params: {
   database: WorkspaceStateDatabaseHandle;
   workspaceDirs: readonly string[];
@@ -229,7 +242,7 @@ export function registerWorkspaceStateAliasesInTransaction(params: {
       aliases.set(alias.workspaceKey, alias);
     }
   }
-  registerWorkspacePathAliases({
+  registerWorkspaceStateAliasIdentitiesInTransaction({
     database: params.database,
     identity: params.identity,
     aliases: [...aliases.values()],
@@ -286,10 +299,7 @@ function readSnapshotFromDatabase(params: {
     for (const row of hashRows) {
       // Validate names structurally rather than against today's bootstrap set:
       // retiring a seeded file must not make an existing attestation unreadable.
-      if (
-        !isSafeWorkspaceAttestationFilename(row.filename) ||
-        !SHA256_HEX_PATTERN.test(row.sha256)
-      ) {
+      if (!isValidWorkspaceAttestationHash(row.filename, row.sha256)) {
         throw new Error("workspace attestation hash row is invalid");
       }
       generatedHashes.set(row.filename, row.sha256);

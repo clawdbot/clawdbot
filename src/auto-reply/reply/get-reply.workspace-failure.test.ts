@@ -3,7 +3,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { WorkspaceAliasRepointedError } from "../../agents/workspace-state-identity.js";
+import {
+  WorkspaceAliasRepointedError,
+  WorkspaceVanishedError,
+} from "../../agents/workspace-state-identity.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
@@ -82,7 +85,6 @@ describe("getReplyFromConfig workspace failures", () => {
   });
 
   it("turns a vanished workspace into a visible terminal reply", async () => {
-    const { WorkspaceVanishedError } = await import("../../agents/workspace.js");
     (await workspaceMock()).mockRejectedValueOnce(
       new WorkspaceVanishedError({ workspaceDir: "/home/user/clawd" }),
     );

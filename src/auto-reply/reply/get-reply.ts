@@ -19,12 +19,11 @@ import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-mo
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
-import { WorkspaceAliasRepointedError } from "../../agents/workspace-state-identity.js";
 import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
-  ensureAgentWorkspace,
+  WorkspaceAliasRepointedError,
   WorkspaceVanishedError,
-} from "../../agents/workspace.js";
+} from "../../agents/workspace-state-identity.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -534,11 +533,8 @@ export async function getReplyFromConfig(
           }),
     );
   } catch (error) {
-    // Workspace state that fails closed cannot heal through ingress retries; a
-    // rethrow here leaves the inbound event stuck at the head of its durable
-    // lane until the 24h dead-letter gate. Turn it into a visible terminal
-    // reply that names the supported repair instead. Heartbeats keep throwing
-    // so their own failure logging stays the recorded outcome.
+    // Permanent workspace state failures cannot heal through ingress retries.
+    // Return a visible terminal reply; heartbeat logging owns heartbeat failures.
     if (
       opts?.isHeartbeat !== true &&
       (error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)

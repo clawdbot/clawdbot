@@ -108,14 +108,18 @@ describe("doctor workspace alias repair", () => {
     expect(collectRepointedWorkspaceAliasFindings(buildAliasCfg(dir))).toHaveLength(0);
   });
 
-  it("rebinds automatically when attested files verify against the current target", async () => {
-    const { alias } = repointAlias({ seedAttestedFile: true });
+  it("requires the aggressive gate even when generated hashes match", async () => {
+    const { alias, original } = repointAlias({ seedAttestedFile: true });
     const prompter = buildPrompter();
 
     await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
 
-    expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
-    expect(prompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
+    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+    expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
+    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
+
+    const approving = buildPrompter({ confirmAggressiveAutoFix: vi.fn(async () => true) });
+    await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter: approving });
     const snapshot = readWorkspaceStateSnapshot(alias);
     expect(snapshot.setupExists).toBe(true);
     expect(snapshot.setup.bootstrapSeededAt).toBe("2026-07-16T01:00:00.000Z");
@@ -126,7 +130,7 @@ describe("doctor workspace alias repair", () => {
       cfg: buildAliasCfg(alias),
       prompter: secondPrompter,
     });
-    expect(secondPrompter.confirmAutoFix).not.toHaveBeenCalled();
+    expect(secondPrompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
   });
 
   it("requires the explicit operator gate when continuity is unproven", async () => {
@@ -158,13 +162,42 @@ describe("doctor workspace alias repair", () => {
     expect(readWorkspaceStateSnapshot(replacement).setupExists).toBe(true);
   });
 
-  it("only notes the problem outside repair mode", async () => {
-    const { alias, original } = repointAlias({ seedAttestedFile: true });
-    const prompter = buildPrompter({ shouldRepair: false });
+  it("allows an interactive approval outside non-interactive repair mode", async () => {
+    const { alias } = repointAlias({ seedAttestedFile: true });
+    const prompter = buildPrompter({
+      shouldRepair: false,
+      confirmAggressiveAutoFix: vi.fn(async () => true),
+      repairMode: {
+        shouldRepair: false,
+        shouldForce: false,
+        nonInteractive: false,
+        canPrompt: true,
+        updateInProgress: false,
+      },
+    });
 
     await maybeRepairRepointedWorkspaceAliases({ cfg: buildAliasCfg(alias), prompter });
 
     expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+    expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
+    expect(readWorkspaceStateSnapshot(alias).setupExists).toBe(true);
+  });
+
+  it("refuses to transfer state while another configured agent uses the stored target", async () => {
+    const { alias, original } = repointAlias({ seedAttestedFile: false });
+    const prompter = buildPrompter({ confirmAggressiveAutoFix: vi.fn(async () => true) });
+    const cfg = {
+      agents: {
+        entries: {
+          main: { workspace: alias },
+          legacy: { workspace: original },
+        },
+      },
+    } as OpenClawConfig;
+
+    await maybeRepairRepointedWorkspaceAliases({ cfg, prompter });
+
+    expect(prompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
   });
 });

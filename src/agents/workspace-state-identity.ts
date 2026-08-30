@@ -106,11 +106,28 @@ export class WorkspaceAliasRepointedError extends Error {
   }) {
     super(
       `workspace path alias points to a different current target: ${params.aliasPath} now resolves to ${params.currentWorkspacePath}, but its stored workspace state belongs to ${params.storedWorkspacePath}. ` +
-        "Run `openclaw doctor --fix` to rebind or retire the stale alias.",
+        "Run `openclaw doctor` and confirm the rebind, or use `openclaw doctor --fix --force`.",
     );
     this.name = "WorkspaceAliasRepointedError";
     this.aliasPath = params.aliasPath;
     this.storedWorkspacePath = params.storedWorkspacePath;
     this.currentWorkspacePath = params.currentWorkspacePath;
+  }
+}
+
+export const WORKSPACE_VANISHED_ERROR_CODE = "WORKSPACE_VANISHED";
+
+export class WorkspaceVanishedError extends Error {
+  readonly code = WORKSPACE_VANISHED_ERROR_CODE;
+  readonly workspaceDir: string;
+
+  constructor(params: { workspaceDir: string }) {
+    super(
+      `OpenClaw workspace appears to have disappeared after a recent initialization: ${params.workspaceDir}. ` +
+        `Refusing to reseed BOOTSTRAP.md over a recently attested workspace. ` +
+        "Restore the workspace or run a full OpenClaw reset if this reset was intentional.",
+    );
+    this.name = "WorkspaceVanishedError";
+    this.workspaceDir = params.workspaceDir;
   }
 }

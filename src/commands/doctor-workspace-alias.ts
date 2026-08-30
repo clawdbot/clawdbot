@@ -13,6 +13,7 @@ import {
   rebindRepointedWorkspaceAlias,
   type RepointedWorkspaceAliasFacts,
 } from "../agents/workspace-alias-rebind.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { shortenHomePath } from "../utils.js";
@@ -91,6 +92,19 @@ async function attestedHashesMatchCurrentTarget(
   return true;
 }
 
+function findConfiguredStoredTargetOwner(params: {
+  cfg: OpenClawConfig;
+  currentAgentId: string;
+  storedWorkspacePath: string;
+}): WorkspaceAliasScope | undefined {
+  return resolveWorkspaceAliasScopes(params.cfg).find(
+    (scope) =>
+      scope.agentId !== params.currentAgentId &&
+      resolveWorkspaceStateIdentity(scope.workspaceDir).workspacePath ===
+        params.storedWorkspacePath,
+  );
+}
+
 export type WorkspaceAliasFinding = {
   checkId: string;
   severity: "warning";
@@ -108,7 +122,8 @@ export function collectRepointedWorkspaceAliasFindings(
     checkId: WORKSPACE_ALIAS_CHECK_ID,
     severity: "warning",
     message: `${labelAgent ? `Agent "${agentId}": ` : ""}${describeRepointedWorkspaceAlias(facts)}. Inbound messages for this workspace fail until the alias is repaired.`,
-    fixHint: "Run `openclaw doctor --fix` to rebind or retire the stale alias.",
+    fixHint:
+      "Run `openclaw doctor` and confirm the rebind, or use `openclaw doctor --fix --force`.",
   }));
 }
 
@@ -129,25 +144,26 @@ export async function maybeRepairRepointedWorkspaceAliases(params: {
       );
       continue;
     }
-    if (!params.prompter.shouldRepair) {
+    const configuredOwner = findConfiguredStoredTargetOwner({
+      cfg: params.cfg,
+      currentAgentId: agentId,
+      storedWorkspacePath: facts.storedWorkspacePath,
+    });
+    if (configuredOwner) {
       note(
-        `${prefix}${description}. Inbound messages for this workspace fail until the alias is repaired. Run \`openclaw doctor --fix\` to rebind it.`,
+        `${prefix}${description}. Agent "${configuredOwner.agentId}" still uses the stored target, so doctor will not transfer its state.`,
         "Workspace",
       );
       continue;
     }
-    const continuityProven = await attestedHashesMatchCurrentTarget(facts);
-    const approved = continuityProven
-      ? await params.prompter.confirmAutoFix({
-          message: `${prefix}${description}. Attested workspace files match the current target. Rebind the stored state to it?`,
-          initialValue: true,
-        })
-      : // Without matching attestation evidence the new target is unproven, so
-        // adoption stays an explicit operator decision (interactive yes or --force).
-        await params.prompter.confirmAggressiveAutoFix({
-          message: `${prefix}${description}. Attested workspace files do NOT verify against the current target. Rebind the stored state to it anyway?`,
-          initialValue: false,
-        });
+    const hashesMatch = await attestedHashesMatchCurrentTarget(facts);
+    // Generated bootstrap templates can corroborate a target, but they do not identify it.
+    const approved = await params.prompter.confirmAggressiveAutoFix({
+      message: hashesMatch
+        ? `${prefix}${description}. Generated template hashes match the current target but do not prove its identity. Rebind the stored state to it?`
+        : `${prefix}${description}. Attested workspace files do NOT verify against the current target. Rebind the stored state to it anyway?`,
+      initialValue: false,
+    });
     if (!approved) {
       note(
         `${prefix}Left the repointed workspace alias in place. Inbound messages for this workspace keep failing until it is repaired.`,
@@ -155,7 +171,7 @@ export async function maybeRepairRepointedWorkspaceAliases(params: {
       );
       continue;
     }
-    const outcome = rebindRepointedWorkspaceAlias(workspaceDir);
+    const outcome = rebindRepointedWorkspaceAlias(workspaceDir, facts);
     if (outcome === "rebound") {
       note(
         `${prefix}Rebound workspace state for ${shortenHomePath(facts.aliasPath)} to ${shortenHomePath(facts.currentWorkspacePath)}.`,

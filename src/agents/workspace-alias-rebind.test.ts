@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -14,8 +17,11 @@ import {
 import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
 import {
   mergeWorkspaceSetupState,
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
+  WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
 } from "./workspace-state-store.js";
 
 let testState: OpenClawTestState | undefined;
@@ -59,7 +65,7 @@ describe("workspace alias rebind", () => {
     });
     expect(facts?.storedAttestationHashes.get("BOOTSTRAP.md")).toBe("a".repeat(64));
 
-    expect(rebindRepointedWorkspaceAlias(alias)).toBe("rebound");
+    expect(rebindRepointedWorkspaceAlias(alias, facts!)).toBe("rebound");
     const snapshot = readWorkspaceStateSnapshot(alias);
     expect(snapshot.setupExists).toBe(true);
     expect(snapshot.setup.bootstrapSeededAt).toBe("2026-07-16T01:00:00.000Z");
@@ -69,7 +75,7 @@ describe("workspace alias rebind", () => {
     );
 
     expect(detectRepointedWorkspaceAlias(alias)).toBeUndefined();
-    expect(rebindRepointedWorkspaceAlias(alias)).toBe("no-repoint");
+    expect(rebindRepointedWorkspaceAlias(alias, facts!)).toBe("no-repoint");
   });
 
   it("refuses to rebind onto a target that already owns workspace state", () => {
@@ -83,9 +89,100 @@ describe("workspace alias rebind", () => {
     fs.unlinkSync(alias);
     fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
 
-    expect(detectRepointedWorkspaceAlias(alias)?.currentTargetHasOwnState).toBe(true);
-    expect(rebindRepointedWorkspaceAlias(alias)).toBe("current-target-owns-state");
+    const facts = detectRepointedWorkspaceAlias(alias)!;
+    expect(facts.currentTargetHasOwnState).toBe(true);
+    expect(rebindRepointedWorkspaceAlias(alias, facts)).toBe("current-target-owns-state");
     expect(readWorkspaceStateSnapshot(dir).setupExists).toBe(true);
     expect(readWorkspaceStateSnapshot(replacement).setupExists).toBe(true);
+  });
+
+  it("rejects a target change after doctor presents the repair facts", () => {
+    const original = testState!.workspaceDir;
+    const alias = testState!.path("workspace-link");
+    const firstReplacement = testState!.path("replacement-a");
+    const secondReplacement = testState!.path("replacement-b");
+    fs.mkdirSync(firstReplacement, { recursive: true });
+    fs.mkdirSync(secondReplacement, { recursive: true });
+    fs.symlinkSync(original, alias, process.platform === "win32" ? "junction" : "dir");
+    mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+    fs.unlinkSync(alias);
+    fs.symlinkSync(firstReplacement, alias, process.platform === "win32" ? "junction" : "dir");
+    const approvedFacts = detectRepointedWorkspaceAlias(alias)!;
+
+    fs.unlinkSync(alias);
+    fs.symlinkSync(secondReplacement, alias, process.platform === "win32" ? "junction" : "dir");
+
+    expect(rebindRepointedWorkspaceAlias(alias, approvedFacts)).toBe("repoint-changed");
+    expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
+    expect(readWorkspaceStateSnapshot(secondReplacement).setupExists).toBe(false);
+  });
+
+  it("rejects malformed persisted attestation rows during detection", () => {
+    const original = testState!.workspaceDir;
+    const alias = testState!.path("workspace-link");
+    const replacement = testState!.path("replacement-workspace");
+    fs.mkdirSync(replacement, { recursive: true });
+    fs.symlinkSync(original, alias, process.platform === "win32" ? "junction" : "dir");
+    mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+    replaceWorkspaceAttestation({
+      workspaceDir: alias,
+      attestedAtMs: 1_000,
+      generatedHashes: new Map([["BOOTSTRAP.md", "a".repeat(64)]]),
+      nowMs: 1_000,
+    });
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE workspace_generated_bootstrap_hashes SET filename = '../outside.md'")
+      .run();
+    fs.unlinkSync(alias);
+    fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+
+    expect(() => detectRepointedWorkspaceAlias(alias)).toThrow(
+      /workspace attestation hash row is invalid/u,
+    );
+  });
+
+  it("transfers migration receipt ownership so later deletion removes it", () => {
+    const original = testState!.workspaceDir;
+    const alias = testState!.path("workspace-link");
+    const replacement = testState!.path("replacement-workspace");
+    fs.mkdirSync(replacement, { recursive: true });
+    fs.symlinkSync(original, alias, process.platform === "win32" ? "junction" : "dir");
+    mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+    const originalIdentity = resolveWorkspaceStateIdentity(original);
+    const db = openOpenClawStateDatabase().db;
+    db.prepare(
+      "INSERT INTO migration_runs (id, started_at, finished_at, status, report_json) VALUES ('workspace-run', 1, 1, 'completed', '{}')",
+    ).run();
+    db.prepare(
+      `INSERT INTO migration_sources (
+        source_key, migration_kind, source_path, target_table, last_run_id, status, imported_at,
+        report_json
+      ) VALUES ('workspace-receipt', ?, '/legacy/workspace-state.json',
+        'workspace_setup_state', 'workspace-run', 'completed', 1, ?)`,
+    ).run(
+      WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
+      JSON.stringify({ workspaceKey: originalIdentity.workspaceKey }),
+    );
+    fs.unlinkSync(alias);
+    fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+    const facts = detectRepointedWorkspaceAlias(alias)!;
+
+    expect(rebindRepointedWorkspaceAlias(alias, facts)).toBe("rebound");
+    const receipt = db
+      .prepare("SELECT report_json FROM migration_sources WHERE source_key = 'workspace-receipt'")
+      .get() as { report_json: string };
+    expect(JSON.parse(receipt.report_json)).toMatchObject({
+      workspaceKey: resolveWorkspaceStateIdentity(replacement).workspaceKey,
+    });
+
+    deleteWorkspaceState(prepareWorkspaceStateDeletion(alias));
+    expect(
+      db
+        .prepare("SELECT source_key FROM migration_sources WHERE source_key = 'workspace-receipt'")
+        .get(),
+    ).toBeUndefined();
+    expect(
+      db.prepare("SELECT id FROM migration_runs WHERE id = 'workspace-run'").get(),
+    ).toBeUndefined();
   });
 });
