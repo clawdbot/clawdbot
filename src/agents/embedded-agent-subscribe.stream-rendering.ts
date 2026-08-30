@@ -156,7 +156,10 @@ export function createStreamRendering({
     if (!scanText) {
       return "";
     }
-    const codeSpans = buildCodeSpanIndex(scanText, inlineStateStart, fenceStateStart);
+    const codeSpans =
+      scanText === fenceInput
+        ? initialCodeSpans
+        : buildCodeSpanIndex(scanText, inlineStateStart, fenceStateStart);
 
     let processed = "";
     THINKING_TAG_SCAN_RE.lastIndex = 0;
@@ -253,7 +256,10 @@ export function createStreamRendering({
     // If enforcement is disabled, we still strip the tags themselves to prevent
     // hallucinations (e.g. Minimax copying the style) from leaking, but we
     // do not enforce buffering/extraction logic.
-    const finalCodeSpans = buildCodeSpanIndex(processed, inlineStateStart, fenceStateStart);
+    const finalCodeSpans =
+      processed === scanText
+        ? codeSpans
+        : buildCodeSpanIndex(processed, inlineStateStart, fenceStateStart);
     if (!params.enforceFinalTag) {
       stateLocal.inlineCode = finalCodeSpans.inlineState;
       stateLocal.fence = finalCodeSpans.fenceState;
