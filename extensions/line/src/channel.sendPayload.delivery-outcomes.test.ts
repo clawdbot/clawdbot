@@ -99,7 +99,7 @@ describe("line outbound delivery outcomes", () => {
         body: JSON.stringify({ message: "You have reached your monthly limit." }),
       });
       mocks.pushMessageLine.mockRejectedValueOnce(rejection);
-      mocks.readAccountMessageQuota.mockImplementation(() => new Promise(() => {}));
+      mocks.readAccountMessageQuota.mockImplementation(() => new Promise<never>(() => {}));
       setLineRuntime(runtime);
 
       const sent = lineOutboundAdapter.sendPayload!({

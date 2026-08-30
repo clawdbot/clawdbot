@@ -2,6 +2,8 @@ import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
+type LineMessageQuotaReader = typeof import("./message-quota.js").readLineAccountMessageQuota;
+
 type LineRuntimeMocks = {
   pushMessageLine: ReturnType<typeof vi.fn>;
   pushMessagesLine: ReturnType<typeof vi.fn>;
@@ -15,7 +17,7 @@ type LineRuntimeMocks = {
   chunkMarkdownText: ReturnType<typeof vi.fn>;
   resolveLineAccount: ReturnType<typeof vi.fn>;
   resolveTextChunkLimit: ReturnType<typeof vi.fn>;
-  readAccountMessageQuota: ReturnType<typeof vi.fn>;
+  readAccountMessageQuota: ReturnType<typeof vi.fn<LineMessageQuotaReader>>;
 };
 
 export function lineResult(messageId: string, chatId = "c1") {
@@ -40,7 +42,7 @@ export function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMoc
   const resolveTextChunkLimit = vi.fn(() => 123);
   // Defaults to an unreadable allowance so a refusal keeps whatever verdict the
   // status alone proves; tests that care supply a quota explicitly.
-  const readAccountMessageQuota = vi.fn(async () => undefined);
+  const readAccountMessageQuota = vi.fn<LineMessageQuotaReader>(async () => undefined);
   const resolveLineAccount = vi.fn(
     ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) => {
       const resolved = accountId ?? "default";
