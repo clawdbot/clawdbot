@@ -397,18 +397,29 @@ export function buildLiveShardPnpmArgs(files: string[], passthroughArgs: string[
  * Resolves build profiles required by selected live tests.
  */
 export function resolveLiveShardPreparation(files: string[]): LiveShardPreparation | null {
-  if (files.some(isGatewayProfilesLiveTest)) {
+  const gatewayProfiles = files.some(isGatewayProfilesLiveTest);
+  // Vision requests load provider and agent runtime plugins. Compile them before
+  // Vitest starts so cold source transforms do not consume the request deadline.
+  if (
+    gatewayProfiles ||
+    files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
+    files.includes("extensions/openai/openai.live.test.ts")
+  ) {
     return {
       env: {},
       profile: "sourcePerformance",
       requiredArtifact: SOURCE_PERFORMANCE_ARTIFACT,
-      runtimeEnv: {
-        OPENCLAW_DISABLE_BONJOUR: "1",
-        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
-        OPENCLAW_LIVE_TEST_QUIET: "0",
-        OPENCLAW_LOG_LEVEL: "info",
-        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
-      },
+      ...(gatewayProfiles
+        ? {
+            runtimeEnv: {
+              OPENCLAW_DISABLE_BONJOUR: "1",
+              OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+              OPENCLAW_LIVE_TEST_QUIET: "0",
+              OPENCLAW_LOG_LEVEL: "info",
+              OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+            },
+          }
+        : {}),
     };
   }
   if (files.includes(QA_RUNTIME_LIVE_TEST)) {
