@@ -1865,7 +1865,7 @@ src/agents/embedded-agent-subscribe.handlers.messages.update.ts	6
 src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	3
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	14
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	8
-src/agents/embedded-agent-subscribe.handlers.ts	11
+src/agents/embedded-agent-subscribe.handlers.ts	10
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
 src/agents/embedded-agent-subscribe.ts	5
 src/agents/embedded-agent-tool-media.ts	10

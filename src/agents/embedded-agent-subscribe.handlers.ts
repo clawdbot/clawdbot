@@ -93,17 +93,22 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
           handleMessageUpdate(ctx, evt as never);
         });
         return;
-      case "message_end":
-        if ((evt.message as AgentMessage)?.role === "assistant") {
-          preservePendingAssistantUsage(
-            evt.message as Extract<AgentMessage, { role: "assistant" }>,
-            ctx.state.pendingAssistantUsage,
-          );
+      case "message_end": {
+        const message = evt.message as AgentMessage;
+        if (message?.role === "assistant") {
+          preservePendingAssistantUsage(message, ctx.state.pendingAssistantUsage);
         }
-        void scheduleEvent(evt, () => {
-          return handleMessageEnd(ctx, evt as never);
+        // Session persistence normalizes this message after listeners return.
+        // Queued delivery must retain the same model output as immediate delivery.
+        const completedEvent =
+          message?.role === "assistant" && ctx.state.pendingEventChain
+            ? { ...evt, message: structuredClone(evt.message) }
+            : evt;
+        void scheduleEvent(completedEvent, () => {
+          return handleMessageEnd(ctx, completedEvent as never);
         });
         return;
+      }
       case "tool_execution_start":
         void scheduleEvent(evt, () => {
           return handleToolExecutionStart(ctx, evt as never);

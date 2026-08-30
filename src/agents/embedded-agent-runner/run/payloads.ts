@@ -136,6 +136,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTranscriptOwned?: boolean;
   assistantTranscriptIdempotencyKey?: string;
   lastAssistant: AssistantMessage | undefined;
+  /** Completed output owned by this attempt; may precede transcript normalization. */
   currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
@@ -214,6 +215,13 @@ export function buildEmbeddedRunPayloads(params: {
   // Pre-upgrade recovered messages have no stored facts, and recovery intentionally does not
   // reparse text; one in-flight reply can lose delivery or speech intent across this boundary.
   const storedDelivery = assistantForPayload?.openclawDelivery;
+  // Provider phase hints share this container but are not persisted delivery intent.
+  const hasStoredDeliveryFacts = Boolean(
+    storedDelivery?.audioAsVoice ||
+    storedDelivery?.replyToCurrent ||
+    storedDelivery?.replyToId ||
+    storedDelivery?.tts,
+  );
   const lastAssistantStopReason = assistantForPayload?.stopReason;
   const lastAssistantErrored = lastAssistantStopReason === "error";
   const lastAssistantAborted = lastAssistantStopReason === "aborted";
@@ -396,14 +404,17 @@ export function buildEmbeddedRunPayloads(params: {
       replyToCurrent,
     } = parseReplyDirectives(text);
     const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
-    const delivery = shouldUseCanonicalFinalAnswer
-      ? {
-          audioAsVoice: storedDelivery?.audioAsVoice,
-          replyToCurrent: storedDelivery?.replyToCurrent,
-          replyToId: storedDelivery?.replyToId,
-          replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
-        }
-      : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
+    // Current-attempt snapshots can predate transcript normalization.
+    // Stored facts win; recovered messages never regain intent by reparsing old text.
+    const delivery =
+      shouldUseCanonicalFinalAnswer && (hasStoredDeliveryFacts || !currentAssistant)
+        ? {
+            audioAsVoice: storedDelivery?.audioAsVoice,
+            replyToCurrent: storedDelivery?.replyToCurrent,
+            replyToId: storedDelivery?.replyToId,
+            replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
+          }
+        : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
     if (
       !cleanedText &&
       (!mediaUrls || mediaUrls.length === 0) &&
