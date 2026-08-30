@@ -112,7 +112,7 @@ export type WorkspaceAliasFinding = {
   fixHint: string;
 };
 
-export const WORKSPACE_ALIAS_CHECK_ID = "core/doctor/workspace-alias";
+const WORKSPACE_ALIAS_CHECK_ID = "core/doctor/workspace-alias";
 
 /** Read-only findings for `openclaw doctor` preview and health reporting. */
 export function collectRepointedWorkspaceAliasFindings(

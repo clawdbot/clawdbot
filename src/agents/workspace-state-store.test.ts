@@ -19,8 +19,10 @@ import {
   retireWorkspaceFileCache,
   writeWorkspaceFileCache,
 } from "./workspace-file-cache.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
-import { WorkspaceAliasRepointedError } from "./workspace-state-identity.js";
+import {
+  resolveWorkspaceStateIdentity,
+  WorkspaceAliasRepointedError,
+} from "./workspace-state-identity.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
   deleteWorkspaceState,

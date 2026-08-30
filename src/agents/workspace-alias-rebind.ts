@@ -157,6 +157,7 @@ function transferWorkspaceMigrationReceipts(params: {
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
         continue;
       }
+      // SAFETY: the guard above proves parsed is a non-null, non-array object.
       report = parsed as Record<string, unknown>;
     } catch {
       continue;

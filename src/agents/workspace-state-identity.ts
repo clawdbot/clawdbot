@@ -91,7 +91,7 @@ export function resolveWorkspaceStateIdentity(workspaceDir: string): WorkspaceSt
   );
 }
 
-export const WORKSPACE_ALIAS_REPOINTED_ERROR_CODE = "WORKSPACE_ALIAS_REPOINTED";
+const WORKSPACE_ALIAS_REPOINTED_ERROR_CODE = "WORKSPACE_ALIAS_REPOINTED";
 
 export class WorkspaceAliasRepointedError extends Error {
   readonly code = WORKSPACE_ALIAS_REPOINTED_ERROR_CODE;
