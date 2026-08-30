@@ -39,6 +39,7 @@ export {
   resolveCompletedBatchResult,
   throwIfBatchCompletionError,
   throwIfBatchTerminalFailure,
+  waitForEmbeddingBatch,
   type BatchCompletionResult,
 } from "./host/batch-status.js";
 export { uploadBatchJsonlFile } from "./host/batch-upload.js";

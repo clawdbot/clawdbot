@@ -201,13 +201,28 @@ describe("OpenAI embedding batch output", () => {
       name: "pending status",
       pollIntervalMs: 2_000,
       expectedWaits: [500],
-      retryFirstStatus: false,
+      statusSequence: [],
+      expectedStatusTimes: [],
+      advanceClock: true,
+      timeoutCause: undefined,
     },
     {
       name: "retry backoff",
       pollIntervalMs: 500,
       expectedWaits: [500, 500],
-      retryFirstStatus: true,
+      statusSequence: ["retry"],
+      expectedStatusTimes: [500],
+      advanceClock: false,
+      timeoutCause: 503,
+    },
+    {
+      name: "combined pending and retry backoff",
+      pollIntervalMs: 100,
+      expectedWaits: [100, 200, 400, 300],
+      statusSequence: ["pending", "retry", "pending"],
+      expectedStatusTimes: [100, 300, 700],
+      advanceClock: false,
+      timeoutCause: undefined,
     },
   ])("clamps $name waits to the remaining batch timeout", async (scenario) => {
     vi.useFakeTimers();
@@ -220,6 +235,7 @@ describe("OpenAI embedding batch output", () => {
         scenario.expectedWaits.includes(Number(timeout)),
       );
     let statusCalls = 0;
+    const statusTimes: number[] = [];
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = fetchInputUrl(input);
       if (url.endsWith("/files") && init?.method === "POST") {
@@ -230,7 +246,12 @@ describe("OpenAI embedding batch output", () => {
       }
       if (url.endsWith("/batches/batch-0")) {
         statusCalls += 1;
-        if (scenario.retryFirstStatus && statusCalls === 1) {
+        statusTimes.push(Date.now());
+        const nextStatus = scenario.statusSequence[statusCalls - 1];
+        if (nextStatus === "pending") {
+          return jsonResponse({ id: "batch-0", status: "in_progress" });
+        }
+        if (nextStatus === "retry") {
           return jsonResponse({ error: { message: "retry status" } }, 503);
         }
         return jsonResponse({ id: "batch-0", status: "completed", output_file_id: "output-0" });
@@ -267,14 +288,14 @@ describe("OpenAI embedding batch output", () => {
       pollIntervalMs: scenario.pollIntervalMs,
       timeoutMs: 1_000,
       debug: (message) => {
-        if (!scenario.retryFirstStatus && message.includes("batch-0 in_progress")) {
+        if (scenario.advanceClock && message.includes("batch-0 in_progress")) {
           vi.setSystemTime(500);
         }
       },
     });
     const rejection = expect(result).rejects.toMatchObject({
       message: "openai batch batch-0 timed out after 1000ms",
-      ...(scenario.retryFirstStatus ? { cause: { status: 503 } } : {}),
+      ...(scenario.timeoutCause ? { cause: { status: scenario.timeoutCause } } : {}),
     });
 
     for (const [index, waitMs] of scenario.expectedWaits.entries()) {
@@ -286,64 +307,84 @@ describe("OpenAI embedding batch output", () => {
       await vi.advanceTimersByTimeAsync(waitMs);
     }
     await rejection;
-    expect(statusCalls).toBe(scenario.retryFirstStatus ? 1 : 0);
+    if (scenario.timeoutCause === undefined) {
+      await expect(result).rejects.not.toHaveProperty("cause");
+    }
+    expect(statusCalls).toBe(scenario.expectedStatusTimes.length);
+    expect(statusTimes).toEqual(scenario.expectedStatusTimes);
   });
 
-  it("reads a completed error file before downloading successful output", async () => {
-    let outputFetched = false;
-    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = fetchInputUrl(input);
-      if (url.endsWith("/files") && init?.method === "POST") {
-        return jsonResponse({ id: "input-0" });
-      }
-      if (url.endsWith("/batches") && init?.method === "POST") {
-        return jsonResponse({
-          id: "batch-0",
-          status: "completed",
-          output_file_id: "output-0",
-          error_file_id: "error-0",
-        });
-      }
-      if (url.endsWith("/files/error-0/content")) {
-        return new Response(
-          JSON.stringify({
-            custom_id: "0",
-            response: { status_code: 500, message: "provider rejected request" },
-            error: null,
-          }),
-        );
-      }
-      if (url.endsWith("/files/output-0/content")) {
-        outputFetched = true;
-      }
-      return new Response("unexpected request", { status: 500 });
-    });
+  it.each(["create", "status", "failed"] as const)(
+    "reads a batch error file from %s before downloading successful output",
+    async (completionStage) => {
+      vi.useFakeTimers();
+      let outputFetched = false;
+      const terminal = {
+        id: "batch-0",
+        status: completionStage === "failed" ? "failed" : "completed",
+        output_file_id: "output-0",
+        error_file_id: "error-0",
+      };
+      const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = fetchInputUrl(input);
+        if (url.endsWith("/files") && init?.method === "POST") {
+          return jsonResponse({ id: "input-0" });
+        }
+        if (url.endsWith("/batches") && init?.method === "POST") {
+          return jsonResponse(
+            completionStage === "create" ? terminal : { id: "batch-0", status: "in_progress" },
+          );
+        }
+        if (url.endsWith("/batches/batch-0")) {
+          return jsonResponse(terminal);
+        }
+        if (url.endsWith("/files/error-0/content")) {
+          return new Response(
+            JSON.stringify({
+              custom_id: "0",
+              response: { status_code: 500, message: "provider rejected request" },
+              error: null,
+            }),
+          );
+        }
+        if (url.endsWith("/files/output-0/content")) {
+          outputFetched = true;
+        }
+        return new Response("unexpected request", { status: 500 });
+      });
 
-    await expect(
-      runOpenAiEmbeddingBatches({
-        openAi: {
-          baseUrl: "https://openai-compatible.example/v1",
-          headers: { Authorization: "Bearer test" },
-          model: "text-embedding-3-small",
-          fetchImpl,
-        },
-        agentId: "main",
-        requests: [
-          {
-            custom_id: "0",
-            method: "POST",
-            url: "/v1/embeddings",
-            body: { model: "text-embedding-3-small", input: "payload" },
+      const rejection = expect(
+        runOpenAiEmbeddingBatches({
+          openAi: {
+            baseUrl: "https://openai-compatible.example/v1",
+            headers: { Authorization: "Bearer test" },
+            model: "text-embedding-3-small",
+            fetchImpl,
           },
-        ],
-        wait: true,
-        concurrency: 1,
-        pollIntervalMs: 1,
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow("openai batch batch-0 completed: provider rejected request");
-    expect(outputFetched).toBe(false);
-  });
+          agentId: "main",
+          requests: [
+            {
+              custom_id: "0",
+              method: "POST",
+              url: "/v1/embeddings",
+              body: { model: "text-embedding-3-small", input: "payload" },
+            },
+          ],
+          wait: true,
+          concurrency: 1,
+          pollIntervalMs: 1,
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toThrow(`openai batch batch-0 ${terminal.status}: provider rejected request`);
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
+      expect(outputFetched).toBe(false);
+      expect(fetchImpl).toHaveBeenCalledTimes(completionStage === "create" ? 3 : 4);
+      expect(
+        fetchImpl.mock.calls.filter(([input]) => fetchInputUrl(input).endsWith("/batches/batch-0")),
+      ).toHaveLength(completionStage === "create" ? 0 : 1);
+    },
+  );
 
   it("splits provider uploads by serialized JSONL byte cap", async () => {
     const requests: Parameters<typeof runOpenAiEmbeddingBatches>[0]["requests"] = Array.from(

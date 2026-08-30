@@ -326,7 +326,9 @@ describe("voyage batch bounded reads", () => {
 
   it("normalizes and bounds a non-OK status diagnostic through the public runner", async () => {
     const streamed = streamingResponse({ chunkCount: 20, chunkSize: 1024 * 1024, status: 500 });
-    stubBatchFetch((stage) => (stage === "status" ? streamed.response : undefined));
+    const fetchMock = stubBatchFetch((stage) =>
+      stage === "status" ? streamed.response : undefined,
+    );
 
     await expect(runBatch()).rejects.toMatchObject({
       name: "ProviderHttpError",
@@ -335,6 +337,9 @@ describe("voyage batch bounded reads", () => {
     });
     expect(streamed.getReadCount()).toBeLessThan(20);
     expect(streamed.wasCanceled()).toBe(true);
+    expect(
+      fetchMock.mock.calls.filter(([input]) => fetchInputUrl(input).endsWith("/batches/batch-0")),
+    ).toHaveLength(1);
   });
 
   it("uses the shared output reader and stops after the expected result", async () => {

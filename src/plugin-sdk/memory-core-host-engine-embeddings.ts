@@ -51,6 +51,7 @@ export {
   sanitizeEmbeddingCacheHeaders,
   throwIfBatchCompletionError,
   throwIfBatchTerminalFailure,
+  waitForEmbeddingBatch,
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
