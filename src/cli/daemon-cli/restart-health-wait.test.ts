@@ -455,7 +455,7 @@ describe("restart health", () => {
     expect(snapshot.healthy).toBe(false);
     expect(snapshot.waitOutcome).toBe("timeout");
     expect(snapshot.elapsedMs).toBe(4_000);
-    expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: null });
+    expect(snapshot.buildIdMismatch).toBeUndefined();
     expect(sleep).toHaveBeenCalledTimes(4);
   });
 

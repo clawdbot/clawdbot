@@ -314,26 +314,7 @@ function withWaitContext(
   waitOutcome: GatewayRestartWaitOutcome,
   elapsedMs: number,
 ): GatewayRestartSnapshot {
-  const settledSnapshot = waitOutcome === "healthy" ? snapshot : settleUnprovenBuildId(snapshot);
-  return { ...settledSnapshot, waitOutcome, elapsedMs };
-}
-
-function settleUnprovenBuildId(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
-  if (
-    !snapshot.expectedBuildId ||
-    snapshot.buildIdMismatch ||
-    snapshot.gatewayBuildId === snapshot.expectedBuildId
-  ) {
-    return snapshot;
-  }
-  return {
-    ...snapshot,
-    healthy: false,
-    buildIdMismatch: {
-      expected: snapshot.expectedBuildId,
-      actual: snapshot.gatewayBuildId ?? null,
-    },
-  };
+  return { ...snapshot, waitOutcome, elapsedMs };
 }
 
 export async function waitForGatewayHealthyRestart(params: {
