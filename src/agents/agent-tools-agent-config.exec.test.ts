@@ -166,6 +166,7 @@ describe("Agent-specific exec tool defaults", () => {
     expect.soft(execTool.description).not.toMatch(/background|yieldMs|process/);
     expect.soft(schemaPropertyNames(execTool)).not.toContain("background");
     expect.soft(schemaPropertyNames(execTool)).not.toContain("yieldMs");
+    expect.soft(schemaPropertyNames(execTool)).not.toContain("security");
 
     const result = await execTool.execute("call-runtime-exec-only", {
       command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 250)"`,
@@ -193,6 +194,7 @@ describe("Agent-specific exec tool defaults", () => {
       ...createTempAgentDirs("test-main-implicit-gateway"),
     });
     const execTool = requireExecTool(tools);
+    expect.soft(schemaPropertyNames(execTool)).not.toContain("security");
 
     const result = await execTool.execute("call-implicit-auto-default", {
       command: "echo done",

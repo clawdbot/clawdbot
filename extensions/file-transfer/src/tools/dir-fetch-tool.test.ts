@@ -84,11 +84,14 @@ async function executeDirFetch(module: typeof import("./dir-fetch-tool.js")) {
 describe("dir.fetch archive extraction", () => {
   it("extracts a bounded tar and returns the plugin-side manifest", async () => {
     const tarBuffer = await createTarBuffer({
-      entries: ["ok.txt", "nested"],
+      entries: ["ok.txt", "nested", ".root-note", ".hidden"],
       setup: async (sourceDir) => {
         await fs.writeFile(path.join(sourceDir, "ok.txt"), "ok");
         await fs.mkdir(path.join(sourceDir, "nested"));
         await fs.writeFile(path.join(sourceDir, "nested", "also-ok.txt"), "also ok");
+        await fs.writeFile(path.join(sourceDir, ".root-note"), "hidden root");
+        await fs.mkdir(path.join(sourceDir, ".hidden"));
+        await fs.writeFile(path.join(sourceDir, ".hidden", "note.txt"), "hidden member");
       },
     });
     const { appendFileTransferAudit, module, saveMediaBuffer } = await importTool(tarBuffer);
@@ -96,15 +99,15 @@ describe("dir.fetch archive extraction", () => {
     const result = await executeDirFetch(module);
 
     expect(result).toMatchObject({
-      content: [{ type: "text", text: expect.stringContaining("Fetched 2 files") }],
+      content: [{ type: "text", text: expect.stringContaining("Fetched 4 files") }],
       details: {
         path: "/tmp/project",
-        fileCount: 2,
+        fileCount: 4,
       },
     });
     const files = (result.details as { files: Array<{ relPath: string; localPath: string }> })
       .files;
-    expect(files).toHaveLength(2);
+    expect(files).toHaveLength(4);
     expect(files).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -121,6 +124,14 @@ describe("dir.fetch archive extraction", () => {
     );
     const localPath = files.find((file) => file.relPath === "ok.txt")?.localPath;
     await expect(fs.readFile(localPath!, "utf8")).resolves.toBe("ok");
+    for (const [relPath, contents] of [
+      [".root-note", "hidden root"],
+      [path.join(".hidden", "note.txt"), "hidden member"],
+    ]) {
+      const hiddenFile = files.find((file) => file.relPath === relPath);
+      expect(hiddenFile).toBeDefined();
+      await expect(fs.readFile(hiddenFile!.localPath, "utf8")).resolves.toBe(contents);
+    }
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       tarBuffer,
       "application/gzip",
