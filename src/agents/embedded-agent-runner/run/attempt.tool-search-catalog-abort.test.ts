@@ -57,27 +57,40 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
     {
       mode: "code-mode",
       tools: { codeMode: { enabled: true } },
+      cancel: false,
     },
     {
       mode: "tool-search-tools",
       tools: { toolSearch: { enabled: true, mode: "tools" } },
+      cancel: false,
     },
     {
       mode: "tool-search-directory",
       tools: { toolSearch: { enabled: true, mode: "directory" } },
+      cancel: false,
+    },
+    {
+      mode: "cancelled-code-mode",
+      tools: { codeMode: { enabled: true } },
+      cancel: true,
     },
   ] as const)(
-    "clears the $mode run catalog when diagnostics throw during preparation",
-    async ({ mode, tools }) => {
+    "clears the $mode run catalog when preparation fails or is cancelled",
+    async ({ mode, tools, cancel }) => {
       const runId = `run-catalog-diagnostics-${mode}`;
       const diagnosticsError = new Error(`failed ${mode} tool diagnostics`);
+      const abortController = new AbortController();
       let catalogRef: ToolSearchCatalogRef | undefined;
       const logDiagnostics = vi.fn(() => {
         catalogRef = requireAttemptCatalogRef();
         expect(catalogRef.current?.entries).toContainEqual(
           expect.objectContaining({ name: "cataloged_probe_tool" }),
         );
-        throw diagnosticsError;
+        if (cancel) {
+          abortController.abort(diagnosticsError);
+        } else {
+          throw diagnosticsError;
+        }
       });
       hoisted.createOpenClawCodingToolsMock.mockImplementation(() => catalogProbeTools());
 
@@ -87,6 +100,7 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
         tempPaths,
         attemptOverrides: {
           runId,
+          abortSignal: abortController.signal,
           disableTools: false,
           config: { tools },
           runtimePlan: {

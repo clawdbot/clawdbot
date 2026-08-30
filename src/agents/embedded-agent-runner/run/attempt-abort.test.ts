@@ -212,7 +212,7 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     }
   });
 
-  it("cleans prepared resources before rejecting a pre-fired signal", async () => {
+  it.each(["stage-start", "prep-cleanup"])("classifies cancellation at %s", async (checkpoint) => {
     const source = new AbortController();
     const reason = new Error("cancelled during setup");
     source.abort(reason);
@@ -226,9 +226,13 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
       state: state.port,
     });
 
-    await expect(controller.throwIfFiredAfterPrepCleanup()).rejects.toBe(reason);
+    if (checkpoint === "stage-start") {
+      expect(() => controller.throwIfFired()).toThrow(reason);
+    } else {
+      await expect(controller.throwIfFiredAfterPrepCleanup()).rejects.toBe(reason);
+    }
 
-    expect(cleanupAfterEarlyAbort).toHaveBeenCalledTimes(1);
+    expect(cleanupAfterEarlyAbort).toHaveBeenCalledTimes(checkpoint === "stage-start" ? 0 : 1);
     expect(state.markAborted).toHaveBeenCalledTimes(1);
     expect(state.markExternalAbort).toHaveBeenCalledTimes(1);
     expect(state.setPromptError).toHaveBeenCalledWith(reason);

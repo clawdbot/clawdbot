@@ -1,6 +1,7 @@
 // Session utility performance tests protect resolver cache scaling for large
 // session lists with repeated provider/model tuples.
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, test, expect, vi } from "vitest";
 import {
@@ -22,6 +23,7 @@ import * as titleReader from "./session-transcript-title-reader.js";
 import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
 import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
+import * as rowProjection from "./session-utils-row.js";
 import { listSessionsFromStoreAsync } from "./session-utils.js";
 
 /**
@@ -36,6 +38,59 @@ import { listSessionsFromStoreAsync } from "./session-utils.js";
  * are the actual scaling failure mode we care about.
  */
 describe("session list resolver cache", () => {
+  test.each([
+    { rowWorkMs: 0, shouldYield: false },
+    { rowWorkMs: 20, shouldYield: true },
+  ])(
+    "yields for row work rather than row count ($rowWorkMs ms)",
+    async ({ rowWorkMs, shouldYield }) => {
+      await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
+        resetPluginRuntimeStateForTest();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        const cfg: OpenClawConfig = {};
+        resetConfigRuntimeState();
+        setRuntimeConfigSnapshot(cfg);
+        const store = Object.fromEntries(
+          Array.from({ length: 32 }, (_, index) => [
+            `agent:main:budget-${index}`,
+            { sessionId: `budget-${index}`, updatedAt: index + 1 },
+          ]),
+        );
+        let workMs = 0;
+        const buildRow = rowProjection.buildGatewaySessionRow;
+        const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
+        const rows = vi
+          .spyOn(rowProjection, "buildGatewaySessionRow")
+          .mockImplementation((params) => {
+            const row = buildRow(params);
+            workMs += rowWorkMs;
+            return row;
+          });
+        let controlRan = false;
+        const controlCallback = new Promise<void>((resolve) => {
+          setImmediate(() => {
+            controlRan = true;
+            resolve();
+          });
+        });
+        try {
+          const result = await listSessionsFromStoreAsync({
+            cfg,
+            storePath: path.join(stateDir, "sessions.json"),
+            store,
+            opts: {},
+          });
+          expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
+          expect(controlRan).toBe(shouldYield);
+        } finally {
+          rows.mockRestore();
+          clock.mockRestore();
+          await controlCallback;
+        }
+      });
+    },
+  );
+
   test("collapses request-local resolver work to O(unique provider/model tuples)", () => {
     const cfg: OpenClawConfig = {
       agents: {
