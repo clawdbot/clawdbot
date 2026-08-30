@@ -1,6 +1,7 @@
 // Line plugin module implements monthly message quota reads.
 import { messagingApi } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import type { LineMessageQuota } from "./types.js";
@@ -31,13 +32,23 @@ export type LineMessageQuotaReader = Pick<
  */
 export async function readLineMessageQuota(
   reader: LineMessageQuotaReader,
+  budgetMs?: number,
 ): Promise<LineMessageQuota | undefined> {
+  // A caller sharing a deadline with more important work passes what it can
+  // spare. Zero or less means there is nothing left to spend, and withTimeout
+  // treats a non-positive budget as "no timeout", so skip the read outright
+  // rather than letting it run unbounded on a budget that is already gone.
+  if (budgetMs !== undefined && budgetMs <= 0) {
+    return undefined;
+  }
+  const bounded = <T>(work: Promise<T>) =>
+    budgetMs === undefined ? work : withTimeout(work, budgetMs, "line message quota");
   try {
-    const quota = await reader.getMessageQuota();
+    const quota = await bounded(reader.getMessageQuota());
     if (quota.type !== "limited" || typeof quota.value !== "number") {
       return { kind: "unlimited" };
     }
-    const consumption = await reader.getMessageQuotaConsumption();
+    const consumption = await bounded(reader.getMessageQuotaConsumption());
     if (typeof consumption.totalUsage !== "number") {
       return undefined;
     }

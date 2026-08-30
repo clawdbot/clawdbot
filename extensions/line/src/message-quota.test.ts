@@ -48,6 +48,23 @@ describe("readLineMessageQuota", () => {
 
     await expect(readLineMessageQuota(reader)).resolves.toBeUndefined();
   });
+  it("skips the read outright when the caller has no budget left", async () => {
+    // withTimeout treats a non-positive budget as "no timeout", so a spent budget
+    // has to short-circuit instead of running the reads unbounded.
+    const { reader, getMessageQuota } = createReader(async () => ({
+      type: "limited",
+      value: 200,
+    }));
+
+    await expect(readLineMessageQuota(reader, 0)).resolves.toBeUndefined();
+    expect(getMessageQuota).not.toHaveBeenCalled();
+  });
+
+  it("gives up on a stalled read instead of holding the caller's deadline", async () => {
+    const { reader } = createReader(() => new Promise(() => {}));
+
+    await expect(readLineMessageQuota(reader, 40)).resolves.toBeUndefined();
+  });
 });
 
 describe("isLineMessageQuotaExhausted", () => {

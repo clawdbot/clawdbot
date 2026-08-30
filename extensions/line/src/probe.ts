@@ -19,12 +19,20 @@ export async function probeLineBot(
 
   return await runChannelProbe(
     timeoutMs,
-    async () => {
+    async ({ elapsedMs }) => {
       const profile = await client.getBotInfo();
       // LINE meters monthly messages per account and stops accepting pushes once
       // the allowance runs out, so the probe reports it next to the identity an
-      // operator already checks here. An unreadable quota leaves the probe green.
-      const quota = await readLineMessageQuota(client);
+      // operator already checks here.
+      //
+      // The shared probe timeout covers this whole callback, so a slow allowance
+      // endpoint could otherwise time the probe out and report a healthy bot as
+      // failed. It gets half of what identity left behind: enough for two small
+      // reads, and bounded so the probe still answers when they stall.
+      const quota = await readLineMessageQuota(
+        client,
+        Math.floor(Math.max(timeoutMs - elapsedMs(), 0) / 2),
+      );
       return {
         ok: true,
         bot: {
