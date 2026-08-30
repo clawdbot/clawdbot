@@ -1,14 +1,16 @@
 // Full-entry coverage for before_agent_reply hook handling before embedded attempts.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 function firstBeforeAgentReplyCall() {
@@ -48,8 +50,14 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.before-agent-reply-cron" });
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("lets before_agent_reply claim cron runs before the embedded attempt starts", async () => {
@@ -65,7 +73,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     const onExecutionPhase = vi.fn();
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       trigger: "cron",
       jobId: "cron-job-123",
       prompt: "__openclaw_memory_core_short_term_promotion_dream__",
@@ -83,8 +91,8 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(hookContext?.jobId).toBe("cron-job-123");
     expect(hookContext?.agentId).toBe("main");
     expect(hookContext?.sessionId).toBe("test-session");
-    expect(hookContext?.sessionKey).toBe(overflowBaseRunParams.sessionKey);
-    expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
+    expect(hookContext?.sessionKey).toBe(createOverflowRunParams(state).sessionKey);
+    expect(hookContext?.workspaceDir).toBe(state.workspaceDir);
     expect(hookContext?.trigger).toBe("cron");
     expect(hookContext?.senderId).toBeUndefined();
     expect(hookContext?.chatId).toBeUndefined();
@@ -102,7 +110,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     const onExecutionPhase = vi.fn();
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       trigger: "cron",
       onExecutionPhase,
     });
@@ -125,7 +133,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       trigger: "user",
       toolBindings,
       disableTrajectory: true,
@@ -144,7 +152,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       cleanupBundleMcpOnRunEnd: true,
     });
 

@@ -1,10 +1,20 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  loadExactSessionEntry,
+  persistSessionTranscriptTurn,
+  readActiveTranscriptEntryAnchor,
+  resolveSessionEntrySelection,
+  type TranscriptMessageAppendResult,
+} from "../config/sessions/session-accessor.js";
+import {
   findTranscriptEvent,
+  readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
 import { getOwnedSessionTranscriptWriterFence } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
@@ -22,7 +32,7 @@ const internalSourceReplyPersistenceLeases = createKeyedFifoLeaseRegistry(
   Symbol.for("openclaw.internalSourceReplyPersistenceLeases"),
 );
 
-async function hasPersistedInternalSourceReply(params: {
+async function completePersistedInternalSourceReply(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   expectedSessionId?: string;
@@ -35,39 +45,85 @@ async function hasPersistedInternalSourceReply(params: {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
   });
-  const found = await findTranscriptEvent(
-    {
-      agentId: params.agentId,
-      sessionId: params.expectedSessionId,
-      sessionKey: params.sessionKey,
-      storePath,
+  const scope = {
+    agentId: params.agentId,
+    sessionId: params.expectedSessionId,
+    sessionKey: params.sessionKey,
+    storePath,
+  };
+  scope.sessionKey = resolveSessionEntrySelection(scope).normalizedKey;
+  const expected = {
+    expectedSessionId: params.expectedSessionId,
+    ...getOwnedSessionTranscriptWriterFence(),
+  };
+  const found = await findTranscriptEvent(scope, (event) => {
+    const message = readTranscriptEventMessage(event);
+    return (
+      message?.idempotencyKey === params.idempotencyKey &&
+      isOpenClawDeliveryMirrorAssistantMessage(message)
+    );
+  });
+  if (!found) {
+    return false;
+  }
+  const messageId = readTranscriptEventId(found.event);
+  const message = readTranscriptEventMessage(found.event);
+  if (!messageId || !message) {
+    throw new Error("Internal source reply transcript identity is unavailable");
+  }
+  const assertCurrentReplay = (entryId: string) => {
+    if (
+      !sessionMatchesExpectedTranscriptTurn(loadExactSessionEntry(scope), expected) ||
+      !readActiveTranscriptEntryAnchor({ ...scope, entryId })
+    ) {
+      throw new Error("Internal source reply no longer owns the active transcript");
+    }
+  };
+  // Replay also refreshes history when an earlier owned drain suppressed publication.
+  // Preserve the original bytes and run provenance; never restage a retry.
+  const replay = await persistSessionTranscriptTurn(scope, {
+    config: params.cfg,
+    ...expected,
+    messages: [
+      {
+        eventId: messageId,
+        message,
+        idempotencyLookup: "scan",
+        shouldAppendInTransaction: () => {
+          // A removed or abandoned original must never become a new append on retry.
+          assertCurrentReplay(messageId);
+          return true;
+        },
+      },
+    ],
+    touchSessionEntry: false,
+    updateMode: "file-only",
+    publishWhen: "always",
+    onMessageCommitted: (result) => {
+      // The queue await can outlive admission or the active branch; promotion must use current ownership.
+      assertCurrentReplay(result.messageId);
+      attachSourceReplyMedia(result);
     },
-    (event) => {
-      const message = readTranscriptEventMessage(event);
-      return (
-        message?.idempotencyKey === params.idempotencyKey &&
-        isOpenClawDeliveryMirrorAssistantMessage(message)
-      );
-    },
-  );
-  return found !== undefined;
+  });
+  if (replay.rejectedReason || replay.messages.length === 0) {
+    throw new Error("Internal source reply no longer owns the active transcript");
+  }
+  return true;
 }
 
-function resolveInternalSourceReplyPersistenceLeaseKey(params: {
-  sessionKey: string;
-  expectedSessionId?: string;
-  agentId?: string;
-  idempotencyKey?: string;
-}): string | undefined {
-  if (!params.idempotencyKey) {
-    return undefined;
+function attachSourceReplyMedia(result: TranscriptMessageAppendResult<unknown>): void {
+  // This producer writes only text and managed-media blocks.
+  const message = result.message;
+  const blocks =
+    isRecord(message) && Array.isArray(message.content)
+      ? message.content.filter(isRecord).filter((block) => block.type !== "text")
+      : [];
+  if (
+    blocks.length > 0 &&
+    !attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks })
+  ) {
+    throw new Error("Internal source reply media ownership could not be persisted");
   }
-  return JSON.stringify([
-    params.agentId ?? "",
-    params.sessionKey,
-    params.expectedSessionId ?? "",
-    params.idempotencyKey,
-  ]);
 }
 
 /** Persist the private WebChat source reply before its successful tool result becomes visible. */
@@ -83,11 +139,18 @@ export async function persistInternalSourceReply(params: {
   toolCallId?: string;
   sourceTurnId?: string;
 }): Promise<void> {
-  const leaseKey = resolveInternalSourceReplyPersistenceLeaseKey(params);
+  const leaseKey = params.idempotencyKey
+    ? JSON.stringify([
+        params.agentId ?? "",
+        params.sessionKey,
+        params.expectedSessionId ?? "",
+        params.idempotencyKey,
+      ])
+    : undefined;
   const lease = leaseKey ? internalSourceReplyPersistenceLeases.reserve([leaseKey]) : undefined;
   await lease?.wait();
   try {
-    if (await hasPersistedInternalSourceReply(params)) {
+    if (await completePersistedInternalSourceReply(params)) {
       return;
     }
     const media = prepareOutgoingMediaFromReplyPayload(params.payload);
@@ -131,15 +194,10 @@ export async function persistInternalSourceReply(params: {
             }
           : {}),
         config: params.cfg,
-        onMessageCommitted: (messageId) => {
+        onMessageCommitted: (result) => {
           // Publication can fail after commit; cleanup must never delete owned media.
-          committed = true;
-          if (
-            mediaBlocks.length > 0 &&
-            !attachManagedOutgoingMediaToMessage({ messageId, blocks: mediaBlocks })
-          ) {
-            throw new Error("Internal source reply media ownership could not be persisted");
-          }
+          committed = result.appended;
+          attachSourceReplyMedia(result);
         },
       });
       if (!appended.ok) {

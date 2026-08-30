@@ -1,19 +1,21 @@
 // Full-entry coverage for replay-safe Codex app-server recovery retries.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedClassifyFailoverReason,
   mockedMarkAuthProfileFailure,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 const CODEX_MISSING_TERMINAL_MESSAGE =
@@ -96,9 +98,15 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.codex-app-server-recovery" });
     mockedClassifyFailoverReason.mockReturnValue(null);
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("keeps shared abort ownership open through a replay-safe retry", async () => {
@@ -121,7 +129,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       });
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "codex",
       model: "gpt-5.5",
       runId: "run-codex-freeze-after-retry",
@@ -140,7 +148,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     await expect(
       runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         provider: "codex",
         model: "gpt-5.5",
         runId: "run-codex-cancel-before-retry",
@@ -161,7 +169,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     await expect(
       runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         provider: "codex",
         model: "gpt-5.5",
         runId: "run-codex-cancel-ordinary-failure",
@@ -190,7 +198,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     await expect(
       runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         provider: "codex",
         model: "gpt-5.5",
         runId: "run-codex-cancel-before-model-fallback",
@@ -225,7 +233,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
 
     await expect(
       runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         provider: "codex",
         model: "gpt-5.5",
         runId: "run-codex-upstream-cancel-before-model-fallback",
@@ -245,7 +253,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       .mockResolvedValueOnce(successAttempt());
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "codex",
       model: "gpt-5.5",
       runId: "run-codex-client-close-retry-mirror",
@@ -269,7 +277,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt());
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "codex",
       model: "gpt-5.5",
       runId: "run-codex-turn-completion-idle-timeout-retry-exhausted",
@@ -296,7 +304,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt());
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "codex",
       model: "gpt-5.5",
       runId: "run-codex-turn-completion-outer-fallback",
@@ -331,7 +339,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "codex",
       model: "gpt-5.5",
       runId: "run-codex-turn-completion-idle-timeout-fallback",

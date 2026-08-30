@@ -70,7 +70,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Chat attachments:** keep prepared message-tool media safe from cleanup until its transcript message commits, attach it before publishing the reply, and preserve committed files if later lifecycle cleanup fails.
+- **Chat attachments:** protect prepared message-tool media from premature cleanup, attach it before publication, and complete interrupted attachment promotion on retries without duplicating the original reply.
+- **Upgrade state metadata:** record the current application version after repairing older databases with an unset version marker, allowing CLI commands to use the running Gateway without attempting another schema repair.
 - **Device workers:** preserve offline-runner classification and reconnect guidance when desktop preparation detects a disconnected device, without treating the disconnect as a model failure.
 - **Control UI global sessions:** preserve the selected agent's session in the composer so usage, goals, progress, and thinking options survive agent switches without reusing another agent's stale row.
 - **Image analysis startup:** prepare selected model providers and keep configuration reads independent of full runtime loading, avoiding unrelated discovery and redundant model resolution while preserving credentials and runtime cleanup.

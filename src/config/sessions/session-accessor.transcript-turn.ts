@@ -241,9 +241,7 @@ async function appendTranscriptTurnMessages(
       },
     );
     if (result) {
-      if (result.appended) {
-        options.onMessageCommitted?.(result.messageId);
-      }
+      options.onMessageCommitted?.(result);
       appendedMessages.push(result);
     }
   }
@@ -370,9 +368,7 @@ async function persistExpectedSessionTranscriptTurn(
       );
       // Owned-write teardown can reject after commit; complete custody before that drain.
       for (const message of committed.appendedMessages) {
-        if (message.appended) {
-          options.onMessageCommitted?.(message.messageId);
-        }
+        options.onMessageCommitted?.(message);
       }
       return committed;
     },

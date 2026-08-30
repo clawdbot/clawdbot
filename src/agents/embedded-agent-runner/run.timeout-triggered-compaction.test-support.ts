@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
@@ -7,11 +8,12 @@ import {
   mockedGetApiKeyForModel,
   mockedResolveAuthProfileOrder,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 type CompactParams = {
@@ -34,8 +36,14 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.timeout-triggered-compaction" });
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("adopts a compacted transcript and retries with a continuation prompt", async () => {
@@ -70,7 +78,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       messageChannel: "slack",
       currentThreadTs: "thread-1",
     });
@@ -84,7 +92,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       "Continue from the current transcript",
     );
     expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt).not.toBe(
-      overflowBaseRunParams.prompt,
+      createOverflowRunParams(state).prompt,
     );
     const compactParams = mockedCompactDirect.mock.calls[0]?.[0] as CompactParams | undefined;
     expect(compactParams).toMatchObject({
@@ -128,7 +136,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     });
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.5",
       config: { agents: { defaults: { agentRuntime: { id: "codex" } } } },
@@ -163,7 +171,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       reason: "nothing to compact",
     });
 
-    const result = await runEmbeddedAgent(overflowBaseRunParams);
+    const result = await runEmbeddedAgent(createOverflowRunParams(state));
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
     expect(
@@ -187,7 +195,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    const result = await runEmbeddedAgent(overflowBaseRunParams);
+    const result = await runEmbeddedAgent(createOverflowRunParams(state));
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedCompactDirect).not.toHaveBeenCalled();

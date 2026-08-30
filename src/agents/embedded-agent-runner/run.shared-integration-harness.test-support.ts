@@ -3,6 +3,7 @@ import {
   warmRunOverflowCompactionHarness,
   type TestRunEmbeddedAgent,
 } from "./run.overflow-compaction.harness.js";
+import { guardRunWorkspaceOwnership } from "./run.workspace-ownership.test-support.js";
 
 let sharedRunEmbeddedAgent: Promise<TestRunEmbeddedAgent> | undefined;
 
@@ -14,7 +15,15 @@ let sharedRunEmbeddedAgent: Promise<TestRunEmbeddedAgent> | undefined;
 export function loadSharedRunIntegrationHarness(): Promise<TestRunEmbeddedAgent> {
   sharedRunEmbeddedAgent ??= (async () => {
     const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
-    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
+    const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    await withOpenClawTestState({ label: "shared-run-warmup" }, async (state) => {
+      const guard = await guardRunWorkspaceOwnership(state);
+      try {
+        await warmRunOverflowCompactionHarness(runEmbeddedAgent, state);
+      } finally {
+        guard.verifyAndRestore();
+      }
+    });
     return runEmbeddedAgent;
   })();
   return sharedRunEmbeddedAgent;

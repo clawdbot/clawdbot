@@ -1,17 +1,19 @@
 // Full-entry coverage for retrying empty errored assistant turns.
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 type AssistantContent = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>["content"];
@@ -62,10 +64,16 @@ describe("runEmbeddedAgent silent-error retry", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.empty-error-retry" });
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
     mockedClassifyFailoverReason.mockReturnValue(null);
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("retries when a turn ends with stopReason=error and zero output tokens", async () => {
@@ -73,7 +81,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("ollama", "glm-5.1:cloud"));
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "ollama",
       model: "glm-5.1:cloud",
       runId: "run-empty-error-retry-basic",
@@ -91,7 +99,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-4-8"));
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "anthropic",
       model: "claude-opus-4-8",
       runId: "run-empty-error-retry-server-error",
@@ -120,7 +128,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     );
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "anthropic",
       model: "missing-model",
       runId: "run-empty-error-retry-non-transient",
@@ -136,7 +144,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     }
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "ollama",
       model: "glm-5.1:cloud",
       runId: "run-empty-error-retry-exhausted",
@@ -165,7 +173,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "anthropic",
       model: "claude-opus-4-8",
       runId: "run-terminal-heartbeat-not-fallback-safe",

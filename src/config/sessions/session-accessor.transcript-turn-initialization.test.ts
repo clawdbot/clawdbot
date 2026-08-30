@@ -124,7 +124,7 @@ describe("first transcript turn initialization", () => {
     "completes committed messages once before publication with %s updates",
     async (mode) => {
       const order: string[] = [];
-      const onMessageCommitted = vi.fn((messageId: string) => {
+      const onMessageCommitted = vi.fn(({ messageId }: { messageId: string }) => {
         expect(loadTranscriptEventsSync(scope())).toContainEqual(
           expect.objectContaining({
             id: messageId,
@@ -152,6 +152,8 @@ describe("first transcript turn initialization", () => {
           await expect(append).resolves.toMatchObject({ appendedCount: 1 });
         }
         expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
+        // Goal receipt replay returns no matched messages; completion belongs to the
+        // original admission, unlike replaying an existing transcript message.
         await expect(admit({ onMessageCommitted })).resolves.toMatchObject({ appendedCount: 0 });
         expect(onMessageCommitted).toHaveBeenCalledTimes(1);
         expect(order).toEqual(mode === "inline" ? ["committed", "published"] : ["committed"]);

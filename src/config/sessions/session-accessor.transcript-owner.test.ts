@@ -224,7 +224,7 @@ describe("transcript turn logical ownership", () => {
                   ]
                 : []),
             ],
-            onMessageCommitted: (messageId) => {
+            onMessageCommitted: ({ messageId }) => {
               completed.push(messageId);
             },
             updateMode: "none",
