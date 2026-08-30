@@ -105,7 +105,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             ifCurrentRoute: route)
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, expectedSessionID, expectedMarkedUnreadAt, label, category, pinned, archived, unread in
+            patchSession: { key, expectedID, expectedMarkedUnreadAt, label, category, color, pinned, archived, unread in
                 guard unread != false || unreadAckContract != nil else {
                     throw OpenClawChatTransportSendError.notDispatched
                 }
@@ -113,9 +113,10 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                 let request = OpenClawChatGatewayRequests.patchSession(
                     sessionKey: target.sessionKey,
                     agentID: target.agentID,
-                    expectedSessionID: expectedSessionID,
+                    expectedSessionID: expectedID,
                     label: label,
                     category: category,
+                    color: color,
                     pinned: pinned,
                     archived: archived,
                     unreadPatch: .routed(
@@ -131,14 +132,6 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                     agentID: target.agentID)
                 _ = try await transport.requestSessionMutation(request, ifCurrentRoute: route)
             })
-    }
-
-    func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease? {
-        guard let route = await currentSessionMutationRoute() else { return nil }
-        let transport = self
-        return Self.makeSessionGroupsRouteLease { request in
-            try await transport.requestSessionMutation(request, ifCurrentRoute: route)
-        }
     }
 
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {
@@ -228,29 +221,6 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             request,
             ifCurrentRoute: route,
             distinguishPreDispatchRouteChange: true)
-    }
-
-    static func makeSessionGroupsRouteLease(
-        request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
-        -> OpenClawChatSessionGroupsRouteLease
-    {
-        OpenClawChatSessionGroupsRouteLease(
-            listGroups: {
-                let data = try await request(OpenClawChatGatewayRequests.sessionGroupsList())
-                return try JSONDecoder().decode(OpenClawChatSessionGroupsResponse.self, from: data)
-            },
-            putGroups: { names in
-                let data = try await request(OpenClawChatGatewayRequests.sessionGroupsPut(names: names))
-                return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
-            },
-            renameGroup: { name, to in
-                let data = try await request(OpenClawChatGatewayRequests.sessionGroupsRename(name: name, to: to))
-                return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
-            },
-            deleteGroup: { name in
-                let data = try await request(OpenClawChatGatewayRequests.sessionGroupsDelete(name: name))
-                return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
-            })
     }
 
     func createSession(
@@ -445,6 +415,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         expectedSessionID: String? = nil,
         label: String?? = nil,
         category: String?? = nil,
+        color: String?? = nil,
         pinned: Bool? = nil,
         archived: Bool? = nil,
         unread: Bool? = nil) async throws
@@ -455,6 +426,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                 expectedSessionID: expectedSessionID,
                 label: label,
                 category: category,
+                color: color,
                 pinned: pinned,
                 archived: archived,
                 unread: unread)
@@ -470,6 +442,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             expectedSessionID: expectedSessionID,
             label: label,
             category: category,
+            color: color,
             pinned: pinned,
             archived: archived,
             unreadPatch: .routed(
@@ -836,8 +809,16 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return try JSONDecoder().decode(QuestionGetResult.self, from: data).question
     }
 
-    func resolveQuestion(id: String, answers: [String: [String]]) async throws {
-        _ = try await self.gateway.request(OpenClawChatGatewayRequests.resolveQuestion(id: id, answers: answers))
+    func resolveQuestion(
+        id: String,
+        answers: [String: [String]],
+        secretStoreAllowedHosts: [String]?) async throws -> QuestionAnswers
+    {
+        let data = try await self.gateway.request(OpenClawChatGatewayRequests.resolveQuestion(
+            id: id,
+            answers: answers,
+            secretStoreAllowedHosts: secretStoreAllowedHosts))
+        return try OpenClawChatGatewayPayloadCodec.decodeQuestionAnswer(data)
     }
 
     func cancelQuestion(id: String) async throws {

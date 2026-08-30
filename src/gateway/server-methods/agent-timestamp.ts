@@ -39,17 +39,12 @@ export function buildTimestampPrefix(
   date: Date,
   opts?: Pick<TimestampInjectionOptions, "timezone">,
 ): string | undefined {
-  const timezone = opts?.timezone ?? "UTC";
-  const formatted = formatZonedTimestamp(date, { timeZone: timezone });
-  if (!formatted) {
-    return undefined;
-  }
-  // 3-letter DOW: small models (8B) can't reliably derive day-of-week from
-  // a date, and may treat a bare "Wed" as a typo. Costs ~1 token.
-  const dow = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(
-    date,
-  );
-  return `[${dow} ${formatted}] `;
+  // The weekday keeps date reasoning reliable without another Intl formatter.
+  const formatted = formatZonedTimestamp(date, {
+    timeZone: opts?.timezone ?? "UTC",
+    displayWeekday: true,
+  });
+  return formatted ? `[${formatted}] ` : undefined;
 }
 
 /**

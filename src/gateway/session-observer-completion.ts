@@ -25,14 +25,24 @@ export function createSessionObserverCompletion(params: {
     if (!modelRef) {
       throw new Error("session observer utility model is unavailable");
     }
-    state.preparedPromise ??= params.prepareModel({
+    const preparedPromise = (state.preparedPromise ??= params.prepareModel({
       cfg: params.getConfig(),
       agentId: state.agentId,
       modelRef,
       useUtilityModel: true,
       allowMissingApiKeyModes: ["aws-sdk"],
-    });
-    return await state.preparedPromise;
+    }));
+    let failed = true;
+    try {
+      const prepared = await preparedPromise;
+      failed = "error" in prepared;
+      return prepared;
+    } finally {
+      // Pending and successful preparation remain shared; settled failures do not.
+      if (failed && state.preparedPromise === preparedPromise) {
+        state.preparedPromise = undefined;
+      }
+    }
   };
 
   return async (state: SessionObserverState, notes: readonly string[]) => {

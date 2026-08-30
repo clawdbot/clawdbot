@@ -184,7 +184,7 @@ suite.define(() => {
         await gateway.resolveDeferred("chat.startup", {
           messages: [],
           metadata: { models: [] },
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         });
         await gateway.resolveDeferred("agents.list", {
@@ -247,7 +247,7 @@ suite.define(() => {
         await gateway.resolveDeferred("chat.startup", {
           messages: [],
           metadata: { models: [] },
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         });
 
@@ -311,7 +311,7 @@ suite.define(() => {
               },
               messages: [],
               metadata: { models: [] },
-              sessionId: "control-ui-e2e-session",
+              sessionId: "session:agent:main:main",
               thinkingLevel: null,
             },
             "sessions.list": {

@@ -2,14 +2,30 @@
 // Builds OpenClaw packages and plugin SDK artifacts with cache-aware orchestration.
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import prettyMilliseconds from "pretty-ms";
+import {
+  acquireBuildArtifactLock,
+  artifactRecordMatches,
+  collectArtifactRecord,
+  readArtifactRecord,
+  writeArtifactRecord,
+  publishArtifactFiles,
+  resolveTsdownCompilerIdentity,
+  hashInputFiles,
+  listCacheFiles,
+  portableRelativePath,
+  type BuildCacheEntry,
+} from "./lib/build-artifact-cache.mts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import {
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import {
   listPluginSdkDistArtifacts,
   listPluginSdkDeclarationOutputs,
@@ -29,15 +45,9 @@ import {
   resolveTsdownBuildPlan,
   type MemoryLimitParams,
 } from "./tsdown-build.mts";
+export type { BuildCacheEntry } from "./lib/build-artifact-cache.mts";
 
 const nodeBin = process.execPath;
-type BuildCachePath = {
-  path: string;
-  excludeDirectories?: string[];
-  extensions?: string[];
-  recursive?: boolean;
-};
-export type BuildCacheEntry = string | BuildCachePath;
 
 type BuildCache = {
   env?: string[];
@@ -67,7 +77,6 @@ type BuildAllStepParams = {
   comSpec?: string;
 };
 type BuildAllCacheParams = { rootDir?: string; fs?: BuildAllFs; env?: NodeJS.ProcessEnv };
-const BUILD_CACHE_VERSION = 4;
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const TSDOWN_SOURCE_EXTENSIONS = [
@@ -93,6 +102,7 @@ const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "pnpm-lock.yaml",
   "tsconfig.json",
   "scripts/tsdown-build.mts",
+  "scripts/lib/build-artifact-cache.mts",
   "scripts/lib/bundled-plugin-build-entries.mjs",
   "scripts/lib/bundled-plugin-paths.mjs",
   "scripts/lib/optional-bundled-clusters.mjs",
@@ -125,47 +135,6 @@ const TSDOWN_UNIFIED_CACHE_INPUTS = [
 ];
 const declarationCacheOutputs = (roots: string[]) =>
   roots.map((root) => ({ path: root, extensions: TSDOWN_DECLARATION_EXTENSIONS }));
-const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = [
-  "OPENCLAW_BUILD_PRIVATE_QA",
-  "OPENCLAW_PLUGIN_SDK_CANONICAL_DTS",
-];
-const PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS = [
-  "scripts/write-plugin-sdk-entry-dts.ts",
-  "scripts/lib/plugin-sdk-entries.mts",
-  "scripts/lib/plugin-sdk-entrypoints.json",
-  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-  "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
-  "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
-];
-const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
-  ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
-  { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
-];
-const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
-  ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
-  "package.json",
-  "pnpm-lock.yaml",
-  "tsconfig.json",
-  "tsconfig.plugin-sdk.dts.json",
-  {
-    path: "src",
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
-    excludeDirectories: ["dist", "node_modules"],
-  },
-  {
-    path: "packages",
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
-    excludeDirectories: ["dist", "node_modules"],
-  },
-];
-const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
-  "dist/plugin-sdk/.boundary-entry-shims.stamp",
-  ...pluginSdkEntrypoints.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
-];
-const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_OUTPUTS = [
-  { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
-  ...PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS,
-];
 const tsxScript = (script: string, ...args: string[]) => ["--import", "tsx", script, ...args];
 const nodeStep = (label: string, args: string[]): Extract<BuildAllStep, { kind?: "node" }> => ({
   label,
@@ -261,18 +230,7 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   nodeStep("runtime-postbuild", ["scripts/runtime-postbuild.mjs"]),
   tsxStep("build-stamp", "scripts/build-stamp.mts"),
   tsxStep("runtime-postbuild-stamp", "scripts/runtime-postbuild-stamp.mts"),
-  {
-    ...tsxStep("write-plugin-sdk-entry-dts", "scripts/write-plugin-sdk-entry-dts.ts"),
-    env: {
-      OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1",
-    },
-    cache: {
-      env: PLUGIN_SDK_ENTRY_DTS_CACHE_ENV,
-      inputs: PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS,
-      outputs: PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS,
-      restore: "always",
-    },
-  },
+  tsxStep("write-plugin-sdk-entry-dts", "scripts/write-plugin-sdk-entry-dts.ts"),
   tsxStep("check-plugin-sdk-exports", "scripts/check-plugin-sdk-exports.mts"),
   {
     label: "ui:build",
@@ -310,7 +268,6 @@ const FULL_BUILD_STEP_LABELS = [
   "runtime-postbuild",
   "build-stamp",
   "runtime-postbuild-stamp",
-  "write-plugin-sdk-entry-dts",
   "check-plugin-sdk-exports",
   "ui:build",
   "write-build-info",
@@ -411,13 +368,13 @@ export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.Pr
     tsdown: {
       // Global declaration emission is ~95% of the tsdown wall clock and PR
       // CI's dist consumers are runtime JS only; the plugin-sdk gate below
-      // self-builds its scoped declarations instead. Release/package builds
+      // stages the two canonical SDK declaration groups instead. Release/package builds
       // (full profile, docker packaging) keep canonical dts.
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
     "write-plugin-sdk-entry-dts": {
-      OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "0",
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
     },
   },
   gatewayWatch: {
@@ -520,19 +477,6 @@ export function resolveBuildAllSteps(
       }
       const mergedEnv = Object.assign({}, "env" in step ? step.env : undefined, env);
       const merged: BuildAllStep = Object.assign({}, step, { env: mergedEnv });
-      // Self-built declarations need both the complete repository-owned type
-      // graph and the flat declarations that this step generates after tsdown
-      // clears dist. Canonical mode keeps its narrower generated-dts cache.
-      if (
-        step.label === "write-plugin-sdk-entry-dts" &&
-        mergedEnv.OPENCLAW_PLUGIN_SDK_CANONICAL_DTS !== "1"
-      ) {
-        merged.cache = {
-          ...step.cache,
-          inputs: PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS,
-          outputs: PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_OUTPUTS,
-        };
-      }
       return merged;
     });
 }
@@ -551,25 +495,35 @@ export function resolveBuildAllEnvironment(
   now: () => Date = () => new Date(),
   readGitCommit: () => string | null = readCurrentGitCommit,
 ) {
-  return resolveBuildIdentityEnvironment({
+  const buildEnv = resolveBuildIdentityEnvironment({
     commitLabel: "build commit",
     env,
     now,
     readGitCommit,
   });
+  // Older installed updaters already send this marker to candidate builds.
+  // Updates need runtime artifacts; explicit declaration/package builds still win.
+  if (buildEnv.OPENCLAW_UPDATE_IN_PROGRESS === "1") {
+    buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] ??= "1";
+  }
+  return buildEnv;
 }
 
 export function resolveBuildAllTsdownPlan(
   profile: string,
   env: NodeJS.ProcessEnv,
   params: Omit<MemoryLimitParams, "env"> = {},
-) {
-  if (profile !== "full" && profile !== "package") {
+): {
+  env: NodeJS.ProcessEnv;
+  heapShortfall: ReturnType<typeof resolveTsdownBuildPlan>["heapShortfall"];
+} {
+  if (profile !== "full" && profile !== "package" && profile !== "ciArtifacts") {
     return { env, heapShortfall: null };
   }
   const plan = resolveTsdownBuildPlan({ ...params, env });
   return {
-    env: { ...env, [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(plan.maxOldSpaceMb) },
+    // Direct Node steps need NODE_OPTIONS; tsdown descendants also need the frozen budget.
+    env: { ...plan.env, [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(plan.maxOldSpaceMb) },
     heapShortfall: plan.heapShortfall,
   };
 }
@@ -646,61 +600,6 @@ export function resolveBuildAllStepOnCacheHit(step: BuildAllStep) {
   };
 }
 
-function cacheEntryIncludesFile(entry: BuildCachePath, filePath: string) {
-  if (!entry.extensions?.length) {
-    return true;
-  }
-  return entry.extensions.some((extension) => filePath.endsWith(extension));
-}
-
-function listFilesRecursively(
-  rootPath: string,
-  fsImpl: BuildAllFs,
-  cacheEntry: BuildCachePath = { path: rootPath },
-) {
-  let stat;
-  try {
-    stat = fsImpl.statSync(rootPath);
-  } catch {
-    return [];
-  }
-  if (stat.isFile()) {
-    return cacheEntryIncludesFile(cacheEntry, rootPath) ? [rootPath] : [];
-  }
-  if (!stat.isDirectory()) {
-    return [];
-  }
-  const out: string[] = [];
-  const entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
-  const recursive = cacheEntry.recursive !== false;
-  for (const dirent of entries) {
-    if (dirent.name === ".DS_Store") {
-      continue;
-    }
-    const entryPath = path.join(rootPath, dirent.name);
-    if (dirent.isDirectory() && cacheEntry.excludeDirectories?.includes(dirent.name)) {
-      continue;
-    }
-    if (dirent.isDirectory() && recursive) {
-      out.push(...listFilesRecursively(entryPath, fsImpl, cacheEntry));
-    } else if (dirent.isFile() && cacheEntryIncludesFile(cacheEntry, entryPath)) {
-      out.push(entryPath);
-    }
-  }
-  return out;
-}
-
-function listCacheFiles(rootDir: string, entries: BuildCacheEntry[], fsImpl: BuildAllFs) {
-  return entries
-    .map((entry) => (typeof entry === "string" ? { path: entry } : entry))
-    .flatMap((entry) => listFilesRecursively(path.resolve(rootDir, entry.path), fsImpl, entry))
-    .toSorted();
-}
-
-function portableRelativePath(rootDir: string, filePath: string) {
-  return path.relative(rootDir, filePath).split(path.sep).join("/");
-}
-
 function normalizePortablePath(filePath: string) {
   return filePath.replaceAll("\\", "/");
 }
@@ -735,47 +634,6 @@ function resolveCachePaths(rootDir: string, step: BuildCacheStep, env: NodeJS.Pr
   };
 }
 
-function hashInputFiles(
-  rootDir: string,
-  files: string[],
-  fsImpl: BuildAllFs,
-  envEntries: string[] = [],
-  env: NodeJS.ProcessEnv = process.env,
-) {
-  const hash = createHash("sha256");
-  hash.update(`v${BUILD_CACHE_VERSION}\0`);
-  for (const name of envEntries.toSorted((left, right) => left.localeCompare(right))) {
-    hash.update(`env:${name}`);
-    hash.update("\0");
-    hash.update(env[name] ?? "");
-    hash.update("\0");
-  }
-  for (const file of files) {
-    hash.update(portableRelativePath(rootDir, file));
-    hash.update("\0");
-    hash.update(fsImpl.readFileSync(file));
-    hash.update("\0");
-  }
-  return hash.digest("hex");
-}
-
-function readCacheStamp(stampPath: string, fsImpl: BuildAllFs) {
-  try {
-    const stamp = asRecord(JSON.parse(fsImpl.readFileSync(stampPath, "utf8")));
-    const { version, signature, outputs: rawOutputs } = stamp;
-    const outputs = Array.isArray(rawOutputs)
-      ? rawOutputs.filter((entry) => typeof entry === "string")
-      : undefined;
-    return {
-      version: typeof version === "number" ? version : undefined,
-      signature: typeof signature === "string" ? signature : undefined,
-      outputs,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
 function hasAllFiles(rootDir: string, relativeFiles: string[], fsImpl: BuildAllFs) {
   return relativeFiles.every((relativeFile) => {
     try {
@@ -784,11 +642,6 @@ function hasAllFiles(rootDir: string, relativeFiles: string[], fsImpl: BuildAllF
       return false;
     }
   });
-}
-
-function copyFileSync(fsImpl: BuildAllFs, sourcePath: string, targetPath: string) {
-  fsImpl.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fsImpl.copyFileSync(sourcePath, targetPath);
 }
 
 export function resolveBuildAllStepCacheState(
@@ -810,47 +663,48 @@ export function resolveBuildAllStepCacheState(
     fsImpl,
     step.cache.env ?? [],
     params.env ?? process.env,
+    step.label.startsWith("tsdown") ? resolveTsdownCompilerIdentity() : "",
   );
   const { outputRoot, stampPath } = resolveCachePaths(rootDir, step, params.env ?? process.env);
-  const stamp = readCacheStamp(stampPath, fsImpl);
-  const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
-  const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(rootDir, file));
-  const stampedOutputs = stamp?.outputs?.map((entry) => normalizePortablePath(entry)) ?? [];
-  const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
-  const stampedOutputSet = new Set(stampedOutputs);
-  // Restore trusts the stamp inventory, so legacy partial stamps must name the
-  // complete current contract before either output tree can make them fresh.
-  const stampIncludesRequiredOutputs = requiredOutputs.every((output) =>
-    stampedOutputSet.has(output),
-  );
-  const stampMatches =
-    stamp?.version === BUILD_CACHE_VERSION &&
-    stamp.signature === signature &&
-    stampIncludesRequiredOutputs;
-  const actualOutputsPresent =
-    stampedOutputs.length > 0 && hasAllFiles(rootDir, stampedOutputs, fsImpl);
-  const cachedOutputsPresent =
-    stampedOutputs.length > 0 && hasAllFiles(outputRoot, stampedOutputs, fsImpl);
-  const cacheHitContractMatches =
-    stampMatches && hasAllFiles(rootDir, step.cache.requiredCacheHitOutputs ?? [], fsImpl);
-  const alwaysRestore = step.cache.restore === "always";
-  const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
-  const restorable =
-    cacheHitContractMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
-  const fresh = cacheHitContractMatches && (actualOutputsAcceptable || cachedOutputsPresent);
-  return {
-    cacheable: true,
-    fresh,
-    restorable,
-    reason: fresh ? (restorable ? "fresh-cache" : "fresh") : "stale",
-    signature,
-    outputRoot,
-    stampPath,
-    inputFiles: inputFiles.length,
-    outputFiles: outputFiles.length,
-    relativeOutputFiles,
-    stampedOutputs,
-  };
+  const lock = acquireBuildArtifactLock(stampPath);
+  try {
+    const stamp = readArtifactRecord(stampPath);
+    const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
+    const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(rootDir, file));
+    const stampedOutputs = Object.keys(stamp?.outputs ?? {});
+    const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
+    const actualOutputsPresent = artifactRecordMatches(rootDir, stamp, signature, requiredOutputs);
+    const cachedOutputsPresent = artifactRecordMatches(
+      outputRoot,
+      stamp,
+      signature,
+      requiredOutputs,
+    );
+    const stampMatches = stamp?.signature === signature;
+    const cacheHitContractMatches =
+      stampMatches && hasAllFiles(rootDir, step.cache.requiredCacheHitOutputs ?? [], fsImpl);
+    const alwaysRestore = step.cache.restore === "always";
+    const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
+    const restorable =
+      cacheHitContractMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
+    const fresh = cacheHitContractMatches && (actualOutputsAcceptable || cachedOutputsPresent);
+    return {
+      cacheable: true,
+      fresh,
+      restorable,
+      reason: fresh ? (restorable ? "fresh-cache" : "fresh") : "stale",
+      signature,
+      outputRoot,
+      stampPath,
+      inputFiles: inputFiles.length,
+      outputFiles: outputFiles.length,
+      relativeOutputFiles,
+      stampedOutputs,
+      record: stamp,
+    };
+  } finally {
+    lock.release();
+  }
 }
 
 type BuildAllCacheState = ReturnType<typeof resolveBuildAllStepCacheState>;
@@ -884,23 +738,32 @@ export function writeBuildAllStepCacheStamp(
   ) {
     return;
   }
-  for (const relativeFile of cacheState.relativeOutputFiles) {
-    copyFileSync(
-      fsImpl,
-      path.resolve(rootDir, relativeFile),
-      path.resolve(cacheState.outputRoot, relativeFile),
+  const lock = acquireBuildArtifactLock(cacheState.stampPath);
+  try {
+    const record = collectArtifactRecord(
+      rootDir,
+      cacheState.signature,
+      cacheState.relativeOutputFiles,
     );
+    const previous = readArtifactRecord(cacheState.stampPath);
+    // Invalidate before the first copied byte; readers and publishers use this
+    // same lock, so neither crashes nor overlap can expose a partial snapshot.
+    fsImpl.rmSync(cacheState.stampPath, { force: true });
+    publishArtifactFiles(
+      rootDir,
+      cacheState.outputRoot,
+      Object.keys(record.outputs),
+      Object.keys(previous?.outputs ?? {}),
+    );
+    if (
+      !artifactRecordMatches(cacheState.outputRoot, record, cacheState.signature, requiredOutputs)
+    ) {
+      throw new Error(`Incomplete build cache snapshot: ${step.label}`);
+    }
+    writeArtifactRecord(cacheState.stampPath, record);
+  } finally {
+    lock.release();
   }
-  fsImpl.mkdirSync(path.dirname(cacheState.stampPath), { recursive: true });
-  fsImpl.writeFileSync(
-    cacheState.stampPath,
-    `${JSON.stringify({
-      version: BUILD_CACHE_VERSION,
-      label: step.label,
-      signature: cacheState.signature,
-      outputs: cacheState.relativeOutputFiles,
-    })}\n`,
-  );
 }
 
 export function resolveBuildAllStepCacheStampState(
@@ -928,24 +791,28 @@ export function restoreBuildAllStepCacheOutputs(
   if (!cacheState.restorable || !cacheState.outputRoot || !cacheState.stampedOutputs?.length) {
     return false;
   }
-  const fsImpl = params.fs ?? fs;
-  const rootDir = params.rootDir ?? process.cwd();
-  const stampedOutputSet = new Set(cacheState.stampedOutputs);
-  // A restored snapshot owns its declared output set. Remove older checkout
-  // outputs first so cache hits cannot combine declarations from two builds.
-  for (const relativeFile of cacheState.relativeOutputFiles ?? []) {
-    if (!stampedOutputSet.has(normalizePortablePath(relativeFile))) {
-      fsImpl.rmSync(path.resolve(rootDir, relativeFile), { force: true });
+  if (!cacheState.stampPath || !cacheState.signature || !cacheState.record) {
+    return false;
+  }
+  const lock = acquireBuildArtifactLock(cacheState.stampPath);
+  try {
+    const record = readArtifactRecord(cacheState.stampPath);
+    if (
+      JSON.stringify(record) !== JSON.stringify(cacheState.record) ||
+      !artifactRecordMatches(cacheState.outputRoot, record, cacheState.signature)
+    ) {
+      return false;
     }
-  }
-  for (const relativeFile of cacheState.stampedOutputs) {
-    copyFileSync(
-      fsImpl,
-      path.resolve(cacheState.outputRoot, relativeFile),
-      path.resolve(rootDir, relativeFile),
+    publishArtifactFiles(
+      cacheState.outputRoot,
+      params.rootDir ?? process.cwd(),
+      cacheState.stampedOutputs,
+      cacheState.relativeOutputFiles,
     );
+    return true;
+  } finally {
+    lock.release();
   }
-  return true;
 }
 
 export function finalizeBuildAllStepCache(
@@ -994,7 +861,7 @@ export function formatBuildAllTimingSummary(timings: BuildAllTiming[]) {
   return `[build-all] phase timings: total ${formatBuildAllDuration(totalMs)}; slowest ${phases}`;
 }
 
-export function runBuildAllSteps(
+export async function runBuildAllSteps(
   profile: string,
   params: {
     cacheEnabled?: boolean;
@@ -1005,11 +872,17 @@ export function runBuildAllSteps(
     now?: () => number;
     resolveCacheState?: typeof resolveBuildAllStepCacheState;
     restoreCache?: typeof restoreBuildAllStepCacheOutputs;
-    runStep?: (invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number | null };
+    runStep?: (
+      invocation: ReturnType<typeof resolveBuildAllStep>,
+    ) => { status: number | null } | Promise<{ status: number | null }>;
     steps?: BuildAllStep[];
   } = {},
 ) {
-  let buildEnv = params.env ?? resolveBuildAllEnvironment();
+  const { env: buildEnv, heapShortfall } = resolveBuildAllTsdownPlan(
+    profile,
+    resolveBuildAllEnvironment(params.env),
+    params.memoryLimit,
+  );
   const steps = params.steps ?? resolveBuildAllSteps(profile, buildEnv);
   const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
   const logger = params.logger ?? console;
@@ -1019,21 +892,29 @@ export function runBuildAllSteps(
   const finalizeCache = params.finalizeCache ?? finalizeBuildAllStepCache;
   const runStep =
     params.runStep ??
-    ((invocation: ReturnType<typeof resolveBuildAllStep>) =>
-      spawnSync(invocation.command, invocation.args, invocation.options));
+    (async (invocation: ReturnType<typeof resolveBuildAllStep>) => {
+      const script = invocation.args[2];
+      return {
+        status: await runManagedCommand({
+          bin: invocation.command,
+          args:
+            script === "scripts/tsdown-build.mts" ||
+            script === "scripts/write-plugin-sdk-entry-dts.ts"
+              ? distArtifactEntryArgs(script, invocation.args.slice(3))
+              : invocation.args,
+          ...invocation.options,
+          requireProcessTreeExit: process.platform !== "win32",
+        }),
+      };
+    });
   const timings: BuildAllTiming[] = [];
   let exitCode = 0;
-  if (profile === "full" || profile === "package") {
-    const buildPlan = resolveBuildAllTsdownPlan(profile, buildEnv, params.memoryLimit);
-    const heapShortfall = buildPlan.heapShortfall;
-    if (heapShortfall) {
-      if (heapShortfall.fatal) {
-        logger.error(heapShortfall.message);
-        return { exitCode: 1, timings };
-      }
-      logger.warn(heapShortfall.message);
+  if (heapShortfall) {
+    if (heapShortfall.fatal) {
+      logger.error(heapShortfall.message);
+      return { exitCode: 1, timings };
     }
-    buildEnv = buildPlan.env;
+    logger.warn(heapShortfall.message);
   }
   for (const step of steps) {
     const cacheStartedAt = now();
@@ -1043,7 +924,9 @@ export function runBuildAllSteps(
     let stepToRun = step;
     let reusedCache = false;
     if (cacheEnabled && cacheState.fresh) {
-      restoreCache(cacheState);
+      if (cacheState.restorable && !restoreCache(cacheState)) {
+        throw new Error(`Build cache changed before restoration: ${step.label}; rerun the build`);
+      }
       const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
       if (!cacheHitStep) {
         const durationMs = cacheDurationMs + now() - startedAt;
@@ -1056,7 +939,7 @@ export function runBuildAllSteps(
     }
     logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
     const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
-    const result = runStep(invocation);
+    const result = await runStep(invocation);
     const durationMs = cacheDurationMs + now() - startedAt;
     if (typeof result.status === "number") {
       if (result.status !== 0) {
@@ -1069,7 +952,9 @@ export function runBuildAllSteps(
       }
       // Runtime-only tsdown cleans its output roots. Cache hits restore
       // declarations again after that pass so the full build stays complete.
-      finalizeCache(step, cacheState, { env: buildEnv, reusedCache });
+      if (!finalizeCache(step, cacheState, { env: buildEnv, reusedCache })) {
+        throw new Error(`Build cache changed during ${step.label}; rerun the build`);
+      }
       timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
       logger.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
       continue;
@@ -1094,7 +979,9 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   if (args?.help) {
     console.log(buildAllUsage());
   } else {
-    const result = runBuildAllSteps(args.profile);
+    const result = await withDistArtifactOwnership(process.cwd(), () =>
+      runBuildAllSteps(args.profile),
+    );
     if (result.exitCode !== 0) {
       process.exit(result.exitCode);
     }

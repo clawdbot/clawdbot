@@ -497,10 +497,12 @@ suite.define(() => {
           ).toBe(true);
           await browserPanel.getByText("Example", { exact: true }).first().waitFor();
           await expect
-            .poll(
-              async () => (await browserPanel.textContent())?.includes("Loading page...") ?? true,
+            .poll(() =>
+              browserPanel
+                .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="browser"]')
+                .count(),
             )
-            .toBe(false);
+            .toBe(0);
           expect(await browserPanel.textContent()).not.toContain("Browser request failed");
 
           if (host === "app") {

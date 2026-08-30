@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 // Openshell tests cover backend-owned exec workdir validation behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -167,27 +168,25 @@ describe("openshell backend exec workdir validation", () => {
       usePty: false,
     });
 
-    const uploadCalls = cliMocks.runOpenShellCli.mock.calls.filter(
-      ([params]) => params.args[0] === "sandbox" && params.args[1] === "upload",
-    );
-    expect(uploadCalls).toHaveLength(1);
-    expect(uploadCalls[0]?.[0]).toMatchObject({
-      args: [
-        "sandbox",
-        "upload",
-        "--no-git-ignore",
-        backend.runtimeId,
-        expect.stringMatching(/\/seed\.txt$/),
-        "/sandbox/",
-      ],
-      cwd: workspaceDir,
-    });
-    await backend.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: execSpec.finalizeToken,
-    });
+    try {
+      const uploadCalls = cliMocks.runOpenShellCli.mock.calls.filter(
+        ([params]) => params.args[0] === "sandbox" && params.args[1] === "upload",
+      );
+      expect(uploadCalls).toHaveLength(1);
+      expect(uploadCalls[0]?.[0]).toMatchObject({
+        args: [
+          "sandbox",
+          "upload",
+          "--no-git-ignore",
+          backend.runtimeId,
+          expect.stringMatching(/\/seed\.txt$/),
+          "/sandbox/",
+        ],
+        cwd: workspaceDir,
+      });
+    } finally {
+      await finalize(backend, execSpec.finalizeToken);
+    }
     const nestedFile = path.join(workspaceDir, "nested", "note.txt");
     const bridge = backend.createFsBridge?.({
       sandbox: createSandboxTestContext({
@@ -338,12 +337,14 @@ describe("openshell backend exec workdir validation", () => {
       name: "missing materialized child",
       target: "/sandbox/.openclaw/sandbox-skills/skills/missing",
       expected: null,
+      workspaceFallback: true,
     },
     {
       name: "symlinked materialized source",
       target: "/sandbox/.openclaw/sandbox-skills/nested",
       expected: null,
       sourceLink: true,
+      workspaceFallback: true,
     },
   ])("validates the uploaded host directory for $name", async (scenario) => {
     const workspaceDir = await createWorkspace();
@@ -358,6 +359,11 @@ describe("openshell backend exec workdir validation", () => {
     }
     await fs.symlink(workspaceDir, path.join(workspaceDir, "link"), "junction");
     await fs.mkdir(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
+    if (scenario.workspaceFallback) {
+      await fs.mkdir(path.join(workspaceDir, path.posix.relative("/sandbox", scenario.target)), {
+        recursive: true,
+      });
+    }
     if (scenario.sourceLink) {
       await fs.rm(skillsWorkspaceDir, { recursive: true });
       await fs.symlink(workspaceDir, skillsWorkspaceDir, "junction");
@@ -380,7 +386,7 @@ describe("openshell backend exec workdir validation", () => {
       workspace: "/sandbox/primary",
       agent: "/sandbox",
       target: "/sandbox/primary/host-only",
-      exists: false,
+      exists: true,
     },
     {
       workspace: "/sandbox",
@@ -404,6 +410,248 @@ describe("openshell backend exec workdir validation", () => {
       scenario.exists ? scenario.target : null,
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a workdir omitted from the authoritative overlapping root",
+    async () => {
+      const workspaceDir = await createWorkspace();
+      const agentWorkspaceDir = await createWorkspace("agent");
+      await fs.mkdir(path.join(workspaceDir, "preserved"));
+      execFileSync("mkfifo", [path.join(agentWorkspaceDir, "preserved")]);
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir,
+        agentWorkspaceDir,
+        scopeKey: "agent:overlap-special-file",
+        remoteWorkspaceDir: "/sandbox",
+        remoteAgentWorkspaceDir: "/sandbox",
+      });
+
+      await expect(backend.validateWorkdir?.("/sandbox/preserved")).resolves.toBeNull();
+    },
+  );
+
+  it.each([
+    {
+      name: "a later nested directory replaces an earlier file",
+      workspace: "/sandbox",
+      agent: "/sandbox/collision",
+      setup: async (workspaceDir: string) => {
+        await fs.writeFile(path.join(workspaceDir, "collision"), "file");
+      },
+      uploads: [
+        ["collision", "/sandbox/"],
+        ["primary-only", "/sandbox/"],
+        ["agent-only", "/sandbox/collision/"],
+      ],
+    },
+    {
+      name: "a deeper nested root replaces a blocking ancestor file",
+      workspace: "/sandbox",
+      agent: "/sandbox/collision/agent",
+      setup: async (workspaceDir: string) => {
+        await fs.writeFile(path.join(workspaceDir, "collision"), "file");
+      },
+      uploads: [
+        ["collision", "/sandbox/"],
+        ["primary-only", "/sandbox/"],
+        ["agent-only", "/sandbox/collision/agent/"],
+      ],
+    },
+    {
+      name: "a later file replaces an earlier nested directory",
+      workspace: "/sandbox/collision",
+      agent: "/sandbox",
+      setup: async (_workspaceDir: string, agentWorkspaceDir: string) => {
+        await fs.writeFile(path.join(agentWorkspaceDir, "collision"), "file");
+      },
+      uploads: [
+        ["agent-only", "/sandbox/"],
+        ["collision", "/sandbox/"],
+        ["primary-only", "/sandbox/collision/"],
+      ],
+    },
+  ])("composes overlapping roots when $name", async (scenario) => {
+    const workspaceDir = await createWorkspace();
+    const agentWorkspaceDir = await createWorkspace("agent");
+    await fs.writeFile(path.join(workspaceDir, "primary-only"), "primary");
+    await fs.writeFile(path.join(agentWorkspaceDir, "agent-only"), "agent");
+    await scenario.setup(workspaceDir, agentWorkspaceDir);
+    const backend = await createOpenShellBackendFixture({
+      workspaceDir,
+      agentWorkspaceDir,
+      scopeKey: `agent:overlap-cross-type:${scenario.name}`,
+      remoteWorkspaceDir: scenario.workspace,
+      remoteAgentWorkspaceDir: scenario.agent,
+    });
+
+    const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+    try {
+      const uploads = cliMocks.runOpenShellCli.mock.calls.flatMap(([params]) =>
+        params.args[0] === "sandbox" && params.args[1] === "upload"
+          ? [[path.basename(params.args.at(-2) ?? ""), params.args.at(-1)]]
+          : [],
+      );
+      expect(uploads).toEqual(scenario.uploads);
+    } finally {
+      await finalize(backend, exec.finalizeToken);
+    }
+  });
+
+  it.each([
+    {
+      workspace: "/sandbox/primary",
+      agent: "/sandbox",
+      uploads: [
+        ["agent-only", "/sandbox/"],
+        ["host-only", "/sandbox/primary/"],
+      ],
+    },
+    {
+      workspace: "/sandbox",
+      agent: "/sandbox/nested/agent",
+      uploads: [
+        ["host-only", "/sandbox/"],
+        ["agent-only", "/sandbox/nested/agent/"],
+      ],
+    },
+    {
+      workspace: "/sandbox",
+      agent: "/sandbox",
+      uploads: [
+        ["host-only", "/sandbox/"],
+        ["agent-only", "/sandbox/"],
+      ],
+    },
+    {
+      workspace: "/sandbox",
+      agent: "/sandbox/hooks",
+      uploads: [
+        ["host-only", "/sandbox/"],
+        ["agent-only", "/sandbox/hooks/"],
+      ],
+    },
+  ])(
+    "clears each overlapping root immediately before upload: $workspace -> $agent",
+    async (scenario) => {
+      const workspaceDir = await createWorkspace();
+      const agentWorkspaceDir = await createWorkspace("agent");
+      await fs.mkdir(path.join(workspaceDir, "host-only"));
+      await fs.mkdir(path.join(agentWorkspaceDir, "agent-only"));
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir,
+        agentWorkspaceDir,
+        scopeKey: `agent:overlap-publication:${scenario.workspace}:${scenario.agent}`,
+        remoteWorkspaceDir: scenario.workspace,
+        remoteAgentWorkspaceDir: scenario.agent,
+      });
+
+      const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      try {
+        const clearCallOrders = sdkMocks.runSshSandboxCommand.mock.calls.flatMap(
+          ([params], index) =>
+            String(params.remoteCommand).includes("find")
+              ? [sdkMocks.runSshSandboxCommand.mock.invocationCallOrder[index]!]
+              : [],
+        );
+        const uploadCalls = cliMocks.runOpenShellCli.mock.calls.flatMap(([params], index) =>
+          params.args[0] === "sandbox" && params.args[1] === "upload"
+            ? [{ params, order: cliMocks.runOpenShellCli.mock.invocationCallOrder[index]! }]
+            : [],
+        );
+        expect(clearCallOrders).toHaveLength(2);
+        expect(
+          [
+            ...clearCallOrders.map((order) => ({ label: "clear", order })),
+            ...uploadCalls.map(({ order }) => ({ label: "upload", order })),
+          ]
+            .toSorted((a, b) => a.order - b.order)
+            .map(({ label }) => label),
+        ).toEqual(["clear", "upload", "clear", "upload"]);
+        expect(
+          uploadCalls.map(({ params }) => [
+            path.basename(params.args.at(-2) ?? ""),
+            params.args.at(-1),
+          ]),
+        ).toEqual(scenario.uploads);
+      } finally {
+        await finalize(backend, exec.finalizeToken);
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "read-only containing agent root",
+      workspaceAccess: "ro" as const,
+      remoteWorkspaceDir: "/sandbox/agent/project",
+      remoteAgentWorkspaceDir: "/sandbox/agent",
+    },
+    {
+      name: "writable containing agent root",
+      workspaceAccess: "rw" as const,
+      remoteWorkspaceDir: "/sandbox/agent/project",
+      remoteAgentWorkspaceDir: "/sandbox/agent",
+    },
+    {
+      name: "equal read-only roots",
+      workspaceAccess: "ro" as const,
+      remoteWorkspaceDir: "/sandbox/shared",
+      remoteAgentWorkspaceDir: "/sandbox/shared",
+    },
+  ])(
+    "downloads the primary root without reconciling the $name",
+    async ({ name, workspaceAccess, remoteWorkspaceDir, remoteAgentWorkspaceDir }) => {
+      const workspaceDir = await createWorkspace();
+      const agentWorkspaceDir = await createWorkspace("agent");
+      await fs.writeFile(path.join(workspaceDir, "primary-only"), "local-primary");
+      await fs.writeFile(path.join(agentWorkspaceDir, "agent-only"), "local-agent");
+      await fs.mkdir(path.join(agentWorkspaceDir, "project"));
+      await fs.writeFile(
+        path.join(agentWorkspaceDir, "project", "agent-shadow.txt"),
+        "preserved-shadow",
+      );
+      cliMocks.runOpenShellCli.mockImplementation(async ({ args }) => {
+        if (args[1] === "download") {
+          const remote = args.at(-2);
+          const target = args.at(-1);
+          if (!target) {
+            throw new Error("Expected download target");
+          }
+          await fs.writeFile(
+            path.join(target, remote === remoteWorkspaceDir ? "primary-only" : "agent-only"),
+            remote === remoteWorkspaceDir ? "remote-primary" : "remote-agent",
+          );
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir,
+        agentWorkspaceDir,
+        scopeKey: `agent:overlap-download:${name}`,
+        workspaceAccess,
+        remoteWorkspaceDir,
+        remoteAgentWorkspaceDir,
+      });
+
+      const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      await finalize(backend, exec.finalizeToken);
+
+      await expect(fs.readFile(path.join(agentWorkspaceDir, "agent-only"), "utf8")).resolves.toBe(
+        "local-agent",
+      );
+      await expect(fs.readFile(path.join(workspaceDir, "primary-only"), "utf8")).resolves.toBe(
+        "remote-primary",
+      );
+      await expect(
+        fs.readFile(path.join(agentWorkspaceDir, "project", "agent-shadow.txt"), "utf8"),
+      ).resolves.toBe("preserved-shadow");
+      expect(
+        cliMocks.runOpenShellCli.mock.calls.flatMap(([params]) =>
+          params.args[1] === "download" ? [params.args.at(-2)] : [],
+        ),
+      ).toEqual([remoteWorkspaceDir]);
+    },
+  );
 
   it("rejects an aborted file write after waiting for mirror publication", async () => {
     const workspaceDir = await createWorkspace();
@@ -498,8 +746,9 @@ describe("openshell backend exec workdir validation", () => {
   });
 
   it.each([
-    { label: "a host workspace", sharedHost: true, sharedRuntime: false },
-    { label: "a remote runtime", sharedHost: false, sharedRuntime: true },
+    { label: "a host workspace", host: "same", sharedRuntime: false },
+    { label: "a symlink-aliased host workspace", host: "alias", sharedRuntime: false },
+    { label: "a remote runtime", host: "different", sharedRuntime: true },
   ])("holds $label until command execution and publication finish", async (scenario) => {
     const workspaces = await Promise.all(
       ["first", "second"].map(async (label) =>
@@ -512,46 +761,50 @@ describe("openshell backend exec workdir validation", () => {
     tempWorkspaces.push(...workspaces);
     const firstWorkspace = expectDefined(workspaces[0], "first OpenShell workspace");
     const secondWorkspace = expectDefined(workspaces[1], "second OpenShell workspace");
+    const secondWorkspaceDir =
+      scenario.host === "same"
+        ? firstWorkspace.dir
+        : scenario.host === "alias"
+          ? path.join(secondWorkspace.dir, "alias")
+          : secondWorkspace.dir;
+    if (scenario.host === "alias") {
+      await fs.symlink(firstWorkspace.dir, secondWorkspaceDir, "junction");
+    }
     const first = await createOpenShellBackendFixture({
       workspaceDir: firstWorkspace.dir,
       scopeKey: "agent:workspace:first",
     });
     const second = await createOpenShellBackendFixture({
-      workspaceDir: (scenario.sharedHost ? firstWorkspace : secondWorkspace).dir,
+      workspaceDir: secondWorkspaceDir,
       scopeKey: scenario.sharedRuntime ? "agent:workspace:first" : "agent:workspace:second",
     });
 
     const firstExec = await first.buildExecSpec({ command: "first", env: {}, usePty: false });
     const secondPreparation = second.buildExecSpec({ command: "second", env: {}, usePty: false });
-
+    // Observe rejection while the first lease is held; cleanup still awaits and rethrows it.
+    const secondSettled = Promise.allSettled([secondPreparation]);
     try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(cliMocks.runOpenShellCli.mock.calls.map(([params]) => params.args[1])).toEqual([
+          "get",
+        ]);
+      } finally {
+        await finalize(first, firstExec.finalizeToken);
+      }
+      await secondPreparation;
       expect(cliMocks.runOpenShellCli.mock.calls.map(([params]) => params.args[1])).toEqual([
+        "get",
+        "download",
         "get",
       ]);
     } finally {
-      await first.finalizeExec?.({
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        token: firstExec.finalizeToken,
-      });
+      await secondSettled;
+      const secondExec = await secondPreparation;
+      await finalize(second, secondExec.finalizeToken);
     }
-
-    const secondExec = await secondPreparation;
-    expect(cliMocks.runOpenShellCli.mock.calls.map(([params]) => params.args[1])).toEqual([
-      "get",
-      "download",
-      "get",
-    ]);
-    await second.finalizeExec?.({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      token: secondExec.finalizeToken,
-    });
   });
 
   it.each(["exec preparation", "mirror publication", "SSH cleanup"])(
@@ -587,15 +840,8 @@ describe("openshell backend exec workdir validation", () => {
           failure === "SSH cleanup" ? "cleanup failed" : "download failed",
         );
       }
-      let secondExec: Awaited<ReturnType<SandboxBackendHandle["buildExecSpec"]>> | undefined;
-      const secondPreparation = second
-        .buildExecSpec({ command: "second", env: {}, usePty: false })
-        .then((prepared) => {
-          secondExec = prepared;
-          return prepared;
-        });
-      await vi.waitFor(() => expect(secondExec).toBeDefined());
-      await finalize(second, (await secondPreparation).finalizeToken);
+      const secondExec = await second.buildExecSpec({ command: "second", env: {}, usePty: false });
+      await finalize(second, secondExec.finalizeToken);
     },
   );
 
@@ -621,29 +867,19 @@ describe("openshell backend exec workdir validation", () => {
     const second = expectDefined(backends[1], "second OpenShell backend");
     const firstExec = await first.buildExecSpec({ command: "first", env: {}, usePty: false });
     const secondPreparation = second.buildExecSpec({ command: "second", env: {}, usePty: false });
-    let secondExec: Awaited<typeof secondPreparation> | undefined;
     try {
-      await vi.waitFor(() => {
-        const startedRuntimeIds = cliMocks.runOpenShellCli.mock.calls
-          .filter(([params]) => params.args[1] === "get")
-          .map(([params]) => params.args[2]);
-        expect(startedRuntimeIds).toEqual([first.runtimeId, second.runtimeId]);
-      });
-      secondExec = await secondPreparation;
+      await secondPreparation;
+      const startedRuntimeIds = cliMocks.runOpenShellCli.mock.calls
+        .filter(([params]) => params.args[1] === "get")
+        .map(([params]) => params.args[2]);
+      expect(startedRuntimeIds).toEqual([first.runtimeId, second.runtimeId]);
     } finally {
-      await first.finalizeExec?.({
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        token: firstExec.finalizeToken,
-      });
-      secondExec ??= await secondPreparation;
-      await second.finalizeExec?.({
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        token: secondExec.finalizeToken,
-      });
+      try {
+        await finalize(first, firstExec.finalizeToken);
+      } finally {
+        const secondExec = await secondPreparation;
+        await finalize(second, secondExec.finalizeToken);
+      }
     }
   });
 });

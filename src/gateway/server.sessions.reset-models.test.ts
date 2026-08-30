@@ -63,8 +63,6 @@ type ResetSessionEntry = {
   groupActivation?: string;
   groupActivationNeedsSystemIntro?: boolean;
   execHost?: string;
-  execSecurity?: string;
-  execAsk?: string;
   execNode?: string;
   displayName?: string;
   cliSessionBindings?: Record<
@@ -207,8 +205,6 @@ const ownedChildMetadata = {
   groupActivation: "always",
   groupActivationNeedsSystemIntro: true,
   execHost: "gateway",
-  execSecurity: "allowlist",
-  execAsk: "on-miss",
   execNode: "mac-mini",
   displayName: "Ops Child",
   cliSessionIds: {

@@ -91,6 +91,13 @@ successful; retry creates a fenced delivery generation from the retained
 canonical result. An ambiguous earlier acknowledgement can still cause a
 duplicate visible result.
 
+Retry and dismissal select the task's exact retained run, never another result
+from the same child session. Unrelated parent turns leave suspended completions
+blocked until you retry them. Upgrading from an older release repairs missing task
+bindings before loading runs, including runs that have not finished yet. Only
+unambiguous bindings are repaired; conflicting records remain unchanged and
+cannot be recovered by guessing from a shared session.
+
 ### `dismiss`
 
 ```bash
@@ -130,10 +137,11 @@ pruning, and stale cron run session registry cleanup.
 For cron tasks, reconciliation uses persisted run logs/job state before
 marking an old active task `lost`, so completed cron runs do not become
 false audit errors just because the in-memory Gateway runtime state is gone.
-Offline CLI audit is not authoritative for the Gateway's process-local cron
-active-job set. CLI tasks with a run id/source id are marked `lost` when
-their live Gateway run context is gone, even if an old child-session row
-remains.
+Offline CLI audit and maintenance are not authoritative for the Gateway's
+process-local cron, CLI, or ACP liveness. They retain active tasks of those
+kinds when the local runtime cannot prove completion. Gateway maintenance
+marks CLI tasks with a run id/source id `lost` when their live run context is
+gone, even if an old child-session row remains.
 
 When applied, maintenance also prunes `cron:<jobId>:run:<uuid>` session
 registry rows older than 7 days while preserving currently running cron

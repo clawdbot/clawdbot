@@ -39,6 +39,22 @@ import { callGatewayTool } from "./tools/gateway.js";
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
 const log = createSubsystemLogger("agents/tools");
 
+function pluginApprovalDeniedOutcome(baseParams: unknown): HookOutcome {
+  return {
+    blocked: true,
+    kind: "failure",
+    disposition: "blocked",
+    deniedReason: "plugin-approval",
+    reason: [
+      "Denied by user. The tool call did not run.",
+      "This denial is final: the approval request is closed. Do not mention /approve or any other approval command to the user.",
+      "Do not run the tool call again or ask the user to approve it again.",
+      "If the user still wants the action, explain that a new tool call will trigger a fresh approval request.",
+    ].join("\n"),
+    params: baseParams,
+  };
+}
+
 function resolvePluginToolApprovalTimeoutMs(approval: PluginApprovalRequest): number {
   if (
     typeof approval.timeoutMs !== "number" ||
@@ -231,14 +247,7 @@ async function requestPluginToolApproval(params: {
         };
       }
       if (resolution === PluginApprovalResolutions.DENY) {
-        return {
-          blocked: true,
-          kind: "failure",
-          disposition: "blocked",
-          deniedReason: "plugin-approval",
-          reason: "Denied by user",
-          params: params.baseParams,
-        };
+        return pluginApprovalDeniedOutcome(params.baseParams);
       }
       // Veto carries the plugin-supplied reason; plain timeouts record a
       // timed_out failure disposition for the audit ledger.
@@ -394,14 +403,7 @@ async function requestPluginToolApproval(params: {
       };
     }
     if (resolution === PluginApprovalResolutions.DENY) {
-      return {
-        blocked: true,
-        kind: "failure",
-        disposition: "blocked",
-        deniedReason: "plugin-approval",
-        reason: "Denied by user",
-        params: params.baseParams,
-      };
+      return pluginApprovalDeniedOutcome(params.baseParams);
     }
     const fallbackTimeoutReason = approval.timeoutReason ?? "Approval timed out";
     const timeoutReason =

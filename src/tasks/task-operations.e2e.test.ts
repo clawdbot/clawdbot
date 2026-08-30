@@ -21,6 +21,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRunningTaskRunCore, recordTaskRunProgressByRunIdCore } from "./task-executor.js";
 import { createTaskRecord, getTaskById, reloadTaskRegistryFromStore } from "./task-registry.js";
 import {
+  configureTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
@@ -159,6 +160,15 @@ describe("task operations product boundary", () => {
             notifyPolicy: "done_only",
           });
 
+          const standaloneList = createRuntime();
+          await tasksListCommand({}, standaloneList.runtime);
+          expect(standaloneList.logs.join("\n")).toContain(
+            "Task pressure: 0 queued · 2 running · 0 issues",
+          );
+          expect(requireTask(stale.taskId).status).toBe("running");
+
+          // Only the Gateway can reconcile CLI runs from process-local liveness.
+          configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
           const list = createRuntime();
           await tasksListCommand({}, list.runtime);
           expect(list.logs.join("\n")).toContain("Background tasks: 3");

@@ -125,20 +125,14 @@ async function main() {
   // The scans are independent Knip child processes over separate configs;
   // running them concurrently cuts the lane's serial wall clock roughly 2x.
   const results = await Promise.all(
-    KNIP_SCANS.map(async (scan) => ({
-      scan,
-      result: await runKnip([...scan.args, ...KNIP_COMMON_ARGS], { scanName: scan.name }),
-    })),
+    KNIP_SCANS.map(async (scan) => {
+      const result = await runKnip([...scan.args, ...KNIP_COMMON_ARGS], { scanName: scan.name });
+      return reportUnusedExportScan(scan, result);
+    }),
   );
-  for (const { scan, result } of results) {
-    if (!reportUnusedExportScan(scan, result)) {
-      process.exitCode = 1;
-      return;
-    }
+  if (results.includes(false)) {
+    process.exitCode = 1;
   }
-  console.log(
-    "[deadcode] Knip production and full-tree unused-export checks passed with 0 entries.",
-  );
 }
 
 function reportUnusedExportScan(scan: (typeof KNIP_SCANS)[number], result: KnipResult) {

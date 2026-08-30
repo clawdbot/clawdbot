@@ -68,8 +68,9 @@ exceeds the limit.
 Bundled channels spell these overrides as
 `channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`. The flat
 `*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings are
-rejected everywhere. `openclaw doctor --fix` migrates legacy configs into the
-nested shape.
+rejected by validation. `openclaw doctor --fix` migrates legacy configs into the
+nested shape; Gateway startup applies the same migration automatically when the
+single-file config meets the [startup migration conditions](/gateway/doctor#detailed-behavior-and-rationale).
 
 **Boundary semantics** for `blockStreamingBreak`:
 
@@ -318,6 +319,9 @@ preview path, so short "I am checking..." progress notes can stream into the
 editable draft without becoming part of the final answer. This keeps
 multi-step tool turns visually alive instead of silent between the first
 thinking preview and the final answer.
+
+Responses commentary keeps each message item's identity through tool handoffs.
+Later tool updates do not replay earlier commentary as an extra combined preamble.
 
 Long-running tools may emit typed progress before they return. For example,
 `web_fetch` arms a five-second timer when it starts: if the fetch is still

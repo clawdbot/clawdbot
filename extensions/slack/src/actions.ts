@@ -13,6 +13,10 @@ import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
+import {
+  openSlackConversationWithClient,
+  parseSlackConversationOpenInput,
+} from "./conversation-open.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
 import { normalizeSlackOutboundText } from "./format.js";
@@ -487,6 +491,12 @@ export async function deleteSlackMessage(
     channel: channelId,
     ts: messageId,
   });
+}
+
+export async function openSlackConversation(userIds: unknown, opts: SlackActionClientOpts = {}) {
+  const input = parseSlackConversationOpenInput(userIds, opts.teamId);
+  const client = await getClient({ ...opts, teamId: input.teamId }, "write");
+  return await openSlackConversationWithClient(client, input);
 }
 
 export async function resolveSlackConversationName(

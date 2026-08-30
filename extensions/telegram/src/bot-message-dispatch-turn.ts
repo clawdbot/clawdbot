@@ -150,6 +150,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   admission: turn.turnAdoptionLifecycle.admission ?? "exclusive",
                   onAdopted: turn.turnAdoptionLifecycle.onAdopted,
                   onDeferred: turn.turnAdoptionLifecycle.onDeferred,
+                  onDeferredHeartbeat: turn.turnAdoptionLifecycle.onDeferredHeartbeat,
                   onAbandoned: turn.turnAdoptionLifecycle.onAbandoned,
                   abortSignal: turn.turnAdoptionLifecycle.abortSignal,
                 }
@@ -223,8 +224,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                       turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
                     } else if (
                       turn.answerLane.hasStreamedMessage &&
-                      !turn.activeAnswerDraftIsToolProgressOnly
+                      !turn.activeAnswerDraftIsToolProgressOnly &&
+                      (turn.activeAnswerBlockDelivery || turn.queuedAnswerBlockRotations.length > 0)
                     ) {
+                      // Only accepted blocks need a new message. A provider retry must
+                      // keep editing its unfinished preview instead of retaining it as final.
                       turn.rotateAnswerLaneWhenQueuedBlocksSettle = true;
                     }
                   });
@@ -283,8 +287,10 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               if (!text) {
                 return false;
               }
+              const progressId = payload.channelData?.openclawToolProgressId;
               const updatedDraft = await pushToolProgress(turn, text, {
                 startImmediately: true,
+                id: typeof progressId === "string" ? progressId : undefined,
               });
               if (updatedDraft) {
                 return true;

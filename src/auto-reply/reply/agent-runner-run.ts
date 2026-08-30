@@ -12,6 +12,7 @@ import {
   BLOCK_REPLY_SEND_TIMEOUT_MS,
   cleanupReplyAgentRun,
   handleReplyAgentRunError,
+  hasSuccessfulTerminalSourceReplyDelivery,
   refreshSessionEntryFromStore,
   resolveAdmittedRunSessionFile,
   type RunReplyAgentParams,
@@ -422,6 +423,20 @@ export async function runReplyAgent(
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
+  const resolveVisibleReplyDelivery = async () => {
+    // Settle accepted or in-flight blocks before deciding whether a terminal failure may stay silent.
+    try {
+      await blockReplyPipeline?.flush({ force: true });
+    } catch (flushError) {
+      logVerbose(
+        `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
+      );
+    }
+    return (
+      didDeliverVisiblePartialReply ||
+      hasSuccessfulTerminalSourceReplyDelivery({ blockReplyPipeline })
+    );
+  };
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
   const replyRouteThreadId = resolveRoutedDeliveryThreadId({
     ctx: sessionCtx,
@@ -524,21 +539,13 @@ export async function runReplyAgent(
     },
     storePath,
   });
-  type SessionResetOptions = {
-    failureLabel: string;
-    buildLogMessage: (nextSessionId: string) => string;
-    cleanupTranscripts?: boolean;
-  };
-  const resetSession = async ({
-    failureLabel,
-    buildLogMessage,
-    cleanupTranscripts,
-  }: SessionResetOptions): Promise<boolean> =>
+  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
     await resetReplyRunSession({
       options: {
-        failureLabel,
-        buildLogMessage,
-        cleanupTranscripts,
+        failureLabel: "role ordering conflict",
+        buildLogMessage: (nextSessionId) =>
+          `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+        cleanupTranscripts: true,
       },
       sessionKey,
       queueKey,
@@ -553,13 +560,6 @@ export async function runReplyAgent(
         activeIsNewSession = true;
       },
     });
-  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
-    resetSession({
-      failureLabel: "role ordering conflict",
-      buildLogMessage: (nextSessionId) =>
-        `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
-      cleanupTranscripts: true,
-    });
   try {
     return await executePreparedReplyAgentRun({
       activeSessionStore,
@@ -573,6 +573,7 @@ export async function runReplyAgent(
       checkpointBeforeAgentReply,
       commandBody,
       defaultModel,
+      resolveVisibleReplyDelivery,
       followupRun,
       getActiveIsNewSession: () => activeIsNewSession,
       getActiveSessionEntry: () => activeSessionEntry,
@@ -580,7 +581,6 @@ export async function runReplyAgent(
       isRestartRecoveryArmed,
       opts: runOpts,
       pendingToolTasks,
-      performSessionReset: resetSession,
       queueKey,
       replyMediaContext,
       replyOperation,
@@ -627,9 +627,8 @@ export async function runReplyAgent(
       replyOperation,
     );
     return await handleReplyAgentRunError(error, {
-      blockReplyPipeline,
       cfg,
-      didDeliverVisiblePartialReply: () => didDeliverVisiblePartialReply,
+      resolveVisibleReplyDelivery,
       isHeartbeat,
       isRestartRecoveryArmed,
       replyOperation,

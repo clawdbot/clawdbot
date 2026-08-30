@@ -29,6 +29,16 @@ function buildGrant(overrides: Partial<RunCliAgentParams> = {}) {
 }
 
 describe("buildCliMcpGrantContext source-reply authority", () => {
+  it.each(["heartbeat", "cron-event", "exec-event"])(
+    "keeps the reply channel separate from the %s turn source",
+    (messageProvider) => {
+      expect(buildGrant({ messageProvider, messageChannel: "telegram" }).messageProvider).toBe(
+        "telegram",
+      );
+      expect(buildGrant({ messageProvider }).messageProvider).toBeUndefined();
+    },
+  );
+
   it("stamps only trusted, message-capped subagent completion grants", () => {
     expect(buildGrant().sourceReplyOnly).toBe(true);
   });

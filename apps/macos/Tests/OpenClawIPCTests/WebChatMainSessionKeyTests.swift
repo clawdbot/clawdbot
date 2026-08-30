@@ -3,6 +3,15 @@ import Testing
 @testable import OpenClaw
 
 struct WebChatMainSessionKeyTests {
+    @Test func `unavailable endpoint falls back to the main session key`() async {
+        let connection = GatewayConnection(configProvider: {
+            throw URLError(.cannotConnectToHost)
+        })
+
+        #expect(await connection.mainSessionKey() == "main")
+        await connection.shutdown()
+    }
+
     @Test func `config get snapshot main key falls back to main when missing`() throws {
         let json = """
         {
@@ -19,7 +28,7 @@ struct WebChatMainSessionKeyTests {
         #expect(key == "main")
     }
 
-    @Test func `config get snapshot main key trims and uses value`() throws {
+    @Test func `config get snapshot keeps the canonical main key`() throws {
         let json = """
         {
           "path": "/Users/pete/.openclaw/openclaw.json",

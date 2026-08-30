@@ -20,6 +20,10 @@ import {
   type PreparedModelRuntimeReplacement,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
+import {
+  preparedPluginGenerationReusesBase,
+  preparedPluginGenerationSupportsSelections,
+} from "./prepared-model-runtime.plugin-generation.js";
 import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.types.js";
 
 type PreparedModelRuntimeLeaseContext = {
@@ -120,12 +124,17 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           !input.readOnly &&
           !input.loadRuntimePlugins &&
           !input.skipCredentials &&
-          !input.env
+          !input.env &&
+          preparedPluginGenerationSupportsSelections(options.pluginGeneration, input)
         ) {
           // A turn may finish under its still-open parent lease after reload. Its historic
           // generation must never publish over the configured owner for newly admitted work.
           throwIfLeaseAdmissionAborted(options.abortSignal);
-          return { snapshot: borrowed, release: () => {} };
+          return {
+            snapshot: borrowed,
+            pluginGeneration: options.pluginGeneration,
+            release: () => {},
+          };
         }
         throw new PreparedModelRuntimeOwnerNotPublishedError(
           `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
@@ -139,8 +148,10 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       (existing.provenance === "run" || existing.provenance === "ephemeral");
     const pluginGenerationChanged =
       options.pluginGeneration !== undefined &&
-      (existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration) !==
-        options.pluginGeneration;
+      !preparedPluginGenerationReusesBase(
+        existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration,
+        options.pluginGeneration,
+      );
     if (existing?.pending && pluginGenerationChanged) {
       // Do not supersede active discovery. Wait for its owner to settle, then retry against
       // the published identity so same-generation callers still coalesce.
@@ -241,8 +252,9 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     break;
   }
   throwIfLeaseAdmissionAborted(options.abortSignal);
+  const pluginGeneration = owner.pluginGeneration!;
   if (owner.provenance !== provenance) {
-    return { snapshot, release: () => {} };
+    return { snapshot, pluginGeneration, release: () => {} };
   }
   throwIfLeaseAdmissionAborted(options.abortSignal);
   if (provenance === "run" && options.retainIdleRunOwner) {
@@ -254,6 +266,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   let released = false;
   return {
     snapshot,
+    pluginGeneration,
     release: () => {
       if (released) {
         return;

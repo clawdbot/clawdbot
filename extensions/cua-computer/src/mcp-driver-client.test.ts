@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { ClickButton, EscalationReason } from "./driver-client.js";
@@ -24,7 +23,10 @@ type FakeEndpoint = {
 async function createFakeEndpoint(
   handle: (request: RpcRequest, endpoint: FakeEndpoint) => void,
 ): Promise<FakeEndpoint> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cua-mcp-test-"));
+  // macOS sockaddr_un cannot hold the test runner's nested temporary path.
+  const directory = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-cua-mcp-"));
+  // Registered before the bind so a failed listen still removes the root.
+  onTestFinished(async () => await fs.rm(directory, { recursive: true, force: true }));
   const socketPath = path.join(directory, "daemon.sock");
   const binaryPath = path.join(directory, "cua-driver");
   await fs.writeFile(
@@ -100,7 +102,6 @@ socket.on("close", () => process.exit(0));
           resolve();
         });
       });
-      await fs.rm(directory, { recursive: true, force: true });
     },
   });
   // Register first so later driver hooks dispose before socket cleanup, even when a test fails.

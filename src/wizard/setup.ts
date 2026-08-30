@@ -423,7 +423,8 @@ async function runSetupWizardOnce(
   const remoteProbe = remoteUrl
     ? await onboardHelpers.probeGatewayReachable({
         url: remoteUrl,
-        ...(baseConfig.gateway?.remote?.edgeAuth ? { config: baseConfig } : {}),
+        config: baseConfig,
+        originScopedDeviceAuth: true,
         token: remoteProbeAuth?.auth.token,
         ...(remoteProbeAuth?.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
       })

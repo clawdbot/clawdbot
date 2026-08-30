@@ -51,6 +51,8 @@ export const SessionCatalogSessionSchema = closedObject({
   threadId: NonEmptyString,
   sourceHomeId: Type.Optional(NonEmptyString),
   name: Type.Optional(Type.String()),
+  /** Named tint imported from the source CLI session (SESSION_COLOR_IDS). */
+  color: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
   status: NonEmptyString,
   createdAt: Type.Optional(Type.Number()),

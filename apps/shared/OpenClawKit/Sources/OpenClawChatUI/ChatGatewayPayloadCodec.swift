@@ -15,6 +15,15 @@ public enum OpenClawChatSessionKey {
 
 /// Canonical gateway payload mapping shared by the native Apple chat transports.
 public enum OpenClawChatGatewayPayloadCodec {
+    public static func decodeQuestionAnswer(_ data: Data) throws -> QuestionAnswers {
+        struct AnsweredQuestion: Decodable {
+            enum Status: String, Decodable { case answered }
+            let status: Status
+            let answers: QuestionAnswers
+        }
+        return try JSONDecoder().decode(AnsweredQuestion.self, from: data).answers
+    }
+
     private struct AgentWaitResponse: Decodable {
         var status: String?
         var endedAt: Double?

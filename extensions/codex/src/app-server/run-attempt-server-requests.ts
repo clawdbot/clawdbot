@@ -199,6 +199,7 @@ export function createCodexAttemptServerRequestController(
           data: {
             phase: "start",
             name: call.tool,
+            itemId: call.callId,
             toolCallId: call.callId,
             ...(toolMeta ? { meta: toolMeta } : {}),
             ...(toolArgs ? { args: toolArgs } : {}),
@@ -305,6 +306,7 @@ export function createCodexAttemptServerRequestController(
             data: {
               phase: "result",
               name: call.tool,
+              itemId: call.callId,
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),
               ...(commandBearing ? { commandBearing: true } : {}),

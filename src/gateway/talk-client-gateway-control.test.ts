@@ -47,7 +47,8 @@ describe("Talk client Gateway control owner", () => {
         flushTranscript: vi.fn(async () => undefined),
         closeLogicalSession,
       });
-      owner.activate(closeProvider);
+      await owner.adoptProvider(closeProvider);
+      owner.activate();
       owner.control.onEvent?.({
         direction: "server",
         type: "response.created",
@@ -115,7 +116,8 @@ describe("Talk client Gateway control owner", () => {
       closeLogicalSession,
     });
     owner.control.bindBridge(bridge);
-    owner.activate(closeProvider);
+    await owner.adoptProvider(closeProvider);
+    owner.activate();
 
     owner.control.onTranscript?.("user", "check the repository", true);
     owner.control.onToolCall?.({
@@ -173,7 +175,8 @@ describe("Talk client Gateway control owner", () => {
       closeLogicalSession: vi.fn(async () => undefined),
     });
     owner.control.bindBridge(bridge);
-    owner.activate(vi.fn(async () => undefined));
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
     owner.control.onToolCall?.({
       itemId: "item-status",
       callId: "call-status",
@@ -247,7 +250,8 @@ describe("Talk client Gateway control owner", () => {
       closeLogicalSession: vi.fn(async () => undefined),
     });
     owner.control.bindBridge(bridge);
-    owner.activate(vi.fn(async () => undefined));
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
     owner.control.onToolCall?.({
       itemId: "item-long",
       callId: "call-long",
@@ -293,7 +297,8 @@ describe("Talk client Gateway control owner", () => {
       flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession,
     });
-    owner.activate(closeProvider);
+    await owner.adoptProvider(closeProvider);
+    owner.activate();
 
     cleanupTalkConnection("conn-disconnect", { warn: vi.fn() });
 
@@ -313,7 +318,8 @@ describe("Talk client Gateway control owner", () => {
       flushTranscript: vi.fn(async () => undefined),
       closeLogicalSession,
     });
-    owner.activate(vi.fn(() => Promise.reject(new Error("provider close failed"))));
+    await owner.adoptProvider(vi.fn(() => Promise.reject(new Error("provider close failed"))));
+    owner.activate();
 
     await expect(owner.close()).rejects.toThrow("provider close failed");
     expect(closeLogicalSession).toHaveBeenCalledOnce();
@@ -359,7 +365,8 @@ describe("Talk client Gateway control owner", () => {
     const closeSecond = vi.fn(async () => undefined);
     const first = createTalkClientGatewayControlOwner(common);
     first.control.bindBridge(firstBridge);
-    first.activate(closeFirst);
+    await first.adoptProvider(closeFirst);
+    first.activate();
     first.control.onTranscript?.("user", "first transport", true);
     first.control.onToolCall?.({
       itemId: "item-replacement",
@@ -371,7 +378,8 @@ describe("Talk client Gateway control owner", () => {
 
     const second = createTalkClientGatewayControlOwner(common);
     second.control.bindBridge(secondBridge);
-    second.activate(closeSecond);
+    await second.adoptProvider(closeSecond);
+    second.activate();
     await vi.waitFor(() => expect(closeFirst).toHaveBeenCalledOnce());
     first.control.onClose?.("completed");
     first.control.onTranscript?.("user", "stale transport", true);

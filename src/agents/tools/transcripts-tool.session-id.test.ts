@@ -112,6 +112,7 @@ describe("transcripts bounded export names", () => {
     { label: "overlong encoded device name", sessionId: "CON." + "x".repeat(100) },
   ];
   const ordinaryIds = [
+    { label: "date-prefixed raw ID", sessionId: "2026-07-03/raw-id", slug: "2026-07-03-raw-id" },
     { label: "generated", sessionId: undefined, slug: undefined },
     { label: "punctuation", sessionId: "notes: room/one", slug: "notes-room-one" },
     { label: "255 safe bytes", sessionId: "x".repeat(255), slug: "x".repeat(255) },
@@ -122,6 +123,14 @@ describe("transcripts bounded export names", () => {
     { label: "device", sessionId: "CON", slug: "%43%4F%4E" },
   ];
   const cases = [
+    {
+      label: "date-prefixed import",
+      sessionId: "2026-07-03/raw-id",
+      slug: "2026-07-03-raw-id",
+      action: "import" as const,
+      exportParentExists: false,
+      shortened: false,
+    },
     ...oversizedIds.flatMap(({ label, sessionId }) =>
       [false, true].flatMap((exportParentExists) =>
         (["start", "import"] as const).map((action) => ({

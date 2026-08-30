@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
 import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
@@ -35,12 +36,14 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../../sessions/model-overrides.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import {
   listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
@@ -56,6 +59,9 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { buildCommandContext } from "./commands-context.js";
+import { maybeHandleResetCommand } from "./commands-reset.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { clearSessionQueues, enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
@@ -1852,19 +1858,9 @@ describe("initSessionState RawBody", () => {
               actorId: "profile-ada",
             }),
           );
-          await vi.waitFor(() =>
-            expect(
-              listSessionParticipantsReadOnly({ agentId: "main", storePath }).get(sessionKey),
-            ).toEqual([
-              {
-                actor: { type: "human", id: "profile-ada" },
-                contributionCount: 1,
-                firstPromptedAt: expect.any(Number),
-                lastPromptedAt: expect.any(Number),
-                source: "profile",
-              },
-            ]),
-          );
+          expect(
+            listSessionParticipantsReadOnly({ agentId: "main", storePath }).get(sessionKey),
+          ).toBeUndefined();
           expect(
             loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })?.sandbox,
           ).toBe(sandbox);
@@ -1887,6 +1883,9 @@ describe("initSessionState RawBody", () => {
             createdAt: initialized.sessionEntry.createdAt,
           });
           expect(persisted?.sandbox).toBe(sandbox);
+          expect(
+            listSessionParticipantsReadOnly({ agentId: "main", storePath }).get(sessionKey),
+          ).toBeUndefined();
           return initialized;
         },
       );
@@ -1899,10 +1898,19 @@ describe("initSessionState RawBody", () => {
     },
   );
 
-  it("keeps channel and agent participant sources distinct", async () => {
+  it("records accepted inputs once and keeps creation hints separate from participation", async () => {
     const root = await makeCaseDir("openclaw-session-participant-admission-");
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const profileContext = {
+      RawBody: "authenticated input",
+      ChatType: "direct" as const,
+      SessionKey: "agent:main:profile-participant",
+    };
+    prepareSessionParticipantInput(profileContext, { type: "profile", id: "current-profile" }, 42);
+    await initSessionState({ ctx: profileContext, cfg });
+    await initSessionState({ ctx: { ...profileContext }, cfg });
 
     await initSessionState({
       ctx: {
@@ -1952,35 +1960,45 @@ describe("initSessionState RawBody", () => {
 
     await vi.waitFor(() => {
       const participants = listSessionParticipantsReadOnly({ agentId: "main", storePath });
+      expect(participants.get("agent:main:profile-participant")).toEqual([
+        {
+          identity: { type: "profile", id: "current-profile" },
+          contributionCount: 1,
+          firstPromptedAt: 42,
+          lastPromptedAt: 42,
+        },
+      ]);
       expect(participants.get("agent:main:channel-participant")).toEqual([
         {
-          actor: { type: "human", id: "channel-sender" },
+          identity: {
+            type: "observation",
+            id: "channel-sender",
+            pluginId: null,
+            accountId: null,
+            senderKind: "unknown",
+          },
           contributionCount: 1,
           firstPromptedAt: expect.any(Number),
           lastPromptedAt: expect.any(Number),
-          source: "channel",
         },
       ]);
       expect(participants.get("agent:main:unknown-participant")).toBeUndefined();
       expect(participants.get("agent:main:channel-created-participant")).toEqual([
         {
-          actor: { type: "human", id: "channel-created-sender" },
+          identity: {
+            type: "observation",
+            id: "channel-created-sender",
+            pluginId: null,
+            accountId: null,
+            senderKind: "unknown",
+          },
           contributionCount: 1,
           firstPromptedAt: expect.any(Number),
           lastPromptedAt: expect.any(Number),
-          source: "channel",
         },
       ]);
       expect(participants.get("agent:main:own-agent-participant")).toBeUndefined();
-      expect(participants.get("agent:main:delegated-agent-participant")).toEqual([
-        {
-          actor: { type: "agent", id: "research" },
-          contributionCount: 1,
-          firstPromptedAt: expect.any(Number),
-          lastPromptedAt: expect.any(Number),
-          source: "agent",
-        },
-      ]);
+      expect(participants.get("agent:main:delegated-agent-participant")).toBeUndefined();
     });
   });
 
@@ -2588,6 +2606,78 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionKey).toBe(boundSessionKey);
   });
 
+  it.each([
+    { name: "opaque plugin target", targetSessionKey: "plugin-binding:fixture-runtime:thread-17" },
+    { name: "adopted agent target", targetSessionKey: "agent:main:external-runtime:thread-17" },
+  ])("keeps escaped commands on the core session for $name", async ({ targetSessionKey }) => {
+    setMinimalCurrentConversationBindingRegistryForTests();
+    registerCurrentConversationBindingAdapterForTest({ channel: "slack", accountId: "default" });
+    const storePath = await createStorePath("openclaw-plugin-command-session-");
+    const sourceSessionKey = "agent:main:slack:source";
+    const sourceSessionId = "source-command-session";
+    const conversation = {
+      channel: "slack",
+      accountId: "default",
+      conversationId: "user:U123",
+    };
+    await writeSessionStoreFast(storePath, {
+      [sourceSessionKey]: { sessionId: sourceSessionId, updatedAt: Date.now() },
+    });
+    if (targetSessionKey.startsWith("agent:")) {
+      await writeSessionStoreFast(storePath, {
+        [targetSessionKey]: {
+          sessionId: "plugin-owned-session",
+          updatedAt: Date.now(),
+          label: "Plugin-owned state must remain untouched",
+        },
+      });
+    }
+    const targetBefore = { ...readSessionStoreFast(storePath) }[targetSessionKey];
+    const binding = await getSessionBindingService().bind({
+      targetSessionKey,
+      targetKind: "session",
+      conversation,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "fixture-runtime",
+        pluginRoot: "/plugins/fixture-runtime",
+      },
+    });
+    const ctx = {
+      Body: "/fixture status",
+      RawBody: "/fixture status",
+      CommandBody: "/fixture status",
+      CommandSource: "text",
+      CommandAuthorized: true,
+      SessionKey: sourceSessionKey,
+      Provider: "slack",
+      Surface: "slack",
+      AccountId: "default",
+      From: "slack:user:U123",
+      To: "user:U123",
+      OriginatingTo: "user:U123",
+      SenderId: "U123",
+      ChatType: "direct",
+    };
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx,
+      cfg,
+      expectedExistingSessionId: sourceSessionId,
+      pinExpectedExistingSession: true,
+    });
+
+    expect(result.sessionKey).toBe(sourceSessionKey);
+    expect(result.sessionId).toBe(sourceSessionId);
+    expect(result.sessionCtx.SessionKey).toBe(sourceSessionKey);
+    expect(
+      resolveReplySessionPreprocessingState({ cfg, ctx: finalizeInboundContext(ctx) }),
+    ).toMatchObject({ sessionKey: sourceSessionKey, sessionEntry: { sessionId: sourceSessionId } });
+    expect({ ...readSessionStoreFast(storePath) }[targetSessionKey]).toEqual(targetBefore);
+    expect(getSessionBindingService().resolveByConversation(conversation)).toEqual(binding);
+  });
+
   it("does not apply a source admission id to a bound conversation target", async () => {
     setMinimalCurrentConversationBindingRegistryForTests();
     registerCurrentConversationBindingAdapterForTest({
@@ -2628,6 +2718,7 @@ describe("initSessionState RawBody", () => {
       cfg: { session: { store: storePath } } as OpenClawConfig,
       expectedExistingSessionId: sourceSessionId,
       pinExpectedExistingSession: true,
+      newlyCreatedSessionId: sourceSessionId,
     });
 
     expect(result.sessionKey).toBe(boundSessionKey);
@@ -3375,7 +3466,7 @@ describe("initSessionState channel reset overrides", () => {
   });
 });
 
-describe("initSessionState reset triggers in WhatsApp groups", () => {
+describe("initSessionState reset authorization", () => {
   async function seedSessionStore(params: {
     storePath: string;
     sessionKey: string;
@@ -3401,62 +3492,254 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     } as OpenClawConfig;
   }
 
-  it("requires canonical command authorization before rotating durable session state", async () => {
-    const sessionKey = "agent:main:whatsapp:group:owner-only-reset";
-    const storePath = await createStorePath("openclaw-group-reset-owner-only-");
-    const existingSessionId = "existing-owner-session";
-    await seedSessionStore({ storePath, sessionKey, sessionId: existingSessionId });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "whatsapp",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "whatsapp", label: "WhatsApp" }),
-            commands: { enforceOwnerForCommands: true },
-          },
-        },
-      ]),
-    );
-
-    try {
+  it.each<{
+    name: string;
+    body?: "/new" | "/reset";
+    source?: "text" | "native";
+    feishuDirect?: boolean;
+    admitted?: boolean;
+    enforceOwner?: boolean;
+    senderId?: string;
+    allowFrom?: Record<string, string[]>;
+    scopes?: string[];
+    allowed: boolean;
+    generalAuthorized?: boolean;
+  }>([
+    { name: "channel-admitted non-owner /new", allowed: true },
+    { name: "channel-admitted non-owner /reset", body: "/reset", allowed: true },
+    { name: "native admitted non-owner", source: "native", allowed: true },
+    {
+      name: "Feishu per-channel-peer DM /new",
+      feishuDirect: true,
+      senderId: "ou_guest",
+      allowed: true,
+    },
+    {
+      name: "Feishu per-channel-peer DM /reset",
+      feishuDirect: true,
+      senderId: "ou_guest",
+      body: "/reset",
+      allowed: true,
+    },
+    {
+      name: "Feishu per-channel-peer DM respects empty command policy",
+      feishuDirect: true,
+      senderId: "ou_guest",
+      allowFrom: { feishu: [] },
+      allowed: false,
+    },
+    { name: "non-admitted sender", admitted: false, allowed: false },
+    { name: "unrelated provider command policy", allowFrom: { telegram: [] }, allowed: true },
+    { name: "explicit command deny", allowFrom: { buzz: ["other"] }, allowed: false },
+    { name: "empty global command allowlist", allowFrom: { "*": [] }, allowed: false },
+    {
+      name: "empty provider command allowlist overrides global grant",
+      allowFrom: { "*": ["*"], buzz: [] },
+      allowed: false,
+    },
+    {
+      name: "explicit command grant without channel admission",
+      admitted: false,
+      allowFrom: { buzz: ["guest"] },
+      allowed: true,
+      generalAuthorized: true,
+    },
+    { name: "plugin owner enforcement", enforceOwner: true, allowed: false },
+    {
+      name: "native wildcard does not bypass plugin owner enforcement",
+      source: "native",
+      enforceOwner: true,
+      allowFrom: { "*": ["*"] },
+      allowed: false,
+    },
+    {
+      name: "plugin owner can reset",
+      enforceOwner: true,
+      senderId: "owner",
+      allowed: true,
+      generalAuthorized: true,
+    },
+    { name: "internal operator.write cannot reset", scopes: ["operator.write"], allowed: false },
+    {
+      name: "internal operator.admin can reset",
+      scopes: ["operator.admin"],
+      allowed: true,
+      generalAuthorized: true,
+    },
+  ])(
+    "keeps durable reset and acknowledgement consistent: $name",
+    async ({
+      body = "/new",
+      source = "text",
+      feishuDirect = false,
+      admitted = true,
+      enforceOwner = false,
+      senderId = "guest",
+      allowFrom,
+      scopes,
+      allowed,
+      generalAuthorized = false,
+    }) => {
+      const provider = feishuDirect
+        ? "feishu"
+        : scopes
+          ? "webchat"
+          : enforceOwner
+            ? "whatsapp"
+            : "buzz";
+      const storePath = await createStorePath("openclaw-reset-authority-");
       const cfg = {
-        session: { store: storePath, idleMinutes: 999 },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        commands: { ownerAllowFrom: ["owner"] },
+        session: {
+          store: storePath,
+          idleMinutes: 999,
+          ...(feishuDirect ? { dmScope: "per-channel-peer" } : {}),
+        },
+        channels: { [provider]: { allowFrom: ["*"] } },
+        commands: { ownerAllowFrom: ["owner"], allowFrom },
       } as OpenClawConfig;
-      const baseContext = {
-        Body: "/new /model openai/gpt-5",
-        RawBody: "/new /model openai/gpt-5",
-        CommandBody: "/new /model openai/gpt-5",
-        From: "120363406150318674@g.us",
-        To: "bot",
-        ChatType: "group",
-        SessionKey: sessionKey,
-        Provider: "whatsapp",
-        Surface: "whatsapp",
-      };
-
-      const denied = await initSessionState({
-        ctx: { ...baseContext, SenderId: "non-owner" },
+      const route = resolveAgentRoute({
         cfg,
-        // Ingress admission alone must not bypass the channel's owner-only command policy.
-        commandAuthorized: true,
+        channel: provider,
+        accountId: "default",
+        peer: feishuDirect
+          ? { kind: "direct", id: senderId }
+          : { kind: "group", id: "reset-authority" },
       });
-      expect(denied.resetTriggered).toBe(false);
-      expect(denied.sessionId).toBe(existingSessionId);
-
-      const owner = await initSessionState({
-        ctx: { ...baseContext, SenderId: "owner" },
-        cfg,
-        commandAuthorized: true,
+      const sessionKey = route.sessionKey;
+      const siblingSessionKey = feishuDirect
+        ? resolveAgentRoute({
+            cfg,
+            channel: "feishu",
+            accountId: "default",
+            peer: { kind: "direct", id: "ou_other" },
+          }).sessionKey
+        : undefined;
+      const existingSessionId = "existing-reset-session";
+      const lifecycleRevision = "before-reset";
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          lifecycleRevision,
+          updatedAt: Date.now(),
+          cliSessionIds: { "claude-cli": "existing-cli-binding" },
+        },
+        ...(siblingSessionKey
+          ? {
+              [siblingSessionKey]: {
+                sessionId: "untouched-peer-session",
+                lifecycleRevision: "untouched-peer-generation",
+                updatedAt: Date.now(),
+              },
+            }
+          : {}),
       });
-      expect(owner.resetTriggered).toBe(true);
-      expect(owner.isNewSession).toBe(true);
-    } finally {
-      resetPluginRuntimeStateForTest();
-    }
-  });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: provider,
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({ id: provider, label: provider }),
+              commands: { enforceOwnerForCommands: enforceOwner },
+            },
+          },
+        ]),
+      );
+      try {
+        const ctx = finalizeInboundContext({
+          Body: body,
+          RawBody: body,
+          CommandBody: body,
+          CommandSource: source,
+          CommandAuthorized: admitted,
+          SenderId: senderId,
+          From: feishuDirect ? "feishu:" + senderId : provider + ":group:reset-authority",
+          To: feishuDirect ? "user:" + senderId : "bot",
+          ChatType: feishuDirect ? "direct" : "group",
+          AccountId: "default",
+          SessionKey: sessionKey,
+          Provider: provider,
+          Surface: provider,
+          GatewayClientScopes: scopes,
+        });
+        const initialized = await initSessionState({ ctx, cfg, commandAuthorized: admitted });
+        const command = buildCommandContext({
+          ctx,
+          cfg,
+          agentId: "main",
+          sessionKey,
+          isGroup: initialized.isGroup,
+          triggerBodyNormalized: initialized.triggerBodyNormalized,
+          commandAuthorized: admitted,
+        });
+        const acknowledgement = await maybeHandleResetCommand({
+          ...initialized,
+          ctx,
+          cfg,
+          command,
+          agentId: "main",
+          directives: parseInlineSessionDirectives(""),
+          elevated: { enabled: false, allowed: false, failures: [] },
+          workspaceDir: path.dirname(storePath),
+          defaultGroupActivation: () => "mention",
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          provider: "openai",
+          model: "test-model",
+          contextTokens: 0,
+        });
+        const stored = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
+        const resets = (
+          await loadTranscriptEvents({ storePath, sessionId: existingSessionId })
+        ).filter((event) => isRecord(event) && event.type === "reset");
+        expect.soft(command.isAuthorizedSender).toBe(generalAuthorized);
+        expect
+          .soft(command.senderIsOwner)
+          .toBe(senderId === "owner" || scopes?.includes("operator.admin") === true);
+        expect.soft(initialized.resetTriggered).toBe(allowed);
+        expect.soft(initialized.isNewSession).toBe(allowed);
+        expect.soft(initialized.isGroup).toBe(!feishuDirect);
+        expect.soft(initialized.sessionKey).toBe(sessionKey);
+        if (siblingSessionKey) {
+          expect.soft(route.dmScope).toBe("per-channel-peer");
+          expect.soft(sessionKey).not.toBe(route.mainSessionKey);
+          expect.soft(siblingSessionKey).not.toBe(sessionKey);
+          expect
+            .soft(
+              loadSessionEntry({
+                storePath,
+                sessionKey: siblingSessionKey,
+                readConsistency: "latest",
+              }),
+            )
+            .toMatchObject({
+              sessionId: "untouched-peer-session",
+              lifecycleRevision: "untouched-peer-generation",
+            });
+        }
+        expect.soft(stored?.sessionId).toBe(existingSessionId);
+        expect.soft(stored?.lifecycleRevision !== lifecycleRevision).toBe(allowed);
+        expect
+          .soft(stored?.cliSessionIds)
+          .toEqual(allowed ? undefined : { "claude-cli": "existing-cli-binding" });
+        expect.soft(resets).toHaveLength(allowed ? 1 : 0);
+        if (allowed) {
+          expect.soft(resets[0]).toMatchObject({ type: "reset", reason: body.slice(1) });
+        }
+        expect.soft(acknowledgement).toEqual(
+          allowed
+            ? {
+                shouldContinue: false,
+                reply: { text: body === "/new" ? "✅ New session started." : "✅ Session reset." },
+              }
+            : { shouldContinue: false },
+        );
+      } finally {
+        resetPluginRuntimeStateForTest();
+      }
+    },
+  );
 
   it("applies WhatsApp group reset authorization across sender variants", async () => {
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
@@ -5496,7 +5779,7 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "prefers fresh final usage over zero compactionTokensAfter",
+      name: "preserves an ordered zero context snapshot independently of billable usage",
       seed: {
         totalTokens: 1_794_391,
         totalTokensFresh: true,
@@ -5510,10 +5793,10 @@ describe("persistSessionUsageUpdate", () => {
         lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
         providerUsed: "claude-cli",
         contextTokensUsed: 1_048_576,
-        compactionTokensAfter: 0,
+        currentContextSnapshot: { tokens: 0 },
       },
       expected: {
-        totalTokens: 1_794_391,
+        totalTokens: 0,
         totalTokensFresh: true,
         inputTokens: 20,
         outputTokens: 10_855,
@@ -5522,16 +5805,16 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "prefers fresh lastCallUsage over positive compactionTokensAfter",
+      name: "uses ordered current context rather than older last-call usage",
       seed: { totalTokens: 180_000, totalTokensFresh: true },
       update: {
         usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
         lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
         providerUsed: "openai",
-        compactionTokensAfter: 80_000,
+        currentContextSnapshot: { tokens: 80_000 },
       },
       expected: {
-        totalTokens: 95_000,
+        totalTokens: 80_000,
         totalTokensFresh: true,
         inputTokens: 100_000,
         outputTokens: 3_000,
@@ -5539,7 +5822,7 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "uses positive compactionTokensAfter when final usage has no prompt total",
+      name: "keeps ordered context separate from output-only billing usage",
       seed: {
         totalTokens: 180_000,
         totalTokensFresh: true,
@@ -5571,14 +5854,14 @@ describe("persistSessionUsageUpdate", () => {
         lastCallUsage: { output: 125 },
         providerUsed: "claude-cli",
         contextTokensUsed: undefined,
-        compactionTokensAfter: 80_000,
+        currentContextSnapshot: { tokens: 80_000 },
       },
       expected: {
         totalTokens: 80_000,
         totalTokensFresh: true,
-        inputTokens: undefined,
-        outputTokens: undefined,
-        cacheRead: undefined,
+        inputTokens: 0,
+        outputTokens: 125,
+        cacheRead: 0,
         contextBudgetStatus: undefined,
       },
     },

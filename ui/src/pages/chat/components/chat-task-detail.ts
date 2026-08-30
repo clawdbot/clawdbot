@@ -2,8 +2,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { html, nothing, type TemplateResult } from "lit";
 import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
-import { canonicalUiSessionKeyForPersistence } from "../../../lib/sessions/session-key.ts";
+import {
+  uiConversationMatches,
+  isUiGlobalScopeConfigured,
+  normalizeAgentId,
+  uiSessionRowMatchesSelectedChat,
+} from "../../../lib/sessions/session-key.ts";
 import {
   isActiveTask,
   taskDetail,
@@ -12,7 +18,6 @@ import {
   taskTitle,
 } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import type { ChatProps } from "../chat-view.ts";
 import {
   backgroundTaskStatusLabel,
   newestTaskSnapshot,
@@ -26,11 +31,12 @@ import {
   resetTaskDetail,
   type TaskDetailHost,
 } from "./chat-task-detail-state.ts";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 
 export function renderTaskDetailPanel(params: {
   backgroundTasks: BackgroundTasksProps;
-  chat: ChatProps;
+  chat: ChatThreadProps;
   host: TaskDetailHost;
   task: TaskSummary | undefined;
   transcript: ChatTranscriptController;
@@ -56,15 +62,16 @@ export function renderTaskDetailPanel(params: {
       ? currentTask.childSessionKey
       : (currentTask.childSessionKey ?? currentTask.sessionKey),
   );
-  const canonicalTranscriptKey = canonicalUiSessionKeyForPersistence(
-    params.host,
-    transcriptSessionKey,
-  );
-  const canonicalPaneKey = canonicalUiSessionKeyForPersistence(params.host, params.host.sessionKey);
   // A task pointing at this pane's canonical session uses the inspector. Mirroring
   // the current conversation into its own detail sidebar would duplicate the chat.
   const content =
-    transcriptSessionKey && canonicalTranscriptKey !== canonicalPaneKey
+    transcriptSessionKey &&
+    !uiConversationMatches(
+      params.host,
+      params.host.sessionKey,
+      transcriptSessionKey,
+      currentTask.agentId,
+    )
       ? renderTaskTranscript({ ...params, task: currentTask, sessionKey: transcriptSessionKey })
       : renderTaskFallback(currentTask, backgroundTasks, params.host);
   return html`
@@ -132,7 +139,7 @@ function renderTaskHeader(
 }
 
 function renderTaskTranscript(params: {
-  chat: ChatProps;
+  chat: ChatThreadProps;
   host: TaskDetailHost;
   sessionKey: string;
   task: TaskSummary;
@@ -143,9 +150,7 @@ function renderTaskTranscript(params: {
     sessionKey: params.sessionKey,
   });
   if (load.status === "loading") {
-    return html`<div class="sidebar-content chat-task-detail__state">
-      ${t("chat.backgroundTasks.transcriptLoading")}
-    </div>`;
+    return renderPanelLoadingSkeleton("review", t("chat.backgroundTasks.transcriptLoading"));
   }
   if (load.status === "error") {
     return html`<div class="sidebar-content chat-task-detail__state chat-task-detail__state--error">
@@ -157,10 +162,18 @@ function renderTaskTranscript(params: {
       ${t("chat.backgroundTasks.transcriptEmpty")}
     </div>`;
   }
+  const selectedSession = params.chat.sessions?.sessions.find(
+    (row) =>
+      (row.key !== "global" ||
+        (isUiGlobalScopeConfigured(params.host) &&
+          normalizeAgentId(params.host.sessionsResultAgentId ?? "") ===
+            normalizeAgentId(params.task.agentId))) &&
+      uiSessionRowMatchesSelectedChat(params.host, row.key, params.sessionKey),
+  );
   return html`<div class="sidebar-content chat-task-detail__content">
     <div class="chat-task-detail__transcript">
       ${renderReadOnlyTranscript({
-        chat: params.chat,
+        chat: { ...params.chat, selectedSession },
         messages: load.messages,
         paneId: `${params.chat.paneId}:task-sidebar`,
         sessionKey: params.sessionKey,
@@ -194,6 +207,9 @@ function renderTaskInspector(task: TaskSummary, props: BackgroundTasksProps): Te
   const output = taskDetail(newest);
   const detailLoading = props.taskDetailLoadingIds.has(task.id);
   const detailError = props.taskDetailErrors.get(task.id);
+  if (detailLoading && !detailError) {
+    return renderPanelLoadingSkeleton("review", t("chat.backgroundTasks.detailLoading"));
+  }
   return html`
     ${detailError
       ? html`<div
@@ -216,10 +232,7 @@ function renderTaskInspector(task: TaskSummary, props: BackgroundTasksProps): Te
     <div class="chat-tasks-rail__detail-blocks">
       <section class="chat-tasks-rail__task-inspector-block">
         <div class="chat-tasks-rail__task-inspector-label">${t("chat.backgroundTasks.prompt")}</div>
-        <pre>
-${detailLoading
-            ? t("chat.backgroundTasks.detailLoading")
-            : (detailedTask?.prompt ?? t("chat.backgroundTasks.promptUnavailable"))}</pre>
+        <pre>${detailedTask?.prompt ?? t("chat.backgroundTasks.promptUnavailable")}</pre>
       </section>
       <section class="chat-tasks-rail__task-inspector-block">
         <div class="chat-tasks-rail__task-inspector-label">${t("chat.backgroundTasks.output")}</div>

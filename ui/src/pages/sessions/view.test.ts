@@ -541,7 +541,14 @@ describe("sessions view", () => {
               key: "agent:main:ada",
               kind: "direct",
               updatedAt: 2,
-              owner: { actor: { type: "human", id: "profile-ada", label: "Ada Lovelace" } },
+              owner: {
+                actor: {
+                  type: "human",
+                  id: "profile-ada",
+                  label: "Ada Lovelace",
+                  identity: { type: "profile", id: "profile-ada" },
+                },
+              },
             },
             { key: "agent:main:ownerless", kind: "direct", updatedAt: 1 },
           ]),
@@ -1810,34 +1817,49 @@ describe("sessions view", () => {
     expect(facts[1]?.classList.contains("sessions-heading-fact--active")).toBe(true);
   });
 
-  it("renders a context meter with usage tone on the tokens cell", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            totalTokens: 180_000,
-            contextTokens: 200_000,
-          }),
+  it.each([
+    { total: 128_000, percent: 64, tone: "ok", value: "128k" },
+    { total: 130_000, percent: 65, tone: "warn", value: "130k" },
+    { total: 168_000, percent: 84, tone: "warn", value: "168k" },
+    { total: 170_000, percent: 85, tone: "danger", value: "170k" },
+    { total: 180_000, percent: 90, tone: "danger", value: "180k" },
+    { total: 220_000, percent: 100, tone: "danger", value: "220k" },
+  ])(
+    "preserves context usage, tooltip, and $tone tone at $percent%",
+    async ({ total, percent, tone, value }) => {
+      const container = document.createElement("div");
+      render(
+        renderSessions(
+          buildProps(
+            buildResult({
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: Date.now(),
+              totalTokens: total,
+              contextTokens: 200_000,
+            }),
+          ),
         ),
-      ),
-      container,
-    );
-    await Promise.resolve();
+        container,
+      );
+      await Promise.resolve();
 
-    const meter = container.querySelector(".session-context-meter");
-    expect(meter?.classList.contains("session-context-meter--danger")).toBe(true);
-    expect(meter?.getAttribute("aria-label")).toBe(
-      "90% of context used (180,000 / 200,000 tokens)",
-    );
-    expect(container.querySelector<HTMLElement>(".session-context-meter__fill")?.style.width).toBe(
-      "90%",
-    );
-    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe("180k / 200k");
-  });
+      const meter = container.querySelector(".session-context-meter");
+      const label = `${percent}% of context used (${total.toLocaleString()} / 200,000 tokens)`;
+      expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
+      expect(meter?.getAttribute("role")).toBe("img");
+      expect(meter?.getAttribute("aria-label")).toBe(label);
+      expect(
+        container.querySelector(".session-token-cell")?.querySelector("openclaw-tooltip")?.content,
+      ).toBe(label);
+      expect(
+        container.querySelector<HTMLElement>(".session-context-meter__fill")?.style.width,
+      ).toBe(`${percent}%`);
+      expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe(
+        `${value} / 200k`,
+      );
+    },
+  );
 
   it("keeps stale token snapshots out of the warning tones", async () => {
     const container = document.createElement("div");

@@ -1,11 +1,59 @@
+import {
+  listRuntimePluginIdsFromRegistry,
+  registryContainsRuntimePluginIds,
+} from "../plugins/active-runtime-registry.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
+import {
+  resolveAgentRuntimePluginLoadPlan,
+  resolveAgentRuntimePluginSelections,
+} from "./harness/runtime-plugin-load-plan.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
+
+// Lineage is cache identity only. Derived generations still require the exact open
+// parent lease at admission; they never become configured publication authority.
+const derivedGenerationBases = new WeakMap<
+  PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimePluginGeneration
+>();
+
+/** Borrowing may narrow a prepared selection, but cannot acquire a different plugin owner. */
+export function preparedPluginGenerationSupportsSelections(
+  generation: PreparedModelRuntimePluginGeneration,
+  input: PreparedModelRuntimeInput,
+): boolean {
+  if (!input.runtimePluginSelections) {
+    return true;
+  }
+  const registry = generation.pluginRegistry;
+  if (!registry) {
+    return false;
+  }
+  const plan = resolveAgentRuntimePluginLoadPlan({
+    config: input.config,
+    workspaceDir:
+      generation.pluginMetadataSnapshot.workspaceDir ?? input.workspaceDir ?? process.cwd(),
+    basePluginIds: listRuntimePluginIdsFromRegistry(registry),
+    selections: resolveAgentRuntimePluginSelections(input.config, input.runtimePluginSelections),
+    metadataSnapshot: generation.pluginMetadataSnapshot,
+  });
+  return registryContainsRuntimePluginIds(registry, plan.pluginIds);
+}
+
+export function preparedPluginGenerationReusesBase(
+  generation: PreparedModelRuntimePluginGeneration | undefined,
+  base: PreparedModelRuntimePluginGeneration,
+): boolean {
+  return (
+    generation === base ||
+    (generation !== undefined && derivedGenerationBases.get(generation) === base)
+  );
+}
 
 export function createPreparedPluginGeneration(params: {
   catalogMode: PreparedModelRuntimeCatalogMode;
@@ -23,9 +71,24 @@ export function createPreparedPluginGeneration(params: {
 }): PreparedModelRuntimePluginGeneration {
   const reusable = params.reusablePluginGeneration;
   if (reusable) {
-    return params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot
-      ? reusable
-      : Object.freeze({ ...reusable, pluginMetadataSnapshot: params.pluginMetadataSnapshot });
+    if (
+      params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot &&
+      params.runtimePluginRegistry === reusable.pluginRegistry
+    ) {
+      return reusable;
+    }
+    const derived = Object.freeze({
+      ...reusable,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      pluginRegistry: params.runtimePluginRegistry,
+      mediaCapabilityProviders: params.mediaCapabilityProviders,
+      messageToolCatalog: params.messageToolCatalog,
+      preparedStaticProviderCatalog: params.preparedStaticProviderCatalog,
+    });
+    if (params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot) {
+      derivedGenerationBases.set(derived, reusable);
+    }
+    return derived;
   }
   return Object.freeze({
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
@@ -59,9 +122,10 @@ export async function buildPreparedPluginModelCatalog(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }) {
   const { credentials, input } = params.agentFacts;
-  return await withPreparedPluginGenerationScope(
-    { input, pluginGeneration: params.pluginGeneration },
-    async (metadataSnapshot) => {
+  const { pluginMetadataSnapshot: metadataSnapshot, pluginRegistry } = params.pluginGeneration;
+  return await withPluginRuntimeGenerationScope(
+    { config: input.config, metadataSnapshot, pluginRegistry },
+    async () => {
       const snapshot = await buildPreparedModelCatalogSnapshot({
         agentDir: input.agentDir,
         authCredentials: credentials,
@@ -77,29 +141,9 @@ export async function buildPreparedPluginModelCatalog(params: {
         ? await augmentPreparedModelCatalogWithAgentHarness({
             input,
             snapshot,
-            pluginRegistry: params.pluginGeneration.pluginRegistry,
+            pluginRegistry,
           })
         : snapshot;
     },
-  );
-}
-
-/** Runs workspace preparation against one exact, reusable plugin generation. */
-export function withPreparedPluginGenerationScope<T>(
-  params: {
-    input: PreparedModelRuntimeInput;
-    pluginGeneration: PreparedModelRuntimePluginGeneration;
-  },
-  run: (metadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"]) => T,
-): T {
-  const { input, pluginGeneration } = params;
-  const metadataSnapshot = pluginGeneration.pluginMetadataSnapshot;
-  return withPluginRuntimeGenerationScope(
-    {
-      config: input.config,
-      metadataSnapshot,
-      pluginRegistry: pluginGeneration.pluginRegistry,
-    },
-    () => run(metadataSnapshot),
   );
 }

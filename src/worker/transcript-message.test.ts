@@ -6,6 +6,7 @@ import {
   WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WorkerTranscriptMessageSchema,
 } from "../../packages/gateway-protocol/src/index.js";
+import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import type { AssistantMessage } from "../llm/types.js";
 import {
   createWorkerTranscriptRuntime,
@@ -54,6 +55,40 @@ function assistantWithReplay(
 }
 
 describe("worker transcript provider replay", () => {
+  it.each(["computer", "browser"])(
+    "preserves %s image bytes while retaining the non-image transcript budget",
+    async (toolName) => {
+      const message = {
+        role: "toolResult" as const,
+        toolCallId: "capture",
+        toolName,
+        content: [{ type: "image" as const, data: "a".repeat(128 * 1024), mimeType: "image/png" }],
+        isError: false,
+        timestamp: 1,
+      };
+      const commit = vi.fn(async () => {});
+      const runtime = createWorkerTranscriptRuntime({ commit });
+      runtime.onMessagePersisted(message);
+      await runtime.withSessionWriteSettlement(() => undefined);
+      expect(commit).toHaveBeenCalledWith([message]);
+      expect(isWorkerTranscriptMessageFrameSafe(message)).toBe(true);
+      expect(
+        isWorkerTranscriptMessageFrameSafe({
+          ...message,
+          details: { text: "x".repeat(64 * 1024) },
+        }),
+      ).toBe(false);
+      const oversized = {
+        ...message,
+        content: [
+          { ...message.content[0]!, data: "a".repeat(WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) },
+        ],
+      };
+      expect(() => runtime.onMessagePersisted(oversized)).toThrow(
+        "Worker transcript message exceeds the protocol payload limit",
+      );
+    },
+  );
   it("projects and restores opaque replay state within frame limits", () => {
     const message = assistantWithReplay();
     Object.assign(message.providerReplay!, { providerScratch: "private" });

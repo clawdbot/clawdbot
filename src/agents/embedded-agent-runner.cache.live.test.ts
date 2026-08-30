@@ -6,6 +6,7 @@ import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
@@ -112,7 +113,12 @@ function buildRunnerSessionPaths(sessionId: string) {
   }
   return {
     agentDir: liveRunnerRootDir,
-    sessionFile: path.join(liveRunnerRootDir, `${sessionId}.jsonl`),
+    sessionTarget: {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:live-cache:${sessionId}`,
+      storePath: path.join(liveRunnerRootDir, "openclaw-agent.sqlite"),
+    },
     workspaceDir: path.join(liveRunnerRootDir, `${sessionId}-workspace`),
   };
 }
@@ -265,6 +271,7 @@ function buildEmbeddedRunnerConfig(
       },
     },
     agents: {
+      entries: { main: {} },
       defaults: {
         models: {
           [modelKey]: {
@@ -328,8 +335,7 @@ async function runEmbeddedCacheProbe(params: {
     runEmbeddedAgent({
       admittedRunContext: createTestAdmittedRunContext(runId),
       sessionId: params.sessionId,
-      sessionKey: `live-cache:${params.providerTag}:${params.sessionId}`,
-      sessionFile: sessionPaths.sessionFile,
+      sessionTarget: sessionPaths.sessionTarget,
       workspaceDir: sessionPaths.workspaceDir,
       agentDir: sessionPaths.agentDir,
       config: buildEmbeddedRunnerConfig({
@@ -372,8 +378,7 @@ async function compactLiveCacheSession(params: {
   return await withLiveCacheHeartbeat(
     compactEmbeddedAgentSessionOnDemand({
       sessionId: params.sessionId,
-      sessionKey: `live-cache:${params.providerTag}:${params.sessionId}`,
-      sessionFile: sessionPaths.sessionFile,
+      sessionTarget: sessionPaths.sessionTarget,
       workspaceDir: sessionPaths.workspaceDir,
       agentDir: sessionPaths.agentDir,
       config: buildEmbeddedRunnerConfig({
@@ -815,6 +820,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     previousCacheTraceEnv = null;
     liveCacheTraceFile = undefined;
     if (liveRunnerRootDir) {
+      disposeOpenClawAgentDatabaseByPath(path.join(liveRunnerRootDir, "openclaw-agent.sqlite"));
       await fs.rm(liveRunnerRootDir, { recursive: true, force: true });
     }
     liveRunnerRootDir = undefined;
@@ -1118,7 +1124,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         provider: "anthropic",
         api: "anthropic-messages",
         envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
-        preferredModelIds: ["claude-sonnet-4-6", "claude-sonnet-4-6", "claude-haiku-3-5"],
+        preferredModelIds: ["claude-sonnet-5", "claude-haiku-4-5"],
       });
       logLiveCache(`anthropic model=${fixture.model.provider}/${fixture.model.id}`);
     }, 120_000);

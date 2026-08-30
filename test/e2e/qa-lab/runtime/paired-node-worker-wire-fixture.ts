@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { createQaGatewayChild, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -50,7 +50,7 @@ async function waitUntil<T>(read: () => Promise<T | undefined>): Promise<T> {
   throw new Error("timed out waiting for paired worker node state");
 }
 
-export type WireGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+export type WireGateway = QaGatewayChild;
 type WireGatewayEvent = { event: string; payload?: unknown };
 export type WireNodeRead = {
   nodeId: string;
@@ -509,6 +509,7 @@ export async function createPairedNodeWorkerHost(
 }
 
 export async function startPairedNodeWorkerGateway(params: {
+  owner: ReturnType<typeof createQaGatewayChild>;
   providerBaseUrl: string;
   executionIdentity?: boolean;
   repoRoot?: string;
@@ -517,7 +518,7 @@ export async function startPairedNodeWorkerGateway(params: {
   controlUiEnabled?: boolean;
   fullAccess?: boolean;
 }): Promise<WireGateway> {
-  return await startQaGatewayChild({
+  return await params.owner.start({
     repoRoot: params.repoRoot ?? process.cwd(),
     useRepoCli: params.useRepoCli ?? true,
     providerBaseUrl: `${params.providerBaseUrl}/v1`,

@@ -27,6 +27,7 @@ type ChatQueueProps = {
   onQueueEditCancel?: () => void;
   editingId?: string | null;
   editingText?: string;
+  editingSource?: ChatQueueItem;
   onQueueRemove: (id: string) => void;
 };
 
@@ -156,6 +157,15 @@ export function renderChatQueue(props: ChatQueueProps) {
   const visibleQueue = props.queue.filter(
     (item) => item.sendState !== "sending" && !isQueuedSendInlineState(item),
   );
+  // A peer can retire the source while this pane is away. Render its retained
+  // correction for recovery/cancel; this never recreates a row in the outbox.
+  if (
+    props.editingSource &&
+    props.editingId === props.editingSource.id &&
+    !visibleQueue.some((item) => item.id === props.editingId)
+  ) {
+    visibleQueue.push(props.editingSource);
+  }
   if (!visibleQueue.length) {
     return nothing;
   }
@@ -263,6 +273,7 @@ function renderChatQueueItem(
     Boolean(props.canAbort && props.onQueueSteer) &&
     !editing &&
     !item.localCommandName &&
+    !item.intent &&
     (isSteerableQueuedMessage(item) || item.sendState === "waiting-model");
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);

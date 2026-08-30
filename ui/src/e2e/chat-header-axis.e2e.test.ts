@@ -5,6 +5,7 @@ import {
   chatSessionListResponse,
   captureUiProofEnabled,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
 
@@ -52,7 +53,7 @@ suite.define(() => {
         });
 
         try {
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
           const header = page.locator(".chat-pane__header").first();
           await header.waitFor();
           await header.locator(".workspace-icon").waitFor();
@@ -242,7 +243,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const icon = page.locator(".chat-pane__header openclaw-workspace-icon").first();
       await icon.waitFor();
       await icon.locator("svg").waitFor();

@@ -1,12 +1,12 @@
 import "./tooltip.ts";
-import { collectTooltipVisibleText, isTooltipTriggerElement } from "./tooltip-content.ts";
+import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
 
 function titleNamesElement(element: Element) {
   if (
     element.hasAttribute("aria-label") ||
     element.hasAttribute("aria-labelledby") ||
     element.matches("img[alt], input[alt]") ||
-    collectTooltipVisibleText(element).trim()
+    collectTooltipNameText(element).trim()
   ) {
     return false;
   }
@@ -162,7 +162,12 @@ export function installTitleTooltips(ownerDocument: Document) {
     }
     anchor.addEventListener("pointerleave", handlePointerLeave);
     anchor.addEventListener("focusout", handleFocusOut);
-    observer.observe(anchor, { attributes: true, attributeFilter: ["title", "data-tooltip"] });
+    observer.observe(anchor, {
+      attributes: true,
+      attributeFilter: ["title", "data-tooltip", "aria-hidden"],
+      characterData: true,
+      subtree: true,
+    });
     observer.observe(ownerDocument, { childList: true, subtree: true });
     const root = anchor.getRootNode();
     if (root instanceof ShadowRoot) {

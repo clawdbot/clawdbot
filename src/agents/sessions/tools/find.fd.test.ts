@@ -65,6 +65,43 @@ it("rejects partial fd output when fd exits with an error", async () => {
   await expect(result).rejects.toThrow("fd failed while reading subtree");
 });
 
+it.each([false, true])("preserves fd paths with trailing search separator=%s", async (trailing) => {
+  const searchRoot = path.resolve(path.sep, "find-fixture");
+  const paths = [
+    path.join(searchRoot, "alpha.txt"),
+    path.join(searchRoot, "report.txt "),
+    path.join(searchRoot, "🦞.txt"),
+    `${path.join(searchRoot, "folder space ")}${path.sep}`,
+    path.join(searchRoot, "literal\\"),
+  ];
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+  const tool = createFindToolDefinition(searchRoot);
+  const pending = tool.execute(
+    "paths",
+    { pattern: "*", path: trailing ? `${searchRoot}${path.sep}` : searchRoot },
+    undefined,
+    undefined,
+    {} as never,
+  );
+  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+  child.stdout.end(`${paths.join("\n")}\n`);
+  child.stderr.end();
+  child.emit("close", 0, null);
+  const result = await pending;
+  expect(textContent(result)).toBe(
+    [
+      "alpha.txt",
+      "report.txt ",
+      "🦞.txt",
+      "folder space /",
+      process.platform === "win32" ? "literal/" : "literal\\",
+    ].join("\n"),
+  );
+  expect(result.details).toBeUndefined();
+});
+
 it("keeps multibyte stderr intact when pipe chunks split a character", async () => {
   const child = createChild();
   vi.mocked(spawnCommand).mockReturnValue(child as never);

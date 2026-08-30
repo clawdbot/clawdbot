@@ -1,16 +1,10 @@
 import { createHash } from "node:crypto";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  SessionCreatedActor,
-  SessionOwner,
-} from "../../packages/gateway-protocol/src/index.js";
-import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
-import { resolveAgentIdentity } from "../agents/identity.js";
 import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
@@ -36,32 +30,29 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
-import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
-import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import {
-  buildControlUiChannelAvatarUrl,
-  buildControlUiResourcePath,
-} from "./control-ui-contract.js";
+import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
+import {
+  projectSessionActor,
+  projectSessionOwner,
+  projectSessionParticipants,
+} from "./session-identity-projection.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
-import type {
-  SessionActorProfileIdentity,
-  SessionListRowContext,
-} from "./session-utils-contracts.js";
+import type { SessionListRowContext } from "./session-utils-contracts.js";
 import {
   buildCompactionCheckpointPreview,
   deriveSessionTitle,
@@ -86,123 +77,9 @@ import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-s
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
-/** Adds current actor display data without persisting rename-prone metadata. */
 /** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
 function channelAvatarRevision(reference: string): string {
   return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
-}
-
-export function projectSessionActor(
-  actor: SessionEntry["createdActor"],
-  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> = new Map(),
-  cfg?: OpenClawConfig,
-): SessionCreatedActor | undefined {
-  if (!actor) {
-    return undefined;
-  }
-  const id = normalizeOptionalString(actor.id);
-  if (actor.type === "agent" && id && cfg) {
-    const identity = resolveAgentIdentity(cfg, id);
-    const label = normalizeOptionalString(identity?.name);
-    const avatar = normalizeOptionalString(identity?.avatar);
-    const avatarUrl =
-      avatar && looksLikeAvatarPath(avatar)
-        ? buildControlUiResourcePath(
-            "agentAvatar",
-            normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath),
-            id,
-          )
-        : undefined;
-    return {
-      type: actor.type,
-      id,
-      ...(label ? { label } : {}),
-      ...(avatarUrl ? { avatarUrl } : {}),
-    };
-  }
-  if (actor.type !== "human" || !id) {
-    return { type: actor.type, ...(id ? { id } : {}) };
-  }
-  let identity = userProfileIdentityById.get(id);
-  if (!userProfileIdentityById.has(id)) {
-    const display = resolveCurrentUserProfileDisplay(id);
-    identity =
-      display.kind === "unresolved"
-        ? undefined
-        : {
-            ...(display.label ? { label: display.label } : {}),
-            ...(display.hasUploadedAvatar ? { avatarUrl: display.avatarUrl } : {}),
-          };
-    userProfileIdentityById.set(id, identity);
-  }
-  return { type: actor.type, id, ...identity };
-}
-
-/** Projects an identity only when it can own a session durably. */
-export function projectAssignableSessionOwner(
-  actor: SessionEntry["createdActor"],
-  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>,
-  cfg: OpenClawConfig,
-  configuredAgentIds?: ReadonlySet<string>,
-): SessionOwnerFacetIdentity | undefined {
-  if (!actor || (actor.type !== "human" && actor.type !== "agent")) {
-    return undefined;
-  }
-  const rawId = normalizeOptionalString(actor.id);
-  if (!rawId) {
-    return undefined;
-  }
-  const id = actor.type === "agent" ? normalizeAgentId(rawId) : rawId;
-  if (actor.type === "agent" && !(configuredAgentIds ?? new Set(listAgentIds(cfg))).has(id)) {
-    return undefined;
-  }
-  const projected = projectSessionActor({ type: actor.type, id }, userProfileIdentityById, cfg);
-  if (!projected?.id || (actor.type === "human" && userProfileIdentityById.get(id) === undefined)) {
-    return undefined;
-  }
-  return {
-    type: actor.type,
-    id,
-    ...(projected.label ? { label: projected.label } : {}),
-    ...(projected.avatarUrl ? { avatarUrl: projected.avatarUrl } : {}),
-  };
-}
-
-function projectSessionOwner(
-  entry: SessionEntry | undefined,
-  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> | undefined,
-  cfg: OpenClawConfig,
-  configuredAgentIds?: ReadonlySet<string>,
-): SessionOwner | undefined {
-  const persisted = entry?.owner;
-  const identities = userProfileIdentityById ?? new Map();
-  const actor = projectAssignableSessionOwner(
-    persisted?.actor ?? entry?.createdActor,
-    identities,
-    cfg,
-    configuredAgentIds,
-  );
-  if (!actor) {
-    return undefined;
-  }
-  const assignedBy = projectSessionActor(persisted?.assignedBy, identities, cfg);
-  return {
-    actor,
-    ...(assignedBy ? { assignedBy } : {}),
-    ...(persisted?.assignedAt !== undefined ? { assignedAt: persisted.assignedAt } : {}),
-  };
-}
-
-function projectSessionParticipants(
-  entry: SessionEntry | undefined,
-  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined> | undefined,
-  cfg: OpenClawConfig,
-): SessionCreatedActor[] | undefined {
-  const participants = entry?.participants?.flatMap((participant) => {
-    const projected = projectSessionActor(participant, userProfileIdentityById, cfg);
-    return projected ? [projected] : [];
-  });
-  return participants?.length ? participants.slice(0, 4) : undefined;
 }
 
 export function buildGatewaySessionRow(params: {
@@ -227,6 +104,20 @@ export function buildGatewaySessionRow(params: {
   const lightweight = params.lightweightListRow === true;
   const now = params.now ?? Date.now();
   const agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
+  const owner = projectSessionOwner(
+    entry,
+    params.rowContext?.userProfileIdentityById,
+    cfg,
+    params.configuredAgentIds,
+  );
+  const participants = projectSessionParticipants(
+    entry,
+    params.rowContext?.userProfileIdentityById,
+    cfg,
+  );
+  if (owner?.actor.identity) {
+    participants.delete(JSON.stringify(owner.actor.identity));
+  }
   const observerDigest =
     entry?.observerDigest &&
     // Strictly newer: a run end and restart can share a millisecond, and the
@@ -459,12 +350,12 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  // A per-agent catalog map keeps unscoped listings owner-scoped: each row uses
-  // its own agent's completed catalog instead of a shared default-agent catalog.
+  // Entries and provider policy must stay bound to the same prepared agent owner;
+  // the Gateway startup registry can contain a different set of plugins.
+  const preparedCatalog =
+    params.modelCatalog instanceof Map ? params.modelCatalog.get(sessionAgentId) : undefined;
   const rowModelCatalog =
-    params.modelCatalog instanceof Map
-      ? params.modelCatalog.get(sessionAgentId)
-      : params.modelCatalog;
+    params.modelCatalog instanceof Map ? preparedCatalog?.entries : params.modelCatalog;
   // Event/list rows must not rediscover plugin-backed configured catalog metadata.
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
@@ -478,7 +369,7 @@ export function buildGatewaySessionRow(params: {
     entry,
     modelCatalog: thinkingModelCatalog,
     rowContext,
-    providerPolicySource: lightweight ? "active" : undefined,
+    providerPolicySource: preparedCatalog?.pluginRegistry ?? (lightweight ? "active" : undefined),
   });
   const catalogEntry =
     rowModelCatalog && rowModelProvider && rowModel
@@ -563,21 +454,18 @@ export function buildGatewaySessionRow(params: {
       entry?.createdActor,
       rowContext?.userProfileIdentityById,
       cfg,
+      Boolean(sessionCreatorProfileId(entry?.createdActor)),
     ),
-    owner: projectSessionOwner(
-      entry,
-      rowContext?.userProfileIdentityById,
-      cfg,
-      params.configuredAgentIds,
-    ),
-    participants: projectSessionParticipants(entry, rowContext?.userProfileIdentityById, cfg),
-    participantCount: entry?.participantCount,
+    owner,
+    participants: participants.size ? [...participants.values()].slice(0, 4) : undefined,
+    participantCount: participants.size || undefined,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
     kind: gatewayKind,
     label: entry?.label,
     icon: entry?.icon,
+    color: entry?.color,
     channelAvatarUrl,
     category: entry?.category,
     boardFace: entry?.boardFace,

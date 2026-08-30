@@ -27,6 +27,11 @@ openclaw sessions --store ./tmp/sessions.json
 openclaw sessions --json
 ```
 
+Human-readable lists and cleanup previews use terminal-width tables. Long model
+names and flags wrap without being truncated, and Unicode keys stay aligned.
+Long keys show their beginning and end; use `openclaw sessions --json` for complete
+session keys.
+
 Flags:
 
 | Flag                 | Description                                                                   |
@@ -50,6 +55,10 @@ loop. The CLI returns the newest 100 sessions by default; pass `--limit <n>`
 for a smaller/larger window or `--limit all` when you intentionally need the
 full store. JSON responses include `totalCount`, `limitApplied`, and `hasMore`
 when callers need to show that more rows exist.
+
+JSON session rows include `color` when a session color is set (for example,
+`"color": "blue"`). Uncolored sessions and sessions whose color was cleared omit
+the field.
 
 RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
 discovery source but return only rows for agents currently present in config.

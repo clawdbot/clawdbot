@@ -33,6 +33,7 @@ function runSubmitAction(
 export function createEditorSubmitHandler(params: {
   editor: {
     getText?: () => string;
+    getExpandedText: () => string;
     setText: (value: string) => void;
     addToHistory: (value: string) => void;
   };
@@ -51,9 +52,9 @@ export function createEditorSubmitHandler(params: {
   };
 
   const restoreBlockedEditor = (value: string) => {
-    // pi-tui clears before onSubmit. Preserve text typed while a buffered submit
-    // waited by replaying the blocked value before the newer editor-owned draft.
-    const newerDraft = params.editor.getText?.() ?? "";
+    // Expand newer pastes before setText clears their backing storage, then
+    // prepend the blocked submit to the newer editor-owned draft.
+    const newerDraft = params.editor.getExpandedText();
     params.editor.setText(newerDraft ? `${value}\n${newerDraft}` : value);
   };
 

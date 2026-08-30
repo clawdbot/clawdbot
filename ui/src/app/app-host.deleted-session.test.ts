@@ -2,10 +2,24 @@
 
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
+import {
+  readStoredOutboxStore,
+  storageTargetForGateway,
+  storedChatOutboxScopeKey,
+} from "../lib/chat/outbox-store.ts";
+import { createSessionCapability } from "../lib/sessions/index.ts";
+import {
+  createGatewayHarness,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
+import { createSessionDeletionHarness } from "../lib/sessions/session-deletion.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
+import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import type { ApplicationContext } from "./context.ts";
 import "./app-host.ts";
 
@@ -17,6 +31,7 @@ type DeletedSessionShell = {
   replaceChatWithCurrentSession: () => void;
   updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
   observeDeletedSessions: (state: ApplicationContext["sessions"]["state"]) => void;
+  recoverDeletedActiveSession: (state: ApplicationContext["sessions"]["state"]) => void;
 };
 
 const mainKey = "agent:main:main";
@@ -27,6 +42,7 @@ function createSessionRecoveryShell(params: {
   agentIds?: string[];
   sessionKeys: string[];
   deletedSessionKeys?: string[];
+  sessions?: ApplicationContext["sessions"];
 }) {
   const replace = vi.fn();
   const setSessionKey = vi.fn();
@@ -34,6 +50,7 @@ function createSessionRecoveryShell(params: {
   shell.runtime = {
     context: {
       basePath: "",
+      chatAttachmentHandoff: createChatAttachmentHandoff(),
       agents: {
         state: {
           agentsList: {
@@ -48,7 +65,9 @@ function createSessionRecoveryShell(params: {
         setSessionKey,
         snapshot: { client: null, hello: null, phase: "connected" },
       },
-      sessions: {
+      sessions: params.sessions ?? {
+        deletionState: (key: string) =>
+          params.deletedSessionKeys?.includes(key) ? "confirmed" : undefined,
         state: {
           deletedSessions: (params.deletedSessionKeys ?? []).map((key) => ({
             agentId: "main",
@@ -72,14 +91,254 @@ afterEach(() => {
 });
 
 describe("OpenClaw shell deleted-session recovery", () => {
+  it.each(["rejection", "batch interruption", "different-client batch rejection"] as const)(
+    "navigates on delete intent and visibly reports %s without replacing newer navigation",
+    async (failure) => {
+      const response = createDeferred<{ deleted: boolean }>();
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.delete") {
+          return response.promise;
+        }
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        return sessionsResult([], 1);
+      });
+      const { gateway, publish } = createGatewayHarness({
+        request,
+      } as unknown as GatewayBrowserClient);
+      const sessions = createSessionCapability(gateway);
+      const { shell, replace } = createSessionRecoveryShell({
+        activeSessionKey: deletedKey,
+        sessionKeys: [deletedKey, mainKey],
+        sessions,
+      });
+      const stop = sessions.subscribe((state) => shell.recoverDeletedActiveSession(state));
+      const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+      try {
+        const operation =
+          failure === "rejection"
+            ? sessions.delete(deletedKey)
+            : sessions.deleteMany([{ key: deletedKey }, { key: "agent:main:unsent" }]);
+        expect(shell.activeSessionKey).toBe(mainKey);
+        expect(sessions.deletionState(deletedKey)).toBe("pending");
+        expect(sessions.state.deletedSessions).toEqual([]);
+        expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
+        shell.activeSessionKey = "agent:main:another-thread";
+        replace.mockClear();
+        if (failure === "rejection") {
+          response.reject(new Error("delete rejected"));
+          await expect(operation).rejects.toThrow("delete rejected");
+        } else {
+          publish(false);
+          publish(
+            true,
+            failure === "different-client batch rejection"
+              ? ({ request } as unknown as GatewayBrowserClient)
+              : gateway.snapshot.client,
+          );
+          if (failure === "different-client batch rejection") {
+            response.reject(new Error("old client rejected deletion"));
+          } else {
+            response.resolve({ deleted: true });
+          }
+          await operation;
+          expect(
+            request.mock.calls.filter(([method]) => method === "sessions.delete"),
+          ).toHaveLength(1);
+        }
+        expect(shell.activeSessionKey).toBe("agent:main:another-thread");
+        expect(replace).not.toHaveBeenCalled();
+        if (failure === "different-client batch rejection") {
+          expect(toast.textContent).toBe("");
+          expect(sessions.state.error).toBeNull();
+        } else {
+          await vi.waitFor(() =>
+            expect(toast.textContent).toContain(
+              failure === "rejection" ? "delete rejected" : "Gateway connection replaced",
+            ),
+          );
+        }
+      } finally {
+        stop();
+        sessions.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves the replacement when confirmation selected its predecessor (previously deleted: %s)",
+    async (previouslyDeleted) => {
+      const response = createDeferred<{ deleted: boolean }>();
+      const replacement = {
+        key: deletedKey,
+        sessionId: "replacement",
+        kind: "direct" as const,
+        updatedAt: 2,
+      };
+      let listed = previouslyDeleted ? { ...replacement, sessionId: "predecessor" } : replacement;
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.delete" ? response.promise : sessionsResult([listed], 2),
+      );
+      const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const sessions = createSessionCapability(gateway);
+      await sessions.refresh({ force: true });
+      if (previouslyDeleted) {
+        sessions.reconcileChanged({
+          sessionKey: deletedKey,
+          sessionId: "predecessor",
+          reason: "delete",
+        });
+        listed = replacement;
+        await sessions.refresh({ force: true });
+      }
+      const { shell, replace } = createSessionRecoveryShell({
+        activeSessionKey: deletedKey,
+        sessionKeys: [deletedKey],
+        sessions,
+      });
+      const stop = sessions.subscribe((state) => shell.recoverDeletedActiveSession(state));
+      const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+      const operation = sessions.delete(deletedKey, { expectedSessionId: "predecessor" });
+      try {
+        expect(shell.activeSessionKey).toBe(deletedKey);
+        expect(replace).not.toHaveBeenCalled();
+        expect(sessions.state.result?.sessions).toEqual([replacement]);
+        expect(request).toHaveBeenCalledWith(
+          "sessions.delete",
+          expect.objectContaining({ key: deletedKey, expectedSessionId: "predecessor" }),
+          expect.any(Object),
+        );
+        response.reject(new Error("Session identity changed"));
+        await expect(operation).rejects.toThrow("Session identity changed");
+        await vi.waitFor(() => expect(toast.textContent).toContain("Session identity changed"));
+        expect(shell.activeSessionKey).toBe(deletedKey);
+        expect(sessions.state.result?.sessions).toEqual([replacement]);
+      } finally {
+        response.resolve({ deleted: false });
+        await operation.catch(() => {});
+        stop();
+        sessions.dispose();
+      }
+    },
+  );
+
+  it.each(
+    (["subscription", "reconcile"] as const).flatMap((delivery) =>
+      [false, true].flatMap((priorLocalDelete) =>
+        [false, true].map((identified) => ({ delivery, priorLocalDelete, identified })),
+      ),
+    ),
+  )(
+    "preserves recreated B on delayed A delete ($delivery, local: $priorLocalDelete, identity: $identified)",
+    async ({ delivery, priorLocalDelete, identified }) => {
+      const h = createSessionDeletionHarness();
+      const storage = createStorageMock();
+      vi.stubGlobal("sessionStorage", storage);
+      const gatewayUrl = "ws://gateway.test";
+      const storageKey = storageTargetForGateway(gatewayUrl).key;
+      const replacement = { ...h.alpha, sessionId: "generation-b" };
+      const { shell, replace } = createSessionRecoveryShell({
+        activeSessionKey: h.alpha.key,
+        sessionKeys: [h.alpha.key],
+        sessions: h.sessions,
+      });
+      shell.runtime.context.gateway.snapshot.client = {
+        gatewayUrl,
+        recoveryScopeReady: false,
+      } as GatewayBrowserClient;
+      let stop = () => {};
+      try {
+        await h.sessions.refresh({ force: true });
+        // A is deleted externally unless this client owns the optional local RPC.
+        h.setRows([h.sibling]);
+        if (priorLocalDelete) {
+          const deletion = h.sessions.delete(h.alpha.key);
+          h.responses.get(h.alpha.key)!.resolve({ deleted: true });
+          await deletion;
+        }
+        h.setRows([replacement, h.sibling]);
+        await h.sessions.refresh({ force: true });
+        storage.setItem(
+          storageKey,
+          JSON.stringify({
+            version: 4,
+            recovery: {},
+            gatewayOwner: gatewayUrl,
+            sessions: {
+              [`${h.alpha.key}\u0000agent:main`]: {
+                draft: "B draft",
+                draftRevision: 1,
+                queue: [{ id: "queued-b", text: "B queued", createdAt: 1 }],
+                updatedAt: 1,
+              },
+            },
+          }),
+        );
+        const draft = storage.getItem(storageKey);
+        stop = h.sessions.subscribe((state) => {
+          shell.observeDeletedSessions(state);
+          shell.recoverDeletedActiveSession(state);
+        });
+        const payload = {
+          sessionKey: h.alpha.key,
+          agentId: "main",
+          reason: "delete",
+          ...(identified ? { sessionId: h.alpha.sessionId } : {}),
+        };
+        if (delivery === "subscription") {
+          h.emitEvent({ type: "event", event: "sessions.changed", payload });
+        } else {
+          h.sessions.reconcileChanged(payload);
+        }
+        await import("../lib/chat/composer-draft-retirement.runtime.ts");
+        expect.soft(h.sessions.state.result?.sessions).toEqual([replacement, h.sibling]);
+        expect.soft(shell.activeSessionKey).toBe(h.alpha.key);
+        expect.soft(replace).not.toHaveBeenCalled();
+        expect.soft(storage.getItem(storageKey)).toBe(draft);
+        expect.soft(h.sessions.deletionState(h.alpha.key)).toBeUndefined();
+        await h.sessions.refresh({ force: true });
+        expect(h.sessions.state.result?.sessions).toEqual([replacement, h.sibling]);
+        // The same delivery path must still retire B when B itself is confirmed deleted.
+        h.setRows([h.sibling]);
+        const currentDelete = { ...payload, sessionId: replacement.sessionId };
+        if (delivery === "subscription") {
+          h.emitEvent({ type: "event", event: "sessions.changed", payload: currentDelete });
+        } else {
+          h.sessions.reconcileChanged(currentDelete);
+        }
+        const target = storageTargetForGateway(gatewayUrl);
+        const scopeKey = storedChatOutboxScopeKey({ sessionKey: h.alpha.key, agentId: "main" });
+        const retired = h.sessions.state.deletedSessions.find(({ key }) => key === h.alpha.key)!;
+        await vi.waitFor(() => {
+          const tombstone = readStoredOutboxStore(storage, target).sessions[scopeKey];
+          expect(tombstone).toEqual({
+            draftRevision: expect.any(Number),
+            updatedAt: expect.any(Number),
+          });
+          expect(tombstone?.draftRevision).toBeGreaterThan(retired.retireBeforeRevision);
+        });
+        expect(h.sessions.state.result?.sessions).toEqual([h.sibling]);
+        expect(h.sessions.deletionState(h.alpha.key)).toBe("confirmed");
+        expect(h.sessions.deletionState(h.sibling.key)).toBeUndefined();
+        expect(shell.activeSessionKey).toBe(mainKey);
+      } finally {
+        stop();
+        h.sessions.dispose();
+      }
+    },
+  );
+
   it("retires an externally observed batch once and shows one actionable cleanup failure", async () => {
     const gatewayUrl = "ws://gateway.test";
     const storage = createStorageMock();
     vi.stubGlobal("sessionStorage", storage);
+    const storageKey = storageTargetForGateway(gatewayUrl).key;
     storage.setItem(
-      `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+      storageKey,
       JSON.stringify({
-        version: 2,
+        version: 4,
+        recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
           [`${deletedKey}\u0000agent:main`]: {
@@ -102,6 +361,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
     shell.runtime = {
       context: {
         agents: { state: { agentsList: null } },
+        chatAttachmentHandoff: createChatAttachmentHandoff(),
         gateway: {
           snapshot: {
             assistantAgentId: "main",
@@ -113,18 +373,28 @@ describe("OpenClaw shell deleted-session recovery", () => {
     };
     const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
 
+    shell.observeDeletedSessions({
+      ...state,
+      deletedSessions: [],
+    });
+    await import("../lib/chat/composer-draft-retirement.runtime.ts");
+    expect(storage.getItem(storageKey)).toContain("retire me");
     shell.observeDeletedSessions(state);
     shell.observeDeletedSessions(state);
 
     await vi.waitFor(() => {
-      const stored = JSON.parse(
-        storage.getItem(`openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`) ??
-          "{}",
-      ) as { sessions?: Record<string, { draft?: string; queue?: unknown[] }> };
-      expect(stored.sessions?.[`${deletedKey}\u0000agent:main`]).toEqual({
+      expect(
+        storage.getItem(`openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`),
+      ).toBeNull();
+      const stored = readStoredOutboxStore(storage, storageTargetForGateway(gatewayUrl));
+      const scopeKey = storedChatOutboxScopeKey({ sessionKey: deletedKey, agentId: "main" });
+      expect(stored.sessions[scopeKey]).toEqual({
         draftRevision: expect.any(Number),
         updatedAt: expect.any(Number),
       });
+      expect(stored.sessions[scopeKey]?.draftRevision).toBeGreaterThan(
+        deletedSessions[0]!.retireBeforeRevision,
+      );
       expect(toast.textContent).toContain(
         "Session deleted; browser draft remains. Clear site data.",
       );

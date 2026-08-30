@@ -233,6 +233,7 @@ describe("runConfigureWizard", () => {
           url: "wss://gateway.example.test",
           token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
           password: remotePassword,
+          tlsFingerprint: "ab".repeat(32),
         },
       },
       secrets: { providers: { default: { source: "env" } } },
@@ -243,6 +244,13 @@ describe("runConfigureWizard", () => {
 
     await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
 
+    expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: remoteConfig.gateway?.remote?.url,
+        config: remoteConfig,
+        originScopedDeviceAuth: true,
+      }),
+    );
     expect(mocks.healthCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         config: remoteConfig,
@@ -343,42 +351,46 @@ describe("runConfigureWizard", () => {
     });
   });
 
-  it("keeps startup gateway hint probes bounded", async () => {
-    setupBaseWizardState({
-      gateway: {
-        mode: "local",
-        remote: {
-          url: "wss://gateway.example.test",
-          token: "token",
-          edgeAuth: { "X-Edge-Auth": "test-secret" },
+  it.each([{ edgeAuth: { "X-Edge-Auth": "test-secret" } }, { tlsFingerprint: "ab".repeat(32) }])(
+    "keeps startup gateway hint probes bounded with remote trust: %j",
+    async (trust) => {
+      setupBaseWizardState({
+        gateway: {
+          mode: "local",
+          remote: {
+            url: "wss://gateway.example.test",
+            token: "token",
+            ...trust,
+          },
         },
-      },
-    });
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-password" }, async () => {
-      await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
-    });
+      });
+      await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-password" }, async () => {
+        await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+      });
 
-    const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
-      requireRecord(request, "probe request"),
-    );
-    const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
-    const remoteProbe = probeRequests.find(
-      (request) => request.url === "wss://gateway.example.test",
-    );
-    expect(localProbe?.timeoutMs).toBe(300);
-    expect(remoteProbe).toEqual({
-      url: "wss://gateway.example.test",
-      config: expect.objectContaining({
-        gateway: expect.objectContaining({
-          remote: expect.objectContaining({
-            edgeAuth: { "X-Edge-Auth": "test-secret" },
+      const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
+        requireRecord(request, "probe request"),
+      );
+      const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
+      const remoteProbe = probeRequests.find(
+        (request) => request.url === "wss://gateway.example.test",
+      );
+      expect(localProbe?.timeoutMs).toBe(300);
+      expect(remoteProbe).toEqual({
+        url: "wss://gateway.example.test",
+        originScopedDeviceAuth: true,
+        config: expect.objectContaining({
+          gateway: expect.objectContaining({
+            remote: expect.objectContaining({
+              ...trust,
+            }),
           }),
         }),
-      }),
-      token: "token",
-      timeoutMs: 300,
-    });
-  });
+        token: "token",
+        timeoutMs: 300,
+      });
+    },
+  );
 
   it("ignores blank gateway env credentials when probing the local gateway", async () => {
     setupBaseWizardState({

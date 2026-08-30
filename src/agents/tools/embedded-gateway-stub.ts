@@ -8,6 +8,8 @@ import type {
   SessionsListParams,
   SessionsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type {
@@ -31,23 +33,14 @@ interface EmbeddedGatewayRuntime {
     agentId?: string;
   }) => string;
   getRuntimeConfig: () => OpenClawConfig;
-  resolveDefaultAgentId: (config: OpenClawConfig) => string;
   resolveSessionStoreKey: (params: { cfg: OpenClawConfig; sessionKey: string }) => string;
   resolveStoredSessionKeyForAgentStore: (params: {
     cfg: OpenClawConfig;
     agentId: string;
     sessionKey: string;
   }) => string;
-  searchSessionTranscripts: (params: {
-    agentId: string;
-    limit?: number;
-    query: string;
-    sessionKeys?: string[];
-  }) => {
-    hits: unknown[];
-    indexing: boolean;
-    truncated: boolean;
-  };
+  resolveSessionStorePathCore: typeof resolveSessionStorePathCore;
+  searchSessionTranscripts: typeof searchSessionTranscripts;
   getMaxChatHistoryMessagesBytes: () => number;
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: number;
   replaceOversizedChatHistoryMessages: (opts: {
@@ -193,12 +186,15 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
     throw new Error("sessions.search supports one agent per call");
   }
   const agentId =
-    requestedAgentId ?? agentIds.values().next().value ?? rt.resolveDefaultAgentId(cfg);
+    requestedAgentId ??
+    agentIds.values().next().value ??
+    rt.resolveSessionAgentId({ sessionKey: "main", config: cfg });
   const result = rt.searchSessionTranscripts({
     agentId,
+    storePath: rt.resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     query,
     limit: readPositiveIntegerParam(params, "limit"),
-    ...(sessionKeys ? { sessionKeys } : {}),
+    sessionKeys,
   });
   return {
     results: result.hits,

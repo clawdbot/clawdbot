@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
+import { isComputerObservationAction } from "./tools/computer-tool-shared.js";
 
 const READ_ONLY_ACTIONS = new Set([
   "get",
@@ -77,7 +78,6 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
 ]);
 
 const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
-const COMPUTER_REPLAY_SAFE_ACTIONS = new Set(["screenshot", "wait"]);
 const MOBILE_UI_REPLAY_SAFE_ACTIONS = new Set(["observe"]);
 const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
 const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
@@ -290,7 +290,7 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "sessions":
       return action !== "group_list";
     case "computer":
-      return action == null || !COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
+      return !isComputerObservationAction(action, record?.dialogAction);
     case "mobile_ui":
       return action == null || !MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "subagents":
@@ -343,7 +343,7 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
     case "browser":
       return action != null && BROWSER_READ_ONLY_ACTIONS.has(action);
     case "computer":
-      return action != null && COMPUTER_REPLAY_SAFE_ACTIONS.has(action);
+      return isComputerObservationAction(action, record?.dialogAction);
     case "mobile_ui":
       return action != null && MOBILE_UI_REPLAY_SAFE_ACTIONS.has(action);
     case "skill_workshop":

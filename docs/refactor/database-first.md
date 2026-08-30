@@ -413,14 +413,14 @@ The branch already has a real shared SQLite base:
   discards the file without importing it. Because a file cannot prove whether
   its entries are live or stale after SQLite rows have been pruned, operators
   must let file-era active runs settle before upgrading across this boundary.
-- Current conversation bindings now live in typed shared
-  `current_conversation_bindings` rows keyed by normalized conversation id, with
-  target agent/session columns, conversation kind, status, expiry, and metadata
-  stored as relational columns instead of a duplicated opaque binding record.
-  The durable binding key includes the normalized conversation kind so
-  direct/group/channel refs cannot collide, and SQLite rejects invalid binding
-  kind/status values. The old
-  `bindings/current-conversations.json` file is doctor migration input only.
+- Current conversation bindings live in shared `current_conversation_bindings`
+  rows keyed by normalized channel, account, parent conversation, and conversation
+  id. `record_json` retains the complete binding; relational columns support
+  exact-target and conversation lookup and expiry. Shared-state schema 15 removes
+  the redundant agent/session projections: target keys already identify agent
+  sessions or plugin-owned destinations, and several conversations may share one
+  target. Plugin ownership and approval remain separate from target-key syntax.
+  The old `bindings/current-conversations.json` file is doctor migration input only.
 - Delivery queue recovery now overlays typed queue columns for channel, target,
   account, session, retry, error, platform-send, and recovery state onto the
   replay JSON. `entry_json` keeps the replay payloads, hooks, and formatting
@@ -1504,13 +1504,14 @@ task_runs(...)
 task_delivery_state(...)
 flow_runs(...)
 subagent_runs(run_id, child_session_key, controller_session_key, requester_session_key, created_at, payload_json)
-current_conversation_bindings(binding_key, binding_id, target_agent_id, target_session_id, target_session_key, channel, account_id, conversation_kind, parent_conversation_id, conversation_id, target_kind, status, bound_at, expires_at, metadata_json, updated_at)
+current_conversation_bindings(binding_key, binding_id, target_session_key, channel, account_id, conversation_kind, parent_conversation_id, conversation_id, target_kind, status, bound_at, expires_at, metadata_json, record_json, updated_at)
 plugin_binding_approvals(plugin_root, channel, account_id, plugin_id, plugin_name, approved_at)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
 skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
 skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
-web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
+web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, device_id, user_profile_id, preferences_json, created_at_ms, updated_at_ms)
+web_push_approval_deliveries(approval_id, subscription_id, device_id, user_profile_id, prepared_at_ms)
 apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, relay_origin, topic, environment, distribution, token_debug_suffix, updated_at_ms)
 apns_registration_tombstones(node_id, deleted_at_ms)
 device_identities(identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms)

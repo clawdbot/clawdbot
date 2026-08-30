@@ -357,11 +357,11 @@ suite.define(() => {
       async ({ page }) => {
         const initialConfig = {
           laboratory: { endpoint: "local-api", retryBudget: 2 },
-          tools: { codeMode: { enabled: false } },
+          tools: { codeMode: { timeoutMs: 5000 } },
         };
         const patchedConfig = {
           laboratory: initialConfig.laboratory,
-          tools: { codeMode: { enabled: "auto" } },
+          tools: { codeMode: { enabled: "auto", timeoutMs: 5000 } },
         };
         const gateway = await installMockGateway(page, {
           methodResponses: {
@@ -376,14 +376,14 @@ suite.define(() => {
         const codeModeRow = settingsRow(page, "Code Mode");
         const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
         await codeModeSwitch.waitFor();
-        await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
+        await expect.poll(() => codeModeRow.textContent()).toContain("Using default: Disabled");
 
         const configGetsBeforePatch = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.patch");
         await codeModeRow.locator("wa-switch").click();
         const patchParams = mutationParams(await gateway.waitForRequest("config.patch"));
         expect(patchParams.baseHash).toBe("snapshot-1");
-        expect(patchParams.sessionKey).toBe("main");
+        expect(patchParams.sessionKey).toBe("agent:main:main");
         expect(JSON.parse(String(patchParams.raw))).toEqual({
           tools: { codeMode: { enabled: "auto" } },
         });
@@ -495,7 +495,7 @@ suite.define(() => {
         const applyParams = mutationParams(await gateway.waitForRequest("config.apply"));
         expect(applyParams.baseHash).toBe("mock-config-hash-2");
         expect(applyParams.raw).toBe(rawDraft);
-        expect(applyParams.sessionKey).toBe("main");
+        expect(applyParams.sessionKey).toBe("agent:main:main");
         await expect.poll(() => saveIndicator.textContent()).toContain("Applying");
         await capture(page, "03-applying.png");
 

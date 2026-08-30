@@ -4,7 +4,9 @@
  * Reads bounded, redacted session transcript history after session visibility filtering.
  */
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
+import type { ChatPendingInputsPage } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
@@ -50,6 +52,7 @@ const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
   limit: optionalPositiveIntegerSchema(),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  pendingBefore: optionalPositiveIntegerSchema(),
   messageId: Type.Optional(Type.String({ minLength: 1 })),
   sessionId: Type.Optional(Type.String({ minLength: 1 })),
   includeTools: Type.Optional(Type.Boolean()),
@@ -74,6 +77,26 @@ const SessionsHistoryOutputSchema = Type.Union([
       nextOffset: Type.Optional(Type.Number()),
       hasMore: Type.Optional(Type.Boolean()),
       totalMessages: Type.Optional(Type.Number()),
+      pendingInputs: Type.Optional(
+        Type.Object(
+          {
+            items: Type.Array(
+              Type.Object(
+                {
+                  id: Type.String(),
+                  acceptedAt: Type.Number(),
+                  state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
+                  message: Type.Unknown(),
+                },
+                { additionalProperties: false },
+              ),
+            ),
+            total: Type.Number(),
+            nextBefore: Type.Optional(Type.Number()),
+          },
+          { additionalProperties: false },
+        ),
+      ),
     },
     { additionalProperties: false },
   ),
@@ -88,6 +111,7 @@ const SessionsHistoryOutputSchema = Type.Union([
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
+const SESSIONS_HISTORY_PENDING_MAX_BYTES = 4096;
 type GatewayCaller = AgentToolGatewayRequestCaller;
 type ChatHistoryPaginationMetadata = {
   offset?: number;
@@ -106,7 +130,10 @@ function readOffsetParam(params: Record<string, unknown>): number | undefined {
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
 
-function truncateHistoryText(text: string): {
+function truncateHistoryText(
+  text: string,
+  maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
+): {
   text: string;
   truncated: boolean;
   redacted: boolean;
@@ -115,14 +142,17 @@ function truncateHistoryText(text: string): {
   // when operators disable general-purpose log redaction.
   const sanitized = redactToolPayloadText(text);
   const redacted = sanitized !== text;
-  if (sanitized.length <= SESSIONS_HISTORY_TEXT_MAX_CHARS) {
+  if (sanitized.length <= maxChars) {
     return { text: sanitized, truncated: false, redacted };
   }
-  const cut = truncateUtf16Safe(sanitized, SESSIONS_HISTORY_TEXT_MAX_CHARS);
+  const cut = truncateUtf16Safe(sanitized, maxChars);
   return { text: `${cut}\n…(truncated)…`, truncated: true, redacted };
 }
 
-function sanitizeHistoryContentBlock(block: unknown): {
+function sanitizeHistoryContentBlock(
+  block: unknown,
+  maxChars: number,
+): {
   block: unknown;
   truncated: boolean;
   redacted: boolean;
@@ -134,19 +164,19 @@ function sanitizeHistoryContentBlock(block: unknown): {
   let truncated = false;
   let redacted = false;
   if (typeof entry.text === "string") {
-    const res = truncateHistoryText(entry.text);
+    const res = truncateHistoryText(entry.text, maxChars);
     entry.text = res.text;
     truncated ||= res.truncated;
     redacted ||= res.redacted;
   }
   if (entry.type === "thinking" && typeof entry.thinking === "string") {
-    const res = truncateHistoryText(entry.thinking);
+    const res = truncateHistoryText(entry.thinking, maxChars);
     entry.thinking = res.text;
     truncated ||= res.truncated;
     redacted ||= res.redacted;
   }
   if (typeof entry.partialJson === "string") {
-    const res = truncateHistoryText(entry.partialJson);
+    const res = truncateHistoryText(entry.partialJson, maxChars);
     entry.partialJson = res.text;
     truncated ||= res.truncated;
     redacted ||= res.redacted;
@@ -154,7 +184,10 @@ function sanitizeHistoryContentBlock(block: unknown): {
   return { block: entry, truncated, redacted };
 }
 
-function sanitizeHistoryMessage(message: unknown): {
+function sanitizeHistoryMessage(
+  message: unknown,
+  maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
+): {
   message: unknown;
   truncated: boolean;
   redacted: boolean;
@@ -180,23 +213,56 @@ function sanitizeHistoryMessage(message: unknown): {
   }
 
   if (typeof entry.content === "string") {
-    const res = truncateHistoryText(entry.content);
+    const res = truncateHistoryText(entry.content, maxChars);
     entry.content = res.text;
     truncated ||= res.truncated;
     redacted ||= res.redacted;
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block));
+    const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block, maxChars));
     entry.content = updated.map((item) => item.block);
     truncated ||= updated.some((item) => item.truncated);
     redacted ||= updated.some((item) => item.redacted);
   }
   if (typeof entry.text === "string") {
-    const res = truncateHistoryText(entry.text);
+    const res = truncateHistoryText(entry.text, maxChars);
     entry.text = res.text;
     truncated ||= res.truncated;
     redacted ||= res.redacted;
   }
   return { message: entry, truncated, redacted };
+}
+
+function boundPendingInputs(page: ChatPendingInputsPage) {
+  // Pending input is context for an intentional next action, never executable
+  // history. Keep the whole page addressable while sharing one hard byte cap.
+  const metadata = page.items.map(({ id, state, acceptedAt }) => ({ id, state, acceptedAt }));
+  const messageBudget = Math.floor(
+    (SESSIONS_HISTORY_PENDING_MAX_BYTES -
+      jsonUtf8Bytes({ ...page, items: metadata }) -
+      page.items.length * 12) /
+      Math.max(page.items.length, 1),
+  );
+  let truncated = false;
+  let redacted = false;
+  const items = page.items.map((item, index) => {
+    const result = sanitizeHistoryMessage(item.message, Math.max(1, Math.floor(messageBudget / 8)));
+    redacted ||= result.redacted;
+    const record = asOptionalRecord(result.message);
+    const media = asOptionalRecord(record?.["__openclaw"])?.media;
+    const message = { role: "user", content: record?.content, ...(media ? { media } : {}) };
+    const oversized = jsonUtf8Bytes(message) > messageBudget;
+    truncated ||= result.truncated || oversized;
+    return {
+      ...metadata[index],
+      message: oversized ? { role: "user", content: "[Input omitted; request limit: 1]" } : message,
+    };
+  });
+  const pendingInputs = {
+    items,
+    total: page.total,
+    ...(page.nextBefore !== undefined ? { nextBefore: page.nextBefore } : {}),
+  };
+  return { pendingInputs, bytes: jsonUtf8Bytes(pendingInputs), truncated, redacted };
 }
 
 function enforceSessionsHistoryHardCap(params: {
@@ -382,6 +448,7 @@ export function createSessionsHistoryTool(opts?: {
       });
       const limit = readPositiveIntegerParam(params, "limit");
       const offset = readOffsetParam(params);
+      const pendingBefore = readPositiveIntegerParam(params, "pendingBefore");
       const messageId = readToolStringParam(params, "messageId");
       const sessionId = readToolStringParam(params, "sessionId");
       if (offset !== undefined && messageId) {
@@ -511,6 +578,7 @@ export function createSessionsHistoryTool(opts?: {
             nextOffset?: number;
             hasMore?: boolean;
             totalMessages?: number;
+            pendingInputs?: ChatPendingInputsPage;
           }>({
             method: "chat.history",
             params: {
@@ -518,25 +586,30 @@ export function createSessionsHistoryTool(opts?: {
               agentId: targetAgentId,
               limit,
               ...(offset !== undefined ? { offset } : {}),
+              ...(pendingBefore !== undefined ? { pendingBefore } : {}),
               ...(messageId ? { messageId } : {}),
               ...(sessionId ? { sessionId } : {}),
             },
           }),
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
+      const pending = result?.pendingInputs ? boundPendingInputs(result.pendingInputs) : undefined;
+      const transcriptBudget = SESSIONS_HISTORY_MAX_BYTES - (pending?.bytes ?? 0);
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
-      const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
-      const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);
+      const contentTruncated =
+        sanitizedMessages.some((entry) => entry.truncated) || pending?.truncated === true;
+      const contentRedacted =
+        sanitizedMessages.some((entry) => entry.redacted) || pending?.redacted === true;
       const sanitizedItems = sanitizedMessages.map((entry) => entry.message);
       const cappedMessages = messageId
-        ? capSessionsHistoryAroundMessage(sanitizedItems, messageId, SESSIONS_HISTORY_MAX_BYTES)
-        : capArrayByJsonBytes(sanitizedItems, SESSIONS_HISTORY_MAX_BYTES);
+        ? capSessionsHistoryAroundMessage(sanitizedItems, messageId, transcriptBudget)
+        : capArrayByJsonBytes(sanitizedItems, transcriptBudget);
       const droppedMessages = cappedMessages.items.length < selectedMessages.length;
       const hardened = enforceSessionsHistoryHardCap({
         items: cappedMessages.items,
         bytes: cappedMessages.bytes,
-        maxBytes: SESSIONS_HISTORY_MAX_BYTES,
+        maxBytes: transcriptBudget,
       });
       const pagination = resolveSessionsHistoryPaginationMetadata({
         messages: hardened.items,
@@ -551,7 +624,8 @@ export function createSessionsHistoryTool(opts?: {
         droppedMessages: droppedMessages || hardened.hardCapped,
         contentTruncated,
         contentRedacted,
-        bytes: hardened.bytes,
+        bytes: hardened.bytes + (pending?.bytes ?? 0),
+        ...(pending ? { pendingInputs: pending.pendingInputs } : {}),
         ...(opts?.sessionLinkBase
           ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
           : {}),

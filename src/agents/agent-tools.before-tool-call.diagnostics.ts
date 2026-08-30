@@ -29,7 +29,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
   resolveSkillTelemetrySource,
@@ -46,7 +46,7 @@ import type {
 } from "./agent-tools.before-tool-call.types.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
-import { getChannelAgentToolMeta } from "./channel-tools.js";
+import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {

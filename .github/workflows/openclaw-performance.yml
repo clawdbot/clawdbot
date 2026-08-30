@@ -72,8 +72,8 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.32
-  OCM_LINUX_X64_SHA256: 5b20c21b2825f69b89eb37baa657f0f0062124517e6e6828e9857c7e9bbd3070
+  OCM_VERSION: v0.2.33
+  OCM_LINUX_X64_SHA256: 06b0e46791e750eb044e4a898b6643ad5e7b20224fe0c64f160e35a42f08d00a
   KOVA_REPOSITORY: openclaw/Kova
   KOVA_CANONICAL_CONFIG_REF: 1fe2f4081877bb12b7f7ed355349f98b8a0a6882
   KOVA_LEGACY_LIST_CONFIG_REF: 1fe2f4081877bb12b7f7ed355349f98b8a0a6882
@@ -97,6 +97,9 @@ jobs:
       secret_eligible: ${{ steps.candidate_trust.outputs.secret_eligible }}
       cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
     steps:
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout target metadata
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -122,7 +125,7 @@ jobs:
             echo "::error::target_ref must be a single line."
             exit 1
           fi
-          resolved_sha="$(git -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD)"
+          resolved_sha="$(python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD)"
           tested_ref="${requested:-$GITHUB_REF_NAME}"
           if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::OpenClaw target ref resolved to invalid SHA '${resolved_sha}'."
@@ -295,6 +298,10 @@ jobs:
             echo "Skipping ${LANE_ID}: ${reason}" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Prepare Git owner
+        if: steps.lane.outputs.run == 'true'
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -317,7 +324,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tested_sha="$(git rev-parse HEAD)"
+          tested_sha="$(python3 -I -S "$CI_GIT_OWNER" --git 0 rev-parse HEAD)"
           if [[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]; then
             echo "::error::Checked out ${tested_sha}, expected resolved target ${EXPECTED_TESTED_SHA}."
             exit 1
@@ -412,10 +419,10 @@ jobs:
           tar -xzf "$ocm_archive" -C "${RUNNER_TEMP}/ocm-install"
           install -m 0755 "${RUNNER_TEMP}/ocm-install/ocm" "$HOME/.local/bin/ocm"
 
-          git init -b main "$KOVA_SRC"
-          git -C "$KOVA_SRC" remote add origin "https://github.com/${KOVA_REPOSITORY}.git"
-          git -C "$KOVA_SRC" fetch --filter=blob:none --depth 1 origin "$KOVA_REF"
-          git -C "$KOVA_SRC" checkout --detach FETCH_HEAD
+          python3 -I -S "$CI_GIT_OWNER" --git 0 init -b main "$KOVA_SRC"
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" remote add origin "https://github.com/${KOVA_REPOSITORY}.git"
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" fetch --filter=blob:none --depth 1 origin "$KOVA_REF"
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" checkout --detach FETCH_HEAD
           npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund
           node - "$KOVA_SRC" <<'NODE'
           const fs = require("node:fs");
@@ -696,6 +703,9 @@ jobs:
       TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
     steps:
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout OpenClaw source target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -715,7 +725,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tested_sha="$(git rev-parse HEAD)"
+          tested_sha="$(python3 -I -S "$CI_GIT_OWNER" --git 0 rev-parse HEAD)"
           if [[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]; then
             echo "::error::Checked out ${tested_sha}, expected resolved target ${EXPECTED_TESTED_SHA}."
             exit 1
@@ -741,35 +751,52 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          reports_root=".artifacts/clawgrit-baseline"
-          mkdir -p "$reports_root"
-          git -C "$reports_root" init -b main
-          git -C "$reports_root" remote add origin "https://github.com/openclaw/clawgrit-reports.git"
-          if ! git -C "$reports_root" fetch --filter=blob:none --depth=1 origin main; then
-            echo "No previous source performance baseline could be fetched." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          ref_slug="$(printf '%s' "${TESTED_REF}" | tr -c 'A-Za-z0-9._-' '-')"
-          pointer="openclaw-performance/${ref_slug}/latest-mock-provider.json"
-          if ! git -C "$reports_root" cat-file -e "FETCH_HEAD:${pointer}"; then
-            echo "No previous source performance baseline exists for ${TESTED_REF}." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          if ! latest_path="$(git -C "$reports_root" show "FETCH_HEAD:${pointer}" | node -e "const fs=require('node:fs'); const data=JSON.parse(fs.readFileSync(0,'utf8')); const value=String(data.path || ''); if (!/^openclaw-performance\\/[A-Za-z0-9._-]+\\/[0-9]+-[0-9]+\\/mock-provider$/u.test(value)) process.exit(1); process.stdout.write(value);")"; then
-            echo "Previous source performance baseline pointer is invalid." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          git -C "$reports_root" sparse-checkout init --no-cone
-          printf '/%s/source/\n' "$latest_path" | git -C "$reports_root" sparse-checkout set --stdin
-          git -C "$reports_root" checkout --detach FETCH_HEAD
-          baseline_source="${reports_root}/${latest_path}/source"
-          if [[ -d "$baseline_source" ]]; then
-            baseline_source="$(realpath "$baseline_source")"
-            echo "SOURCE_PERF_BASELINE_DIR=$baseline_source" >> "$GITHUB_ENV"
-            echo "Using source performance baseline: ${latest_path}/source" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Previous source performance baseline has no source directory." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          from ci_git_owner import run_git, git_output, GitFailure, check_cancelled
+
+          reports = ".artifacts/clawgrit-baseline"
+          Path(reports).mkdir(parents=True, exist_ok=True)
+          def summary(message):
+              check_cancelled()
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+                  output.write(message + "\n")
+
+          run_git(reports, "init", "-b", "main")
+          run_git(reports, "remote", "add", "origin", "https://github.com/openclaw/clawgrit-reports.git")
+          try:
+              run_git(reports, "fetch", "--filter=blob:none", "--depth=1", "origin", "main", reclaim_locks=True)
+          except GitFailure:
+              summary("No previous source performance baseline could be fetched.")
+              raise SystemExit(0)
+          ref_slug = re.sub(rb"[^A-Za-z0-9._-]", b"-", os.environ["TESTED_REF"].encode()).decode()
+          pointer = f"openclaw-performance/{ref_slug}/latest-mock-provider.json"
+          # Only a successful empty tree lookup proves absence; failed reads are terminal.
+          if not git_output(reports, "ls-tree", "--name-only", "FETCH_HEAD", "--", pointer).rstrip("\n"):
+              summary(f"No previous source performance baseline exists for {os.environ['TESTED_REF']}.")
+              raise SystemExit(0)
+          pointer_json = git_output(reports, "show", f"FETCH_HEAD:{pointer}")
+          parsed = subprocess.run(["node", "-e", r"const fs=require('node:fs'); const data=JSON.parse(fs.readFileSync(0,'utf8')); const value=String(data.path || ''); if (!/^openclaw-performance\/[A-Za-z0-9._-]+\/[0-9]+-[0-9]+\/mock-provider$/u.test(value)) process.exit(1); process.stdout.write(value);"], input=pointer_json, text=True, stdout=subprocess.PIPE)
+          check_cancelled()
+          if parsed.returncode:
+              summary("Previous source performance baseline pointer is invalid.")
+              raise SystemExit(0)
+          latest_path = parsed.stdout.rstrip("\n")
+          run_git(reports, "sparse-checkout", "init", "--no-cone")
+          run_git(reports, "sparse-checkout", "set", f"/{latest_path}/source/")
+          run_git(reports, "checkout", "--detach", "FETCH_HEAD")
+          baseline_source = Path(reports) / latest_path / "source"
+          if baseline_source.is_dir():
+              check_cancelled()
+              with open(os.environ["GITHUB_ENV"], "a") as output:
+                  output.write(f"SOURCE_PERF_BASELINE_DIR={baseline_source.resolve()}\n")
+              summary(f"Using source performance baseline: {latest_path}/source")
+          else:
+              summary("Previous source performance baseline has no source directory.")
+          PYTHON
 
       - name: Run OpenClaw source performance probes
         shell: bash
@@ -1026,6 +1053,10 @@ jobs:
           fi
           echo "run=$run_lane" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare Git owner
+        if: steps.lane.outputs.run == 'true'
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout performance publisher helper
         if: steps.lane.outputs.run == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1218,14 +1249,19 @@ jobs:
             exit 1
           fi
 
-          git -C "$reports_root" init -b main
-          git -C "$reports_root" config core.hooksPath /dev/null
-          git -C "$reports_root" remote add origin "https://github.com/openclaw/clawgrit-reports.git"
-          if ! timeout 120s git -C "$reports_root" fetch --depth=1 origin main; then
-            echo "::${annotation}::Unable to fetch openclaw/clawgrit-reports before publishing."
-            exit 1
-          fi
-          git -C "$reports_root" checkout -B main FETCH_HEAD
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" init -b main
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" config core.hooksPath /dev/null
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" remote add origin "https://github.com/openclaw/clawgrit-reports.git"
+          python3 -I -S "$CI_GIT_OWNER" --policy - "$reports_root" "$annotation" <<'PYTHON'
+          import sys
+          from ci_git_owner import run_git, GitFailure, FetchTimeout
+          try:
+              run_git(sys.argv[3], "fetch", "--depth=1", "origin", "main", timeout=120, reclaim_locks=True)
+          except (GitFailure, FetchTimeout):
+              print(f"::{sys.argv[4]}::Unable to fetch openclaw/clawgrit-reports before publishing.")
+              raise SystemExit(1)
+          PYTHON
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" checkout -B main FETCH_HEAD
 
           ref_slug="$(printf '%s' "$TESTED_REF" | tr -c 'A-Za-z0-9._-' '-')"
           if [[ -z "$ref_slug" || "$ref_slug" == "." || "$ref_slug" == ".." ]]; then
@@ -1235,7 +1271,8 @@ jobs:
           run_slug="${GITHUB_RUN_ID}-${PRODUCER_ATTEMPT}"
           dest_rel="openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
           report_url="https://github.com/openclaw/clawgrit-reports/tree/main/${dest_rel}"
-          if git -C "$reports_root" cat-file -e "HEAD:${dest_rel}/report.json" 2>/dev/null; then
+          existing_report="$(python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" ls-tree --name-only HEAD -- "${dest_rel}/report.json")"
+          if [[ -n "$existing_report" ]]; then
             {
               echo "### Clawgrit report already published"
               echo
@@ -1294,13 +1331,21 @@ jobs:
             --publish-root "$dest" \
             --max-file-bytes "$PUBLISHED_REPORT_MAX_FILE_BYTES"
 
-          git -C "$reports_root" config user.name "openclaw-performance[bot]"
-          git -C "$reports_root" config user.email "openclaw-performance[bot]@users.noreply.github.com"
-          git -C "$reports_root" add -- openclaw-performance
-          if ! git -C "$reports_root" diff --cached --quiet; then
-            git -C "$reports_root" commit -m "perf: add OpenClaw ${LANE_ID} report ${TESTED_SHA::12}"
-          fi
-          report_commit="$(git -C "$reports_root" rev-parse HEAD)"
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" config user.name "openclaw-performance[bot]"
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" config user.email "openclaw-performance[bot]@users.noreply.github.com"
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" add -- openclaw-performance
+          report_commit="$(python3 -I -S "$CI_GIT_OWNER" --policy - "$reports_root" "$LANE_ID" "$TESTED_SHA" <<'PYTHON'
+          import sys
+          from ci_git_owner import run_git, git_output, GitFailure
+          try:
+              run_git(sys.argv[3], "diff", "--cached", "--quiet")
+          except GitFailure as error:
+              if error.code != 1:
+                  raise
+              run_git(sys.argv[3], "commit", "-m", f"perf: add OpenClaw {sys.argv[4]} report {sys.argv[5][:12]}", stdout=sys.stderr)
+          print(git_output(sys.argv[3], "rev-parse", "HEAD").rstrip("\n"))
+          PYTHON
+          )"
           echo "already_published=false" >> "$GITHUB_OUTPUT"
           echo "reports_root=$reports_root" >> "$GITHUB_OUTPUT"
           echo "report_commit=$report_commit" >> "$GITHUB_OUTPUT"
@@ -1332,97 +1377,84 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          annotation="$([[ "$REPORT_PUBLISH_REQUIRED" == "true" ]] && printf error || printf warning)"
-          if [[ -z "${CLAWGRIT_REPORTS_APP_TOKEN:-}" ]]; then
-            {
-              echo "### Clawgrit report publish unavailable"
-              echo
-              echo "The repository-scoped ClawSweeper GitHub App token could not be created."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::${annotation}::ClawSweeper GitHub App token is unavailable; Kova artifacts were uploaded, but the report cannot be published."
-            exit 1
-          fi
-          token="$CLAWGRIT_REPORTS_APP_TOKEN"
-          unset CLAWGRIT_REPORTS_APP_TOKEN
-          auth_header="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
-          unset token
-          echo "::add-mask::${auth_header}"
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import base64
+          import os
+          import re
+          from pathlib import Path
+          from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, backoff, check_cancelled
 
-          reports_root="$(realpath "$REPORTS_ROOT")"
-          if [[ "$reports_root" != "$RUNNER_TEMP/"* || ! "$REPORT_COMMIT" =~ ^[0-9a-f]{40}$ || ! "$DEST_REL" =~ ^openclaw-performance/[A-Za-z0-9._-]+/[0-9]+-[0-9]+/[A-Za-z0-9._-]+$ ]]; then
-            echo "::${annotation}::Prepared report metadata failed validation."
-            exit 1
-          fi
-          if [[ "$REPORT_URL" != "https://github.com/openclaw/clawgrit-reports/tree/main/${DEST_REL}" ]]; then
-            echo "::${annotation}::Prepared report URL failed validation."
-            exit 1
-          fi
+          annotation = "error" if os.environ["REPORT_PUBLISH_REQUIRED"] == "true" else "warning"
+          def summary(text):
+              check_cancelled()
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+                  output.write(text + "\n")
+          def fail(message):
+              check_cancelled()
+              print(f"::{annotation}::{message}", flush=True)
+              raise SystemExit(1)
+          def success():
+              summary(f"### Clawgrit report published\n\n- Published report: {os.environ['REPORT_URL']}")
+              raise SystemExit(0)
 
-          git_local() {
-            git -C "$reports_root" -c core.hooksPath=/dev/null "$@"
-          }
-          push_report() {
-            GIT_TERMINAL_PROMPT=0               GIT_CONFIG_COUNT=2               GIT_CONFIG_KEY_0=core.hooksPath               GIT_CONFIG_VALUE_0=/dev/null               GIT_CONFIG_KEY_1=http.https://github.com/.extraheader               GIT_CONFIG_VALUE_1="AUTHORIZATION: basic ${auth_header}"               timeout 120s git -C "$reports_root" push origin HEAD:main
-          }
-          write_publish_success() {
-            {
-              echo "### Clawgrit report published"
-              echo
-              echo "- Published report: ${REPORT_URL}"
-            } >> "$GITHUB_STEP_SUMMARY"
-          }
-          write_publish_failure() {
-            {
-              echo "### Clawgrit report publish failed"
-              echo
-              echo "Kova artifacts were uploaded, but publishing the clawgrit report failed after $1 attempts."
-              echo "Check the ClawSweeper GitHub App installation and contents permission for openclaw/clawgrit-reports."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::${annotation}::Kova artifacts uploaded, but clawgrit report publish failed after $1 attempts."
-          }
-
-          if [[ "$(git_local config --local --get core.hooksPath)" != "/dev/null" || "$(git_local remote get-url origin)" != "https://github.com/openclaw/clawgrit-reports.git" ]]; then
-            echo "::${annotation}::Prepared reports checkout failed integrity validation."
-            exit 1
-          fi
-          git_local cat-file -e "${REPORT_COMMIT}^{commit}"
-          report_commit="$REPORT_COMMIT"
-
-          for attempt in 1 2 3 4 5; do
-            if push_report; then
-              write_publish_success
-              exit 0
-            fi
-
-            sleep $((attempt * 2))
-            if ! timeout 120s git -C "$reports_root" -c core.hooksPath=/dev/null fetch --depth=1 origin main; then
-              if [[ "$attempt" != "5" ]]; then
-                echo "::warning::Unable to refresh openclaw/clawgrit-reports after publish attempt ${attempt}; retrying."
-                continue
-              fi
-            else
-              if git_local cat-file -e "FETCH_HEAD:${DEST_REL}/report.json" 2>/dev/null; then
-                # A timed-out push may have succeeded; verify its unique report before failing.
-                write_publish_success
-                exit 0
-              fi
-              if [[ "$attempt" != "5" ]]; then
-                git_local checkout --detach FETCH_HEAD
-                # The run path is unique; only the shared latest pointer can conflict.
-                # Replaying with the current commit wins that pointer deterministically.
-                if ! git_local cherry-pick -X theirs "$report_commit"; then
-                  git_local cherry-pick --abort || true
-                  echo "::${annotation}::Unable to replay the clawgrit report after a concurrent publish."
-                  exit 1
-                fi
-                report_commit="$(git_local rev-parse HEAD)"
-                continue
-              fi
-            fi
-
-            write_publish_failure "$attempt"
-            exit 1
-          done
+          token = os.environ.pop("CLAWGRIT_REPORTS_APP_TOKEN", "")
+          if not token:
+              summary("### Clawgrit report publish unavailable\n\nThe repository-scoped ClawSweeper GitHub App token could not be created.")
+              fail("ClawSweeper GitHub App token is unavailable; Kova artifacts were uploaded, but the report cannot be published.")
+          auth_header = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+          del token
+          print(f"::add-mask::{auth_header}", flush=True)
+          reports = str(Path(os.environ["REPORTS_ROOT"]).resolve(strict=True))
+          report_commit = os.environ["REPORT_COMMIT"]
+          dest = os.environ["DEST_REL"]
+          if not reports.startswith(os.environ["RUNNER_TEMP"] + "/") or not re.fullmatch(r"[0-9a-f]{40}", report_commit) or not re.fullmatch(r"openclaw-performance/[A-Za-z0-9._-]+/[0-9]+-[0-9]+/[A-Za-z0-9._-]+", dest):
+              fail("Prepared report metadata failed validation.")
+          if os.environ["REPORT_URL"] != f"https://github.com/openclaw/clawgrit-reports/tree/main/{dest}":
+              fail("Prepared report URL failed validation.")
+          local = ("-c", "core.hooksPath=/dev/null")
+          if git_output(reports, *local, "config", "--local", "--get", "core.hooksPath").rstrip("\n") != "/dev/null" or git_output(reports, *local, "remote", "get-url", "origin").rstrip("\n") != "https://github.com/openclaw/clawgrit-reports.git":
+              fail("Prepared reports checkout failed integrity validation.")
+          run_git(reports, *local, "cat-file", "-e", f"{report_commit}^{{commit}}")
+          for attempt in range(1, 6):
+              try:
+                  run_git(reports, "push", "origin", "HEAD:main", timeout=120, reclaim_locks=True, env={
+                      "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_COUNT": "2",
+                      "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": "/dev/null",
+                      "GIT_CONFIG_KEY_1": "http.https://github.com/.extraheader",
+                      "GIT_CONFIG_VALUE_1": f"AUTHORIZATION: basic {auth_header}",
+                  })
+              except (GitFailure, FetchTimeout):
+                  # Only ordinary failures after verified extinction authorize reconciliation.
+                  # The fifth ambiguous push still gets its backoff, fetch and duplicate check.
+                  backoff(attempt * 2)
+              else:
+                  success()
+              try:
+                  run_git(reports, *local, "fetch", "--depth=1", "origin", "main", timeout=120, reclaim_locks=True)
+              except (GitFailure, FetchTimeout):
+                  check_cancelled()
+                  if attempt != 5:
+                      print(f"::warning::Unable to refresh openclaw/clawgrit-reports after publish attempt {attempt}; retrying.", flush=True)
+                      continue
+              else:
+                  if git_output(reports, *local, "ls-tree", "--name-only", "FETCH_HEAD", "--", f"{dest}/report.json").rstrip("\n"):
+                      success()
+                  if attempt != 5:
+                      run_git(reports, *local, "checkout", "--detach", "FETCH_HEAD")
+                      # Unique report paths coexist; the current writer wins the shared latest pointer.
+                      try:
+                          run_git(reports, *local, "cherry-pick", "-X", "theirs", report_commit)
+                      except GitFailure:
+                          try:
+                              run_git(reports, *local, "cherry-pick", "--abort")
+                          except GitFailure:
+                              pass
+                          fail("Unable to replay the clawgrit report after a concurrent publish.")
+                      report_commit = git_output(reports, *local, "rev-parse", "HEAD").rstrip("\n")
+                      continue
+              summary(f"### Clawgrit report publish failed\n\nKova artifacts were uploaded, but publishing the clawgrit report failed after {attempt} attempts.\nCheck the ClawSweeper GitHub App installation and contents permission for openclaw/clawgrit-reports.")
+              fail(f"Kova artifacts uploaded, but clawgrit report publish failed after {attempt} attempts.")
+          PYTHON
 
   artifact_only_guard:
     name: Verify artifact-only report mode

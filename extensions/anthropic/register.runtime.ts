@@ -3,6 +3,7 @@
  * CLI auth, dynamic model normalization, usage auth, media, and stream wrappers.
  */
 import { formatCliCommand, parseDurationMs } from "openclaw/plugin-sdk/cli-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginApi,
@@ -1220,9 +1221,9 @@ export function buildAnthropicProvider(): ProviderPlugin {
 /** Register Anthropic provider, Claude CLI backend, and media understanding provider. */
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   let supportsDynamicSystemPromptSections = false;
-  // Start once at plugin load. The first Claude execution awaits the same promise,
-  // so a post-ready gateway hook cannot race the first session's immutable argv.
-  const dynamicSystemPromptSectionsProbe = (async () => {
+  // Catalog discovery must not materialize the runtime for a CLI-only capability probe.
+  // First CLI executions share and await it before resolving immutable process argv.
+  const ensureDynamicSystemPromptSectionsSupport = createLazyRuntimeModule(async () => {
     try {
       const result = await api.runtime.system.runCommandWithTimeout(["claude", "--version"], {
         timeoutMs: 1_500,
@@ -1234,10 +1235,10 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     } catch {
       supportsDynamicSystemPromptSections = false;
     }
-  })();
+  });
   api.registerCliBackend(
     buildAnthropicCliBackend({
-      ensureDynamicSystemPromptSectionsSupport: () => dynamicSystemPromptSectionsProbe,
+      ensureDynamicSystemPromptSectionsSupport,
       supportsDynamicSystemPromptSections: () => supportsDynamicSystemPromptSections,
     }),
   );

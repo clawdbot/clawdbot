@@ -3,13 +3,18 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
+  checkClientVoiceToolConfirmationPolicy,
+  noteClientVoiceConfirmationUtterance,
+} from "../../talk/client-voice-confirmation.js";
+import { resetClientVoiceConfirmationStateForTest } from "../../talk/client-voice-confirmation.test-support.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view-tool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
@@ -89,6 +94,7 @@ const mocks = vi.hoisted(() => ({
   consultRealtimeVoiceAgent: vi.fn(async (_params?: unknown) => ({ text: "agent answer" })),
   closeTalkClientGatewayControlSession: vi.fn(async () => false),
   gatewayControlActivate: vi.fn(),
+  gatewayControlAdoptProvider: vi.fn(async () => undefined),
   gatewayControlClose: vi.fn(async () => undefined),
   gatewayControl: { bindBridge: vi.fn() },
   createTalkClientGatewayControlOwner: vi.fn(),
@@ -334,6 +340,8 @@ beforeEach(() => {
     );
   });
 });
+
+afterEach(() => resetClientVoiceConfirmationStateForTest());
 
 function markTalkOwnerCold(ownerId: string): void {
   setActiveDegradedSecretOwners([
@@ -582,6 +590,7 @@ describe("talk.catalog handler", () => {
       defaultModel: "gpt-realtime-2.1",
       models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
       voices: ["alloy", "marin"],
+      capabilities: { voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] } },
       resolveConfig: vi.fn(({ rawConfig }: { rawConfig: Record<string, unknown> }) => rawConfig),
       isConfigured: vi.fn(() => false),
       createBridge: vi.fn(),
@@ -618,6 +627,7 @@ describe("talk.catalog handler", () => {
     expect(catalog.realtime.providers[0]).toMatchObject({
       models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
       voices: ["alloy", "marin"],
+      voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] },
     });
     // Catalog readiness must mirror talk.client.create: top-level
     // talk.realtime.model overrides the provider-level model and the resolved
@@ -2731,6 +2741,67 @@ describe("talk.client.toolCall handler", () => {
     finishRun?.();
   });
 
+  it("keeps the started run registered when refusal invalidates a detached confirmation", async () => {
+    const now = Date.now();
+    const challenge = checkClientVoiceToolConfirmationPolicy({
+      agentId: "main",
+      voiceSessionId: "voice-test",
+      runId: "run-original",
+      toolName: "message",
+      toolParams: { action: "send", message: "cancelled action" },
+      now,
+    });
+    if (challenge.allowed) {
+      throw new Error("expected voice confirmation challenge");
+    }
+    const confirmationId = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
+    if (!confirmationId) {
+      throw new Error("missing voice confirmation id");
+    }
+    noteClientVoiceConfirmationUtterance({
+      agentId: "main",
+      voiceSessionId: "voice-test",
+      text: "yes",
+      timestamp: now + 1,
+    });
+    mocks.chatSend.mockImplementationOnce(
+      async ({
+        respond,
+      }: {
+        respond: (ok: boolean, result?: unknown, error?: unknown) => void;
+      }) => {
+        noteClientVoiceConfirmationUtterance({
+          agentId: "main",
+          voiceSessionId: "voice-test",
+          text: "no",
+          timestamp: now + 3,
+        });
+        respond(true, { runId: "run-stale-confirmation" }, undefined);
+      },
+    );
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.client.toolCall", {
+      params: {
+        sessionKey: "main",
+        voiceSessionId: "voice-test",
+        callId: "call-stale-confirmation",
+        name: "openclaw_agent_consult",
+        args: { question: "Do it", confirmationId },
+      },
+      respond,
+      context: { getRuntimeConfig: () => ({}) as OpenClawConfig },
+    });
+
+    expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        voiceSessionId: "voice-test",
+        runId: "run-stale-confirmation",
+      }),
+    );
+    expectRespondOk(respond, { runId: "run-stale-confirmation" });
+  });
+
   it("passes configured consult thinking and fast-mode overrides to chat.send", async () => {
     const respond = vi.fn();
 
@@ -2963,11 +3034,19 @@ describe("talk.client.create handler", () => {
     mocks.createOrResumeClientVoiceSession.mockReturnValue("voice-test");
     mocks.resolveClientVoiceAgentSessionId.mockReturnValue("session-main");
     mocks.closeTalkClientGatewayControlSession.mockResolvedValue(false);
-    mocks.createTalkClientGatewayControlOwner.mockReturnValue({
-      activate: mocks.gatewayControlActivate,
-      close: mocks.gatewayControlClose,
-      control: mocks.gatewayControl,
-    });
+    mocks.createTalkClientGatewayControlOwner.mockImplementation(
+      (params: {
+        runAgentConsult: (args: unknown, signal?: AbortSignal) => Promise<{ text: string }>;
+      }) => ({
+        activate: mocks.gatewayControlActivate,
+        adoptProvider: mocks.gatewayControlAdoptProvider,
+        close: mocks.gatewayControlClose,
+        assertOpen: vi.fn(),
+        control: mocks.gatewayControl,
+        runAgentConsult: ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>
+          params.runAgentConsult({ question: prompt }, signal),
+      }),
+    );
   });
 
   it("builds realtime launch defaults from talk.realtime", () => {
@@ -3240,7 +3319,8 @@ describe("talk.client.create handler", () => {
         transcriptCapable: true,
       }),
     );
-    expect(mocks.gatewayControlActivate).toHaveBeenCalledWith(expect.any(Function));
+    expect(mocks.gatewayControlAdoptProvider).toHaveBeenCalledWith(expect.any(Function));
+    expect(mocks.gatewayControlActivate).toHaveBeenCalledOnce();
     expectRespondOk(respond, {
       ...browserSession,
       voiceSessionId: "voice-gateway",
@@ -4214,7 +4294,7 @@ describe("role-required Talk session creation", () => {
           agentId: "main",
           sessionKey: "agent:main:talk-required",
           creation: expect.objectContaining({
-            actor: { type: "human", id: profile.id },
+            actor: { type: "human", source: "profile", id: profile.id },
             sandbox: "required",
           }),
         }),

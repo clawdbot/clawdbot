@@ -32,6 +32,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
+  isRuntimeCompactionDelegate,
   prepareMemorySystemPromptAddition,
 } from "./delegate.js";
 import { LegacyContextEngine } from "./legacy.js";
@@ -286,15 +287,16 @@ describe("Engine contract tests", () => {
       sessionKey: "agent:main:s2",
       storePath: "/tmp/openclaw-agent.sqlite",
     };
+    const runtimeContext = {
+      workspaceDir: "/tmp/workspace",
+      currentTokenCount: 12345,
+    };
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",
       sessionKey: "agent:main:s2",
       sessionTarget,
       tokenBudget: 4096,
-      runtimeContext: {
-        workspaceDir: "/tmp/workspace",
-        currentTokenCount: 12345,
-      },
+      runtimeContext,
     });
 
     expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
@@ -306,6 +308,7 @@ describe("Engine contract tests", () => {
     expect(compactRuntimeParams.tokenBudget).toBe(4096);
     expect(compactRuntimeParams.currentTokenCount).toBe(12345);
     expect(compactRuntimeParams.workspaceDir).toBe("/tmp/workspace");
+    expect(compactRuntimeParams.contextEngineRuntimeContext).toBe(runtimeContext);
     expect(result).toEqual({
       ok: true,
       compacted: false,
@@ -713,6 +716,12 @@ describe("Default engine selection", () => {
   it("resolveContextEngine() with no config returns the default ('legacy') engine", async () => {
     const engine = await resolveContextEngine();
     expect(engine.info.id).toBe("legacy");
+  });
+
+  it("preserves native compaction watchdog ownership through default resolution", async () => {
+    const engine = await resolveContextEngine();
+
+    expect(isRuntimeCompactionDelegate(Reflect.get(engine, "compact", engine))).toBe(true);
   });
 
   it("resolveContextEngine() with config contextEngine='legacy' returns legacy engine", async () => {
@@ -1534,6 +1543,7 @@ describe("Invalid engine fallback", () => {
     expect(engine.info.id).toBe("legacy");
     expect(engine.info.ownsCompaction).toBeUndefined();
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
+    expect(isRuntimeCompactionDelegate(Reflect.get(engine, "compact", engine))).toBe(true);
     expect(assemble).toHaveBeenCalledTimes(1);
   });
 
@@ -1624,6 +1634,7 @@ describe("Invalid engine fallback", () => {
     expect(engine.info.id).toBe("legacy");
     expect(engine.info.ownsCompaction).toBeUndefined();
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
+    expect(isRuntimeCompactionDelegate(Reflect.get(engine, "compact", engine))).toBe(true);
     expect(compact).toHaveBeenCalledTimes(1);
   });
 
@@ -1684,11 +1695,18 @@ describe("Invalid engine fallback", () => {
     expect(listContextEngineQuarantines()).toEqual([]);
   });
 
-  it("does not quarantine abort rejections from lifecycle methods", async () => {
+  it("does not quarantine causal abort rejections from lifecycle methods", async () => {
     const engineId = uniqueEngineId("abort-rejection");
-    const abortError = new Error("compaction aborted");
-    abortError.name = "AbortError";
-    const controller = new AbortController();
+    const compactAbortReason = new Error("user stopped compaction");
+    const compactAbortError = new Error("compaction aborted", { cause: compactAbortReason });
+    compactAbortError.name = "AbortError";
+    const compactController = new AbortController();
+    const maintainAbortReason = new Error("gateway shutdown");
+    const maintainAbortError = new Error("maintenance cancelled", {
+      cause: maintainAbortReason,
+    });
+    maintainAbortError.name = "AbortError";
+    const maintainController = new AbortController();
     registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Abort Aware Engine" },
       async ingest() {
@@ -1698,8 +1716,12 @@ describe("Invalid engine fallback", () => {
         return { messages, estimatedTokens: 0 };
       },
       async compact() {
-        controller.abort(new Error("user stopped run"));
-        throw abortError;
+        compactController.abort(compactAbortReason);
+        throw compactAbortError;
+      },
+      async maintain() {
+        maintainController.abort(maintainAbortReason);
+        throw maintainAbortError;
       },
     }));
 
@@ -1709,14 +1731,140 @@ describe("Invalid engine fallback", () => {
       engine.compact({
         sessionId: "s1",
         sessionKey: "agent:main:s1",
-        abortSignal: controller.signal,
+        abortSignal: compactController.signal,
       }),
     ).rejects.toThrow("compaction aborted");
+    await expect(
+      engine.maintain?.({
+        sessionId: "s1",
+        sessionFile: "/tmp/s1.jsonl",
+        abortSignal: maintainController.signal,
+      }),
+    ).rejects.toThrow("maintenance cancelled");
 
     const nextEngine = await resolveContextEngine(configWithSlot(engineId));
     expect(nextEngine.info.id).toBe(engineId);
     expect(listContextEngineQuarantines()).toEqual([]);
     expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke guarded maintenance for an already-aborted signal", async () => {
+    const engineId = uniqueEngineId("maintain-pre-abort");
+    const maintain = vi.fn(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    registerTestContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Pre-Abort Engine" },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }: { messages: AgentMessage[] }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      maintain,
+    }));
+    const controller = new AbortController();
+    const reason = new Error("shutdown already requested");
+    controller.abort(reason);
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    await expect(
+      engine.maintain?.({
+        sessionId: "s1",
+        sessionFile: "/tmp/s1.jsonl",
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+
+    expect(maintain).not.toHaveBeenCalled();
+    expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe(engineId);
+    expect(listContextEngineQuarantines()).toEqual([]);
+  });
+
+  it("does not quarantine standard AbortError from aborted maintenance", async () => {
+    const engineId = uniqueEngineId("maintain-standard-abort");
+    const controller = new AbortController();
+    const abortError = new Error("This operation was aborted");
+    abortError.name = "AbortError";
+    let observedSignal: AbortSignal | undefined;
+    registerTestContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Standard Abort Engine" },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }: { messages: AgentMessage[] }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      async maintain({ abortSignal }) {
+        observedSignal = abortSignal;
+        await new Promise<void>((_resolve, reject) => {
+          abortSignal?.addEventListener("abort", () => reject(abortError), { once: true });
+        });
+        return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+      },
+    }));
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    const maintenance = engine.maintain?.({
+      sessionId: "s1",
+      sessionFile: "/tmp/s1.jsonl",
+      abortSignal: controller.signal,
+    });
+    await vi.waitFor(() => expect(observedSignal).toBe(controller.signal));
+    controller.abort(new Error("gateway shutdown"));
+
+    await expect(maintenance).rejects.toBe(abortError);
+    expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe(engineId);
+    expect(listContextEngineQuarantines()).toEqual([]);
+  });
+
+  it("quarantines standard AbortError when maintenance was not aborted", async () => {
+    const engineId = uniqueEngineId("maintain-unrelated-standard-abort");
+    const controller = new AbortController();
+    const abortError = new Error("This operation was aborted");
+    abortError.name = "AbortError";
+    registerTestContextEngine(engineId, () => ({
+      info: { id: engineId, name: "Unrelated Standard Abort Engine" },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble({ messages }: { messages: AgentMessage[] }) {
+        return { messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+      async maintain() {
+        throw abortError;
+      },
+    }));
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    await expect(
+      engine.maintain?.({
+        sessionId: "s1",
+        sessionFile: "/tmp/s1.jsonl",
+        abortSignal: controller.signal,
+      }),
+    ).resolves.toMatchObject({ changed: false });
+
+    expect(controller.signal.aborted).toBe(false);
+    expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
+    expect(listContextEngineQuarantines()).toEqual([
+      expect.objectContaining({
+        engineId,
+        operation: "maintain",
+        reason: "This operation was aborted",
+      }),
+    ]);
   });
 
   it("quarantines subagent preparation failures while failing the active spawn closed", async () => {

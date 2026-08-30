@@ -12,9 +12,11 @@ import {
   WORKER_PROTOCOL_METHODS,
   validateRequestFrame,
   validateWorkerConnectRequestFrame,
+  validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { isWorkerTranscriptFrameWithinBudget } from "../../../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { rawDataByteLength } from "../../../infra/ws.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -76,11 +78,13 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   const sessionOperations = new Set<string>();
+  const computerLifetime = new AbortController();
   const cleanup = () => {
     if (disposed) {
       return;
     }
     disposed = true;
+    computerLifetime.abort(new Error("Worker computer connection closed"));
     clearTimeout(expiryTimer);
     sessionOperations.clear();
     params.socket.off("message", onMessage);
@@ -277,9 +281,18 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       closeWorker(1008, "invalid-frame");
       return;
     }
+    const mediaTranscript =
+      parsed.method === "worker.transcript.commit" &&
+      validateWorkerTranscriptCommitParams(parsed.params) &&
+      isWorkerTranscriptFrameWithinBudget({
+        ...parsed,
+        method: "worker.transcript.commit",
+        params: parsed.params,
+      });
     if (
       frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES &&
-      parsed.method !== WORKER_INFERENCE_METHODS[0]
+      parsed.method !== WORKER_INFERENCE_METHODS[0] &&
+      !mediaTranscript
     ) {
       failFrame(1009, "invalid-frame");
       return;
@@ -292,6 +305,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method === WORKER_PROTOCOL_METHODS[4] ||
       parsed.method === WORKER_PROTOCOL_METHODS[5] ||
       parsed.method === WORKER_PROTOCOL_METHODS[6] ||
+      parsed.method === "worker.computer" ||
       parsed.method === WORKER_INFERENCE_METHODS[0] ||
       parsed.method === WORKER_INFERENCE_METHODS[1]
     ) {
@@ -331,7 +345,8 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method === WORKER_PROTOCOL_METHODS[3] ||
       parsed.method === WORKER_PROTOCOL_METHODS[4] ||
       parsed.method === WORKER_PROTOCOL_METHODS[5] ||
-      parsed.method === WORKER_PROTOCOL_METHODS[6];
+      parsed.method === WORKER_PROTOCOL_METHODS[6] ||
+      parsed.method === "worker.computer";
     if (isLongSessionOperation) {
       if (sessionOperations.has(parsed.id)) {
         failFrame(1008, "invalid-frame");
@@ -342,12 +357,11 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         return;
       }
       sessionOperations.add(parsed.id);
-      // Provisioning and recipient turns can take minutes. Retain independent
-      // shutdown admission while releasing this connection's ordered frame
-      // queue so heartbeats, cancellation, and terminal ACKs keep flowing. A
-      // socket is only a response transport: disconnecting it must not cancel
-      // an admitted durable operation after external effects may have begun.
-      void runWithGatewayIndependentRootWorkContinuation(() => dispatch())
+      // Release the frame queue while retaining shutdown admission. Desktop input
+      // belongs to this socket; durable session work survives response-transport loss.
+      void runWithGatewayIndependentRootWorkContinuation(() =>
+        dispatch(parsed.method === "worker.computer" ? computerLifetime.signal : undefined),
+      )
         .catch(() => {
           respond(false, undefined, workerProtocolError("gateway-unavailable"));
         })

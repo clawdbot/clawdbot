@@ -2,7 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
-import { startQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -94,10 +95,10 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
     },
     async (apiRoot) =>
       await withTempDir("openclaw-telegram-failure-settlement-", async (workspace) => {
-        let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+        const gatewayOwner = createQaGatewayChild();
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
-          gateway = await startQaGatewayChild({
+          await gatewayOwner.start({
             repoRoot,
             useRepoCli: true,
             providerBaseUrl: `${apiRoot}/v1`,
@@ -168,7 +169,7 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
             });
           expect(providerRequests).toBeGreaterThan(0);
         } finally {
-          await gateway?.stop();
+          await stopQaGatewayFixture(gatewayOwner);
           for (const poll of pendingPolls) {
             poll.destroy();
           }

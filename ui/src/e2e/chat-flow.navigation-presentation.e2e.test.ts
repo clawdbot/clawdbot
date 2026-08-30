@@ -6,6 +6,7 @@ import {
   chatSessionListResponse,
   controlUiSessionPath,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
   sidebarSessionOrder,
@@ -70,7 +71,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count(), { timeout: 10_000 }).toBe(2);
       await expect
@@ -126,13 +127,28 @@ suite.define(() => {
       methodResponses: {
         "chat.history": initialResponses,
         "chat.startup": initialResponses,
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          {
+            key: sessionA,
+            sessionId: `${sessionA}:backing`,
+            kind: "direct",
+            label: "Session A",
+            updatedAt: 2,
+          },
+          {
+            key: sessionB,
+            sessionId: `${sessionB}:backing`,
+            kind: "direct",
+            label: "Session B",
+            updatedAt: 1,
+          },
+        ]),
       },
       sessionKey: sessionA,
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       await waitForChatScrollIdle(page);
       await gateway.waitForRequest("agent.identity.get");
       const initialIdentityRequestCount = (await gateway.getRequests("agent.identity.get")).length;
@@ -227,7 +243,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Split toolbar proof.").waitFor({ timeout: 10_000 });
 
       // Desktop renders no topbar row: the sidebar owns navigation.
@@ -278,7 +294,14 @@ suite.define(() => {
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
       await panes.last().getByText("Split toolbar proof.").waitFor();
-      await expect.poll(() => panes.last().locator(".chat-loading-skeleton").count()).toBe(0);
+      await expect
+        .poll(() =>
+          panes
+            .last()
+            .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+            .count(),
+        )
+        .toBe(0);
       await gateway.resolveDeferred("chat.startup");
       await expect
         .poll(() =>
@@ -695,7 +718,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
         .waitFor({
@@ -761,7 +784,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
       await page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`).waitFor();
       await page
         .locator(".chat-pane-cache__pane--visible .chat-pane__session-title")
@@ -901,7 +924,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, initialKey));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.locator("a.sidebar-recent-session__link").click();
       await expect

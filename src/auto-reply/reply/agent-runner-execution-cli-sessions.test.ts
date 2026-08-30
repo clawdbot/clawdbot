@@ -30,6 +30,10 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 const state = setupAgentRunnerExecutionTestState();
 afterEach(resetGeneratedMediaTaskActivityForTests);
 
+function rejectUnexpectedCompactionSuccessor(): never {
+  throw new Error("Unexpected compaction successor during CLI session routing test");
+}
+
 describe("executeAgentTurn: CLI session routing", () => {
   it("carries the admitted session permission and placement into the CLI grant", async () => {
     state.isCliProviderMock.mockReturnValue(true);
@@ -70,6 +74,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-sonnet-4-6";
     const restoreAdmission = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {
         sessionEntry = admittedSessionEntry;
         return await runLocal();
@@ -141,6 +146,7 @@ describe("executeAgentTurn: CLI session routing", () => {
         runId: run.runId,
         workspaceDir: run.workspaceDir,
         config: run.config,
+        sessionEntry: run.sessionEntry,
         backend,
       });
       prepared.params = {
@@ -188,6 +194,7 @@ describe("executeAgentTurn: CLI session routing", () => {
         id: "claude-sonnet-4-6",
         contextWindow: 400_000,
         contextTokens: 321_000,
+        input: ["text", "image"],
       },
     ];
 
@@ -698,6 +705,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     const activeSessionStore = { main: sessionEntry };
     let cleanupObservedBeforePlacementRelease = false;
     const restoreAdmission = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {
         const resultLocal = await runLocal();
         expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
@@ -953,6 +961,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       notifyAdmissionWait = resolve;
     });
     const restoreAdmission = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {
         notifyAdmissionWait();
         await admissionGate;

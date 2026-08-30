@@ -1,143 +1,85 @@
 // Application-owned browser push subscription lifecycle.
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import type {
+  WebPushCapabilityAction,
+  WebPushCapabilityPatch,
+  WebPushCapabilityRuntime,
+  WebPushPreferencesResult,
+  WebPushSubscriptionState,
+} from "./web-push.runtime.ts";
 
-type WebPushSnapshot = {
+export type WebPushSnapshot = {
   supported: boolean;
-  permission: NotificationPermission | "unsupported";
-  subscribed: boolean;
+  permission: NotificationPermission | "install-required" | "unsupported";
+  subscription: WebPushSubscriptionState;
   loading: boolean;
-  error: string | null;
+  error?: string | null;
+  preferences?: WebPushPreferencesResult | null;
 };
 
 export type WebPushCapability = {
   readonly snapshot: WebPushSnapshot;
-  subscribe: (listener: (snapshot: WebPushSnapshot) => void) => () => void;
-  enable: () => Promise<void>;
-  disable: () => Promise<void>;
-  sendTest: () => Promise<void>;
+  subscribe: (listener: () => void) => () => void;
+  run: (action: WebPushCapabilityAction) => Promise<void>;
   dispose: () => void;
 };
 
-function isWebPushSupported(): boolean {
-  return (
-    typeof navigator !== "undefined" &&
-    "serviceWorker" in navigator &&
-    typeof window !== "undefined" &&
-    "PushManager" in window &&
-    "Notification" in window
-  );
-}
-
 export function createWebPushCapability(gateway: ApplicationGateway): WebPushCapability {
-  const supported = isWebPushSupported();
-  let snapshot: WebPushSnapshot = {
+  const nav = globalThis.navigator;
+  const ios =
+    /iPad|iPhone|iPod/u.test(nav.userAgent) ||
+    (nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
+  // SAFETY: iOS Safari's non-standard standalone flag is optional and read-only.
+  const installed = !ios || (nav as Navigator & { standalone?: boolean }).standalone === true;
+  const supported =
+    installed &&
+    "serviceWorker" in nav &&
+    "PushManager" in globalThis &&
+    "Notification" in globalThis;
+  const snapshot: WebPushSnapshot = {
     supported,
-    permission: supported ? Notification.permission : "unsupported",
-    subscribed: false,
+    permission: installed
+      ? supported
+        ? Notification.permission
+        : "unsupported"
+      : "install-required",
+    subscription: "unknown",
     loading: false,
-    error: null,
   };
-  let disposed = false;
-  let wasConnected = false;
-  let operation: Promise<void> | null = null;
-  const listeners = new Set<(snapshot: WebPushSnapshot) => void>();
+  const listeners = new Set<() => void>();
 
-  const publish = (patch: Partial<WebPushSnapshot>) => {
-    if (disposed) {
-      return;
-    }
-    snapshot = { ...snapshot, ...patch };
+  const publish = (patch: WebPushCapabilityPatch) => {
+    Object.assign(snapshot, patch);
     for (const listener of listeners) {
-      listener(snapshot);
+      listener();
     }
   };
-
-  const readExistingSubscription = async () => {
-    if (!supported) {
-      return null;
-    }
-    const { getExistingSubscription } = await import("./web-push.runtime.ts");
-    const subscription = await getExistingSubscription();
-    publish({ subscribed: subscription !== null });
-    return subscription;
-  };
-
-  const reconcile = async (client: GatewayBrowserClient) => {
-    try {
-      const subscription = await readExistingSubscription();
-      const json = subscription?.toJSON();
-      if (!json?.endpoint || !json.keys?.p256dh || !json.keys.auth) {
-        return;
-      }
-      await client.request("push.web.subscribe", {
-        endpoint: json.endpoint,
-        keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-      });
-    } catch {
-      // Existing subscriptions are reconciled best-effort after reconnect.
-    }
-  };
-
-  const run = (action: (client: GatewayBrowserClient) => Promise<void>) => {
-    const client = gateway.snapshot.client;
-    if (!supported || !client || operation) {
-      return operation ?? Promise.resolve();
-    }
-    publish({ loading: true, error: null });
-    operation = action(client)
-      .catch((error: unknown) => {
-        publish({ error: formatUiError(error) });
-      })
-      .finally(() => {
-        operation = null;
-        publish({
-          loading: false,
-          permission: "Notification" in window ? Notification.permission : "unsupported",
-        });
-      });
-    return operation;
-  };
-
-  void readExistingSubscription().catch(() => {});
-  const stopGateway = gateway.subscribe((gatewaySnapshot) => {
-    const client = gatewaySnapshot.client;
-    const connected = gatewaySnapshot.phase === "connected" && client !== null;
-    if (connected && !wasConnected && client) {
-      void reconcile(client);
-    }
-    wasConnected = connected;
-  });
-
+  const runtime: Promise<WebPushCapabilityRuntime | null> | null = snapshot.supported
+    ? import("./web-push.runtime.ts")
+        .then(({ createWebPushCapabilityRuntime }) =>
+          createWebPushCapabilityRuntime({ gateway, publish }),
+        )
+        .catch((error: unknown) => {
+          publish({
+            supported: false,
+            permission: "unsupported",
+            subscription: "unknown",
+            preferences: null,
+            error: formatUiError(error),
+          });
+          return null;
+        })
+    : null;
   return {
-    get snapshot() {
-      return snapshot;
-    },
+    snapshot,
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    enable: () =>
-      run(async (client) => {
-        const { subscribeToWebPush } = await import("./web-push.runtime.ts");
-        await subscribeToWebPush(client);
-        publish({ subscribed: true });
-      }),
-    disable: () =>
-      run(async (client) => {
-        const { unsubscribeFromWebPush } = await import("./web-push.runtime.ts");
-        await unsubscribeFromWebPush(client);
-        publish({ subscribed: false });
-      }),
-    sendTest: () =>
-      run(async (client) => {
-        const { sendTestWebPush } = await import("./web-push.runtime.ts");
-        await sendTestWebPush(client);
-      }),
+    run: (action) => (runtime ? runtime.then((owner) => owner?.run(action)) : Promise.resolve()),
     dispose() {
-      disposed = true;
-      stopGateway();
+      void runtime?.then((owner) => owner?.dispose());
       listeners.clear();
     },
   };

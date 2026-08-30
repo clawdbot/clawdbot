@@ -104,6 +104,61 @@ describe("memory index", () => {
     }
   });
 
+  it("adopts a configured fallback index published by detached maintenance", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      model: "new-embed",
+    });
+    const maintenanceManager = await getFreshManager(cfg);
+    const maintenanceFields = maintenanceManager as unknown as {
+      providerInitialized: boolean;
+      provider: {
+        id: string;
+        model: string;
+        embed: (text: string) => Promise<number[]>;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+        close: () => Promise<void>;
+      };
+    };
+    maintenanceFields.providerInitialized = true;
+    maintenanceFields.provider = {
+      id: "mock",
+      model: "new-embed",
+      embed: async () => {
+        throw providerFixture.createLocalWorkerExitError();
+      },
+      embedBatch: async () => {
+        throw providerFixture.createLocalWorkerExitError();
+      },
+      close: async () => {},
+    };
+    await maintenanceManager.sync({ reason: "search", force: true });
+    expect(maintenanceManager.status()).toMatchObject({
+      provider: "fallback-provider",
+      model: "fallback-provider-embed",
+      custom: { indexIdentity: { status: "valid" } },
+    });
+    await maintenanceManager.close?.();
+
+    const manager = await getFreshManager(cfg);
+    // The existing serving manager handed its dirty generation to maintenance
+    // before the fallback index was published. Do not model a separate startup scan.
+    Reflect.set(manager, "dirty", false);
+    const callsBeforeSearch = providerFixture.providerCalls.length;
+
+    const results = await manager.search("alpha");
+
+    expect(results).not.toStrictEqual([]);
+    expect(providerFixture.providerCalls.slice(callsBeforeSearch)).toContainEqual(
+      expect.objectContaining({ provider: "fallback-provider" }),
+    );
+    expect(manager.status()).toMatchObject({
+      provider: "fallback-provider",
+      model: "fallback-provider-embed",
+    });
+    expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  });
+
   it("reinitializes the configured provider after probe-time local degradation", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",

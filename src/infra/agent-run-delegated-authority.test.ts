@@ -46,6 +46,32 @@ test("delegated authority closes exactly once on replacement, exact close, and l
   }
 });
 
+test("authority closure reaches concurrent observers despite errors and independent unsubscribe", () => {
+  const closed: string[] = [];
+  const stopApprovalObserver = registerAgentRunDelegatedAuthorityClosedHandler((authority) => {
+    closed.push(`approval:${authority.operationalRunInstance.instanceId}`);
+  });
+  const stopFaultyObserver = registerAgentRunDelegatedAuthorityClosedHandler(() => {
+    throw new Error("observer failed");
+  });
+  const stopTransferObserver = registerAgentRunDelegatedAuthorityClosedHandler((authority) => {
+    closed.push(`transfer:${authority.operationalRunInstance.instanceId}`);
+  });
+  try {
+    const first = claimAgentRunDelegatedAuthority({ instanceId: "first", runId: "run" });
+    releaseAgentRunDelegatedAuthority(first);
+    expect(closed).toEqual(["approval:first", "transfer:first"]);
+    stopTransferObserver();
+    const second = claimAgentRunDelegatedAuthority({ instanceId: "second", runId: "run" });
+    releaseAgentRunDelegatedAuthority(second);
+    expect(closed).toEqual(["approval:first", "transfer:first", "approval:second"]);
+  } finally {
+    stopTransferObserver();
+    stopFaultyObserver();
+    stopApprovalObserver();
+  }
+});
+
 test("stale projection sweeping cannot retire a live delegated authority claim", () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(100);
   const authority = claimAgentRunDelegatedAuthority({

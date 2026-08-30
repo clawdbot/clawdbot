@@ -305,6 +305,120 @@ describe("resolveExecDefaults", () => {
     });
   });
 
+  it.each([
+    {
+      permissionMode: "guarded",
+      override: { security: "deny" },
+      security: "deny",
+      ask: "on-miss",
+      mode: "deny",
+    },
+    {
+      permissionMode: "guarded",
+      override: { ask: "always" },
+      security: "allowlist",
+      ask: "always",
+      mode: "ask",
+    },
+    {
+      permissionMode: "guarded",
+      override: { mode: "deny" },
+      security: "deny",
+      ask: "on-miss",
+      mode: "deny",
+    },
+    {
+      permissionMode: "guarded",
+      override: { security: "full", ask: "off" },
+      security: "allowlist",
+      ask: "on-miss",
+      mode: "ask",
+    },
+    {
+      permissionMode: "guarded",
+      override: { mode: "full" },
+      security: "allowlist",
+      ask: "on-miss",
+      mode: "ask",
+    },
+    {
+      permissionMode: "guarded",
+      override: undefined,
+      security: "allowlist",
+      ask: "on-miss",
+      mode: "ask",
+    },
+    {
+      permissionMode: "read-only",
+      override: { mode: "deny" },
+      security: "deny",
+      ask: "off",
+      mode: "deny",
+    },
+    {
+      permissionMode: "guarded",
+      override: { mode: "ask" },
+      security: "allowlist",
+      ask: "on-miss",
+      mode: "ask",
+    },
+    {
+      permissionMode: "workspace",
+      override: { mode: "auto" },
+      security: "allowlist",
+      ask: "on-miss",
+      mode: "auto",
+    },
+    {
+      permissionMode: "full",
+      override: { mode: "full" },
+      security: "full",
+      ask: "off",
+      mode: "full",
+    },
+    {
+      permissionMode: "workspace",
+      override: { mode: "auto", security: "deny", ask: "always" },
+      security: "deny",
+      ask: "always",
+      mode: "deny",
+    },
+  ] as const)(
+    "only tightens $permissionMode with $override",
+    ({ permissionMode, override, ...expected }) => {
+      expect(
+        resolveExecDefaults({
+          sessionEntry: { permissionMode },
+          execOverrides: override,
+          sandboxAvailable: false,
+        }),
+      ).toMatchObject(expected);
+    },
+  );
+
+  it.each([
+    {
+      override: { mode: "full", security: "allowlist" },
+      security: "deny",
+      ask: "always",
+      mode: "deny",
+    },
+    { override: { mode: "full", ask: "on-miss" }, security: "full", ask: "on-miss", mode: "full" },
+    { override: { mode: "full" }, security: "full", ask: "off", mode: "full" },
+  ] as const)(
+    "bounds tightened full sessions with host floors for $override",
+    ({ override, ...expected }) => {
+      expect(
+        resolveExecDefaults({
+          sessionEntry: { permissionMode: "full" },
+          execOverrides: override,
+          execApprovals: { version: 1, defaults: { security: "deny", ask: "always" } },
+          sandboxAvailable: false,
+        }),
+      ).toMatchObject(expected);
+    },
+  );
+
   it("keeps agent mode overrides ahead of the global mode", () => {
     expect(
       resolveExecDefaults({

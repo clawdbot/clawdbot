@@ -433,6 +433,9 @@ function buildTalkCatalog(config: OpenClawConfig) {
         if (provider.voices?.length) {
           entry.voices = [...provider.voices];
         }
+        if (capabilities?.voicesByModel) {
+          entry.voicesByModel = capabilities.voicesByModel;
+        }
         if (provider.aliases?.length) {
           entry.aliases = [...provider.aliases];
         }

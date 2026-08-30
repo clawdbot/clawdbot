@@ -1,3 +1,4 @@
+import { t } from "../i18n/index.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -244,6 +245,20 @@ export const KEYBOARD_SHORTCUTS_ELEMENT = {
   tagName: KEYBOARD_SHORTCUTS_TAG,
   label: KEYBOARD_SHORTCUTS_TAG,
   loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
+} satisfies OptionalCustomElement;
+
+const MACOS_TITLEBAR_TAG = "openclaw-macos-titlebar-controls";
+
+export const MACOS_TITLEBAR_ELEMENT = {
+  tagName: MACOS_TITLEBAR_TAG,
+  label: MACOS_TITLEBAR_TAG,
+  loadModule: () => import("../components/macos-titlebar-controls.runtime.ts"),
+} satisfies OptionalCustomElement;
+
+export const SIDEBAR_ATTENTION_ELEMENT = {
+  tagName: "openclaw-sidebar-attention",
+  label: t("attention.issues"),
+  loadModule: () => import("../components/sidebar-attention.ts"),
 } satisfies OptionalCustomElement;
 
 export const TERMINAL_PANEL_ELEMENT = {

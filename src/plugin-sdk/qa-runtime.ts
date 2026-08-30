@@ -1,4 +1,5 @@
 import { createServer } from "node:net";
+import path from "node:path";
 // QA runtime helpers register and execute plugin QA scenarios from local files.
 import { runExec } from "./process-runtime.js";
 import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
@@ -18,6 +19,23 @@ export type {
   LiveTransportQaCredentialCliOptions,
   LiveTransportQaSuiteCommandOptions,
 } from "./qa-runner-runtime.js";
+
+/** Release only this QA root's parent stores before its files are removed. */
+export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
+  const [auth, agents, state, paths] = await Promise.all([
+    import("../agents/auth-profiles/sqlite.js"),
+    import("../state/openclaw-agent-db.js"),
+    import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-state-db.paths.js"),
+  ]);
+  // Agent close releases leases through shared state. Keep that owner alive
+  // until every scoped handle closes, or exit-time release can recreate the root.
+  auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
+  agents.closeOpenClawAgentDatabases(tempRoot);
+  state.closeOpenClawStateDatabaseByPath(
+    paths.resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }),
+  );
+}
 
 type QaRuntimeSurface = {
   acquireQaCredentialLease: <TPayload>(options: {
@@ -41,7 +59,13 @@ type QaRuntimeSurface = {
       preferredLiveModel?: string;
     },
   ) => string;
-  startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
+  createQaLiveLaneGateway: () => {
+    start: (...args: unknown[]) => Promise<unknown>;
+    stop: () => Promise<{
+      process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
+      errors: unknown[];
+    }>;
+  };
   startQaCredentialLeaseHeartbeat: (lease: {
     heartbeat(): Promise<void>;
     heartbeatIntervalMs: number;

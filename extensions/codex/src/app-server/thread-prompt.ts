@@ -1,10 +1,10 @@
 import {
+  buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildHarnessVisibleReplyGuidance,
   buildSkillWorkshopPromptSection,
   resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
-  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
@@ -23,6 +23,7 @@ export function buildDeveloperInstructions(
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
 ): string {
   const deferredToolNames = new Set<string>();
+  let secretsToolName: string | undefined;
   let hasSkillWorkshop = false;
   let hasSessionsSpawn = false;
   let hasSessionsYield = false;
@@ -42,6 +43,9 @@ export function buildDeveloperInstructions(
       const name = tool.name.trim();
       if (tool.deferLoading === true && name) {
         deferredToolNames.add(name);
+      }
+      if (name === "secrets" && params.disableTools !== true) {
+        secretsToolName ??= spec.type === "namespace" ? `${spec.name}.${name}` : name;
       }
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
       hasSessionsSpawn ||= name === "sessions_spawn";
@@ -109,7 +113,7 @@ export function buildDeveloperInstructions(
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       messageToolAvailable,
     }),
-    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
+    buildCredentialSafetyPrompt(secretsToolName),
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];

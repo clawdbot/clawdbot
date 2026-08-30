@@ -29,6 +29,7 @@ type StartingRun = {
   scopeKey?: string;
   terminationReason?: TerminationReason;
   cancel?: (reason: TerminationReason) => void;
+  pending?: Promise<ManagedRun>;
 };
 
 type StartingScope = {
@@ -96,12 +97,15 @@ function resolveElapsedTimeoutReason(params: {
 }
 
 export function createProcessSupervisor(): ProcessSupervisor & {
+  shutdown: () => Promise<void>;
   waitForScope: (scopeKey: string) => Promise<void>;
 } {
   const registry = createRunRegistry();
   const active = new Map<string, ActiveRun>();
   const startingRuns = new Map<string, StartingRun>();
   const startingScopes = new Map<string, StartingScope>();
+  let shuttingDown = false;
+  let shutdownPromise: Promise<void> | null = null;
 
   const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
     const current = active.get(runId);
@@ -142,12 +146,17 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     }
   };
 
-  const waitForScope = async (scopeKey: string): Promise<void> => {
+  const waitForRuns = async (
+    scopeKey: string | null,
+    ignoreStartupFailures = false,
+  ): Promise<void> => {
     let firstFailure: PromiseRejectedResult | undefined;
     while (true) {
-      const starts = Array.from(startingScopes.get(scopeKey)?.runs ?? []);
+      const starts = Array.from(startingRuns.values())
+        .filter((current) => scopeKey === null || current.scopeKey === scopeKey)
+        .flatMap((current) => (current.pending ? [current.pending] : []));
       const owned = Array.from(active.values())
-        .filter((current) => current.scopeKey === scopeKey)
+        .filter((current) => scopeKey === null || current.scopeKey === scopeKey)
         .map((current) => current.waitForExtinction());
       if (starts.length === 0 && owned.length === 0) {
         if (firstFailure) {
@@ -158,11 +167,12 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       // Startup can become active while the snapshot settles; recheck both maps
       // so shutdown cannot outrun an admitted command or retained descendants.
       const results = await Promise.allSettled([...owned, ...starts]);
-      firstFailure ??= results.find(
-        (result): result is PromiseRejectedResult => result.status === "rejected",
-      );
+      firstFailure ??= results
+        .slice(0, ignoreStartupFailures ? owned.length : undefined)
+        .find((result): result is PromiseRejectedResult => result.status === "rejected");
     }
   };
+  const waitForScope = (scopeKey: string): Promise<void> => waitForRuns(scopeKey);
 
   const startRun = async (
     input: SpawnInput,
@@ -533,6 +543,9 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   };
 
   const spawn = (input: SpawnInput): Promise<ManagedRun> => {
+    if (shuttingDown) {
+      return Promise.reject(new Error("process supervisor is shut down"));
+    }
     const scopeKey = normalizeOptionalString(input.scopeKey);
     const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
     const startingRun: StartingRun = { scopeKey };
@@ -560,6 +573,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       previous.length > 0
         ? Promise.allSettled(previous).then(() => startRun(input, scopeKey, runId, startingRun))
         : startRun(input, scopeKey, runId, startingRun);
+    startingRun.pending = pending;
     starting?.runs.add(pending);
     if (starting && input.replaceExistingScope) {
       starting.replacement = pending;
@@ -581,10 +595,26 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     return pending;
   };
 
+  const shutdown = (): Promise<void> => {
+    // Publish the admission fence before cancellation can invoke owner callbacks.
+    shuttingDown = true;
+    return (shutdownPromise ??= Promise.resolve().then(async () => {
+      while (startingRuns.size || active.size) {
+        for (const runId of new Set([...startingRuns.keys(), ...active.keys()])) {
+          cancel(runId);
+        }
+        // A failed startup owns no live process; only failed owner extinction
+        // must keep the process-wide supervisor fenced for operator recovery.
+        await waitForRuns(null, true);
+      }
+    }));
+  };
+
   return {
     spawn,
     cancel,
     cancelScope,
+    shutdown,
     waitForScope,
     getRecord: (runId: string) => registry.get(runId),
   };

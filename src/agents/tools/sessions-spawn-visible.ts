@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
@@ -41,13 +42,13 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
     }),
   ),
-  category: Type.Optional(
+  group: Type.Optional(
     Type.String({
       description:
-        "Sidebar category for a visible session. Omit or pass an empty string to leave it ungrouped.",
+        "Custom sidebar group for a visible session; a new name creates the group. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -108,14 +109,14 @@ export async function maybeSpawnVisibleSession(params: {
   sandbox: "inherit" | "require";
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
+  const promptedAt = Date.now();
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
-  const categoryProvided = Object.hasOwn(params.raw, "category");
-  const requestedCategory = readToolStringParam(params.raw, "category", { allowEmpty: true });
+  const group = readToolStringParam(params.raw, "group");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
-      ["category", categoryProvided ? requestedCategory : undefined],
+      ["group", group],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -125,7 +126,8 @@ export async function maybeSpawnVisibleSession(params: {
       .map(([name]) => name);
     if (providedVisibleOnlyParams.length > 0) {
       throw new ToolInputError(
-        `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}`,
+        `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}. ` +
+          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
       );
     }
     return undefined;
@@ -133,6 +135,8 @@ export async function maybeSpawnVisibleSession(params: {
   const modelOverride = normalizeToolModelOverride(readToolStringParam(params.raw, "model"));
   const requestedCwd = readToolStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+  // A visible session starts one run; empty attachment fields request no staging.
+  const requestedMode = params.raw.mode === "run" ? undefined : params.raw.mode;
   const unsupported = [
     [
       "runtime",
@@ -149,7 +153,7 @@ export async function maybeSpawnVisibleSession(params: {
       params.raw.thread === true ? true : undefined,
       "visible sessions route to the dashboard, not a channel thread",
     ],
-    ["mode", params.raw.mode, "visible sessions are persistent dashboard sessions"],
+    ["mode", requestedMode, "visible sessions are persistent dashboard sessions"],
     [
       "lightContext",
       params.raw.lightContext === true ? true : undefined,
@@ -157,12 +161,16 @@ export async function maybeSpawnVisibleSession(params: {
     ],
     [
       "attachments",
-      Array.isArray(params.raw.attachments) ? params.raw.attachments : undefined,
+      Array.isArray(params.raw.attachments) && params.raw.attachments.length > 0
+        ? params.raw.attachments
+        : undefined,
       "attachment staging is not wired to the sessions.create path",
     ],
     [
       "attachAs",
-      params.raw.attachAs,
+      isRecord(params.raw.attachAs)
+        ? readToolStringParam(params.raw.attachAs, "mountPath")
+        : params.raw.attachAs,
       "attachment staging is not wired to the sessions.create path",
     ],
   ] as const;
@@ -207,7 +215,6 @@ export async function maybeSpawnVisibleSession(params: {
     sessionKey: requesterKey,
     agentId: params.options?.requesterAgentIdOverride,
   });
-  const category = normalizeOptionalString(requestedCategory);
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -321,7 +328,8 @@ export async function maybeSpawnVisibleSession(params: {
       response = await createGatewayCall("sessions.create", {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
-        ...(category ? { category } : {}),
+        // sessions.create persists the group under the legacy wire field `category`.
+        ...(group ? { category: group } : {}),
         model: resolvedModel,
         task: params.task,
         parentSessionKey: requesterKey,
@@ -441,10 +449,10 @@ export async function maybeSpawnVisibleSession(params: {
       };
     }
     recordSessionParticipantBestEffort({
-      actor: { type: "agent", id: requesterAgentId },
+      promptedAt,
+      identity: { type: "agent", id: requesterAgentId },
       agentId: targetAgentId,
       sessionKey: childSessionKey,
-      source: "agent",
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
     });
     const ownerLabel = normalizeOptionalString(resolveAgentIdentity(cfg, requesterAgentId)?.name);

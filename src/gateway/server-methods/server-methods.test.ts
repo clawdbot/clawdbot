@@ -156,6 +156,7 @@ function assistantAudioAttachmentHistoryMessage(
   text: string,
   timestamp: number,
   fields: ChatHistoryTestMessage = {},
+  includeLocalUrl = true,
 ): ChatHistoryTestMessage {
   return {
     role: "assistant",
@@ -164,7 +165,7 @@ function assistantAudioAttachmentHistoryMessage(
       {
         type: "attachment",
         attachment: {
-          url: "/tmp/tts.mp3",
+          ...(includeLocalUrl ? { url: "/tmp/tts.mp3" } : {}),
           kind: "audio",
           label: "tts.mp3",
           mimeType: "audio/mpeg",
@@ -184,6 +185,19 @@ function ttsSupplementHistoryMessage(
   return assistantAudioAttachmentHistoryMessage(text, timestamp, {
     openclawTtsSupplement: marker,
   });
+}
+
+function projectedTtsSupplementHistoryMessage(
+  marker: { textSha256: string; spokenText?: string },
+  timestamp: number,
+  text = "Audio reply",
+): ChatHistoryTestMessage {
+  return assistantAudioAttachmentHistoryMessage(
+    text,
+    timestamp,
+    { openclawTtsSupplement: marker },
+    false,
+  );
 }
 
 function deliveryMirrorHistoryMessage(
@@ -1841,7 +1855,7 @@ describe("projectChatDisplayMessages", () => {
 
     expect(result).toEqual([
       projectedSessionsSendHistoryMessage(visibleText, 1),
-      ttsSupplementHistoryMessage({ textSha256 }, 2),
+      projectedTtsSupplementHistoryMessage({ textSha256 }, 2),
     ]);
   });
 
@@ -2162,7 +2176,7 @@ describe("projectChatDisplayMessages", () => {
 
     expect(result).toEqual([
       userHistoryMessage("first", { timestamp: 1 }),
-      assistantAudioAttachmentHistoryMessage(visibleText, 2),
+      assistantAudioAttachmentHistoryMessage(visibleText, 2, {}, false),
       userHistoryMessage("second", { timestamp: 3 }),
     ]);
   });
@@ -2184,6 +2198,7 @@ describe("projectChatDisplayMessages", () => {
         `${projectedVisibleText.slice(0, 24)}\n...(truncated)...`,
         1,
         { __openclaw: { truncated: true, reason: "display-cap" } },
+        false,
       ),
     ]);
   });
@@ -2202,7 +2217,7 @@ describe("projectChatDisplayMessages", () => {
     expect(result).toEqual([
       assistantHistoryMessage(visibleText, { timestamp: 1 }),
       userHistoryMessage("again", { timestamp: 2 }),
-      ttsSupplementHistoryMessage(ttsSupplement, 3, visibleText),
+      projectedTtsSupplementHistoryMessage(ttsSupplement, 3, visibleText),
     ]);
   });
 });
@@ -2857,6 +2872,11 @@ describe("exec approval handlers", () => {
   }
 
   function createForwardingExecApprovalFixture(opts?: {
+    webPushDelivery?: {
+      handleRequested: ReturnType<typeof vi.fn>;
+      handleResolved: ReturnType<typeof vi.fn>;
+      handleExpired: ReturnType<typeof vi.fn>;
+    };
     iosPushDelivery?: {
       handleRequested: ReturnType<typeof vi.fn>;
       handleResolved: ReturnType<typeof vi.fn>;
@@ -2878,11 +2898,13 @@ describe("exec approval handlers", () => {
       getRuntimeConfig: () => ({}),
       broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
+      approvalWebPushDelivery: opts?.webPushDelivery,
     };
     return {
       manager,
       handlers,
       forwarder,
+      webPushDelivery: opts?.webPushDelivery,
       iosPushDelivery: opts?.iosPushDelivery,
       respond,
       context,
@@ -2890,6 +2912,16 @@ describe("exec approval handlers", () => {
   }
 
   function createIosPushDelivery(
+    handleRequested: ReturnType<typeof vi.fn> = vi.fn(async () => true),
+  ) {
+    return {
+      handleRequested,
+      handleResolved: vi.fn(async () => {}),
+      handleExpired: vi.fn(async () => {}),
+    };
+  }
+
+  function createWebPushDelivery(
     handleRequested: ReturnType<typeof vi.fn> = vi.fn(async () => true),
   ) {
     return {
@@ -4330,6 +4362,36 @@ describe("exec approval handlers", () => {
     await waitForFast(() => {
       expectRecordFields(mockCallArg(iosPushDelivery.handleResolved), {
         id: "approval-ios-cleanup",
+        decision: "allow-once",
+      });
+    });
+  });
+
+  it("sends Web Push terminal replacement on resolve", async () => {
+    const webPushDelivery = createWebPushDelivery();
+    const { handlers, respond, context } = createForwardingExecApprovalFixture({
+      webPushDelivery,
+    });
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { timeoutMs: 60_000, id: "approval-web-push-cleanup", host: "gateway" },
+    });
+    await waitForFast(() => {
+      expect(webPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+    });
+
+    await resolveExecApprovalForTest({
+      handlers,
+      id: "approval-web-push-cleanup",
+      context,
+    });
+    await requestPromise;
+
+    await waitForFast(() => {
+      expectRecordFields(mockCallArg(webPushDelivery.handleResolved), {
+        id: "approval-web-push-cleanup",
         decision: "allow-once",
       });
     });

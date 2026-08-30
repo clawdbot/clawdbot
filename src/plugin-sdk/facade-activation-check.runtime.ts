@@ -19,6 +19,7 @@ import {
 } from "../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { parsePluginCacheJson, readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "./facade-activation-contract.js";
@@ -104,7 +105,6 @@ function getFacadeManifestRegistry(params: {
 export function resolveRegistryPluginModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
 }): FacadeModuleLocation | null {
   const registry = getFacadeManifestRegistry(params.env ? { env: params.env } : {});
@@ -119,16 +119,20 @@ function readBundledPluginManifestRecordFromDir(params: {
   pluginsRoot: string;
   resolvedDirName: string;
 }): FacadePluginManifestLike | null {
-  const manifestPath = path.join(
-    params.pluginsRoot,
-    params.resolvedDirName,
-    "openclaw.plugin.json",
-  );
-  if (!fs.existsSync(manifestPath)) {
+  const file = readPluginCacheFile({
+    rootDir: path.join(params.pluginsRoot, params.resolvedDirName),
+    relativePath: "openclaw.plugin.json",
+    rejectHardlinks: false,
+  });
+  if (!file.ok) {
     return null;
   }
   try {
-    const raw = parseJsonWithJson5Fallback(fs.readFileSync(manifestPath, "utf8")) as {
+    const parsed = parsePluginCacheJson(file, { json5: true });
+    if (!parsed.ok) {
+      return null;
+    }
+    const raw = parsed.value as {
       id?: unknown;
       enabledByDefault?: unknown;
       channels?: unknown;
@@ -201,7 +205,6 @@ function resolveBundledPluginManifestRecord(params: {
   artifactBasename: string;
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
 }): FacadePluginManifestLike | null {
   const metadataRecord = resolveBundledMetadataManifestRecord(params);
@@ -234,7 +237,6 @@ export function resolveTrackedFacadePluginId(params: {
   artifactBasename: string;
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   return resolveBundledPluginManifestRecord(params)?.id ?? params.dirName;
@@ -246,7 +248,6 @@ export function resolveBundledPluginPublicSurfaceAccess(params: {
   artifactBasename: string;
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
 }): { allowed: boolean; pluginId?: string; reason?: string } {
   if (
@@ -327,7 +328,6 @@ export function resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(params: 
   artifactBasename: string;
   location: FacadeModuleLocation | null;
   sourceExtensionsRoot: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
 }) {
   const access = resolveBundledPluginPublicSurfaceAccess(params);

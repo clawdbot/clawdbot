@@ -164,7 +164,7 @@ const DEFAULT_CRON_FORM: CronFormState = {
   payloadModel: "",
   payloadThinking: "",
   payloadLightContext: false,
-  deliveryMode: "announce",
+  deliveryMode: "none",
   deliveryChannel: "last",
   deliveryTo: "",
   deliveryAccountId: "",
@@ -206,6 +206,7 @@ export type CronState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   cronLoading: boolean;
+  cronJobsError: string | null;
   cronJobsLoadingMore: boolean;
   cronJobsReloadPending: boolean;
   cronJobsReloadPendingTableFilters: boolean;
@@ -270,6 +271,7 @@ export function createInitialCronState(
     client: snapshot.client ?? null,
     connected: snapshot.connected ?? false,
     cronLoading: false,
+    cronJobsError: null,
     cronJobsLoadingMore: false,
     cronJobsReloadPending: false,
     cronJobsReloadPendingTableFilters: false,
@@ -713,7 +715,7 @@ export async function loadCronJobsPage(
   } else {
     state.cronLoading = true;
   }
-  state.cronError = null;
+  state.cronJobsError = null;
   try {
     const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
     const res = await state.client.request<CronJobsListResult>("cron.list", {
@@ -756,7 +758,7 @@ export async function loadCronJobsPage(
     // A filtered/paged list is not deletion authority. Only an explicit remove
     // may clear an editor opened from an exact job definition.
   } catch (err) {
-    state.cronError = formatUiError(err);
+    state.cronJobsError = formatUiError(err);
   } finally {
     if (append) {
       state.cronJobsLoadingMore = false;

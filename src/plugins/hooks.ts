@@ -9,7 +9,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
+import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   expandToolGroups,
@@ -30,6 +30,7 @@ import {
 } from "./hook-decision-types.js";
 import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
+import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
@@ -266,6 +267,14 @@ function getHooksForName<K extends PluginHookName>(
       if (hook.hookName !== hookName) {
         return false;
       }
+      if (hookName === "reply_dispatch" && hook.eligibleDispatchKinds !== undefined) {
+        const kind =
+          typeof ctx === "object" && ctx !== null && "dispatchKind" in ctx
+            ? ctx.dispatchKind
+            : undefined;
+        // Unknown callers cannot prove exclusion from a hook, including during recovery checks.
+        return !isPluginHookReplyDispatchKind(kind) || hook.eligibleDispatchKinds.includes(kind);
+      }
       if (hookName !== "before_agent_reply" || hook.eligibleTriggers === undefined) {
         return true;
       }
@@ -485,14 +494,10 @@ export function createHookRunner(
     if (normalizedRight.includes("*")) {
       return normalizedLeft;
     }
+    const matchesLeft = createToolPolicyMatcher({ allow: normalizedLeft });
+    const matchesRight = createToolPolicyMatcher({ allow: normalizedRight });
     return [...new Set(normalizeToolList([...normalizedLeft, ...normalizedRight]))].filter(
-      (name) => {
-        const normalized = normalizeToolPolicyName(name);
-        return (
-          isToolAllowedByPolicyName(normalized, { allow: normalizedLeft }) &&
-          isToolAllowedByPolicyName(normalized, { allow: normalizedRight })
-        );
-      },
+      (name) => matchesLeft(name) && matchesRight(name),
     );
   };
 
@@ -1735,7 +1740,7 @@ export function createHookRunner(
 
   function hasHooks<K extends PluginHookName>(
     hookName: K,
-    ctx?: Parameters<PluginHookHandlerMap[K]>[1],
+    ctx?: Partial<Parameters<PluginHookHandlerMap[K]>[1]>,
   ): boolean {
     if (ctx === undefined) {
       return registry.typedHooks.some((hook) => hook.hookName === hookName);

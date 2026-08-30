@@ -28,6 +28,9 @@ describe("normalizeMcpToolCatalog", () => {
 
     expect(normalized.tools.map((entry) => entry.name)).toEqual(["healthy"]);
     expect(normalized.deniedTools).toEqual([]);
+    expect(normalized.excludedTools.map((entry) => entry.name)).toEqual(
+      colliding.map((entry) => entry.name.trim()),
+    );
     expect(normalized.metadata.validatorForCall(colliding[0]?.name.trim() ?? "")).toBeUndefined();
   });
 
@@ -44,12 +47,14 @@ describe("normalizeMcpToolCatalog", () => {
         tool("excluded", {
           outputSchema: { type: "object", $ref: "#/$defs/Missing" },
         }),
+        tool("task_only", { execution: { taskSupport: "required" } }),
       ],
       createMcpJsonSchemaValidator(),
       (toolName) => (toolName === "excluded" ? "exclude" : "include"),
     );
 
     expect(normalized.tools.map((entry) => entry.name)).toEqual(["healthy"]);
+    expect(normalized.excludedTools.map((entry) => entry.name)).toEqual(["excluded", "task_only"]);
     expect(normalized.metadata.validatorForCall("healthy")).toBeTypeOf("function");
     expect(normalized.metadata.validatorForCall("excluded")).toBeUndefined();
   });

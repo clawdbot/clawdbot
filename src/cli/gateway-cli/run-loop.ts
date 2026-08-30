@@ -574,6 +574,7 @@ export async function runGatewayLoop(params: {
         | "restored-in-process"
         | "restart-after-exit"
         | undefined;
+      let shutdownFailed = false;
       const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs(restartIntent) : 0;
       const restartDrainDeadlineAt =
         isRestart && restartDrainTimeoutMs !== undefined
@@ -734,6 +735,7 @@ export async function runGatewayLoop(params: {
           ...(closeDrainTimeoutMs !== null ? { drainTimeoutMs: closeDrainTimeoutMs } : {}),
         });
       } catch (err) {
+        shutdownFailed = true;
         gatewayLog.error(`shutdown step failed (gateway server close): ${formatErrorMessage(err)}`);
       } finally {
         const handoffClosed =
@@ -743,7 +745,9 @@ export async function runGatewayLoop(params: {
         }
         if (isRestart) {
           try {
-            if (handoffClosed) {
+            if (shutdownFailed) {
+              await forceExitAfterStabilityBundle("gateway.restart_close_failed");
+            } else if (handoffClosed) {
               await handleRestartAfterServerClose(
                 managedUpdateOwner,
                 managedUpdateCancellation === "restored-in-process",
@@ -1006,6 +1010,9 @@ export async function runGatewayLoop(params: {
       // suspension admission callback and discards the coordinator entry.
       resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetAllLanes();
+      // resetAllLanes installs the next admission generation. Keep the local
+      // mirror aligned so a restart queued during cleanup closes that generation.
+      restartDrainingMarked = false;
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
       // Rent: a failed startup has no server close handle, and restart hooks can
@@ -1023,9 +1030,6 @@ export async function runGatewayLoop(params: {
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstIteration = true;
     for (;;) {
-      // The restart hook reopens admission before reloading durable state. Clear
-      // its local mirror first so a failed reload cannot skip the next drain.
-      restartDrainingMarked = false;
       let startupFailedBeforeServerHandle = false;
       const isRestartIteration = !isFirstIteration;
       isFirstIteration = false;

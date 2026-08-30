@@ -48,6 +48,30 @@ For tab endpoints, `targetId` is the compatibility field name. Prefer passing
 `suggestedTargetId` from `GET /tabs` or `POST /tabs/open`; labels and `tabId`
 handles such as `t1` are also accepted. Raw CDP target ids and unique raw
 target-id prefixes still work, but they are volatile diagnostic handles.
+Tab handles are scoped to a browser host or node and profile; keep that route
+with the handle when making follow-up requests.
+
+The Control UI's `browser.request` Gateway method accepts `target: "host"` to
+pin the Gateway host or `target: "node"` with `node: "<node-id>"` to pin a browser
+node. Pass the profile in `query.profile`. Explicit routes do not fall back to
+another host; omitting them keeps the configured automatic routing. These
+routing fields do not grant access or change browser policy.
+
+Browser previews require a result from the `browser` tool with a known route.
+Browser-shaped metadata from other tools does not trigger screenshots or change
+the panel's selection; those results remain ordinary tool output.
+
+When URL validation fails during tab listing, the tab keeps its identity and
+title but returns `url: ""` and `urlUnavailableReason`:
+
+- `navigation_blocked`: navigation rules rejected the address.
+- `navigation_check_failed`: OpenClaw could not validate the address, for example
+  because DNS lookup failed. Refresh to check again.
+
+An empty URL alone does not indicate a policy denial. Navigation-policy errors
+also carry `reason: "navigation_blocked"`; raw blocked URLs and DNS details are
+not included in that metadata. Tab listings are observations, not authorization:
+every subsequent content read or action still enforces its own checks.
 
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
@@ -286,6 +310,8 @@ Snapshot flags at a glance:
 - `--format aria`: accessibility tree with `axN` refs. When Playwright is available, OpenClaw binds refs with backend DOM ids to the live page so follow-up actions can use them; otherwise treat the output as inspection-only.
 - `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/configuration-reference#browser)).
 - `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
+- A selector-scoped snapshot is a point-in-time observation: if no element matches when the snapshot is requested, it returns an empty snapshot immediately instead of waiting for the snapshot timeout. Use `openclaw browser wait "<selector>"` when the page is expected to add the element later.
+- `--selector` does not change the behavior of page-wide or frame-scoped transport failures; those still use the configured snapshot timeout and diagnostics.
 - With Playwright, `--labels` adds a screenshot with overlayed ref labels
   (prints `MEDIA:<path>`) plus an `annotations` array with each ref's bounding
   box. On `screenshot`, Playwright-backed labels work with `--full-page`,

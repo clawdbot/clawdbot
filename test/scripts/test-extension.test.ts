@@ -607,8 +607,8 @@ describe("scripts/test-extension.mts", () => {
         OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
         OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
           process.cwd(),
-          "node_modules",
-          ".experimental-vitest-cache",
+          ".cache",
+          "vitest",
           "extension-batch",
           "0-heavy",
         ),

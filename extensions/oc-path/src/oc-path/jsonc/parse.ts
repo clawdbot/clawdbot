@@ -19,7 +19,7 @@ const MAX_PARSE_DEPTH = 256;
  * by patching this constant — no SDK affordance because it isn't a
  * supported configuration.
  */
-const MAX_JSONC_INPUT_BYTES = 16 * 1024 * 1024;
+export const MAX_JSONC_INPUT_BYTES = 16 * 1024 * 1024;
 const JSONC_PARSE_INVALID_SYMBOL = 1;
 const JSONC_PARSE_END_OF_FILE_EXPECTED = 9;
 

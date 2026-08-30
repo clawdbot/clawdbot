@@ -1,13 +1,13 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectDefined,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   pauseVirtualClock,
   requireRecord,
@@ -80,7 +80,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
       const secondRow = page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`);
       await expect
         .poll(async () =>
@@ -192,7 +192,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.getByText("Implementing the repair").waitFor();
       if (captureUiProofEnabled) {
@@ -255,7 +255,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const recentRow = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
       );
@@ -342,25 +342,18 @@ suite.define(() => {
     const busyKey = "agent:main:busy-session";
     const plainKey = "agent:main:plain-session";
     const longKey = "agent:main:long-title-session";
-    const homeKey = "agent:main:main";
+    const unreadKey = "agent:main:unread-session";
     await installMockGateway(page, {
-      featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
       methodResponses: {
-        "board.get": {
-          cases: [homeKey, busyKey, plainKey, longKey].map((sessionKey) => ({
-            match: { sessionKey },
-            response: {
-              sessionKey,
-              revision: 1,
-              tabs:
-                sessionKey === homeKey || sessionKey === busyKey
-                  ? [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }]
-                  : [],
-              widgets: [],
-            },
-          })),
-        },
         "sessions.list": chatSessionListResponse([
+          {
+            key: unreadKey,
+            kind: "direct",
+            label: "Movies and recommendations for the weekend",
+            icon: "🎬",
+            updatedAt: 3,
+            unread: true,
+          },
           {
             key: busyKey,
             kind: "direct",
@@ -379,6 +372,7 @@ suite.define(() => {
             },
             incognito: true,
             hasAutomation: true,
+            boardFace: "dashboard",
             status: "running",
             unread: true,
           },
@@ -405,7 +399,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, plainKey));
       const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
       const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
       await busyRow.locator(".session-row-badges").waitFor();
@@ -426,34 +420,12 @@ suite.define(() => {
       await previewToggle.click();
       await busyRow.locator(".sidebar-recent-session__subtitle").waitFor();
       const sidebar = page.locator("openclaw-app-sidebar");
-      const homeBoard = sidebar
-        .locator(".nav-item--home")
-        .getByRole("img", { name: "Dashboard available" })
-        .locator("svg");
-      const sessionBoard = busyRow.getByRole("img", { name: "Dashboard available" }).locator("svg");
+      expect(await sidebar.getByRole("img", { name: "Dashboard available" }).count()).toBe(0);
+      expect(await sidebar.getByRole("img", { name: "Automation attached" }).count()).toBe(0);
       const ordinaryBadge = busyRow.locator(".session-row-badge--incognito svg");
-      await homeBoard.waitFor({ state: "visible" });
-      await sessionBoard.waitFor({ state: "visible" });
-      const automationBadge = busyRow
-        .getByRole("img", { name: "Automation attached" })
-        .locator("svg");
       for (const colorScheme of ["dark", "light"] as const) {
         await page.emulateMedia({ colorScheme });
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(colorScheme);
-        const automationStyle = await automationBadge.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { color: style.color, strokeWidth: style.strokeWidth };
-        });
-        for (const board of [homeBoard, sessionBoard]) {
-          expect
-            .soft(
-              await board.evaluate((element) => {
-                const style = getComputedStyle(element);
-                return { color: style.color, strokeWidth: style.strokeWidth };
-              }),
-            )
-            .toEqual(automationStyle);
-        }
         for (const reducedMotion of ["no-preference", "reduce"] as const) {
           await page.emulateMedia({ reducedMotion });
           const spinnerColors = await busyRow
@@ -498,14 +470,10 @@ suite.define(() => {
           });
         }
         badgeSizes.push(
-          await Promise.all(
-            [homeBoard, sessionBoard, ordinaryBadge].map((icon) =>
-              icon.evaluate((element) => {
-                const { height, width } = element.getBoundingClientRect();
-                return { height, width };
-              }),
-            ),
-          ),
+          await ordinaryBadge.evaluate((element) => {
+            const { height, width } = element.getBoundingClientRect();
+            return { height, width };
+          }),
         );
       }
 
@@ -570,7 +538,7 @@ suite.define(() => {
       expect(layout.state.right).toBeLessThanOrEqual(layout.endcap.right);
       expect(layout.spinner.left).toBeGreaterThanOrEqual(layout.endcap.left);
       expect(layout.spinner.right).toBeLessThanOrEqual(layout.endcap.right);
-      expect(layout.atoms.length).toBeGreaterThanOrEqual(3);
+      expect(layout.atoms).toHaveLength(2);
       for (const atom of layout.atoms) {
         expect(atom.left).toBeGreaterThanOrEqual(layout.endcap.left);
         expect(atom.right).toBeLessThanOrEqual(layout.endcap.right);
@@ -609,6 +577,35 @@ suite.define(() => {
       expect(intrinsicAtomWidth).toBeGreaterThan(0);
       expect(longLayout.endcapWidth).toBeGreaterThanOrEqual(intrinsicAtomWidth);
 
+      const unreadRow = page.locator(`.sidebar-recent-session[data-session-key="${unreadKey}"]`);
+      const unreadDot = unreadRow.locator(".session-unread-dot");
+      const unreadTitle = unreadRow.locator(".sidebar-recent-session__name");
+      await unreadDot.waitFor({ state: "visible" });
+      const restingWidth = await unreadTitle.evaluate((element) => element.clientWidth);
+      await unreadRow.hover();
+      if (captureUiProofEnabled) {
+        await shellNav.screenshot({
+          animations: "disabled",
+          path: path.join(sessionSecondRowProofDir, "03-unread-hover.png"),
+        });
+      }
+      await unreadDot.waitFor({ state: "hidden" });
+      const hoverWidth = await unreadTitle.evaluate((element) => element.clientWidth);
+      const actionReserve = await unreadRow.evaluate((element) =>
+        Number.parseFloat(
+          getComputedStyle(element).getPropertyValue("--session-row-actions-reserve"),
+        ),
+      );
+      // Collapsing the unread track gives its width back to the title; merely
+      // making the dot transparent would still squeeze the text by the full reserve.
+      expect(restingWidth - hoverWidth).toBeLessThan(actionReserve);
+      await page.mouse.move(900, 400);
+      await unreadDot.waitFor({ state: "visible" });
+      await unreadRow.locator("[data-session-menu]").focus();
+      await unreadDot.waitFor({ state: "hidden" });
+      await sidebarResizer.focus();
+      await unreadDot.waitFor({ state: "visible" });
+
       await busyRow.hover();
       await expect
         .poll(() =>
@@ -631,12 +628,8 @@ suite.define(() => {
         });
       }
       await plainRow.waitFor();
-      for (const sizes of badgeSizes) {
-        expect(sizes).toEqual([
-          { height: 12, width: 12 },
-          { height: 12, width: 12 },
-          { height: 12, width: 12 },
-        ]);
+      for (const size of badgeSizes) {
+        expect(size).toEqual({ height: 12, width: 12 });
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -669,7 +662,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const documentMarker = await page.evaluate(() => {
         const marker = crypto.randomUUID();
         (window as Window & { __openclawAvatarTestDocument?: string })[

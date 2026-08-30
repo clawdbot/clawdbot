@@ -22,8 +22,8 @@ export async function collectCrabboxNodeEnrollmentEvidence(params: {
       binary: params.binary,
       input: [
         `state_dir="$HOME/.openclaw/cloud-workers/${params.id}"`,
-        'printf "package-spec="',
-        'if [ -s "$state_dir/package-spec" ]; then head -c 256 "$state_dir/package-spec"; else printf absent; fi',
+        'printf "node-runtime="',
+        'if [ -L "$state_dir/runtime" ]; then readlink "$state_dir/runtime"; else printf absent; fi',
         'printf " node-pid="',
         'if [ -s "$state_dir/node.pid" ] && kill -0 "$(head -c 32 "$state_dir/node.pid")" 2>/dev/null; then printf alive; else printf dead-or-absent; fi',
         'printf " node.log tail: "',

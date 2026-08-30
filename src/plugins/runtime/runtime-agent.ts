@@ -383,6 +383,7 @@ async function createSessionEntry(
             key: params.key,
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
+            ...(params.displayName !== undefined ? { displayName: params.displayName } : {}),
             ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
             ...(params.sessionRoot !== undefined ? { sessionRoot: params.sessionRoot } : {}),
             ...(params.permissionMode !== undefined
@@ -391,6 +392,7 @@ async function createSessionEntry(
             ...(params.execNode !== undefined ? { execNode: params.execNode } : {}),
             ...(params.execCwd !== undefined ? { execCwd: params.execCwd } : {}),
             initialEntry: {
+              color: params.initialEntry.color,
               ...(harnessInitial ? { agentHarnessId: harnessInitial.agentHarnessId } : {}),
               ...(cliInitial
                 ? {

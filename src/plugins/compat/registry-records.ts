@@ -148,6 +148,29 @@ export const PLUGIN_COMPAT_RECORDS = [
       "The beta.5 session-store import set and package-root whole-store aliases remain available while official plugins and package consumers migrate to row-level session access.",
   },
   {
+    code: "plugin-sdk-session-agent-resolution-aliases",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-08-29",
+    deprecated: "2026-08-29",
+    warningStarts: "2026-08-29",
+    removeAfter: "2026-11-29",
+    replacement:
+      "`resolveSessionAgentIdsStrict` and `resolveSessionAgentIdStrict` with an explicit agent, agent-scoped session key, prepared fallback, or persisted owner",
+    docsPath: "/plugins/compatibility#session-agent-resolution-aliases",
+    surfaces: [
+      "openclaw/plugin-sdk/agent-scope-runtime resolveSessionAgentIds and resolveSessionAgentId",
+      "openclaw/plugin-sdk/agent-runtime session-agent resolver aliases",
+      "openclaw/plugin-sdk/agent-harness-runtime session-agent resolver aliases",
+      "openclaw/plugin-sdk/memory-core-host-runtime-core session-agent resolver alias",
+      "openclaw/plugin-sdk/memory-host-core session-agent resolver alias",
+    ],
+    diagnostics: ["TypeScript deprecated SDK alias annotations", "plugin compatibility registry"],
+    tests: ["src/plugin-sdk/agent-scope-runtime.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "Legacy Plugin SDK session-agent resolver names preserve ambient system-agent fallback while published plugins migrate to strict owner-required aliases.",
+  },
+  {
     code: "removed-session-transcript-file-api",
     status: "removed",
     owner: "sdk",

@@ -308,6 +308,7 @@ function throwIfResetFailed(failures: string[]): void {
 type OnboardingGatewayProbeParams = {
   url: string;
   config?: OpenClawConfig;
+  originScopedDeviceAuth?: boolean;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -324,6 +325,7 @@ function runOnboardingGatewayProbe(
   return probeGateway({
     url,
     ...(params.config ? { config: params.config } : {}),
+    ...(params.originScopedDeviceAuth ? { originScopedDeviceAuth: true } : {}),
     timeoutMs,
     auth: {
       token: params.token,
@@ -421,28 +423,24 @@ export async function probeGatewayConfiguredModel(
 }
 
 /** Polls gateway reachability until success or deadline. */
-export async function waitForGatewayReachable(params: {
-  url: string;
-  token?: string;
-  password?: string;
-  /** Total time to wait before giving up. */
-  deadlineMs?: number;
-  /** Per-probe timeout (each probe makes a full gateway health request). */
-  probeTimeoutMs?: number;
-  /** Delay between probes. */
-  pollMs?: number;
-}): Promise<{ ok: boolean; detail?: string }> {
-  const deadlineMs = params.deadlineMs ?? 15_000;
-  const pollMs = resolveTimerTimeoutMs(params.pollMs ?? 400, 400, 0);
-  const probeTimeoutMs = params.probeTimeoutMs ?? 1500;
+export async function waitForGatewayReachable(
+  params: Omit<OnboardingGatewayProbeParams, "timeoutMs"> & {
+    /** Total time to wait before giving up. */
+    deadlineMs?: number;
+    /** Per-probe timeout for the hello-only readiness check. */
+    probeTimeoutMs?: number;
+    /** Delay between probes. */
+    pollMs?: number;
+  },
+): Promise<{ ok: boolean; detail?: string }> {
+  const { deadlineMs = 15_000, pollMs = 400, probeTimeoutMs = 1500, ...probeParams } = params;
+  const pollDelayMs = resolveTimerTimeoutMs(pollMs, 400, 0);
   const startedAt = Date.now();
   let lastDetail: string | undefined;
 
   while (Date.now() - startedAt < deadlineMs) {
     const probe = await probeGatewayReachable({
-      url: params.url,
-      token: params.token,
-      password: params.password,
+      ...probeParams,
       timeoutMs: probeTimeoutMs,
     });
     if (probe.ok) {
@@ -453,7 +451,7 @@ export async function waitForGatewayReachable(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await sleep(Math.min(pollMs, remainingMs));
+    await sleep(Math.min(pollDelayMs, remainingMs));
   }
 
   return { ok: false, detail: lastDetail };

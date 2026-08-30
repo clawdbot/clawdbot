@@ -118,6 +118,7 @@ describe("aborted chat diagnostics", () => {
     expect(state.chatRunError).toBe(displayedDiagnostic);
     expect(state.chatRunError).toEqual({
       summary: "Error: edit tool validation failed: edits: must be an array",
+      runId: "run-validation-abort",
     });
     expect(state.chatRunId).toBeNull();
   });

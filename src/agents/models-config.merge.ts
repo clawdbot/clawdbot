@@ -8,6 +8,11 @@ import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coer
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
+import {
+  modelKey,
+  createConfiguredProviderCatalogModelIdNormalizer,
+  type ModelManifestNormalizationContext,
+} from "./model-ref-shared.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 export function normalizeProviderMapKeys<T>(
@@ -56,6 +61,12 @@ function getProviderModelId(model: unknown): string {
 export function mergeProviderModels(
   implicit: ProviderConfig,
   explicit: ProviderConfig,
+  options?: {
+    providerId: string;
+    sourceModelInputOmissions?: ReadonlySet<string>;
+    manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
+    preserveConfiguredModelMembership?: boolean;
+  },
 ): ProviderConfig {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
@@ -88,6 +99,7 @@ export function mergeProviderModels(
       .filter(([id]) => Boolean(id)),
   );
   const seen = new Set<string>();
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(options);
 
   const mergedModels = explicitModels.map((explicitModel) => {
     const id = getProviderModelId(explicitModel);
@@ -98,6 +110,16 @@ export function mergeProviderModels(
     const implicitModel = implicitById.get(id);
     if (!implicitModel) {
       return explicitModel;
+    }
+    const sourceOmittedInput =
+      options &&
+      options.sourceModelInputOmissions?.has(
+        modelKey(normalizeProviderId(options.providerId), normalizeModelId(options.providerId, id)),
+      ) === true;
+    if (options?.preserveConfiguredModelMembership) {
+      return sourceOmittedInput && implicitModel.input !== undefined
+        ? Object.assign({}, explicitModel, { input: implicitModel.input })
+        : explicitModel;
     }
 
     const contextWindow =
@@ -127,7 +149,12 @@ export function mergeProviderModels(
       {},
       explicitModel,
       {
-        input: "input" in explicitModel ? explicitModel.input : implicitModel.input,
+        input:
+          sourceOmittedInput && implicitModel.input !== undefined
+            ? implicitModel.input
+            : "input" in explicitModel
+              ? explicitModel.input
+              : implicitModel.input,
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
@@ -137,13 +164,15 @@ export function mergeProviderModels(
     );
   });
 
-  for (const implicitModel of implicitModels) {
-    const id = getProviderModelId(implicitModel);
-    if (!id || seen.has(id)) {
-      continue;
+  if (!options?.preserveConfiguredModelMembership) {
+    for (const implicitModel of implicitModels) {
+      const id = getProviderModelId(implicitModel);
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      mergedModels.push(implicitModel);
     }
-    seen.add(id);
-    mergedModels.push(implicitModel);
   }
 
   return {
@@ -165,11 +194,19 @@ export function mergeProviderModels(
 export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
+  sourceModelInputOmissions?: ReadonlySet<string>;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): Record<string, ProviderConfig> {
   const out = normalizeProviderMapKeys(params.implicit);
   for (const [providerKey, explicit] of Object.entries(normalizeProviderMapKeys(params.explicit))) {
     const implicit = out[providerKey];
-    out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
+    out[providerKey] = implicit
+      ? mergeProviderModels(implicit, explicit, {
+          providerId: providerKey,
+          sourceModelInputOmissions: params.sourceModelInputOmissions,
+          manifestPlugins: params.manifestPlugins,
+        })
+      : explicit;
   }
   return out;
 }

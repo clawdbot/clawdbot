@@ -7,6 +7,7 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
   resolvePlaywrightChromiumExecutablePath,
@@ -440,7 +441,7 @@ describeControlUiE2e("session pull request chips", () => {
     await publish.click();
     const request = await gateway.waitForRequest("sessions.github.publish");
     expect(request.params).toMatchObject({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
     });
     expect(request.params).not.toHaveProperty("title");
     expect(JSON.stringify(request.params)).not.toContain("token");
@@ -536,7 +537,7 @@ describeControlUiE2e("session pull request chips", () => {
       },
       sessionKey: sessionA,
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, sessionA));
     await waitForWatchedSessionKey(gateway);
     const publicationState = (branch: string) => ({
       pullRequests: [],

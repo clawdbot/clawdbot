@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { setPluginToolMeta } from "../../../plugins/tools.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import {

@@ -767,6 +767,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])?
     private let listTasksHook: (@Sendable (String, String?) async throws -> [TaskSummary])?
     private let getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)?
+    private let resolveQuestionHook: (@Sendable (String, [String: [String]], [String]?) async throws
+        -> QuestionAnswers)?
     private let cancelQuestionHook: (@Sendable (String) async throws -> Void)?
     private let healthResponses: [Bool]
 
@@ -806,6 +808,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
         listTasksHook: (@Sendable (String, String?) async throws -> [TaskSummary])? = nil,
         getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)? = nil,
+        resolveQuestionHook: (@Sendable (String, [String: [String]], [String]?) async throws -> QuestionAnswers)? = nil,
         cancelQuestionHook: (@Sendable (String) async throws -> Void)? = nil,
         healthResponses: [Bool] = [true])
     {
@@ -839,6 +842,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.listQuestionsHook = listQuestionsHook
         self.listTasksHook = listTasksHook
         self.getQuestionHook = getQuestionHook
+        self.resolveQuestionHook = resolveQuestionHook
         self.cancelQuestionHook = cancelQuestionHook
         self.healthResponses = healthResponses
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
@@ -978,6 +982,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         expectedSessionID: String?,
         label: String??,
         category _: String??,
+        color _: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
         unread _: Bool?) async throws
@@ -1163,6 +1168,15 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
                 userInfo: [NSLocalizedDescriptionKey: "missing question.get fixture"])
         }
         return try await getQuestionHook(id)
+    }
+
+    func resolveQuestion(
+        id: String,
+        answers: [String: [String]],
+        secretStoreAllowedHosts: [String]?) async throws -> QuestionAnswers
+    {
+        guard let resolveQuestionHook else { throw CancellationError() }
+        return try await resolveQuestionHook(id, answers, secretStoreAllowedHosts)
     }
 
     func cancelQuestion(id: String) async throws {
@@ -2507,6 +2521,35 @@ struct ChatViewModelTests {
         #expect(viewModel.visibleQuestionCards.map(\.id) == ["ask_main", "ask_unscoped"])
     }
 
+    @Test @MainActor func `credential submission retains only gateway answers and sends host consent`() async throws {
+        let response = Data(#"{"status":"answered","answers":{"answers":{"credential":["stored"]}}}"#.utf8)
+        let transport = TestChatTransport(
+            historyResponses: [],
+            resolveQuestionHook: { id, answers, hosts in
+                #expect(id == "ask_secret")
+                #expect(answers == ["credential": ["  synthetic-value  "]])
+                #expect(hosts == ["uploads.example.test", "api.example.test"])
+                return try OpenClawChatGatewayPayloadCodec.decodeQuestionAnswer(response)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(QuestionRecord(
+            id: "ask_secret",
+            questions: [.init(questionid: "credential", header: "Credential", question: "Provide a key", options: [],
+                issecret: true, secretstore: .init(name: "TASK_TOKEN", kind: AnyCodable("secret")))],
+            createdatms: 1_000, expiresatms: Int.max, status: .pending))
+        let model = try #require(viewModel.questionCards.first)
+        model.secretStoreAllowedHostsText = "uploads.example.test,\napi.example.test"
+        model.setOtherText(questionID: "credential", value: "  synthetic-value  ")
+        await viewModel.submitQuestion(model)
+        #expect(model.status() == .answered)
+        #expect(model.otherText.isEmpty)
+        let encoded = try JSONEncoder().encode(model.record.answers)
+        let object = try JSONSerialization.jsonObject(with: encoded) as? [String: [String: [String]]]
+        #expect(object == ["answers": ["credential": ["stored"]]])
+        #expect(model.terminalSummaryText(for: model.record.questions[0]) == "Answered")
+        #expect(viewModel.messages.isEmpty)
+    }
+
     @Test @MainActor func `skip sends question cancellation and retains summary`() async {
         let cancelledIDs = AsyncStringRecorder()
         let transport = TestChatTransport(
@@ -2701,6 +2744,7 @@ struct ChatViewModelTests {
             sessionKey: "main",
             transport: TestChatTransport(historyResponses: []))
         var running = sessionEntry(key: "main", updatedAt: 1)
+        running.color = "red"
         running.status = "running"
         running.hasActiveRun = true
         running.activeRunIds = ["run-stale"]
@@ -2718,6 +2762,7 @@ struct ChatViewModelTests {
                 hasActiveRun: true,
                 activeRunIds: nil))))
         #expect(viewModel.currentSessionEntry()?.activeRunIds == ["run-stale"])
+        #expect(viewModel.currentSessionEntry()?.color == "red")
 
         viewModel.handleTransportEvent(.sessionsChanged(.init(
             sessionKey: "main",
@@ -2732,9 +2777,11 @@ struct ChatViewModelTests {
                 activeRunIds: nil),
             hasActiveRun: true,
             activeRunIds: nil,
+            colorPresent: true,
             activeRunIdsPresent: true)))
 
         #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
+        #expect(viewModel.currentSessionEntry()?.color == nil)
         #expect(viewModel.activeSessionRunIDs.isEmpty)
     }
 
@@ -6331,8 +6378,8 @@ struct ChatViewModelTests {
             sessionKey: "agent:aiden:main",
             historyResponses: [historyPayload(sessionKey: "agent:aiden:main")])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         transport.emit(
             .sessionMessage(
@@ -6367,8 +6414,8 @@ struct ChatViewModelTests {
             sessionKey: "agent:work:global",
             historyResponses: [historyPayload(sessionKey: "agent:work:global")])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         transport.emit(
             .sessionMessage(
@@ -6404,8 +6451,8 @@ struct ChatViewModelTests {
             sessionKey: "agent:work:global",
             historyResponses: [historyPayload(sessionKey: "agent:work:global")])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         transport.emit(
             .sessionMessage(
@@ -6479,8 +6526,8 @@ struct ChatViewModelTests {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         transport.emit(
             .sessionMessage(
@@ -6510,8 +6557,8 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload()],
             sendMessageStatus: "pending")
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         await sendUserMessage(vm, text: "ping")
         try await waitUntil("local run pending") { await MainActor.run { vm.pendingRunCount == 1 } }
@@ -6551,8 +6598,8 @@ struct ChatViewModelTests {
                 OpenClawChatSendResponse(runId: runId, status: "pending")
             })
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         await sendUserMessage(vm, text: "echo me")
         let runId = try await waitForLastSentRunId(transport)
@@ -6597,8 +6644,8 @@ struct ChatViewModelTests {
             historyResponses: [history, history],
             sendMessageStatus: "pending")
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         await sendUserMessage(vm, text: "sensitive draft")
         let runId = try await waitForLastSentRunId(transport)
@@ -6655,8 +6702,8 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload()],
             sendMessageStatus: "pending")
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         await sendUserMessage(vm, text: "legacy echo")
         let runId = try await waitForLastSentRunId(transport)
@@ -6771,8 +6818,8 @@ struct ChatViewModelTests {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.messages.isEmpty })
 
         transport.emit(
             .sessionMessage(
@@ -10495,6 +10542,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.fastModeSelectionID } == OpenClawChatViewModel.inheritedThinkingSelectionID)
         #expect(await MainActor.run { vm.sessions.first?.fastMode } == nil)
         #expect(await MainActor.run { vm.sessions.first?.effectiveFastMode } == .on)
+        #expect(await MainActor.run { vm.fastModeIsEnabled })
 
         await MainActor.run { vm.selectVerboseLevel("full") }
         await vm.waitForPendingSessionSettings(in: "main")
@@ -10568,6 +10616,7 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         #expect(await MainActor.run { vm.fastModeSelectionID } == "off")
+        #expect(await MainActor.run { !vm.fastModeIsEnabled })
     }
 
     @Test func `stale fast rollback cannot mutate replacement agent target`() async throws {

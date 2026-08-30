@@ -36,6 +36,8 @@ const CROSS_VM_FILESYSTEM_TYPES = new Set(["virtiofs", "fuse.virtiofs", "9p", "9
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 const PROC_SELF_FD_PATH = "/proc/self/fd";
+const SQLITE_WAL_SPLIT_BRAIN_FATAL_MESSAGE =
+  "SQLite WAL sidecar identity mismatch; terminating without SQLite cleanup";
 
 const log = createSubsystemLogger("infra/sqlite-wal");
 
@@ -71,7 +73,6 @@ export type SqliteWalMaintenanceOptions = {
   databaseLabel?: string;
   databasePath?: string;
   onCheckpointError?: (error: unknown) => void;
-  onWalSplitBrain?: (event: SqliteWalSplitBrainEvent) => void;
 };
 
 export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
@@ -451,6 +452,34 @@ function detectSqliteWalSplitBrain(databasePath: string): SqliteWalSplitBrainEve
   return undefined;
 }
 
+function terminateForSqliteWalSplitBrain(
+  splitBrain: SqliteWalSplitBrainEvent,
+  databaseLabel: string | undefined,
+): never {
+  try {
+    fs.writeSync(
+      process.stderr.fd,
+      `${JSON.stringify({
+        level: "fatal",
+        subsystem: "infra/sqlite-wal",
+        message: SQLITE_WAL_SPLIT_BRAIN_FATAL_MESSAGE,
+        ...splitBrain,
+        databaseLabel,
+        pid: process.pid,
+      })}\n`,
+    );
+  } catch {
+    // Containment must proceed even when the diagnostic sink is unavailable.
+  }
+  // SIGKILL bypasses Node exit hooks that close SQLite caches. process.exit()
+  // would re-enter the exact stale-handle cleanup this containment prevents.
+  try {
+    process.kill(process.pid, "SIGKILL");
+  } finally {
+    process.abort();
+  }
+}
+
 function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintenanceOptions): void {
   const row = db.prepare("PRAGMA journal_mode = DELETE;").get();
   const journalMode = readJournalModeResult(row);
@@ -617,40 +646,9 @@ export function configureSqliteWalMaintenance(
   if (timerIntervalMs > 0) {
     timer = setInterval(() => {
       if (tripwireDatabasePath && splitBrainDetectionEnabled) {
+        let splitBrain: SqliteWalSplitBrainEvent | undefined;
         try {
-          const splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
-          if (splitBrain) {
-            invalidated = true;
-            if (timer) {
-              clearInterval(timer);
-              timer = null;
-            }
-            log.error("SQLite WAL sidecar identity mismatch", {
-              ...splitBrain,
-              databaseLabel: options.databaseLabel,
-            });
-            try {
-              options.onWalSplitBrain?.(splitBrain);
-            } catch (error) {
-              log.error("SQLite WAL split-brain hook failed", {
-                databaseLabel: options.databaseLabel,
-                databasePath: tripwireDatabasePath,
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
-            try {
-              if (db.isOpen) {
-                db.close();
-              }
-            } catch (error) {
-              log.error("SQLite WAL split-brain close failed", {
-                databaseLabel: options.databaseLabel,
-                databasePath: tripwireDatabasePath,
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
-            return;
-          }
+          splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
         } catch (error) {
           splitBrainDetectionEnabled = false;
           if (!splitBrainDetectionWarningLogged) {
@@ -661,6 +659,14 @@ export function configureSqliteWalMaintenance(
               error: error instanceof Error ? error.message : String(error),
             });
           }
+        }
+        if (splitBrain) {
+          invalidated = true;
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+          terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
         }
       }
       runCheckpoint(periodicCheckpointMode);

@@ -36,6 +36,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
+    approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
     systemAgentApprovalManager,
@@ -136,6 +137,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       questionManager,
       cancelRunBoundApprovals,
       forwardPluginApprovalRequest,
+      approvalWebPushDelivery,
       pluginApprovalIosPushDelivery,
       pluginApprovalManager,
       systemAgentApprovalManager,
@@ -258,6 +260,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
+  gatewayRequestContext.createAgentTurnFacade = gatewayInstanceRuntime.createAgentTurnFacade;
   return { ...runtime, chatMetadataLifecycle, gatewayRequestContext, gatewayInstanceRuntime };
 }
 

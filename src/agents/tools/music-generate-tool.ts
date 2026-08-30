@@ -20,6 +20,7 @@ import type {
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -50,11 +51,12 @@ import {
   hasGenerationToolAvailability,
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
-  readBooleanToolParam,
+  resolveMediaToolSandboxConfig,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
+  type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import type { ToolModelConfig } from "./model-config.helpers.js";
 import {
@@ -62,7 +64,7 @@ import {
   createMusicGenerateListActionResult,
   createMusicGenerateStatusActionResult,
 } from "./music-generate-tool.actions.js";
-import type { AnyAgentTool, SandboxFsBridge, ToolFsPolicy } from "./tool-runtime.helpers.js";
+import type { AnyAgentTool, ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
@@ -214,10 +216,7 @@ function validateMusicGenerationCapabilities(params: {
   }
 }
 
-type MusicGenerateSandboxConfig = {
-  root: string;
-  bridge: SandboxFsBridge;
-};
+type MusicGenerateSandboxConfig = MediaToolSandbox;
 
 type MusicGenerationTimeoutNormalization = {
   requested: number;
@@ -264,7 +263,7 @@ async function loadReferenceImages(params: {
   inputs: string[];
   maxBytes: number;
   workspaceDir?: string;
-  sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
+  sandboxConfig: ReturnType<typeof resolveMediaToolSandboxConfig>;
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -538,13 +537,10 @@ export function createMusicGenerateTool(options?: {
     return null;
   }
 
-  const sandboxConfig = options?.sandbox
-    ? {
-        root: options.sandbox.root,
-        bridge: options.sandbox.bridge,
-        workspaceOnly: options.fsPolicy?.workspaceOnly === true,
-      }
-    : null;
+  const sandboxConfig = resolveMediaToolSandboxConfig(
+    options?.sandbox,
+    options?.fsPolicy?.workspaceOnly,
+  );
   const scheduleBackgroundWork =
     options?.scheduleBackgroundWork ?? defaultScheduleMusicGenerateBackgroundWork;
 
@@ -599,7 +595,7 @@ export function createMusicGenerateTool(options?: {
       }
 
       const lyrics = readToolStringParam(args, "lyrics");
-      const instrumental = readBooleanToolParam(args, "instrumental");
+      const instrumental = readBooleanParam(args, "instrumental");
       const durationSeconds = readNumberParam(args, "durationSeconds", {
         positiveInteger: true,
         strict: true,

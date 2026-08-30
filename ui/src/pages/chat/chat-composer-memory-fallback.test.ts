@@ -42,6 +42,7 @@ describe("chat composer memory fallback adoption", () => {
     const bareGlobalKey = storedChatOutboxScopeKey({ sessionKey: "global" });
     const host = globalHost({
       [bareGlobalKey]: {
+        awaitingDefaults: true,
         message: "older sibling draft",
         attachments: [losing],
         storageFailed: true,
@@ -78,6 +79,7 @@ describe("chat composer memory fallback adoption", () => {
     const host = globalHost(
       {
         [bareGlobalKey]: {
+          awaitingDefaults: true,
           message: "older sibling draft",
           attachments: [shared],
           storageFailed: true,

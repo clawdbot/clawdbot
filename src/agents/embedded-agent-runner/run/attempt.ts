@@ -380,6 +380,7 @@ export async function runEmbeddedAttempt(
             effectiveWorkspace,
             initialSystemPrompt: preparedSystemPrompt.systemPromptText,
             isRawModelRun,
+            nestedToolActivities: preparedToolBase.nestedToolActivities,
             sessionManager: {
               replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
               resolveActiveContextEnginePluginId,
@@ -529,6 +530,7 @@ export async function runEmbeddedAttempt(
         buildAbortSettlePromise,
         trajectoryRecorder,
         trajectoryEndRecorded: executionState.trajectoryEndRecorded,
+        deferredLifecycleOwner: executionState.deferredLifecycleOwner,
         cleanupYieldAborted: terminal.cleanupYieldAborted,
         emitDiagnosticRunCompleted,
         readState: () => ({

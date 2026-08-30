@@ -23,6 +23,7 @@ export type ExecApprovalUsageAuthorization = {
   source: "current-policy" | "ask-fallback" | "explicit-approval" | "auto-review";
   security: ExecSecurity;
   ask: ExecAsk;
+  bypassHostApprovalFloors?: boolean;
   allowlistSatisfied: boolean;
   policySnapshot?: ExecApprovalPolicySnapshot;
   requireAutoAllowSkills?: boolean;
@@ -45,8 +46,14 @@ function assertCurrentUsageAuthorization(params: {
       ask: params.authorization.ask,
     },
   });
-  const security = minSecurity(params.authorization.security, current.agent.security);
-  const ask = maxAsk(params.authorization.ask, current.agent.ask);
+  // Full-session floor bypass survives an explicit ask; the delayed decision
+  // still binds to the policy snapshot below, so policy changes invalidate it.
+  const security = params.authorization.bypassHostApprovalFloors
+    ? params.authorization.security
+    : minSecurity(params.authorization.security, current.agent.security);
+  const ask = params.authorization.bypassHostApprovalFloors
+    ? params.authorization.ask
+    : maxAsk(params.authorization.ask, current.agent.ask);
   if (security === "deny") {
     throw new Error("Exec approval changed before execution");
   }

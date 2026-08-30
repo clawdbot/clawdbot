@@ -2,6 +2,7 @@ import type { WorkerTunnelStatus } from "@openclaw/gateway-protocol";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import type { NodeWorkerWorkspaceSeedInput } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
@@ -49,11 +50,14 @@ export type WorkerTunnelStopReason = "provider-destroying" | "provider-destroyed
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];
   transportRetry: "idempotent" | "never";
+  /** Local owner guard revalidated after transport awaits, immediately before dispatch. */
+  assertCurrent?: () => void;
   onDispatchReady?: () => void;
   input?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
   transfer?: NodeWorkerWorkspaceTransferInput;
+  seed?: NodeWorkerWorkspaceSeedInput;
 };
 
 export type WorkerWorkspaceSyncRequest = {
@@ -118,7 +122,13 @@ export type WorkerWorkspaceTunnelHandle = {
   environmentId: string;
   ownerEpoch: number;
   launchTurn?: never;
+  measureLaunchTurn?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
+  stageAttachments?(request: {
+    localPath: string;
+    isAuthorized: () => boolean;
+    signal: AbortSignal;
+  }): Promise<void>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
   reconcileWorkspace(
@@ -127,7 +137,11 @@ export type WorkerWorkspaceTunnelHandle = {
   stop(): Promise<void>;
 };
 
-export type WorkerTurnTunnelHandle = Omit<WorkerWorkspaceTunnelHandle, "launchTurn"> & {
+export type WorkerTurnTunnelHandle = Omit<
+  WorkerWorkspaceTunnelHandle,
+  "launchTurn" | "measureLaunchTurn"
+> & {
+  measureLaunchTurn(plan: WorkerLaunchPlan, claim: WorkerSessionTurnClaim): number;
   launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
 };
 

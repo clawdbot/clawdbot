@@ -532,6 +532,51 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     });
   });
 
+  it("preserves child stdin, arguments, and exit status through the Node watchdog", () => {
+    withTempDir("openclaw-e2e-instance-node-watchdog-stdin-", (tempDir) => {
+      writeNodeShim(tempDir);
+      const payload = "harmless watchdog stdin\nsecond line\n";
+      const args = ["two words", "--literal", "quote'arg"];
+      const child =
+        'const fs = require("node:fs"); process.stdout.write(JSON.stringify({ stdin: fs.readFileSync(0, "utf8"), args: process.argv.slice(1) })); process.exit(37);';
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            `openclaw_e2e_maybe_timeout 5s node -e ${shellQuote(child)} -- ${args.map(shellQuote).join(" ")}`,
+          ].join("\n"),
+        ],
+        {
+          encoding: "utf8",
+          env: shellTestEnv({ PATH: tempDir }),
+          input: payload,
+          timeout: 10_000,
+        },
+      );
+
+      expect(result.status).toBe(37);
+      expect(result.stderr).toContain("using Node watchdog");
+      expect(JSON.parse(result.stdout)).toEqual({ stdin: payload, args });
+    });
+  });
+
+  it("treats Node-watchdog timeout values as data, not Node options", () => {
+    withTempDir("openclaw-e2e-instance-node-watchdog-option-", (tempDir) => {
+      writeNodeShim(tempDir);
+      const result = runBashWithHelper(
+        ["openclaw_e2e_maybe_timeout --version node --version"],
+        { PATH: tempDir },
+        5_000,
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("unsupported timeout value: --version");
+      expect(result.stdout).toBe("");
+    });
+  });
+
   for (const [shellSignal, expectedStatus] of [
     ["TERM", "143"],
     ["HUP", "129"],
@@ -546,11 +591,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           childPath,
           [
             "const fs = require('node:fs');",
-            "fs.writeFileSync(process.argv[2], String(process.pid));",
-            "fs.writeFileSync(process.argv[3], String(process.ppid));",
             "process.on('SIGTERM', () => {});",
             "process.on('SIGHUP', () => {});",
             "setInterval(() => {}, 1000);",
+            // PID publication lets the shell signal us; install handlers first.
+            "fs.writeFileSync(process.argv[2], String(process.pid));",
+            "fs.writeFileSync(process.argv[3], String(process.ppid));",
             "",
           ].join("\n"),
         );
@@ -642,12 +688,13 @@ fi
         childPath,
         [
           "const fs = require('node:fs');",
-          "fs.writeFileSync(process.argv[2], String(process.pid));",
           "process.on('SIGTERM', () => {",
           "  fs.writeFileSync(process.argv[3], 'terminated');",
           "  process.exit(0);",
           "});",
           "setInterval(() => {}, 1000);",
+          // Both PID files announce readiness for immediate group termination.
+          "fs.writeFileSync(process.argv[2], String(process.pid));",
           "",
         ].join("\n"),
       );
@@ -656,13 +703,13 @@ fi
         [
           "const fs = require('node:fs');",
           "const { spawn } = require('node:child_process');",
-          "fs.writeFileSync(process.argv[3], String(process.pid));",
           "const child = spawn(process.execPath, [process.argv[2], process.argv[4], process.argv[5]], {",
           "  stdio: 'ignore',",
           "});",
           "child.unref();",
           "process.on('SIGTERM', () => process.exit(0));",
           "setInterval(() => {}, 1000);",
+          "fs.writeFileSync(process.argv[3], String(process.pid));",
           "",
         ].join("\n"),
       );

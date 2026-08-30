@@ -7,7 +7,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import {
   applySessionEntryCanonicalReplacements,
   type SessionEntryCanonicalReplacement,
@@ -23,7 +22,6 @@ import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { projectSessionPatchResult } from "../session-utils-model.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
@@ -38,9 +36,16 @@ import { resolveOperatorSessionCreation } from "./session-creation-provenance.js
 import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
   prepareSessionPatchArchive,
+  prepareSessionPatchWorktreeTransition,
   type SessionPatchArchivePreparation,
+  type SessionPatchArchiveTarget,
   validateSessionPatchArchiveProjection,
 } from "./sessions-patch-archive.js";
+import {
+  createCommitGuard,
+  sessionChangedError,
+  unexpectedPatchError,
+} from "./sessions-patch-errors.js";
 import { persistSessionPatchModelSelection } from "./sessions-patch-model-selection.js";
 import { resolveSessionWorkerPlacementPatchError, sessionLog } from "./sessions-shared.js";
 import type {
@@ -56,23 +61,14 @@ type MutationTarget = PatchTargetIdentity & {
   commitGuard: () => ErrorShape | undefined;
 };
 
-type PreparedPatchTarget = {
-  archiveActor: ReturnType<typeof gatewayClientSessionCreator>;
+type PreparedPatchTarget = SessionPatchArchiveTarget & {
   archivePreparation?: SessionPatchArchivePreparation;
-  canonicalKey: string;
-  fullPatch: SessionsPatchParams;
   index: number;
-  initialEntry?: SessionEntry;
-  initialStoreKeys: string[];
-  key: string;
-  lifecycleIdentities: Array<string | undefined>;
-  requestedAgentId?: string;
-  storePath: string;
   targetAgentId: string;
 };
 
 type MutationOutcome =
-  | { ok: true; applied: boolean; entry: SessionEntry }
+  | { ok: true; applied: boolean; entry: SessionEntry; cleanupError?: ErrorShape }
   | { ok: false; error: ErrorShape };
 
 type ModelCatalog = Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>;
@@ -86,44 +82,6 @@ type MutationCoreResult =
       preparedByIndex: Array<PreparedPatchTarget | undefined>;
       modelCatalogByAgent: Map<string, Promise<ModelCatalog>>;
     };
-
-function unexpectedPatchError(key: string, error: unknown): ErrorShape {
-  sessionLog.warn(`sessions.patch: target failed for ${key}: ${formatErrorMessage(error)}`);
-  const message = "Session patch failed unexpectedly. Retry the request.";
-  return errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: true });
-}
-
-function sessionChangedError(key: string): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`, {
-    details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
-  });
-}
-
-function pluginOwnershipError(
-  client: GatewayClient | null,
-  entry: SessionEntry | undefined,
-  key: string,
-): ErrorShape | undefined {
-  return resolvePluginSessionOwnershipError({
-    action: "patch",
-    entry,
-    key,
-    pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
-  });
-}
-
-function createCommitGuard(key: string, assertCurrent: (() => void) | undefined) {
-  return (): ErrorShape | undefined => {
-    try {
-      assertCurrent?.();
-      return undefined;
-    } catch (error) {
-      return error instanceof SessionMutationAuthorizationChangedError
-        ? error.error
-        : unexpectedPatchError(key, error);
-    }
-  };
-}
 
 async function executeSessionPatchMutations(params: {
   client: GatewayClient | null;
@@ -212,7 +170,12 @@ async function executeSessionPatchMutations(params: {
       outcomes[index] = { ok: false, error: creationError };
       continue;
     }
-    const ownershipError = pluginOwnershipError(client, initialEntry, canonicalKey);
+    const ownershipError = resolvePluginSessionOwnershipError({
+      action: "patch",
+      entry: initialEntry,
+      key: canonicalKey,
+      pluginOwnerId,
+    });
     if (ownershipError) {
       outcomes[index] = { ok: false, error: ownershipError };
       continue;
@@ -327,12 +290,9 @@ async function executeSessionPatchMutations(params: {
               continue;
             }
             const groupKey = `${target.storePath}\0${target.targetAgentId}`;
-            const group = groups.get(groupKey);
-            if (group) {
-              group.push(target);
-            } else {
-              groups.set(groupKey, [target]);
-            }
+            const group = groups.get(groupKey) ?? [];
+            group.push(target);
+            groups.set(groupKey, group);
           }
           await Promise.all(
             [...groups.values()].map(async (group) => {
@@ -346,7 +306,16 @@ async function executeSessionPatchMutations(params: {
                         new Set([first.key, first.canonicalKey, ...first.initialStoreKeys]),
                       )
                     : undefined;
+                const worktreeTransitions = new Map<
+                  number,
+                  Awaited<ReturnType<typeof prepareSessionPatchWorktreeTransition>>
+                >();
                 const groupOutcomes = await applySessionEntryCanonicalReplacements({
+                  assertCommitAllowed: () => {
+                    for (const transition of worktreeTransitions.values()) {
+                      transition.assertCommitAllowed();
+                    }
+                  },
                   agentId: first.targetAgentId,
                   ...(selectedSessionKeys ? { sessionKeys: selectedSessionKeys } : {}),
                   storePath: first.storePath,
@@ -388,11 +357,12 @@ async function executeSessionPatchMutations(params: {
                           continue;
                         }
                         const candidateKeys = currentTarget.storeKeys;
-                        const ownershipError = pluginOwnershipError(
-                          client,
-                          existingEntry,
-                          primaryKey,
-                        );
+                        const ownershipError = resolvePluginSessionOwnershipError({
+                          action: "patch",
+                          entry: existingEntry,
+                          key: primaryKey,
+                          pluginOwnerId,
+                        });
                         if (ownershipError) {
                           projectedOutcomes.push({ ok: false, error: ownershipError });
                           continue;
@@ -501,6 +471,24 @@ async function executeSessionPatchMutations(params: {
                           projectedOutcomes.push({ ok: false, error: authorizationFailure });
                           continue;
                         }
+                        if (
+                          existingEntry?.worktree &&
+                          typeof target.fullPatch.archived === "boolean"
+                        ) {
+                          const transition = await prepareSessionPatchWorktreeTransition({
+                            archived: target.fullPatch.archived,
+                            entry: existingEntry,
+                            context: params.context,
+                            scope: {
+                              agentId: target.targetAgentId,
+                              sessionKey: primaryKey,
+                              storePath: target.storePath,
+                            },
+                            authorize: params.targets[target.index]!.commitGuard,
+                            preparation: target.archivePreparation,
+                          });
+                          worktreeTransitions.set(target.index, transition);
+                        }
                         const previousSessionKeys = candidateKeys.filter(
                           (sessionKey) => sessionKey !== primaryKey && workingStore[sessionKey],
                         );
@@ -530,7 +518,12 @@ async function executeSessionPatchMutations(params: {
                   },
                 });
                 for (const [groupIndex, target] of group.entries()) {
-                  outcomes[target.index] = groupOutcomes[groupIndex]!;
+                  const outcome = groupOutcomes[groupIndex]!;
+                  outcomes[target.index] = outcome;
+                  const afterCommit = worktreeTransitions.get(target.index)?.afterCommit;
+                  if (outcome.ok && outcome.applied && afterCommit) {
+                    outcome.cleanupError = await afterCommit(outcome.entry);
+                  }
                 }
               } catch (error) {
                 for (const target of group) {
@@ -621,7 +614,10 @@ async function executeSessionPatchMutations(params: {
   return {
     ok: true,
     cfg,
-    outcomes: outcomes as MutationOutcome[],
+    // Publish committed hooks/events/cron changes even when only checkout cleanup failed.
+    outcomes: outcomes.map((outcome) =>
+      outcome?.ok && outcome.cleanupError ? { ok: false, error: outcome.cleanupError } : outcome,
+    ) as MutationOutcome[],
     preparedByIndex,
     modelCatalogByAgent,
   };

@@ -2,13 +2,25 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const dispatchScript = join(process.cwd(), "scripts/pr-lib/ci-dispatch.mjs");
-const sha = "0123456789abcdef0123456789abcdef01234567";
+const headSha = "0123456789abcdef0123456789abcdef01234567";
 const baseSha = "1111111111111111111111111111111111111111";
+const workflowSha = "2222222222222222222222222222222222222222";
 const changedSha = "fedcba9876543210fedcba9876543210fedcba98";
+const runUrl = "https://github.com/openclaw/openclaw/actions/runs/99";
+const summary = formatCrabboxGateCheckSummary({
+  baseSha,
+  headSha,
+  leaseId: "cbx_def456",
+  planDigest: "a".repeat(64),
+  runId: "run_abc123",
+  targetCount: 7,
+  workflowSha,
+});
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 function createFakeGh() {
@@ -18,37 +30,38 @@ function createFakeGh() {
   const realGh = join(tempDir, "real-gh");
   const calls = join(tempDir, "calls.log");
   const dispatched = join(tempDir, "dispatched");
-  const seenRunList = join(tempDir, "seen-run-list");
+  const pollingPreload = join(tempDir, "immediate-poll.mjs");
   mkdirSync(binDir);
   const fakeGhScript = `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\t%s\\n' "$(basename "$0")" "$*" >> "$OPENCLAW_TEST_GH_CALLS"
 case "$1 $2" in
   "auth token") printf 'forwarded-test-token\\n' ;;
-  "api --method")
-    if [ "\${OPENCLAW_TEST_GH_MODE:-}" = "pending-head-change" ]; then
-      printf '{"workflow_runs":[]}\\n'
-    elif [ -e "$OPENCLAW_TEST_GH_SEEN_RUN_LIST" ]; then
-      printf '{"workflow_runs":[{"id":99,"html_url":"https://github.com/openclaw/openclaw/actions/runs/99","head_sha":"%s","head_branch":"main","display_title":"PR Crabbox gate #12345 / run_abc123","created_at":"2026-01-01T00:00:00Z","status":"queued"}]}\\n' "$OPENCLAW_TEST_HEAD_SHA"
-    else
-      : > "$OPENCLAW_TEST_GH_SEEN_RUN_LIST"
-      printf '{"workflow_runs":[]}\\n'
-    fi
-    ;;
   "pr view")
-    if [ -e "$OPENCLAW_TEST_GH_DISPATCHED" ] && [ -n "\${OPENCLAW_TEST_GH_MODE:-}" ]; then
+    if [ -e "$OPENCLAW_TEST_GH_DISPATCHED" ] && [ "\${OPENCLAW_TEST_GH_MODE:-}" = "head-change" ]; then
       printf '%s\\n' "$OPENCLAW_TEST_CHANGED_HEAD_SHA"
     else
       printf '%s\\n' "$OPENCLAW_TEST_HEAD_SHA"
     fi
     ;;
   "workflow run")
-    if [ "\${GH_TOKEN-}" != "forwarded-test-token" ]; then
-      echo "missing forwarded credentials" >&2
-      exit 3
-    fi
+    test "\${GH_TOKEN-}" = "forwarded-test-token"
     : > "$OPENCLAW_TEST_GH_DISPATCHED"
     ;;
+  "api --method")
+    case "$4" in
+      *"/actions/workflows/"*"/runs")
+        if [ -e "$OPENCLAW_TEST_GH_DISPATCHED" ]; then
+          printf '%s\\n' "$OPENCLAW_TEST_RUN_LIST"
+        else
+          printf '{"workflow_runs":[]}\\n'
+        fi
+        ;;
+      *"/actions/runs/99") printf '%s\\n' "$OPENCLAW_TEST_RUN" ;;
+      *) echo "unexpected API: $*" >&2; exit 2 ;;
+    esac
+    ;;
+  "api --paginate") printf '%s\\n' "$OPENCLAW_TEST_CHECK_PAGES" ;;
   *) echo "unexpected gh invocation: $*" >&2; exit 2 ;;
 esac
 `;
@@ -56,34 +69,75 @@ esac
   writeFileSync(realGh, fakeGhScript);
   chmodSync(pathGh, 0o755);
   chmodSync(realGh, 0o755);
-  return { binDir, calls, dispatched, realGh, seenRunList };
+  // The GitHub fixture is synchronous; keep poll scheduling without real backoff waits.
+  writeFileSync(
+    pollingPreload,
+    `const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, _delay, ...args) => realSetTimeout(callback, 0, ...args);
+`,
+  );
+  return { binDir, calls, dispatched, pollingPreload, realGh };
 }
 
 function runDispatch(
   fakeGh: ReturnType<typeof createFakeGh>,
   options: {
     backend?: "ci" | "crabbox";
-    mode?: "observed-head-change" | "pending-head-change";
-    immediateTimers?: boolean;
-    cwd?: string;
+    checkOnLaterPage?: boolean;
+    mode?: "head-change";
+    runTitle?: string;
+    wrongCheck?: boolean;
   } = {},
 ) {
-  let nodeOptions = process.env.NODE_OPTIONS ?? "";
-  if (options.immediateTimers) {
-    const preload = join(tempDirs.make("openclaw-pr-ci-dispatch-timers-"), "immediate-timers.cjs");
-    writeFileSync(preload, "global.setTimeout = (callback) => { callback(); return 0; };\n");
-    nodeOptions = `${nodeOptions} --require ${preload}`.trim();
-  }
+  const crabbox = options.backend === "crabbox";
+  const runList = {
+    workflow_runs: [
+      {
+        display_title: crabbox ? (options.runTitle ?? `PR Crabbox gate #12345 / ${headSha}`) : "CI",
+        head_branch: crabbox ? "main" : "contributor/fix-hosted-gates",
+        head_sha: crabbox ? workflowSha : headSha,
+        html_url: runUrl,
+        id: 99,
+      },
+    ],
+  };
+  const check = {
+    app: { id: options.wrongCheck ? 1 : 15368 },
+    conclusion: "success",
+    details_url: runUrl,
+    head_sha: headSha,
+    id: 88,
+    name: "openclaw/crabbox-gate",
+    output: { summary },
+    status: "completed",
+  };
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    NODE_OPTIONS: nodeOptions,
     OPENCLAW_GH_BIN: fakeGh.realGh,
     OPENCLAW_TEST_CHANGED_HEAD_SHA: changedSha,
+    OPENCLAW_TEST_CHECK_PAGES: JSON.stringify([
+      {
+        check_runs: options.checkOnLaterPage
+          ? [{ ...check, id: 77, name: "unrelated/check" }]
+          : [check],
+      },
+      ...(options.checkOnLaterPage ? [{ check_runs: [check] }] : []),
+    ]),
     OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
     OPENCLAW_TEST_GH_DISPATCHED: fakeGh.dispatched,
     OPENCLAW_TEST_GH_MODE: options.mode ?? "",
-    OPENCLAW_TEST_GH_SEEN_RUN_LIST: fakeGh.seenRunList,
-    OPENCLAW_TEST_HEAD_SHA: sha,
+    OPENCLAW_TEST_HEAD_SHA: headSha,
+    OPENCLAW_TEST_RUN: JSON.stringify({
+      conclusion: "success",
+      event: "workflow_dispatch",
+      head_branch: "main",
+      head_sha: workflowSha,
+      html_url: runUrl,
+      id: 99,
+      path: ".github/workflows/pr-crabbox-gate-publisher.yml",
+      status: "completed",
+    }),
+    OPENCLAW_TEST_RUN_LIST: JSON.stringify(runList),
     PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
   };
   for (const name of [
@@ -97,97 +151,75 @@ function runDispatch(
   return spawnSync(
     process.execPath,
     [
+      "--import",
+      fakeGh.pollingPreload,
       dispatchScript,
       "12345",
       "contributor/fix-hosted-gates",
-      sha,
+      headSha,
       baseSha,
       "false",
-      ...(options.backend === "crabbox"
-        ? [
-            "--backend",
-            "crabbox",
-            "--run-id",
-            "run_abc123",
-            "--lease-id",
-            "cbx_def456",
-            "--bootstrap-sha256",
-            "a".repeat(64),
-          ]
-        : []),
+      ...(crabbox ? ["--backend", "crabbox"] : []),
     ],
-    {
-      cwd: options.cwd,
-      encoding: "utf8",
-      env,
-    },
+    { encoding: "utf8", env },
   );
 }
 
 describePosix("scripts/pr ci-dispatch", () => {
-  it("warns when a same-named local branch points away from the dispatched remote head", () => {
-    const repo = tempDirs.make("openclaw-pr-ci-dispatch-repo-");
-    const git = (...args: string[]) =>
-      spawnSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    git("init", "-q", "-b", "main");
-    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "x");
-    git("branch", "contributor/fix-hosted-gates");
-
-    const fakeGh = createFakeGh();
-    const result = runDispatch(fakeGh, { cwd: repo });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stderr).toContain("warning: local branch contributor/fix-hosted-gates is at");
-    expect(result.stderr).toContain(`remote head ${sha}`);
-  });
-
-  it("stays silent when no same-named local branch exists", () => {
-    const repo = tempDirs.make("openclaw-pr-ci-dispatch-repo-");
-    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: repo, encoding: "utf8" });
-
-    const fakeGh = createFakeGh();
-    const result = runDispatch(fakeGh, { cwd: repo });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stderr).not.toContain("warning: local branch");
-  });
-
-  it("dispatches the exact CI workflow for the remote PR head", () => {
+  it("dispatches ordinary CI for the exact remote head", () => {
     const fakeGh = createFakeGh();
     const result = runDispatch(fakeGh);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(`observed_run_url=${runUrl}`);
+    const calls = readFileSync(fakeGh.calls, "utf8");
+    expect(calls).toContain(
+      `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${headSha} -f release_gate=true -f pull_request_number=12345`,
+    );
+  });
 
+  it("finds the publisher-owned Crabbox proof on a later check-run page", () => {
+    const fakeGh = createFakeGh();
+    const result = runDispatch(fakeGh, { backend: "crabbox", checkOnLaterPage: true });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain(
-      "observed_run_url=https://github.com/openclaw/openclaw/actions/runs/99",
+      JSON.stringify({
+        actionsRunId: 99,
+        actionsRunUrl: runUrl,
+        backend: "crabbox",
+        checkId: 88,
+        provider: "aws",
+        target: "linux",
+        baseSha,
+        headSha,
+        leaseId: "cbx_def456",
+        planDigest: "a".repeat(64),
+        runId: "run_abc123",
+        targetCount: 7,
+        workflowSha,
+      }),
     );
     const calls = readFileSync(fakeGh.calls, "utf8");
-    const callLines = calls.trim().split("\n");
-    expect(callLines).toContain(
-      `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${sha} -f release_gate=true -f pull_request_number=12345`,
-    );
-    expect(callLines).toContain("gh\tauth token");
-    expect(callLines).toContain(
-      `gh\tapi --method GET repos/openclaw/openclaw/actions/workflows/ci.yml/runs -f event=workflow_dispatch -f head_sha=${sha} -f per_page=20`,
-    );
-    expect(callLines.some((call) => call.startsWith("gh\tpr view 12345"))).toBe(true);
-    expect(callLines.some((call) => /^real-gh\t(?:api|pr view)/u.test(call))).toBe(false);
-  });
-
-  it("dispatches the protected-main Crabbox publisher with the immutable proof handle", () => {
-    const fakeGh = createFakeGh();
-    const result = runDispatch(fakeGh, { backend: "crabbox" });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    const calls = readFileSync(fakeGh.calls, "utf8");
     expect(calls).toContain(
-      `real-gh\tworkflow run pr-crabbox-gate-publisher.yml --ref main -f pr_number=12345 -f head_sha=${sha} -f base_sha=${baseSha} -f crabbox_run_id=run_abc123 -f crabbox_lease_id=cbx_def456 -f bootstrap_sha256=${"a".repeat(64)}`,
+      `real-gh\tworkflow run pr-crabbox-gate-publisher.yml --ref main -f pr_number=12345 -f head_sha=${headSha} -f base_sha=${baseSha}`,
     );
+    expect(calls).toContain(`gh\tapi --method GET repos/openclaw/openclaw/actions/runs/99`);
     expect(calls).toContain(
-      "gh\tapi --method GET repos/openclaw/openclaw/actions/workflows/pr-crabbox-gate-publisher.yml/runs -f event=workflow_dispatch -f branch=main -f per_page=20",
+      `gh\tapi --paginate --slurp repos/openclaw/openclaw/commits/${headSha}/check-runs?filter=latest&per_page=100`,
     );
   });
 
-  it("rejects an incomplete Crabbox proof handle before dispatch", () => {
+  it.each(["PR Crabbox gate", "PR Crabbox gate #12345"])(
+    "does not accept a generic or truncated Crabbox run title: %s",
+    (runTitle) => {
+      const result = runDispatch(createFakeGh(), { backend: "crabbox", runTitle });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("run_url=pending");
+      expect(result.stdout).not.toContain('"backend":"crabbox"');
+    },
+    40_000,
+  );
+
+  it("rejects caller-supplied proof handles", () => {
     const fakeGh = createFakeGh();
     const result = spawnSync(
       process.execPath,
@@ -195,11 +227,13 @@ describePosix("scripts/pr ci-dispatch", () => {
         dispatchScript,
         "12345",
         "contributor/fix-hosted-gates",
-        sha,
+        headSha,
         baseSha,
         "false",
         "--backend",
         "crabbox",
+        "--run-id",
+        "run_attacker",
       ],
       {
         encoding: "utf8",
@@ -212,52 +246,39 @@ describePosix("scripts/pr ci-dispatch", () => {
       },
     );
     expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/Expected value|requires valid/u);
     expect(existsSync(fakeGh.dispatched)).toBe(false);
   });
 
-  it("refuses a fork-local branch name before invoking GitHub", () => {
+  it("fails closed for a check from the wrong app", () => {
+    const result = runDispatch(createFakeGh(), { backend: "crabbox", wrongCheck: true });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(
+      /without the exact-head GitHub Actions check/u,
+    );
+  });
+
+  it("rechecks the remote head after dispatch", () => {
+    const result = runDispatch(createFakeGh(), { mode: "head-change" });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/head changed/u);
+  });
+
+  it("rejects fork PRs before invoking GitHub", () => {
     const fakeGh = createFakeGh();
     const result = spawnSync(
       process.execPath,
-      [dispatchScript, "12345", "fix-hosted-gates", sha, baseSha, "true"],
+      [dispatchScript, "12345", "fix", headSha, baseSha, "true"],
       {
         encoding: "utf8",
         env: {
           ...process.env,
           OPENCLAW_GH_BIN: fakeGh.realGh,
           OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
-          OPENCLAW_TEST_GH_DISPATCHED: fakeGh.dispatched,
-          OPENCLAW_TEST_GH_SEEN_RUN_LIST: fakeGh.seenRunList,
-          OPENCLAW_TEST_HEAD_SHA: sha,
           PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
         },
       },
     );
-
     expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/comes from a fork/u);
     expect(existsSync(fakeGh.calls)).toBe(false);
-  });
-
-  it("fails closed if the remote head changes while CI run indexing is pending", () => {
-    const result = runDispatch(createFakeGh(), {
-      immediateTimers: true,
-      mode: "pending-head-change",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(
-      /head changed while CI dispatch was being indexed/u,
-    );
-  });
-
-  it("rechecks the remote head before returning an observed exact-SHA run", () => {
-    const result = runDispatch(createFakeGh(), { mode: "observed-head-change" });
-
-    expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(
-      /head changed before an exact-SHA CI run became visible/u,
-    );
   });
 });

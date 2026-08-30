@@ -3,8 +3,6 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import { createAbortError } from "../abort-signal.js";
-import { toErrorObject } from "../errors.js";
 import {
   normalizeHeadersInitForFetch,
   normalizeRequestInitHeadersForFetch,
@@ -142,44 +140,6 @@ type GuardedFetchPresetOptions = Omit<
 const DEFAULT_MAX_REDIRECTS = 3;
 const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
 
-async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return await run();
-  }
-  if (signal.aborted) {
-    throw signal.reason ?? createAbortError("Guarded fetch aborted during network preflight");
-  }
-  return await new Promise<T>((resolve, reject) => {
-    let settled = false;
-    const settle = (complete: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      complete();
-    };
-    const onAbort = () =>
-      settle(() =>
-        reject(
-          toErrorObject(
-            signal.reason ?? createAbortError("Guarded fetch aborted during network preflight"),
-            "Guarded fetch aborted during network preflight",
-          ),
-        ),
-      );
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    void run().then(
-      (value) => settle(() => resolve(value)),
-      (error: unknown) => settle(() => reject(toErrorObject(error, "Network preflight failed"))),
-    );
-  });
-}
-
 function getRedirectVisitKey(url: string, init: RequestInit | undefined): string {
   return `${init?.method?.toUpperCase() ?? "GET"} ${url}`;
 }
@@ -304,14 +264,11 @@ async function assertExplicitProxyAllowed(
           ...(dispatcherPolicy.allowPrivateProxy === true ? { allowPrivateNetwork: true } : {}),
         }
       : undefined;
-  await runAbortablePreflight(
-    async () =>
-      await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
-        lookupFn,
-        policy: proxyPolicy,
-      }),
+  await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
+    lookupFn,
+    policy: proxyPolicy,
     signal,
-  );
+  });
 }
 
 function isRedirectStatus(status: number): boolean {
@@ -573,14 +530,11 @@ async function fetchWithSsrFGuardInternal(
     const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
     const dispatcherPolicy = params.resolveDispatcherPolicy?.(parsedUrl) ?? params.dispatcherPolicy;
     const resolvePinnedHostname = async () =>
-      await runAbortablePreflight(
-        async () =>
-          await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-            lookupFn: params.lookupFn,
-            policy: policyForUrl,
-          }),
+      await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+        lookupFn: params.lookupFn,
+        policy: policyForUrl,
         signal,
-      );
+      });
     try {
       const usesTrustedExplicitProxyMode =
         mode === GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY &&

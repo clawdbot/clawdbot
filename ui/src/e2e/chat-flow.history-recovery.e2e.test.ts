@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -10,6 +11,7 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
+  readOutboxPayloadAttachments,
   requireString,
   scrollChatThreadToTop,
   visibleChatBubbleTexts,
@@ -52,8 +54,8 @@ suite.define(() => {
       ],
     };
     const sessionListResponse = chatSessionListResponse([
-      { key: sessionA, kind: "direct", label: "Session A", updatedAt: 3 },
-      { key: sessionB, kind: "direct", label: "Session B", updatedAt: 2 },
+      { key: sessionA, sessionId: "session-a", kind: "direct", label: "Session A", updatedAt: 3 },
+      { key: sessionB, sessionId: "session-b", kind: "direct", label: "Session B", updatedAt: 2 },
       { key: deletedSession, kind: "direct", label: "Session C", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
@@ -75,7 +77,12 @@ suite.define(() => {
         );
       await sessionLink(sessionB).click();
       await page.getByText(sessionBText, { exact: true }).waitFor({ timeout: 10_000 });
-      const historyRequestsBeforePeerDelete = (await gateway.getRequests("chat.history")).length;
+      const retainedHistoryRequests = async () =>
+        (await gateway.getRequests("chat.history")).filter(({ params }) => {
+          const { sessionKey } = requireRecord(params);
+          return sessionKey === sessionA || sessionKey === sessionB;
+        });
+      const historyRequestsBeforePeerDelete = (await retainedHistoryRequests()).length;
       const startupRequestsBeforePeerDelete = (await gateway.getRequests("chat.startup")).length;
       await page.evaluate(() => {
         window.addEventListener("storage", (event) => {
@@ -117,10 +124,10 @@ suite.define(() => {
 
       await sessionLink(sessionA).click();
       await page.getByText(sessionAText, { exact: true }).waitFor({ timeout: 10_000 });
-      await Promise.all([
-        expectRequestCountStable(gateway, "chat.history", historyRequestsBeforePeerDelete),
-        expectRequestCountStable(gateway, "chat.startup", startupRequestsBeforePeerDelete),
-      ]);
+      // Prefetch may warm C without reloading either retained pane. Request capture is
+      // append-only, so checking history after the startup window covers the same interval.
+      await expectRequestCountStable(gateway, "chat.startup", startupRequestsBeforePeerDelete);
+      expect(await retainedHistoryRequests()).toHaveLength(historyRequestsBeforePeerDelete);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -197,6 +204,7 @@ suite.define(() => {
         "sessions.list": chatSessionListResponse([
           {
             key: sessionA,
+            sessionId: "current-session",
             kind: "direct",
             label: "Session A",
             reasoningLevel: "high",
@@ -204,6 +212,7 @@ suite.define(() => {
           },
           {
             key: sessionB,
+            sessionId: "trace-session",
             kind: "direct",
             label: "Session B",
             reasoningLevel: "high",
@@ -215,7 +224,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       await page.getByText("Current session placeholder.").waitFor({ timeout: 10_000 });
 
       const sessionLink = (sessionKey: string) =>
@@ -333,13 +342,28 @@ suite.define(() => {
             },
           ],
         },
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          {
+            key: "agent:main:session-a",
+            sessionId: "control-ui-e2e-history-session-a",
+            kind: "direct",
+            label: "Session A",
+            updatedAt: 2,
+          },
+          {
+            key: "agent:main:session-b",
+            sessionId: "control-ui-e2e-history-session-b",
+            kind: "direct",
+            label: "Session B",
+            updatedAt: 1,
+          },
+        ]),
       },
       sessionKey: "agent:main:session-a",
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
 
       const startupCountBeforeSwitch = (await gateway.getRequests("chat.startup")).length;
@@ -521,14 +545,16 @@ suite.define(() => {
           ],
         },
         "sessions.list": chatSessionListResponse([
-          ...shortSessions.map(({ key, label, updatedAt }) => ({
+          ...shortSessions.map(({ key, label, updatedAt, sessionId }) => ({
             key,
+            sessionId,
             kind: "direct",
             label,
             updatedAt,
           })),
           {
             key: "agent:main:session-b",
+            sessionId: "retained-history-session",
             kind: "direct",
             label: "Session B",
             updatedAt: 3,
@@ -539,7 +565,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
 
       const sessionB = page.locator(
@@ -608,7 +634,8 @@ suite.define(() => {
           const rows = Array.from(pane?.querySelectorAll<HTMLElement>("[data-chat-row-key]") ?? []);
           samples.push({
             hiddenNotice: pane?.textContent?.includes("Showing last") ?? false,
-            loading: pane?.querySelector(".chat-history-loading") !== null,
+            loading:
+              pane?.querySelector('.chat-history-boundary__action[aria-busy="true"]') !== null,
             messageCount: pane?.state?.chatMessages?.length ?? 0,
             minOpacity: rows.reduce(
               (minimum, row) => Math.min(minimum, Number.parseFloat(getComputedStyle(row).opacity)),
@@ -678,7 +705,7 @@ suite.define(() => {
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -709,6 +736,7 @@ suite.define(() => {
       const sends = await waitForRequests(gateway, "chat.send", 2);
       const secondParams = requireRecord(sends[1]?.params);
       expect(secondParams.idempotencyKey).toBe(runId);
+      expect(secondParams.sessionKey).toBe(firstParams.sessionKey);
       expect(secondParams.message).toBe(prompt);
       await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
@@ -731,7 +759,7 @@ suite.define(() => {
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -827,10 +855,12 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      sessionScope: "global",
+      mainSessionKey: "global",
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:global",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -876,60 +906,38 @@ suite.define(() => {
       await queue.getByText(prompt).waitFor({ timeout: 10_000 });
       const requestsBeforeReconnect = await gateway.getRequests("chat.send");
       expect(requestsBeforeReconnect).toHaveLength(0);
-      const readStoredProof = () =>
-        page.evaluate(
-          ({ expectedAttachmentName, expectedAttachmentDataUrl, expectedPrompt }) => {
-            const storedValues = Object.entries(sessionStorage)
-              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v2:"))
-              .map(([, value]) => value);
-            const stored = storedValues.join("\n");
-            let runId: string | null = null;
-            for (const value of storedValues) {
-              try {
+      const readStoredProof = async () => {
+        const item = await page.evaluate(
+          (expectedPrompt) =>
+            Object.entries(sessionStorage)
+              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v4:"))
+              .flatMap(([, value]) => {
                 const parsed = JSON.parse(value) as {
-                  sessions?: Record<
-                    string,
-                    {
-                      queue?: Array<{
-                        attachments?: Array<{ dataUrl?: unknown; fileName?: unknown }>;
-                        sendRunId?: unknown;
-                        text?: unknown;
-                      }>;
-                    }
-                  >;
+                  sessions: Record<string, { queue?: ChatQueueItem[] }>;
                 };
-                const item = Object.values(parsed.sessions ?? {})
-                  .flatMap((session) => session.queue ?? [])
-                  .find((entry) => entry.text === expectedPrompt);
-                if (typeof item?.sendRunId === "string") {
-                  runId = item.sendRunId;
-                  const attachment = item.attachments?.find(
-                    (entry) => entry.fileName === expectedAttachmentName,
-                  );
-                  return {
-                    attachment: attachment?.dataUrl === expectedAttachmentDataUrl,
-                    prompt: true,
-                    runId,
-                    waitingReconnect: value.includes('"sendState":"waiting-reconnect"'),
-                  };
-                }
-              } catch {
-                // Ignore unrelated malformed session storage in this focused proof.
-              }
-            }
-            return {
-              attachment: false,
-              prompt: stored.includes(expectedPrompt),
-              runId,
-              waitingReconnect: stored.includes('"sendState":"waiting-reconnect"'),
-            };
-          },
-          {
-            expectedAttachmentDataUrl: attachmentDataUrl,
-            expectedAttachmentName: attachmentName,
-            expectedPrompt: prompt,
-          },
+                return Object.values(parsed.sessions).flatMap((session) => session.queue ?? []);
+              })
+              .find((entry) => entry.text === expectedPrompt),
+          prompt,
         );
+        const attachment = item?.attachments?.find((entry) => entry.fileName === attachmentName);
+        const payload = item?.attachmentPayload
+          ? await readOutboxPayloadAttachments(page, item.attachmentPayload.key)
+          : null;
+        const storedAttachment = payload?.find((entry) => entry.fileName === attachmentName);
+        return {
+          attachment: Boolean(
+            attachment &&
+            storedAttachment &&
+            attachment.dataUrl === undefined &&
+            `data:${storedAttachment.mimeType};base64,${storedAttachment.base64}` ===
+              attachmentDataUrl,
+          ),
+          prompt: item !== undefined,
+          runId: item?.sendRunId ?? null,
+          waitingReconnect: item?.sendState === "waiting-reconnect",
+        };
+      };
       await expect.poll(readStoredProof).toEqual({
         attachment: true,
         prompt: true,

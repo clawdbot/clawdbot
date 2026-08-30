@@ -183,7 +183,7 @@ third-party packages, and non-npm sources are not rewritten.
   <Accordion title="Config includes and invalid-config repair">
     If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
 
-    If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. During Gateway startup and hot reload, invalid plugin config fails closed like any other invalid config; `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+    If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. Gateway startup can apply [safe legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale), but plugin config that remains invalid still fails closed; hot reload also rejects invalid plugin config. `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
 
     When the existing host config is valid but the newly installed plugin's own config is absent, OpenClaw records the install disabled instead of writing an invalid enabled entry. Configure `plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an existing plugin config entry is present but invalid, install fails without rewriting it.
 
@@ -488,6 +488,8 @@ openclaw plugins inspect --all
 ```
 
 Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. JSON output includes the plugin manifest contracts, such as `contracts.agentToolResultMiddleware` and `contracts.trustedToolPolicies`, so operators can audit trusted-surface declarations before enabling or restarting a plugin. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
+
+For multi-entry packages, inspecting any child shows the shared package install metadata. `inspect --all --json` includes that same record for each child. If package ownership is missing or ambiguous, inspection omits install metadata rather than attributing an unrelated install record.
 
 Plugin-owned CLI commands are usually installed as root `openclaw` command groups, but plugins may also register nested commands under a core parent such as `openclaw nodes`. After `inspect --runtime` shows a command under `cliCommands`, run it at the listed path; for example a plugin that registers `demo-git` can be verified with `openclaw demo-git ping`.
 

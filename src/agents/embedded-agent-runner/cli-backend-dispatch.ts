@@ -12,7 +12,8 @@
  * to run through the CLI backend on plan limits instead.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { onAgentEvent } from "../../infra/agent-events.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
@@ -24,6 +25,10 @@ import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const log = createSubsystemLogger("agents/embedded-cli-dispatch");
+
+type CliBackendDispatchParams = RunEmbeddedAgentParams & {
+  sessionTarget: SessionTranscriptRuntimeTarget;
+};
 
 type EmbeddedCliBackendDispatch = {
   provider: string;
@@ -37,7 +42,7 @@ type EmbeddedCliBackendDispatch = {
  * gate matches; returns undefined so the caller continues on the native path.
  */
 export async function runEmbeddedAgentViaCliBackendIfEligible(
-  params: RunEmbeddedAgentParams,
+  params: CliBackendDispatchParams,
 ): Promise<EmbeddedAgentRunResult | undefined> {
   const dispatch = resolveEmbeddedCliBackendDispatch(params);
   return dispatch ? await runEmbeddedAgentViaCliBackend(params, dispatch) : undefined;
@@ -93,7 +98,7 @@ function resolveDispatchableToolsAllow(params: RunEmbeddedAgentParams): string[]
 
 /** Runs an opted-in embedded run through the CLI backend as a one-shot turn. */
 async function runEmbeddedAgentViaCliBackend(
-  params: RunEmbeddedAgentParams,
+  params: CliBackendDispatchParams,
   dispatch: EmbeddedCliBackendDispatch,
 ): Promise<EmbeddedAgentRunResult> {
   const { runCliAgent } = await import("../cli-runner.runtime.js");
@@ -122,6 +127,7 @@ async function runEmbeddedAgentViaCliBackend(
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    storePath: params.sessionTarget.storePath,
     sessionFile: dispatch.sessionFile,
     runId: params.runId,
     prompt: params.prompt,
@@ -140,7 +146,7 @@ async function runEmbeddedAgentViaCliBackend(
   // CLI tool results arrive as agent events with transport-prefixed MCP
   // names; strip and normalize so observers and transcript records see the
   // same tool names and soft-error signal the native embedded path reports.
-  const unsubscribe = onAgentEvent((evt) => {
+  const unsubscribe = onAgentEventForRun(params.runId, (evt) => {
     if (evt.runId !== params.runId) {
       return;
     }
@@ -208,6 +214,7 @@ async function runEmbeddedAgentViaCliBackend(
       admittedRunContext,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
         ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
         : {}),
@@ -216,7 +223,7 @@ async function runEmbeddedAgentViaCliBackend(
         : {}),
       chatType: params.chatType,
       agentId: params.agentId,
-      ...(params.sessionTarget?.storePath ? { storePath: params.sessionTarget.storePath } : {}),
+      storePath: params.sessionTarget.storePath,
       trigger: params.trigger,
       sessionFile: dispatch.sessionFile,
       workspaceDir: params.workspaceDir,

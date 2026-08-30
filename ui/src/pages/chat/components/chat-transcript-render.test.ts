@@ -39,11 +39,46 @@ describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
+  it.each([true, false])(
+    "keeps browser cards visible with capture limited to the active pane (%s)",
+    async (active) => {
+      const messages = [
+        { role: "user", content: "Open the example", timestamp: 1_000 },
+        {
+          role: "toolResult",
+          toolCallId: "browser-call",
+          toolName: "browser",
+          timestamp: 2_000,
+          content: "Opened",
+          details: {
+            browserTab: { profile: "managed", target: "host", targetId: "tab-1", title: "Example" },
+          },
+        },
+        { role: "assistant", content: "Done.", timestamp: 3_000 },
+      ];
+      const props = {
+        ...threadProps("pane-browser-work", "agent:main:dashboard:browser", messages),
+        browserTabPreviewsActive: active,
+        showToolCalls: true,
+      };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      expect(container.querySelector(".chat-work-group")).not.toBeNull();
+      expect(container.querySelectorAll("openclaw-browser-tab-card")).toHaveLength(1);
+      expect(container.querySelector("openclaw-browser-tab-card")?.latest).toBe(active);
+      transcript.hostDisconnected();
+    },
+  );
+
   it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
-    const sessionKey = "agent:main:archived-notice";
+    const sessionKey = "agent:work:main";
     const archivedSession: GatewaySessionRow = {
-      key: sessionKey,
-      kind: "direct",
+      key: "global",
+      kind: "global",
       updatedAt: 2_000,
       archived: true,
       archivedAt: 2_000,
@@ -63,6 +98,7 @@ describe("chat transcript rendering", () => {
         { role: "user", content: "Before archive", timestamp: 1_000 },
         { role: "assistant", content: "After archive", timestamp: 3_000 },
       ]),
+      selectedSession: archivedSession,
       sessions,
     };
     const rerender = () => {
@@ -88,12 +124,14 @@ describe("chat transcript rendering", () => {
       ...archivedSession,
       archivedBy: { type: "human", id: "profile-bob" },
     };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(requireElement(container, ".chat-notice").textContent).toContain(
       "Archived by profile-bob",
     );
 
     sessions.sessions[0] = { ...archivedSession, archivedBy: undefined };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(container.querySelector(".chat-notice")).toBeNull();
 
@@ -103,6 +141,7 @@ describe("chat transcript rendering", () => {
       archivedAt: undefined,
       archivedBy: undefined,
     };
+    props.selectedSession = sessions.sessions[0];
     rerender();
     expect(container.querySelector(".chat-notice")).toBeNull();
     transcript.hostDisconnected();

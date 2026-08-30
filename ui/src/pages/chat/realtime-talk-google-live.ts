@@ -19,7 +19,7 @@ import {
   GoogleLiveToolOwner,
   type GoogleLiveFunctionCall,
 } from "./realtime-talk-google-live-tools.ts";
-import { openRealtimeTalkCamera, openRealtimeTalkInput } from "./realtime-talk-input.ts";
+import { openRealtimeTalkCamera, RealtimeTalkInputController } from "./realtime-talk-input.ts";
 import {
   type RealtimeTalkJsonPcmWebSocketSessionResult,
   createRealtimeTalkEventEmitter,
@@ -42,11 +42,10 @@ type GoogleLiveMessage = {
     outputTranscription?: { text?: string; finished?: boolean };
     modelTurn?: {
       parts?: Array<{
-        text?: string;
-        thought?: boolean;
         inlineData?: { data?: string; mimeType?: string };
       }>;
     };
+    generationComplete?: boolean;
     turnComplete?: boolean;
   };
   toolCall?: {
@@ -59,6 +58,8 @@ type GoogleLiveMessage = {
 
 const GOOGLE_LIVE_VIDEO_FRAME_INTERVAL_MS = 1_000;
 const GOOGLE_LIVE_VIDEO_MESSAGE_MAX_BYTES = 512 * 1024;
+const GOOGLE_LIVE_MAX_TRANSCRIPT_BYTES = 256 * 1024;
+const utf8Encoder = new TextEncoder();
 function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
   return {
     realtimeInput: {
@@ -80,13 +81,17 @@ function isGemini31LiveModel(model: string | undefined): boolean {
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private ws: WebSocket | null = null;
   private setupTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private media: MediaStream | null = null;
+  private readonly input = new RealtimeTalkInputController((detail) => {
+    const ws = this.ws;
+    if (ws) {
+      this.failConnection(ws, detail);
+    }
+  });
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private closed = false;
-  private mediaSetupController: AbortController | null = null;
   private readonly camera: RealtimeTalkCameraController;
   private readonly lifecycle = new GoogleLiveConnectionLifecycle();
   private cameraPublished = false;
@@ -96,6 +101,10 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
   private readonly toolOwner: GoogleLiveToolOwner;
+  private readonly pendingTranscripts = {
+    user: { text: "", byteCount: 0 },
+    assistant: { text: "", byteCount: 0 },
+  };
 
   constructor(
     private readonly session: RealtimeTalkJsonPcmWebSocketSessionResult,
@@ -154,29 +163,17 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const wsUrl = buildGoogleLiveUrl(this.session);
     this.closed = false;
     this.cameraPublished = false;
-    this.mediaSetupController?.abort();
-    const mediaSetupController = new AbortController();
-    this.mediaSetupController = mediaSetupController;
-    let media: MediaStream;
     try {
-      media = await openRealtimeTalkInput(this.ctx.inputDeviceId, {
-        signal: mediaSetupController.signal,
-      });
+      await this.input.open(this.ctx.inputDeviceId);
     } catch (error) {
       if (this.closed) {
         return "cancelled";
       }
       throw error;
-    } finally {
-      if (this.mediaSetupController === mediaSetupController) {
-        this.mediaSetupController = null;
-      }
     }
     if (this.closed) {
-      media.getTracks().forEach((track) => track.stop());
       return "cancelled";
     }
-    this.media = media;
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
     const ws = new WebSocket(wsUrl);
@@ -220,10 +217,10 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       this.assertActivationCurrent();
       this.emitTalkEvent({ type: "session.ready" });
       this.assertActivationCurrent();
-      if (this.ctx.callbacks.onInputLevel && this.media && this.inputContext) {
+      if (this.ctx.callbacks.onInputLevel && this.input.stream && this.inputContext) {
         const inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
         this.inputMeter = inputMeter;
-        inputMeter.start(this.media, this.inputContext);
+        inputMeter.start(this.input.stream, this.inputContext);
         this.assertActivationCurrent();
       }
       this.startMicrophonePump();
@@ -272,13 +269,11 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private releaseResources(): void {
-    const mediaSetupController = this.mediaSetupController;
-    this.mediaSetupController = null;
     this.clearSetupTimeout();
+    this.pendingTranscripts.user = { text: "", byteCount: 0 };
+    this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
     const inputMeter = this.inputMeter;
     this.inputMeter = null;
-    const media = this.media;
-    this.media = null;
     const inputContext = this.inputContext;
     this.inputContext = null;
     const outputContext = this.outputContext;
@@ -286,11 +281,10 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const ws = this.ws;
     this.ws = null;
     runRealtimeTalkCleanup([
-      () => mediaSetupController?.abort(),
+      () => this.input.stop(),
       () => this.toolOwner.release(),
       () => this.inputPump.stop(),
       () => inputMeter?.stop(),
-      ...(media?.getTracks() ?? []).map((track) => () => track.stop()),
       () => this.camera.release(),
       () => this.stopOutput(),
       () => {
@@ -333,10 +327,10 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private startMicrophonePump(): void {
-    if (this.closed || !this.media || !this.inputContext) {
+    if (this.closed || !this.input.stream || !this.inputContext) {
       return;
     }
-    this.inputPump.start(this.media, this.inputContext, (samples) => {
+    this.inputPump.start(this.input.stream, this.inputContext, (samples) => {
       if (this.ws?.readyState !== WebSocket.OPEN) {
         return;
       }
@@ -384,55 +378,17 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const content = message.serverContent;
     if (content?.interrupted) {
       this.stopOutput();
-      this.emitTalkEvent({
-        type: "turn.cancelled",
-        final: true,
-        payload: { reason: "provider-interrupted" },
-      });
     }
-    if (content?.inputTranscription?.text) {
-      this.ctx.callbacks.onTranscript?.({
-        role: "user",
-        text: content.inputTranscription.text,
-        final: content.inputTranscription.finished ?? false,
-      });
-      if (this.closed) {
-        return;
-      }
-      this.emitTalkEvent({
-        type: content.inputTranscription.finished ? "transcript.done" : "transcript.delta",
-        final: content.inputTranscription.finished ?? false,
-        payload: { role: "user", text: content.inputTranscription.text },
-      });
-      if (
-        content.inputTranscription.finished &&
-        this.toolOwner.hasPendingConsult() &&
-        shouldAutoControlRealtimeVoiceAgentText(content.inputTranscription.text)
-      ) {
-        void steerRealtimeTalkActiveConsult({
-          ctx: this.ctx,
-          text: content.inputTranscription.text,
-          emitTalkEvent: this.emitTalkEvent,
-          onControlResult: (result) => this.stopOutputForSuppressedControl(result),
-          speakControlResult: (messageLocal) => this.sendControlSpeechMessage(messageLocal),
-          suppressSpeechForModes: ["cancel"],
-        });
-      }
+    if (content?.inputTranscription && !this.appendTranscript("user", content.inputTranscription)) {
+      return;
     }
-    if (content?.outputTranscription?.text) {
-      this.ctx.callbacks.onTranscript?.({
-        role: "assistant",
-        text: content.outputTranscription.text,
-        final: content.outputTranscription.finished ?? false,
-      });
-      if (this.closed) {
-        return;
-      }
-      this.emitTalkEvent({
-        type: content.outputTranscription.finished ? "output.text.done" : "output.text.delta",
-        final: content.outputTranscription.finished ?? false,
-        payload: { text: content.outputTranscription.text },
-      });
+    // The configured output transcription owns spoken text; modelTurn text has
+    // no transcript identity and must not create a second history entry.
+    if (
+      content?.outputTranscription &&
+      !this.appendTranscript("assistant", content.outputTranscription)
+    ) {
+      return;
     }
     for (const part of content?.modelTurn?.parts ?? []) {
       if (part.inlineData?.data) {
@@ -443,28 +399,33 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
             mimeType: part.inlineData.mimeType,
           },
         });
+        if (this.closed) {
+          return;
+        }
         this.playPcm16(part.inlineData.data);
         if (this.closed) {
           return;
         }
-      } else if (!part.thought && typeof part.text === "string" && part.text.trim()) {
-        this.ctx.callbacks.onTranscript?.({
-          role: "assistant",
-          text: part.text,
-          final: content?.turnComplete ?? false,
-        });
-        if (this.closed) {
-          return;
-        }
-        this.emitTalkEvent({
-          type: content?.turnComplete ? "output.text.done" : "output.text.delta",
-          final: content?.turnComplete ?? false,
-          payload: { text: part.text },
-        });
       }
     }
-    if (content?.turnComplete) {
+    // Output transcription precedes model completion/interruption. Publish its
+    // final before ending the Talk turn, which releases that turn's event identity.
+    if (content?.generationComplete || content?.interrupted || content?.turnComplete) {
+      if (!this.flushTranscript("assistant")) {
+        return;
+      }
+    }
+    if (content?.interrupted) {
+      this.emitTalkEvent({
+        type: "turn.cancelled",
+        final: true,
+        payload: { reason: "provider-interrupted" },
+      });
+    } else if (content?.turnComplete) {
       this.emitTalkEvent({ type: "turn.ended", final: true });
+    }
+    if (this.closed) {
+      return;
     }
     for (const call of message.toolCall?.functionCalls ?? []) {
       void this.toolOwner.handleCall(call).catch((error: unknown) => {
@@ -472,6 +433,74 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       });
     }
     this.toolOwner.cancel(message.toolCallCancellation?.ids);
+  }
+
+  private appendTranscript(
+    role: "user" | "assistant",
+    transcript: { text?: string; finished?: boolean },
+  ): boolean {
+    const pending = this.pendingTranscripts[role];
+    // Live 3.1 input messages are complete utterances even without finished.
+    const completeInput = role === "user" && isGemini31LiveModel(this.session.model);
+    if (transcript.text) {
+      pending.byteCount += utf8Encoder.encode(transcript.text).byteLength;
+      if (pending.byteCount > GOOGLE_LIVE_MAX_TRANSCRIPT_BYTES) {
+        if (this.ws) {
+          this.failConnection(
+            this.ws,
+            "Google Live transcript exceeded the 256 KiB UTF-8 pending buffer limit",
+          );
+        }
+        return false;
+      }
+      pending.text += transcript.text;
+      if (!completeInput && !this.emitTranscript(role, transcript.text, false)) {
+        return false;
+      }
+    }
+    return transcript.finished || completeInput ? this.flushTranscript(role) : !this.closed;
+  }
+
+  private flushTranscript(role: "user" | "assistant"): boolean {
+    const text = this.pendingTranscripts[role].text.trim();
+    this.pendingTranscripts[role] = { text: "", byteCount: 0 };
+    return text ? this.emitTranscript(role, text, true) : !this.closed;
+  }
+
+  private emitTranscript(role: "user" | "assistant", text: string, final: boolean): boolean {
+    this.ctx.callbacks.onTranscript?.({ role, text, final });
+    if (this.closed) {
+      return false;
+    }
+    this.emitTalkEvent({
+      type:
+        role === "user"
+          ? final
+            ? "transcript.done"
+            : "transcript.delta"
+          : final
+            ? "output.text.done"
+            : "output.text.delta",
+      final,
+      payload: role === "user" ? { role, text } : { text },
+    });
+    if (
+      !this.closed &&
+      role === "user" &&
+      final &&
+      this.toolOwner.hasPendingConsult() &&
+      shouldAutoControlRealtimeVoiceAgentText(text)
+    ) {
+      void steerRealtimeTalkActiveConsult({
+        ctx: this.ctx,
+        text,
+        emitTalkEvent: this.emitTalkEvent,
+        onControlResult: (result) => this.stopOutputForSuppressedControl(result),
+        speakControlResult: (message) => this.sendControlSpeechMessage(message),
+        suppressSpeechForModes: ["cancel"],
+      });
+    }
+    return !this.closed;
   }
 
   private playPcm16(base64: string): void {

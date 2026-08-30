@@ -499,7 +499,9 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
   return isLocalBackendSharedAuth || isLocalCliSharedAuth;
 }
 
-function resolveDeviceIdentityForGatewayCall(sharedStateMode?: "read-only"): DeviceIdentity | null {
+export function resolveDeviceIdentityForGatewayCall(
+  sharedStateMode?: "read-only",
+): DeviceIdentity | null {
   try {
     return sharedStateMode === "read-only"
       ? loadDeviceIdentityIfPresent()
@@ -983,6 +985,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
         try {
           opts.onHelloOk?.(hello);
         } catch {}
+        // An observer may cancel after inspecting hello, before any RPC is sent.
+        if (settled) {
+          return;
+        }
         void (async () => {
           try {
             ensureGatewaySupportsRequiredMethods({

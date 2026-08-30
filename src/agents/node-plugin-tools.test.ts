@@ -8,12 +8,13 @@ import {
   removeConnectedNodePluginTools,
   replaceConnectedNodePluginTools,
 } from "../gateway/node-plugin-tool-snapshot.js";
-import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
 import { isToolResultError } from "./tool-result-error.js";
-import { compactToolSearchCatalogEntry, createToolSearchCatalogRef } from "./tool-search.js";
+import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
+import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 

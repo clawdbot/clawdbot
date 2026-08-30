@@ -98,6 +98,7 @@ type ConfigPageSetting =
   | "textScale"
   | "sidebarLiveActivity"
   | "chatMessageMaxWidth"
+  | "chatCollapseTaskProgress"
   | "showAdvancedSettings"
   | "chatSendShortcut"
   | "chatFollowUpMode"
@@ -1218,7 +1219,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         ? localePref.resetValue
         : undefined,
       onLocaleChange: (locale) => this.setLocale(locale),
-      resetLocale: () => this.resetLocale(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
       setAccent: (accent) =>
@@ -1255,6 +1255,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
+      chatCollapseTaskProgress: this.settings.chatCollapseTaskProgress === true,
+      setChatCollapseTaskProgress: (enabled) =>
+        this.setSetting("chatCollapseTaskProgress", enabled),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
       setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
       forceShowAdvanced: this.pageId === "advanced",
@@ -1299,7 +1302,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       chatSendShortcutResetValue:
         chatSendShortcutPref.resetValue ?? UI_APPEARANCE_DEFAULTS.chatSendShortcut,
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
-      resetChatSendShortcut: () => this.resetSyncedAppearancePref("chatSendShortcut"),
       chatFollowUpMode: this.settings.chatFollowUpMode,
       chatFollowUpModeOverridden: chatFollowUpModePref.overridden,
       chatFollowUpModeProvenance: chatFollowUpModePref.provenance,
@@ -1354,9 +1356,13 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.context.nativeNotifications?.requestPermission(),
       onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
       webPush: this.context.webPush.snapshot,
-      onWebPushSubscribe: () => void this.context.webPush.enable(),
-      onWebPushUnsubscribe: () => void this.context.webPush.disable(),
-      onWebPushTest: () => void this.context.webPush.sendTest(),
+      onWebPushSubscribe: () => void this.context.webPush.run({ kind: "enable" }),
+      onWebPushUnsubscribe: () => void this.context.webPush.run({ kind: "disable" }),
+      onWebPushTest: () => void this.context.webPush.run({ kind: "test" }),
+      onWebPushSetUserPreferences: (preferences) =>
+        void this.context.webPush.run({ kind: "set", scope: "user", preferences }),
+      onWebPushSetDevicePreferences: (preferences) =>
+        void this.context.webPush.run({ kind: "set", scope: "device", preferences }),
     };
     if (this.pageId === "mcp") {
       return renderMcp({
@@ -1423,7 +1429,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           }
           runtimeConfig.patchForm(["browser", "enabled"], false);
         },
-        onBrowserEnabledReset: () => runtimeConfig.removeFormValue(["browser", "enabled"]),
         onToolProfileChange: (profile) => {
           if (profile === "full") {
             runtimeConfig.removeFormValue(["tools", "profile"]);
@@ -1431,7 +1436,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           }
           runtimeConfig.patchForm(["tools", "profile"], profile);
         },
-        onToolProfileReset: () => runtimeConfig.removeFormValue(["tools", "profile"]),
         editor: renderConfig({ ...props, embeddedEditor: true }),
       });
     }

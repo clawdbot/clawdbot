@@ -21,10 +21,12 @@ import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-s
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
+  controlUiSessionPath,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
@@ -55,6 +57,7 @@ type CliOptions = {
     | "attachments"
     | "board"
     | "code-fences"
+    | "goal"
     | "swarm"
     | "update-available"
     | "update-blocked"
@@ -358,6 +361,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "attachments" &&
     value !== "board" &&
     value !== "code-fences" &&
+    value !== "goal" &&
     value !== "swarm" &&
     value !== "update-available" &&
     value !== "update-blocked" &&
@@ -389,23 +393,15 @@ function sessionRow(
   options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
 ) {
   const { model, modelProvider, ...extra } = options;
-  return {
+  return createControlUiSessionRow(key, label, updatedAt, {
     contextTokens: 200_000,
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    kind: "direct",
-    label,
     model: (model as string | undefined) ?? "gpt-5.6-luna",
     modelProvider: (modelProvider as string | undefined) ?? "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
     ...extra,
-  };
+  });
 }
 
-function sessionsListResponse(sessions: unknown[], options: SessionListOptions) {
+function sessionsListResponse(sessions: Array<{ key: string }>, options: SessionListOptions) {
   return {
     count: sessions.length,
     defaults: {
@@ -419,14 +415,15 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     ...(options.owners ? { owners: options.owners } : {}),
     offset: options.offset ?? 0,
     path: "",
-    sessions,
+    // Cases select membership; canonical metadata comes from the scenario's rows.
+    sessions: sessions.map(({ key }) => ({ key })),
     totalCount: options.totalCount,
     ts: Date.now(),
   };
 }
 
 function pagedSessionsListResponse(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   offset: number,
   owners?: readonly SessionActorFixture[],
 ) {
@@ -463,7 +460,7 @@ function buildSessionRows(params: {
 }
 
 function buildSessionListCases(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   matchBase: Record<string, unknown> = {},
   owners?: readonly SessionActorFixture[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
@@ -482,7 +479,7 @@ function buildSessionListCases(
 }
 
 function buildSearchSessionListCases(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   searchTerms: string[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
@@ -1700,6 +1697,20 @@ async function createChatPickerScenario(
   const workboardMocks = buildWorkboardMocks(baseTime);
   const activityTime = Date.now();
   const activitySessions = buildActivitySessionRows(activityTime);
+  const activeGoal = {
+    schemaVersion: 1 as const,
+    id: "goal-mobile-parity",
+    objective:
+      "Make Goal work on mobile exactly as it does on desktop while preserving action access, progress visibility, timing, token usage, and composer space across narrow viewports. Keep the collapsed state compact enough for active conversations, while making the expanded state comfortable to scan and operate with one hand. Preserve clear hierarchy between the objective, elapsed time, token budget, and available actions without letting long content push the composer out of reach. Ensure the full objective remains readable when it contains detailed constraints, acceptance criteria, rollout notes, and operational context that cannot be reduced to a short summary. Account for long-running sessions whose goals accumulate multiple requirements, edge cases, validation steps, ownership notes, and deployment considerations. The operator should be able to review all of that context without losing access to the Goal controls or forcing the message composer below the visible viewport.",
+    status: "active" as const,
+    createdAt: activityTime - 14 * 60_000,
+    updatedAt: activityTime - 30_000,
+    tokenStart: 120_000,
+    tokenStartFresh: true,
+    tokensUsed: 127_000,
+    tokenBudget: 300_000,
+    continuationTurns: 3,
+  };
   const sessions = [
     ...activitySessions,
     ...(fixture === "workboard"
@@ -1716,6 +1727,7 @@ async function createChatPickerScenario(
       hasActiveRun: true,
       totalTokens: 170_000,
       totalTokensFresh: true,
+      ...(fixture === "goal" ? { goal: activeGoal } : {}),
     }),
     ...swarmChildRows,
     sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
@@ -1744,6 +1756,32 @@ async function createChatPickerScenario(
       status: "running",
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
+    }),
+    sessionRow("agent:main:cloud-refactor", "Cloud refactor worker", baseTime - 70_000, {
+      hasActiveRun: true,
+      status: "running",
+      startedAt: baseTime - 3_500_000,
+      execCwd: "/workspace/openclaw",
+      placement: {
+        state: "active",
+        generation: 3,
+        createdAtMs: baseTime - 3_600_000,
+        updatedAtMs: baseTime - 20_000,
+        stateChangedAtMs: baseTime - 3_500_000,
+        environmentId: "worker:9f2c4e7a81d24b06a5c3f8e1b7d94c1a",
+        providerId: "machine0",
+        profileId: "team",
+        activeOwnerEpoch: 4,
+        workerBundleHash: "b".repeat(64),
+        workspaceBaseManifestRef: "sha256:cloud-refactor-base",
+        remoteWorkspaceDir: "/workspace/openclaw",
+        diskSpace: {
+          status: "ok",
+          availableBytes: 61 * 1024 ** 3,
+          totalBytes: 100 * 1024 ** 3,
+          observedAtMs: baseTime - 20_000,
+        },
+      },
     }),
     sessionRow(
       "agent:main:production-export",
@@ -1913,6 +1951,7 @@ async function createChatPickerScenario(
     activeRunIds: [PLAN_DEMO_RUN_ID],
     hasActiveRun: true,
     key: "agent:main:main",
+    ...(fixture === "goal" ? { goal: activeGoal } : {}),
   };
   const planInFlightRun = {
     runId: PLAN_DEMO_RUN_ID,
@@ -1930,7 +1969,7 @@ async function createChatPickerScenario(
   };
   const planChatHistory = {
     messages: historyMessages,
-    sessionId: "control-ui-e2e-session",
+    sessionId: "session:agent:main:main",
     sessionInfo: planSessionInfo,
     inFlightRun: planInFlightRun,
     thinkingLevel: null,
@@ -3051,6 +3090,7 @@ async function createChatPickerScenario(
       ],
     },
     sessionArchiveFiltering: true,
+    sessions: [...sessions, ...archivedSessions, mainChildRow, taxChildRow],
     sessionKey: fixture === "workboard" ? workboardMocks.sessionKey : "agent:main:main",
     workspace: "/Users/peter/Projects/openclaw",
     workspaceGit: true,
@@ -3382,7 +3422,9 @@ const server = await createServer({
 });
 
 await server.listen();
-console.log(`[control-ui-mock] ${resolveServerUrl(server, options.host)}`);
+console.log(
+  `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
+);
 console.log(
   `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
 );

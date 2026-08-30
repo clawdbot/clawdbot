@@ -9,7 +9,7 @@ import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
   isRuntimeToolAllowed,
-  isRuntimeToolAllowedForConstruction,
+  createRuntimeToolMatcher,
   isToolAllowedByPolicyName,
 } from "./tool-policy-match.js";
 import {
@@ -218,7 +218,7 @@ describe("isToolAllowedByPolicyName — apply_patch / write deny decoupling (#76
 
   it("keeps runtime write compatibility out of construction planning", () => {
     expect(isRuntimeToolAllowed("apply_patch", ["write"])).toBe(true);
-    expect(isRuntimeToolAllowedForConstruction("apply_patch", ["write"])).toBe(false);
+    expect(createRuntimeToolMatcher(["write"], false)("apply_patch")).toBe(false);
     expect(isRuntimeToolAllowed("apply_patch", ["apply-patch"])).toBe(true);
     expect(isRuntimeToolAllowed("apply_patch", ["apply_*"])).toBe(true);
     expect(isRuntimeToolAllowed("apply_patch", ["group:fs"])).toBe(true);

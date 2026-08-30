@@ -1,8 +1,9 @@
-import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
+import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { copyCodeModeControlToolIdentity } from "./code-mode-control-tools.js";
+import { copyCronScheduledToolProjection } from "./exec-tool-target-pinning.js";
 import { copyInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
@@ -71,6 +72,7 @@ export function copyAgentToolMetadata<T extends AnyAgentTool>(source: AnyAgentTo
   copyBeforeToolCallHookMarker(source, target);
   copyToolTerminalPresentation(source, target);
   copyCodeModeControlToolIdentity(source, target);
+  copyCronScheduledToolProjection(source, target);
   copyInternalToolExecutionPreparer(source, target);
   copyAgentToolActionDescriptor(source, target);
   return target;

@@ -51,8 +51,10 @@ vi.mock("./attempt-prompt-build.js", () => ({
 }));
 vi.mock("./attempt-prompt-submit.js", () => ({
   handleEmbeddedAttemptPromptError: mocks.handlePromptError,
-  prepareEmbeddedAttemptPromptExecution: mocks.preparePromptExecution,
   submitEmbeddedAttemptPrompt: mocks.submitPrompt,
+}));
+vi.mock("./prompt-image-preparation.js", () => ({
+  prepareEmbeddedAttemptPromptExecution: mocks.preparePromptExecution,
 }));
 vi.mock("./attempt-prompt-preflight.js", () => ({
   handleEmbeddedAttemptMidTurnPrecheck: mocks.handleMidTurnPrecheck,
@@ -260,6 +262,7 @@ function createFixture() {
       coreReadAuthorized: true,
     },
     preflight: {
+      compactionReplayEnabled: false,
       contextEngineAssemblySucceeded: false,
       contextEnginePromptAuthority: "assembled",
       includeBoundaryTimestamp: false,

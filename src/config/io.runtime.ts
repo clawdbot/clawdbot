@@ -51,6 +51,8 @@ import {
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
+export { createConfigIO };
+
 export function clearConfigCache(): void {
   // Compat shim: runtime snapshot is the only in-process cache now.
 }
@@ -118,11 +120,13 @@ export async function readBestEffortConfig(options?: {
   isolateEnv?: boolean;
   observe?: boolean;
   skipPluginValidation?: boolean;
+  pluginValidation?: ConfigSnapshotReadOptions["pluginValidation"];
 }): Promise<OpenClawConfig> {
   return await createConfigIO({
     ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
     ...(options?.observe === false ? { observe: false } : {}),
-    ...(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    pluginValidation:
+      options?.pluginValidation ?? (options?.skipPluginValidation ? "skip" : undefined),
   }).readBestEffortConfig();
 }
 

@@ -58,7 +58,7 @@ export function readChatPaneMutationAccess(
   };
 }
 
-export function resolveChatModelCatalogState(
+function resolveChatModelCatalogState(
   state: Pick<
     ChatPageHost,
     "chatModelCatalog" | "chatModelCatalogError" | "chatModelsLoading" | "connected"
@@ -82,6 +82,7 @@ export function renderChatPaneComposerControls(params: {
   state: ChatPageHost;
   selectedSession: GatewaySessionRow | undefined;
   agentDefaultModel: string | undefined;
+  agentDefaultPermissionMode?: ChatPermissionPickerProps["defaultMode"];
   modelAccess: SessionMethodAccess;
   effortAccess: SessionMethodAccess;
   permissionAccess: SessionMethodAccess;
@@ -96,6 +97,7 @@ export function renderChatPaneComposerControls(params: {
     state,
     selectedSession,
     agentDefaultModel,
+    agentDefaultPermissionMode,
     modelAccess,
     effortAccess,
     permissionAccess,
@@ -133,6 +135,7 @@ export function renderChatPaneComposerControls(params: {
           effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
           sending: state.chatSending,
           sessionKey: state.sessionKey,
+          selectedSession,
           sessionsResult: state.sessionsResult,
           stream: state.chatStream,
           onRequestUpdate: () => state.requestUpdate?.(),
@@ -162,6 +165,7 @@ export function renderChatPaneComposerControls(params: {
     `,
     permissionPicker: {
       canSelectFull,
+      defaultMode: agentDefaultPermissionMode,
       disabled: !permissionAccess.allowed,
       disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
       mode: selectedSession?.permissionMode,

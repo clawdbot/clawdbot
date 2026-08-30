@@ -9,6 +9,8 @@ import {
 } from "../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
@@ -186,6 +188,7 @@ function registerHealthyAcpBackend() {
 }
 
 afterEach(async () => {
+  clearPluginMetadataLifecycleCaches();
   hoisted.loadPluginManifestRegistryForInstalledIndex.mockReset();
   hoisted.loadPluginMetadataSnapshot.mockClear();
   hoisted.resolvePluginMetadataSnapshot.mockClear();
@@ -234,6 +237,38 @@ describe("resolvePluginSkillRoots", () => {
     hoisted.resolvePluginMetadataSnapshot.mockClear();
     hoisted.loadPluginRegistrySnapshot.mockReset();
     hoisted.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+  });
+
+  it("keeps package skill targets stable across config changes while publishing live selection", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const pluginRoot = await tempDirs.make("openclaw-plugin-");
+    const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
+    const skillsRoot = path.join(pluginRoot, "skills");
+    const original = path.join(skillsRoot, "original");
+    const added = path.join(skillsRoot, "added");
+    await fs.mkdir(original, { recursive: true });
+    await fs.writeFile(path.join(original, "SKILL.md"), "# Original\n");
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createSinglePluginRegistry({ pluginRoot, skills: ["./skills"] }),
+    );
+    const config: OpenClawConfig = { plugins: { entries: { helper: { enabled: true } } } };
+    const resolve = (nextConfig = config) =>
+      resolvePluginSkillRoots({ workspaceDir, config: nextConfig, pluginSkillsDir });
+    resolve();
+    expect(fsSync.readlinkSync(path.join(pluginSkillsDir, "original"))).toBe(original);
+
+    await fs.mkdir(added);
+    await fs.writeFile(path.join(added, "SKILL.md"), "# Added\n");
+    resolve({ ...config });
+    await expectPathMissing(path.join(pluginSkillsDir, "added"));
+
+    withPluginCache(createPluginCache(), () => resolve({ ...config }));
+    expect(fsSync.readlinkSync(path.join(pluginSkillsDir, "added"))).toBe(added);
+    resolve({ ...config });
+    await expectPathMissing(path.join(pluginSkillsDir, "added"));
+
+    resolve({ plugins: { entries: { helper: { enabled: false } } } });
+    await expectPathMissing(path.join(pluginSkillsDir, "original"));
   });
 
   it.each([
@@ -402,7 +437,7 @@ describe("resolvePluginSkillRoots", () => {
       ];
       expect(first.map((root) => root.dir)).toEqual(dirsForState(firstIncludesAcpx));
       expect(second.map((root) => root.dir)).toEqual(dirsForState(secondIncludesAcpx));
-      expect(resolvePluginSkillRoots({ workspaceDir, config })).toBe(second);
+      expect(resolvePluginSkillRoots({ workspaceDir, config })).toEqual(second);
     },
   );
 

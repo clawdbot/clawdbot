@@ -5,6 +5,7 @@ import { validateCrabboxMergeBypass } from "../../scripts/pr-lib/crabbox-merge-b
 const baseSha = "b".repeat(40);
 const headSha = "a".repeat(40);
 const workflowSha = "d".repeat(40);
+const mainSha = "e".repeat(40);
 const planDigest = "c".repeat(64);
 const runId = "run_abc123";
 const leaseId = "cbx_def456";
@@ -81,7 +82,15 @@ function input() {
       state: "active",
       user: { login: "maintainer" },
     },
-    mainRef: { object: { sha: workflowSha }, ref: "refs/heads/main" },
+    finalMainRef: { object: { sha: mainSha }, ref: "refs/heads/main" },
+    mainComparison: {
+      ahead_by: 3,
+      base_commit: { sha: workflowSha },
+      behind_by: 0,
+      merge_base_commit: { sha: workflowSha },
+      status: "ahead",
+    },
+    mainRef: { object: { sha: mainSha }, ref: "refs/heads/main" },
     pullRequest: {
       base: { ref: "main", repo: { full_name: "openclaw/openclaw" }, sha: baseSha },
       draft: false,
@@ -125,6 +134,7 @@ describe("Crabbox admin merge bypass verifier", () => {
           name: "check",
         },
       ],
+      mainSha,
       planDigest,
       targetCount: 8,
       workflowSha,
@@ -178,9 +188,16 @@ describe("Crabbox admin merge bypass verifier", () => {
     [
       "protected main drift",
       (value: ReturnType<typeof input>) => {
-        value.mainRef.object.sha = "e".repeat(40);
+        value.finalMainRef.object.sha = "f".repeat(40);
       },
-      /not bound to the current protected-main publisher workflow/u,
+      /protected main moved/u,
+    ],
+    [
+      "publisher workflow not ancestral to main",
+      (value: ReturnType<typeof input>) => {
+        value.mainComparison.merge_base_commit.sha = baseSha;
+      },
+      /protected main is not identical or forward/u,
     ],
     [
       "non-canonical CI workflow path",

@@ -24,11 +24,11 @@ SSH host-key verification is strict by default because gateway credentials trave
 
 In SSH tunnel mode, discovered LAN/tailnet hostnames save as `gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local tunnel endpoint (for example `ws://127.0.0.1:18789`) so CLI, Web Chat, and the local node-host service all use the same loopback transport. When discovery returns both raw Tailnet IPs and stable hostnames, the app prefers Tailscale MagicDNS or LAN names so connections survive address changes better. If the local tunnel port differs from the remote gateway port, set `gateway.remote.remotePort` to the port on the remote host.
 
-Browser automation in remote mode is owned by the CLI node host, not the native macOS app node. The app starts the installed node host service when possible; to enable browser control from that Mac, install/start it with `openclaw node install ...` and `openclaw node start` (or run `openclaw node run ...` in the foreground), then target that browser-capable node.
+The Mac app's node combines native capabilities with system, browser, plugin, skill, and MCP commands from its bundled private worker. Connecting the app to a remote Gateway needs no external CLI or separate node-service installation on this Mac. An already-installed headless node service remains separate: the app preserves its start/stop and managed update/recovery behavior. Optional [cookie sync](/platforms/macos#sync-cookies-to-a-remote-computer) still uses an external CLI and reports a feature-specific error when it is missing.
 
 ## Prereqs on the remote host
 
-1. Install Node + pnpm and build/install the OpenClaw CLI (`pnpm install && pnpm build && pnpm link --global`).
+1. Install Node + pnpm, then build/install the OpenClaw CLI from its checkout (`pnpm install && pnpm build && pnpm add --global "openclaw@link:$PWD"`).
 2. Ensure `openclaw` is on PATH for non-interactive shells (symlink into `/usr/local/bin` or `/opt/homebrew/bin` if needed).
 3. For SSH transport: set up key-based SSH auth. Tailscale IPs are recommended for stable reachability off-LAN.
 
@@ -64,7 +64,7 @@ To configure from the UI instead:
    - **Identity file** (advanced): path to your key.
    - **Project root** (advanced): remote checkout path used for commands.
    - **CLI path** (advanced): optional path to a runnable `openclaw` entrypoint/binary (auto-filled when advertised).
-3. Hit **Test remote**. Success means the remote `openclaw status --json` ran correctly. Failures usually mean PATH/CLI issues; exit 127 means the CLI was not found remotely.
+3. Hit **Test remote**. The app checks SSH reachability when applicable, then authenticates and calls the Gateway health RPC. Connection, authentication, and pairing errors appear here; this check does not require a CLI on this Mac.
 4. Health checks and Web Chat now run through the selected transport automatically.
 
 ## Web Chat

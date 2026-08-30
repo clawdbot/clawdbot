@@ -17,10 +17,12 @@ import {
   isUiGlobalSessionKey,
   resolveUiGlobalAliasAgentId,
   uiSessionRowMatchesSelectedChat,
+  type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
+import { reduceChatSessionProjection, setChatRunOwner } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
 import {
@@ -32,6 +34,12 @@ import {
 } from "./tool-stream.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
+
+export type ChatRunError = {
+  summary: string;
+  /** Display ownership only; the session reducer retains each run's diagnostic. */
+  runId?: string;
+};
 
 export type ChatRunUiStatus = {
   phase: "done" | "interrupted";
@@ -56,9 +64,10 @@ type RunLifecycleHost = Omit<
   "hello" | "sessions"
 > & {
   sessionKey: string;
-  agentsList?: { mainKey?: string | null } | null;
+  agentsList?: UiSessionDefaultsHost["agentsList"];
   hello?: { snapshot?: unknown } | null;
   chatRunId?: string | null;
+  chatRunError?: ChatRunError | null;
   chatRunLifecycleGeneration?: number;
   chatRunSessionAbortable?: boolean;
   chatStream?: string | null;
@@ -148,11 +157,40 @@ export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | n
   return Boolean(host.chatSending || host.chatRunId);
 }
 
+export function adoptStartedChatRun(
+  host: RunLifecycleHost & Parameters<typeof reduceChatSessionProjection>[0],
+  runId: string,
+  startedAt: number,
+): void {
+  // A terminal event may beat the request ACK; never resurrect that completed run.
+  if (host.chatRunStatus?.runId === runId || host.lastLocalTerminalReconcile?.runId === runId) {
+    return;
+  }
+  const projection = reduceChatSessionProjection(host, { type: "runDelta", runId });
+  if (projection.runs[runId]?.status !== "streaming") {
+    return;
+  }
+  const adopted = host.chatRunId === runId;
+  const adoptedStream = adopted && typeof host.chatStream === "string";
+  host.chatRunId = runId;
+  setChatRunOwner(host, runId);
+  if (!adopted) {
+    host.chatRunError = null;
+    host.chatRunStartup = null;
+  }
+  if (!adoptedStream) {
+    host.chatStream = "";
+    host.chatStreamStartedAt = startedAt;
+  }
+}
+
 export function setChatRunError(
-  state: { chatRunError?: { summary: string } | null },
+  state: { chatRunError?: ChatRunError | null },
   summary: string,
+  runId?: string,
 ) {
-  state.chatRunError = { summary: formatUiExternalText(summary) };
+  setChatRunOwner(state, runId);
+  state.chatRunError = { summary: formatUiExternalText(summary), ...(runId ? { runId } : {}) };
 }
 
 type SessionRunHost = {
@@ -405,7 +443,7 @@ function sessionKeysFor(host: RunLifecycleHost, options: ReconcileOptions): Set<
     keys.add("global");
   }
   for (const row of host.sessionsResult?.sessions ?? []) {
-    if (uiSessionRowMatchesSelectedChat(host, row.key, primary)) {
+    if (uiSessionRowMatchesSelectedChat(host, row.key, primary, row.agentId)) {
       keys.add(row.key);
     }
   }
@@ -524,7 +562,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
 
 function currentSessionRow(host: RunLifecycleHost) {
   return host.sessionsResult?.sessions.find((row) =>
-    uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey),
+    uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId),
   );
 }
 
@@ -604,20 +642,12 @@ export function reconcileChatRunAfterSessionStatePublication(host: RunLifecycleH
   return canReconcile && reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: false });
 }
 
-function isSessionRowForSelectedChat(
-  host: RunLifecycleHost,
-  rowKey: string,
-  sessionKey: string,
-): boolean {
-  return uiSessionRowMatchesSelectedChat(host, rowKey, sessionKey);
-}
-
 export function reconcileChatRunFromSessionRow(
   host: RunLifecycleHost,
   row: GatewaySessionRow,
   options: { publishRunStatus?: boolean } = {},
 ): boolean {
-  if (!isSessionRowForSelectedChat(host, row.key, host.sessionKey)) {
+  if (!uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId)) {
     return false;
   }
   if (!host.chatRunId && host.chatStream == null) {

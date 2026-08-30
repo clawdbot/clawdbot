@@ -122,6 +122,9 @@ async function runChannelMessageSendWithLifecycle<
   try {
     attemptToken = await params.lifecycle.beforeSendAttempt?.(params.ctx);
     const result = await params.send();
+    if (result.outcome === "not_sent") {
+      return { result };
+    }
     const successCtx = {
       ...params.ctx,
       result,
@@ -312,7 +315,10 @@ function createPluginHandler(
         cfg: params.cfg,
         accountId: params.accountId,
       }) === true,
-    supportsMedia: Boolean(messageMedia ?? sendMedia),
+    // sendFormattedMedia is a first-class media sender (deliver-core prefers it
+    // over sendMedia), so leaving it out here silently drops media for
+    // formatted-only adapters and records the fallback as a plain sent text.
+    supportsMedia: Boolean(messageMedia ?? sendMedia ?? outbound?.sendFormattedMedia),
     sanitizeText: outbound?.sanitizeText
       ? (payload) =>
           outbound.sanitizeText!({

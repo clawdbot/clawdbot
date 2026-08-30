@@ -1,8 +1,10 @@
 import { expect, it } from "vitest";
 import {
+  captureUiProofEnabled,
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
   waitForRequests,
@@ -53,7 +55,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
 
       const main = page.getByRole("main");
       await main.locator('[data-chat-thinking-select="true"]').click();
@@ -92,6 +94,73 @@ suite.define(() => {
         message: prompt,
         sessionKey: "agent:main:session-a",
       });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+});
+
+suite.define(() => {
+  it("dispatches after its settings refresh while a later roster refresh is still pending", async () => {
+    const context = await suite.newBrowserContext({
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: ".artifacts/send-settings-wait/video" } }
+        : {}),
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionKey: "agent:main:session-a",
+      models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
+    });
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+      const main = page.getByRole("main");
+      await main.locator('[data-chat-thinking-select="true"]').click();
+      const listsBefore = (await gateway.getRequests("sessions.list")).length;
+      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list");
+      await main.locator('[data-chat-speed-toggle="on"]').click();
+      await gateway.waitForRequest("sessions.patch");
+      await waitForRequests(gateway, "sessions.list", listsBefore + 1);
+      await page.keyboard.press("Escape");
+      await page.locator(".agent-chat__composer-combobox textarea").fill("send after my settings");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await page.locator(".chat-queue").getByText("Applying chat settings").waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await gateway.resolveDeferred("sessions.list");
+      await waitForRequests(gateway, "sessions.list", listsBefore + 2);
+      await gateway.deferNext("sessions.list");
+      await page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime: {
+            context: {
+              sessions: {
+                refresh: (options: { force: boolean; backgroundHydrate: boolean }) => Promise<void>;
+              };
+            };
+          };
+        };
+        void app.runtime.context.sessions.refresh({ force: true, backgroundHydrate: true });
+      });
+      await gateway.resolveDeferred("sessions.list");
+      await waitForRequests(gateway, "sessions.list", listsBefore + 3);
+      const request = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(request.params).message).toBe("send after my settings");
+      await gateway.emitChatFinal({
+        runId: String(requireRecord(request.params).idempotencyKey),
+        text: "Settings applied and message delivered.",
+      });
+      await page
+        .locator(".chat-bubble")
+        .getByText("Settings applied and message delivered.")
+        .waitFor();
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: ".artifacts/send-settings-wait/browser-after.png" });
+      }
+      await gateway.resolveDeferred("sessions.list");
     } finally {
       await suite.closeBrowserContext(context);
     }

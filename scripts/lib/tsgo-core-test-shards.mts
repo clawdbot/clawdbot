@@ -12,6 +12,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.agents-other.json",
   },
   {
+    name: "agents-tools",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-tools.json",
+  },
+  {
     name: "gateway-root",
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.gateway-root.json",
@@ -37,9 +42,14 @@ export const TSGO_CORE_TEST_SHARDS = [
   { name: "services", group: "src", config: "test/tsconfig/tsconfig.core.test.services.json" },
   { name: "other", group: "src", config: "test/tsconfig/tsconfig.core.test.other.json" },
   {
-    name: "ui-pages-e2e",
+    name: "ui-pages",
     group: "ui",
-    config: "test/tsconfig/tsconfig.core.test.ui-pages-e2e.json",
+    config: "test/tsconfig/tsconfig.core.test.ui-pages.json",
+  },
+  {
+    name: "ui-e2e",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-e2e.json",
   },
   { name: "ui-other", group: "ui", config: "test/tsconfig/tsconfig.core.test.ui-other.json" },
   {

@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -360,11 +361,6 @@ async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
   };
 }
 
-async function offeredLabels(page: Page, scenario: ControlUiMockGatewayScenario) {
-  const choices = await openColdSidebar(page, scenario);
-  return choices.locator(".side-panel-type-option__label").allTextContents();
-}
-
 async function readSlotColdOpenOutcome(
   label: OfferedSlotLabel,
   scenario: ControlUiMockGatewayScenario,
@@ -374,6 +370,10 @@ async function readSlotColdOpenOutcome(
   try {
     const page = await context.newPage();
     const choices = await openColdSidebar(page, scenario);
+    expect(
+      await choices.locator(".side-panel-type-option__label").allTextContents(),
+      `${label} cold-open offered slots`,
+    ).toEqual(offeredSlotLabels);
     await choices.filter({ hasText: label }).click();
     if (expectedOutcome) {
       await expect
@@ -403,7 +403,7 @@ suite.define(() => {
         ...coldOpenScenario(),
         sessionKey: HIDDEN_BOARD_SESSION_KEY,
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, HIDDEN_BOARD_SESSION_KEY));
       await waitForControlUiGatewayReady(page);
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
@@ -529,7 +529,7 @@ suite.define(() => {
       const page = await context.newPage();
       await seedRetainedDesktopSlot(page);
       const gateway = await installMockGateway(page, retainedDesktopScenario());
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
       await waitForControlUiGatewayReady(page);
 
       const desktop = page.locator("openclaw-desktop-panel");
@@ -566,7 +566,7 @@ suite.define(() => {
     try {
       const page = await context.newPage();
       const gateway = await installMockGateway(page, retainedDesktopScenario());
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
       await waitForControlUiGatewayReady(page);
       await openChatSidePanelType(page, "Desktop");
 
@@ -723,17 +723,6 @@ suite.define(() => {
   });
 
   it("renders content for every offered slot with backing data", async () => {
-    const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
-    try {
-      const offered = await offeredLabels(
-        await probeContext.newPage(),
-        populatedColdOpenScenario(),
-      );
-      expect(offered).toEqual(offeredSlotLabels);
-    } finally {
-      await suite.closeBrowserContext(probeContext);
-    }
-
     for (const label of offeredSlotLabels) {
       expect(
         await readSlotColdOpenOutcome(label, populatedColdOpenScenario(), "content"),
@@ -743,14 +732,6 @@ suite.define(() => {
   });
 
   it("keeps generic empty states actionable or explicitly allowlisted", async () => {
-    const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
-    try {
-      const offered = await offeredLabels(await probeContext.newPage(), coldOpenScenario());
-      expect(offered).toEqual(offeredSlotLabels);
-    } finally {
-      await suite.closeBrowserContext(probeContext);
-    }
-
     const observedActionlessEmptyStates: OfferedSlotLabel[] = [];
     for (const label of offeredSlotLabels) {
       const outcome = await readSlotColdOpenOutcome(label, coldOpenScenario());

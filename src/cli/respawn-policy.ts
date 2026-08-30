@@ -79,11 +79,18 @@ export function shouldSkipRespawnForArgv(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   const invocation = resolveCliArgvInvocation(argv);
+  const isGatewayStatus =
+    invocation.commandPath.length === 2 &&
+    invocation.commandPath[0] === "gateway" &&
+    invocation.commandPath[1] === "status";
   return (
     invocation.hasHelpOrVersion ||
     isInteractiveTtyCommandArgv(argv) ||
     isForegroundGmailRunArgv(argv) ||
     shouldKeepNativeHookRelayInProcess(argv, platform) ||
+    // Status commonly overlaps the running Gateway; a warning-only wrapper doubles
+    // transient CLI memory. Startup-environment respawn remains separately owned.
+    isGatewayStatus ||
     (invocation.primary === "gateway" && isForegroundGatewayRunArgv(argv))
   );
 }

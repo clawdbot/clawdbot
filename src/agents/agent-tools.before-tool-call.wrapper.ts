@@ -13,7 +13,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
@@ -77,7 +77,7 @@ import {
   getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
-import { getChannelAgentToolMeta } from "./channel-tools.js";
+import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import {
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,

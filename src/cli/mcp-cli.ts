@@ -11,7 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { Command } from "commander";
 import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
-import { createSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
+import type { McpToolCatalog } from "../agents/agent-bundle-mcp-types.js";
 import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
@@ -39,13 +39,22 @@ import {
   type OAuthLoopbackCallbackServer,
 } from "../infra/oauth-loopback-callback.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
-import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
+
+const createSessionMcpRuntime = createLazyRuntimeMethod(
+  () => import("../agents/agent-bundle-mcp-runtime.js"),
+  (runtime) => runtime.createSessionMcpRuntime,
+);
+const disposeAllSessionMcpRuntimes = createLazyRuntimeMethod(
+  () => import("../agents/agent-bundle-mcp-manager-api.js"),
+  (runtime) => runtime.disposeAllSessionMcpRuntimes,
+);
 
 function fail(message: string): never {
   defaultRuntime.error(message);
@@ -395,7 +404,7 @@ async function probeMcpServerIssues(params: {
   name: string;
   server: Record<string, unknown>;
 }): Promise<McpDoctorIssue[]> {
-  const runtime = createSessionMcpRuntime({
+  const runtime = await createSessionMcpRuntime({
     sessionId: "openclaw-cli-mcp-doctor",
     workspaceDir: process.cwd(),
     cfg: buildMcpProbeConfig({
@@ -490,9 +499,7 @@ async function buildMcpStatusEntries(
   );
 }
 
-function formatMcpProbeResult(
-  catalog: Awaited<ReturnType<ReturnType<typeof createSessionMcpRuntime>["getCatalog"]>>,
-) {
+function formatMcpProbeResult(catalog: McpToolCatalog) {
   const projectedTools = buildBundleMcpToolsFromCatalog({
     catalog,
     createResourceListExecute: () => async () => {
@@ -620,7 +627,7 @@ async function probeMcpServersOrFail(params: {
       applyMcpProbeInitializeTimeout(server),
     ]),
   );
-  const runtime = createSessionMcpRuntime({
+  const runtime = await createSessionMcpRuntime({
     sessionId: "openclaw-cli-mcp-probe",
     workspaceDir: process.cwd(),
     cfg: buildMcpProbeConfig({ config: params.config, servers: probeServers }),
@@ -670,6 +677,7 @@ export function registerMcpCli(program: Command) {
         ) {
           throw new Error('Invalid --claude-channel-mode value. Use "auto", "on", or "off".');
         }
+        const { serveOpenClawChannelMcp } = await import("../mcp/channel-server.js");
         await serveOpenClawChannelMcp({
           gatewayUrl: opts.url as string | undefined,
           gatewayToken,
@@ -839,7 +847,7 @@ export function registerMcpCli(program: Command) {
         );
         return;
       }
-      const runtime = createSessionMcpRuntime({
+      const runtime = await createSessionMcpRuntime({
         sessionId: "openclaw-cli-mcp-probe",
         workspaceDir: process.cwd(),
         cfg: buildMcpProbeConfig({ config: loaded.config, servers }),
@@ -1479,8 +1487,6 @@ export function registerMcpCli(program: Command) {
     .command("reload")
     .description("Dispose cached MCP runtimes so new config is used on the next turn")
     .action(async () => {
-      const { disposeAllSessionMcpRuntimes } =
-        await import("../agents/agent-bundle-mcp-runtime.js");
       await disposeAllSessionMcpRuntimes();
       defaultRuntime.log(
         "Disposed cached MCP runtimes. Active agents use new MCP config on their next runtime build.",

@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -24,7 +25,7 @@ const resolveCompatibleRuntimePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const loadContextMocks = vi.hoisted(() => ({
   actualResolve: undefined as
-    | typeof import("./runtime/load-context.js").resolvePluginRuntimeLoadContext
+    | typeof import("./runtime/load-context.resolve.js").resolvePluginRuntimeLoadContext
     | undefined,
   resolve: vi.fn(),
 }));
@@ -43,8 +44,8 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (params: unknown) => applyPluginAutoEnableMock(params),
 }));
 
-vi.mock("./runtime/load-context.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime/load-context.js")>();
+vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime/load-context.resolve.js")>();
   loadContextMocks.actualResolve = actual.resolvePluginRuntimeLoadContext;
   return {
     ...actual,
@@ -54,14 +55,14 @@ vi.mock("./runtime/load-context.js", async (importOriginal) => {
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
-let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
-let getPluginToolMeta: typeof import("./tools.js").getPluginToolMeta;
+let buildPluginToolMetadataKey: typeof import("./tool-metadata.js").buildPluginToolMetadataKey;
+let getPluginToolMeta: typeof import("./tool-metadata.js").getPluginToolMeta;
 let resetPluginToolDescriptorCacheForTest: typeof import("./tools.test-fixtures.js").resetPluginToolDescriptorCacheForTest;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
 
@@ -540,18 +541,15 @@ function expectConflictingCoreNameResolution(params: {
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({
-      buildPluginToolMetadataKey,
-      ensureStandalonePluginToolRegistryLoaded,
-      getPluginToolMeta,
-      resolvePluginTools,
-    } = await import("./tools.js"));
+    ({ ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey, getPluginToolMeta } = await import("./tool-metadata.js"));
     ({ getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
       await import("./runtime/gateway-request-scope.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
-    ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
+    ({ setCurrentPluginMetadataSnapshot } =
+      await import("./current-plugin-metadata.test-support.js"));
     ({ resetPluginToolDescriptorCacheForTest } = await import("./tools.test-fixtures.js"));
   });
 
@@ -1291,7 +1289,29 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("loads plugin-owned tools when manifest config signals point at configured non-env SecretRefs", () => {
+  it.each<{
+    name: string;
+    apiKey: SecretRef;
+    secrets: OpenClawConfig["secrets"];
+  }>([
+    {
+      name: "explicit file provider",
+      apiKey: { source: "file", provider: "vault", id: "/xai/tool-key" },
+      secrets: {
+        providers: {
+          vault: { source: "file", path: "/tmp/openclaw-secrets.json", mode: "json" },
+        },
+      },
+    },
+    {
+      name: "store default shadowing file",
+      apiKey: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      secrets: {
+        defaults: { store: "shared" },
+        providers: { shared: { source: "file", path: "/tmp/unused-store-alias-fixture.json" } },
+      },
+    },
+  ])("loads plugin-owned tools when manifest config signals use $name", ({ apiKey, secrets }) => {
     const base = createContext();
     const config = {
       ...base.config,
@@ -1301,25 +1321,13 @@ describe("resolvePluginTools optional tools", () => {
           xai: {
             config: {
               webSearch: {
-                apiKey: {
-                  source: "file",
-                  provider: "vault",
-                  id: "/xai/tool-key",
-                },
+                apiKey,
               },
             },
           },
         },
       },
-      secrets: {
-        providers: {
-          vault: {
-            source: "file",
-            path: "/tmp/openclaw-secrets.json",
-            mode: "json",
-          },
-        },
-      },
+      secrets,
     } as const;
     installToolManifestSnapshot({
       config,
@@ -3396,7 +3404,7 @@ describe("resolvePluginTools optional tools", () => {
 
 describe("buildPluginToolMetadataKey", () => {
   beforeAll(async () => {
-    ({ buildPluginToolMetadataKey } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey } = await import("./tool-metadata.js"));
   });
 
   it("does not collide when ids or names contain separator-like characters", () => {

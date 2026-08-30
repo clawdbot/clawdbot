@@ -23,15 +23,18 @@ import {
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import {
+  addClientToolsToToolCatalog,
+  compactToolSearchCatalogEntry,
+} from "./tool-search-catalog.js";
+import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
+  ToolSearchRuntime,
 } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import {
-  addClientToolsToToolCatalog,
-  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
@@ -39,7 +42,6 @@ import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  ToolSearchRuntime,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createWebSearchTool } from "./tools/web-search.js";

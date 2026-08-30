@@ -40,6 +40,7 @@ export { resolveMemoryBackendConfig } from "./host/backend-config.js";
 export {
   isAutomaticMemoryEntryEligible,
   isMemoryOriginEligibleForAutomaticInjection,
+  resolveMemoryIndexIdentityReason,
   resolveMemorySearchStaleness,
 } from "./host/types.js";
 export type { ResolvedMemoryBackendConfig } from "./host/backend-config.js";

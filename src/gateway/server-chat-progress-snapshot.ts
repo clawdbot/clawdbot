@@ -97,20 +97,23 @@ export function updateChatRunProgressSnapshot(
     next.byteLength = next.events.reduce((total, candidate) => total + jsonUtf8Bytes(candidate), 0);
   };
 
-  if (isStartupStatus) {
-    if (
-      next.events.some((candidate) => candidate.stream === "tool" || candidate.stream === "item")
-    ) {
-      return next;
-    }
-    removeWhere((candidate) => candidate.stream === "run_status");
-  } else if (isTool || isPreamble) {
-    removeWhere((candidate) => candidate.stream === "run_status");
+  if (
+    isStartupStatus &&
+    next.events.some((candidate) => candidate.stream === "tool" || candidate.stream === "item")
+  ) {
+    return next;
   }
 
-  if (isTool) {
+  if (isStartupStatus || isTool || isPreamble) {
+    // Remove superseded startup and item state together; recount retained mutable payloads once.
     removeWhere((candidate) => {
-      if (candidate.stream !== "tool" || candidate.data?.toolCallId !== toolCallId) {
+      if (candidate.stream === "run_status") {
+        return true;
+      }
+      if (isPreamble) {
+        return matchesPreamble(candidate);
+      }
+      if (!isTool || candidate.stream !== "tool" || candidate.data?.toolCallId !== toolCallId) {
         return false;
       }
       if (phase === "start") {
@@ -126,10 +129,7 @@ export function updateChatRunProgressSnapshot(
       // review ID so reconnect restores every still-relevant decision.
       return asNullableRecord(candidate.data.review)?.id === reviewId;
     });
-  } else if (isPreamble) {
-    const progressText = typeof data.progressText === "string" ? data.progressText.trim() : "";
-    removeWhere(matchesPreamble);
-    if (!progressText) {
+    if (isPreamble && !(typeof data.progressText === "string" && data.progressText.trim())) {
       return next;
     }
   } else if ((isStandaloneGuardian || resolvesStrictReview) && typeof data.reviewId === "string") {

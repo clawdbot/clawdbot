@@ -3,6 +3,7 @@ import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
   waitForRequests,
@@ -61,7 +62,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
 
       const main = page.getByRole("main");
       await main.locator('[data-chat-model-select="true"]').click();

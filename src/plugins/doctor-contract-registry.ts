@@ -6,6 +6,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { shouldIncludeChannelSetupFeatureForConfig } from "../channels/plugins/bundled-setup-policy.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -29,6 +30,7 @@ import type { PluginManifestDoctorContract } from "./manifest-types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
 
@@ -54,8 +56,19 @@ type PluginDoctorContractEntry = {
 
 type PluginDoctorStateMigrationEntry = {
   pluginId: string;
+  channelIds: string[];
+  /**
+   * Mirrors the runtime proxy's durable-store gate: only bundled plugins and trusted
+   * official installs may reach channel ingress queues. Doctor must not become a way
+   * around that for an activated workspace plugin.
+   */
+  trustedForDurableStores?: boolean;
   migration: PluginDoctorStateMigration;
 };
+
+function isTrustedForDurableStores(record: PluginManifestRegistryRecord): boolean {
+  return record.origin === "bundled" || record.trustedOfficialInstall === true;
+}
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
@@ -63,10 +76,9 @@ function loadPluginDoctorContractModule(params: {
   modulePath: string;
   rootDir: string;
 }): PluginDoctorContractModule {
-  pluginDoctorContractRegistryLoaderState.moduleRoots.set(params.modulePath, params.rootDir);
   return getCachedPluginModuleLoader({
-    cache: pluginDoctorContractRegistryLoaderState.moduleLoaders,
     modulePath: params.modulePath,
+    rootDir: params.rootDir,
     importerUrl: import.meta.url,
     ...(pluginDoctorContractRegistryLoaderState.moduleLoaderFactory
       ? { createLoader: pluginDoctorContractRegistryLoaderState.moduleLoaderFactory }
@@ -328,10 +340,44 @@ function resolvePluginDoctorContracts(params: {
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): PluginDoctorContractEntry[] {
-  return loadPluginDoctorContractEntries({
-    records: resolvePluginDoctorManifestRecords(params),
+  const records = resolvePluginDoctorManifestRecords(params);
+  const entries = loadPluginDoctorContractEntries({
+    records,
     surface: params.surface,
   });
+  if (params.surface !== "configRepair") {
+    return entries;
+  }
+  const ownedChannels = new Set(records.flatMap((record) => record.channels));
+  const installedPluginIds = new Set(records.map((record) => record.id));
+  for (const { channelId, pluginId } of GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA) {
+    if (
+      (!Object.hasOwn(params.config?.channels ?? {}, channelId) &&
+        !Object.hasOwn(params.config?.plugins?.entries ?? {}, pluginId)) ||
+      ownedChannels.has(channelId) ||
+      installedPluginIds.has(pluginId) ||
+      (params.pluginIds &&
+        !params.pluginIds.includes(channelId) &&
+        !params.pluginIds.includes(pluginId))
+    ) {
+      continue;
+    }
+    // Retain the core-version config migration for absent external plugins. An installed
+    // owner, including one with a broken contract, is never replaced by this upgrade path.
+    const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<PluginDoctorContractModule>(
+      {
+        dirName: channelId,
+        artifactCandidates: ["config-doctor-api.js"],
+        env: params.env,
+      },
+    );
+    if (!mod) {
+      continue;
+    }
+    const { summary: _summary, ...contract } = coercePluginDoctorContractModule(mod);
+    entries.push({ pluginId, ...contract });
+  }
+  return entries;
 }
 
 function loadPluginDoctorContractEntries(params: {
@@ -483,7 +529,12 @@ export function listPluginDoctorStateMigrationEntries(params?: {
       records: [record],
       surface: "stateMigrations",
     }).flatMap((entry) =>
-      entry.stateMigrations.map((migration) => ({ pluginId: entry.pluginId, migration })),
+      entry.stateMigrations.map((migration) => ({
+        pluginId: entry.pluginId,
+        channelIds: record.channels,
+        trustedForDurableStores: isTrustedForDurableStores(record),
+        migration,
+      })),
     );
     if (modernEntries.length > 0) {
       entries.push(...modernEntries);
@@ -504,6 +555,8 @@ export function listPluginDoctorStateMigrationEntries(params?: {
     }
     entries.push({
       pluginId: record.id,
+      channelIds: record.channels,
+      trustedForDurableStores: isTrustedForDurableStores(record),
       migration: definePluginDoctorMigrationFromPlans({
         id: `${record.id}-legacy-channel-state`,
         label: `${record.id} legacy channel state`,
@@ -530,6 +583,7 @@ export function applyPluginDoctorCompatibilityMigrations(
   const changes: string[] = [];
   for (const entry of resolvePluginDoctorContracts({
     ...params,
+    config: params?.config ?? cfg,
     surface: "configRepair",
   })) {
     const mutation = entry.normalizeCompatibilityConfig?.({ cfg: nextCfg });

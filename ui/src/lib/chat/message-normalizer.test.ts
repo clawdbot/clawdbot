@@ -637,24 +637,46 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("keeps valid local MEDIA paths as assistant attachments", () => {
-      const result = normalizeMessage({
-        role: "assistant",
-        content: "Hello\nMEDIA:/tmp/openclaw/test-image.png\nWorld",
-      });
-
-      expect(result.content).toEqual([
+    it.each([
+      ["/tmp/openclaw/test-image.png", "test-image.png"],
+      ["file:///tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["FILE:///tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["FILE:/tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["file://localhost/tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+    ])("keeps local MEDIA references as assistant attachments: %s", (url, label) => {
+      expect(
+        normalizeMessage({ role: "assistant", content: `Hello\nMEDIA:${url}\nWorld` }).content,
+      ).toEqual([
         { type: "text", text: "Hello" },
         {
           type: "attachment",
           attachment: {
-            url: "/tmp/openclaw/test-image.png",
+            url,
             kind: "image",
-            label: "test-image.png",
+            label,
             mimeType: "image/png",
           },
         },
         { type: "text", text: "World" },
+      ]);
+    });
+
+    it("classifies absolute WebM MEDIA paths as video attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:/tmp/openclaw/clip.webm",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "/tmp/openclaw/clip.webm",
+            kind: "video",
+            label: "clip.webm",
+            mimeType: "video/webm",
+          },
+        },
       ]);
     });
 
@@ -827,6 +849,71 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("preserves named attachment failures beside successful attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "https://files.example/deploy.yaml",
+              kind: "document",
+              label: "deploy.yaml",
+              mimeType: "application/yaml",
+            },
+          },
+          {
+            type: "attachment_error",
+            attachment: {
+              code: "unsupported-format",
+              kind: "document",
+              label: "settings.toml",
+              mimeType: "application/toml",
+            },
+          },
+          {
+            type: "attachment_error",
+            attachment: {
+              code: "delivery-failed",
+              kind: "document",
+              label: "bundle.7z",
+              mimeType: "application/x-7z-compressed",
+            },
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://files.example/deploy.yaml",
+            kind: "document",
+            label: "deploy.yaml",
+            mimeType: "application/yaml",
+          },
+        },
+        {
+          type: "attachment_error",
+          attachment: {
+            code: "unsupported-format",
+            kind: "document",
+            label: "settings.toml",
+            mimeType: "application/toml",
+          },
+        },
+        {
+          type: "attachment_error",
+          attachment: {
+            code: "delivery-failed",
+            kind: "document",
+            label: "bundle.7z",
+            mimeType: "application/x-7z-compressed",
+          },
+        },
+      ]);
+    });
+
     it("detects tool result by toolCallId", () => {
       const result = normalizeMessage({
         role: "assistant",
@@ -925,17 +1012,57 @@ describe("message-normalizer", () => {
 });
 
 describe("sender label opaque-id stripping", () => {
-  it("strips a baked profile-UUID suffix and preserves it as sender identity", () => {
+  it.each([
+    { type: "profile", id: "x".repeat(513) },
+    { type: "profile", id: "profile", label: "untrusted extra field" },
+    { type: "observation", id: "profile" },
+  ])("drops invalid sender provenance without losing display attribution: %j", (senderIdentity) => {
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hello",
+        __openclaw: {
+          senderIdentity,
+          senderId: "profile",
+          senderName: "Display",
+          senderProfileAvatarUrl: "/api/users/profile/avatar",
+        },
+      }).sender,
+    ).toEqual({ id: "profile", name: "Display" });
+  });
+
+  it("sender provenance preserves typed identity and refuses unqualified profile display", () => {
+    const identity = { type: "profile", id: "shared-id" };
+    const metadata = {
+      senderId: "shared-id",
+      senderName: "Person",
+      senderProfileAvatarUrl: "/api/users/shared-id/avatar",
+    };
+    expect(
+      normalizeMessage({
+        role: "user",
+        content: "hello",
+        __openclaw: { ...metadata, senderIdentity: identity },
+      }).sender,
+    ).toEqual({
+      id: "shared-id",
+      name: "Person",
+      profileAvatarUrl: metadata.senderProfileAvatarUrl,
+      identity,
+    });
+    expect(
+      normalizeMessage({ role: "user", content: "hello", __openclaw: metadata }).sender,
+    ).toEqual({ id: "shared-id", name: "Person" });
+  });
+
+  it("strips a baked UUID suffix without inventing profile identity", () => {
     const normalized = normalizeMessage({
       role: "user",
       content: "hi",
       senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
     });
     expect(normalized.senderLabel).toBe("steipete");
-    // Legacy rows have no structured sender; the UUID from the label is the
-    // only author key, so it must survive as non-display identity.
     expect(normalized.sender).toEqual({
-      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
       name: "steipete",
     });
   });
@@ -971,16 +1098,13 @@ describe("sender label opaque-id stripping", () => {
     ).toBe("(c3e32452-0467-47e5-aafa-233cd5dae29f)");
   });
 
-  it("attributes a bare-UUID legacy label to that profile", () => {
+  it("keeps a bare-UUID legacy label as display only", () => {
     const normalized = normalizeMessage({
       role: "user",
       content: "hi",
       senderLabel: "c3e32452-0467-47e5-aafa-233cd5dae29f",
     });
-    // Nameless legacy senders keep the UUID as last-resort display, but the
-    // row still attributes (and resolves its avatar) to that profile instead
-    // of falling back to the local viewer identity.
     expect(normalized.senderLabel).toBe("c3e32452-0467-47e5-aafa-233cd5dae29f");
-    expect(normalized.sender).toEqual({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f" });
+    expect(normalized.sender).toEqual({ name: "c3e32452-0467-47e5-aafa-233cd5dae29f" });
   });
 });

@@ -26,6 +26,7 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { resolveAgentConfig } from "../../agent-scope.js";
+import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
   resolveConfiguredSubagentSpawnModelSelection,
   resolveThinkingDefault,
@@ -99,11 +100,20 @@ export function resolveAcpSpawnRuntimeOptions(params: {
   | { ok: false; error: string } {
   const policyAgentId = params.configAgentId ?? params.targetAgentId;
   const modelExplicit = normalizeOptionalString(params.model) !== undefined;
-  const model = resolveConfiguredSubagentSpawnModelSelection({
+  const rawModel = resolveConfiguredSubagentSpawnModelSelection({
     cfg: params.cfg,
     agentId: policyAgentId,
     modelOverride: params.model,
   });
+  const modelSelection = splitTrailingAuthProfile(rawModel ?? "");
+  if (modelExplicit && modelSelection.profile) {
+    return {
+      ok: false,
+      error:
+        "ACP model overrides cannot select OpenClaw auth profiles; configure credentials in the ACP runtime instead.",
+    };
+  }
+  const model = modelSelection.model || undefined;
   const targetAgentConfig = resolveAgentConfig(params.cfg, policyAgentId);
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg: params.cfg,

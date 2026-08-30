@@ -18,13 +18,18 @@ import {
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
   loadMemoryWikiCompiledCache,
+  readMemoryWikiDashboardState,
+  MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
   reconcileMemoryWikiCompiledCacheOwner,
   resolveMemoryWikiCompiledCacheGeneration,
   resolveMemoryWikiCompiledCacheOwnerId,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
+  type MemoryWikiImportInsightItem,
+  type MemoryWikiOverviewItem,
 } from "./compiled-cache.js";
 import { resolveMemoryWikiAgentConfig, resolveMemoryWikiConfig } from "./config.js";
+import { buildMemoryWikiImportInsights } from "./import-insights.js";
 import {
   appendMemoryWikiLog,
   loadMemoryWikiValidatedVaultIdentity,
@@ -36,6 +41,7 @@ import { createWikiPromptSectionPreparer } from "./prompt-section.js";
 import { getMemoryWikiPage } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { initializeMemoryWikiVault } from "./vault.js";
+import { buildMemoryWikiOverview } from "./wiki-overview.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 let blobStateDir = "";
@@ -103,6 +109,25 @@ function snapshot(text: string): MemoryWikiCompiledCacheSnapshot {
         text,
       },
     ],
+    dashboards: {
+      importInsights: {
+        sourceType: "chatgpt",
+        totalItems: 0,
+        totalClusters: 0,
+        clusters: [],
+        truncated: false,
+      },
+      overview: {
+        totalItems: 0,
+        totalPages: 0,
+        pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 0, report: 0 },
+        totalClaims: 0,
+        totalQuestions: 0,
+        totalContradictions: 0,
+        clusters: [],
+        truncated: false,
+      },
+    },
   };
 }
 
@@ -212,6 +237,77 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await expect(preparePrompt(config)).resolves.toContain(
       "Alpha uses PostgreSQL for production writes.",
     );
+  });
+
+  it("bounds dashboard projections below the compiled-cache entry limit", () => {
+    const oversized = "x".repeat(10_000);
+    const importItem: MemoryWikiImportInsightItem = {
+      pagePath: "sources/oversized.md",
+      title: oversized,
+      riskLevel: "low",
+      riskReasons: Array(16).fill(oversized),
+      labels: Array(16).fill(oversized),
+      topicKey: oversized,
+      topicLabel: oversized,
+      digestStatus: "available",
+      activeBranchMessages: 1,
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+      firstUserLine: oversized,
+      lastUserLine: oversized,
+      assistantOpener: oversized,
+      summary: oversized,
+      candidateSignals: Array(8).fill(oversized),
+      correctionSignals: Array(8).fill(oversized),
+      preferenceSignals: Array(16).fill(oversized),
+      createdAt: oversized,
+      updatedAt: oversized,
+    };
+    const overviewItem: MemoryWikiOverviewItem = {
+      pagePath: "concepts/oversized.md",
+      title: oversized,
+      kind: "concept",
+      id: oversized,
+      updatedAt: oversized,
+      sourceType: oversized,
+      claimCount: 3,
+      questionCount: 3,
+      contradictionCount: 3,
+      claims: Array(6).fill(oversized),
+      questions: Array(6).fill(oversized),
+      contradictions: Array(6).fill(oversized),
+      snippet: oversized,
+    };
+    const count = MEMORY_WIKI_DASHBOARD_ITEM_LIMIT + 1;
+    const dashboards = {
+      importInsights: buildMemoryWikiImportInsights(
+        Array.from({ length: count }, (_, index) => ({
+          ...importItem,
+          pagePath: `sources/oversized-${index}.md`,
+        })),
+      ),
+      overview: buildMemoryWikiOverview(
+        [],
+        Array.from({ length: count }, (_, index) => ({
+          ...overviewItem,
+          pagePath: `concepts/oversized-${index}.md`,
+        })),
+      ),
+    };
+
+    expect(dashboards.importInsights).toMatchObject({ totalItems: count, truncated: true });
+    expect(dashboards.overview).toMatchObject({ totalItems: count, truncated: true });
+    expect(Buffer.byteLength(JSON.stringify(dashboards))).toBeLessThan(32 * 1024 * 1024);
+  });
+
+  it("replaces a loaded snapshot when a newer publication commits", async () => {
+    const { config } = await createPersistentVault({ initialize: true });
+    await publishSnapshot(config, snapshot("before"));
+    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("before");
+
+    await publishSnapshot(config, snapshot("after"));
+
+    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("after");
   });
 
   it("ignores legacy files and rebuilds only on compile", async () => {
@@ -540,7 +636,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
-  it("treats transient SQLite read failures as a recoverable cache miss", async () => {
+  it("reports transient SQLite read failures as failed dashboard state", async () => {
     const { config } = await createPersistentVault({ initialize: true });
     const errors: unknown[] = [];
     let failNextRead = false;
@@ -562,9 +658,14 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     );
     configureMemoryWikiCompiledCacheStore(store);
     await publishSnapshot(config, snapshot("recoverable"));
+    configureMemoryWikiCompiledCacheStore(undefined);
+    configureMemoryWikiCompiledCacheStore(store);
+    await activateVault(config);
     failNextRead = true;
 
-    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+    await expect(readMemoryWikiDashboardState(config)).resolves.toMatchObject({
+      state: "failed",
+    });
     expect(errors).toHaveLength(1);
     expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("recoverable");
   });

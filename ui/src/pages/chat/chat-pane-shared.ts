@@ -1,11 +1,12 @@
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import { clampText } from "../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
@@ -14,6 +15,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
 export type PaneSessionHandoff = {
+  goalMode?: ChatGoalDraftMode;
   attachments: ChatAttachment[];
   composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
   draft: string;
@@ -27,7 +29,7 @@ type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessi
 const PANE_SESSION_HANDOFF_TTL_MS = 30_000;
 const PANE_SESSION_HANDOFF_LIMIT = 4;
 const paneSessionHandoffs = new WeakMap<
-  ApplicationContext,
+  ApplicationContext<RouteId>,
   Map<string, PendingPaneSessionHandoff[]>
 >();
 
@@ -39,6 +41,17 @@ function discardPaneSessionHandoff(handoff: PendingPaneSessionHandoff): void {
     ...handoff.attachments,
     ...Object.values(handoff.composerFallbacks ?? {}).flatMap((fallback) => fallback.attachments),
   ]);
+}
+
+function removePaneSessionHandoffs(
+  pending: PendingPaneSessionHandoff[] | undefined,
+  matches: (handoff: PendingPaneSessionHandoff) => boolean,
+): void {
+  for (let index = (pending?.length ?? 0) - 1; index >= 0; index -= 1) {
+    if (matches(pending![index]!)) {
+      discardPaneSessionHandoff(pending!.splice(index, 1)[0]!);
+    }
+  }
 }
 
 function paneHandoffs(
@@ -58,12 +71,7 @@ function paneHandoffs(
   }
   if (pending) {
     const now = Date.now();
-    for (let index = pending.length - 1; index >= 0; index -= 1) {
-      if (pending[index]!.expiresAt <= now) {
-        discardPaneSessionHandoff(pending[index]!);
-        pending.splice(index, 1);
-      }
-    }
+    removePaneSessionHandoffs(pending, (handoff) => handoff.expiresAt <= now);
   }
   return pending;
 }
@@ -75,13 +83,9 @@ export function preparePaneSessionHandoff(
   handoff: PaneSessionHandoff,
 ): void {
   const pending = paneHandoffs(context, paneId, true)!;
-  const existing = pending.findIndex((candidate) =>
+  removePaneSessionHandoffs(pending, (candidate) =>
     areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
   );
-  if (existing >= 0) {
-    discardPaneSessionHandoff(pending[existing]!);
-    pending.splice(existing, 1);
-  }
   const stored = {
     sessionKey,
     ...handoff,
@@ -118,12 +122,23 @@ export function clearPaneSessionHandoff(
   paneId: string,
   sessionKey: string,
 ): void {
-  const pending = paneHandoffs(context, paneId, false);
-  for (let index = (pending?.length ?? 0) - 1; index >= 0; index -= 1) {
-    if (areUiSessionKeysEquivalent(pending![index]!.sessionKey, sessionKey)) {
-      discardPaneSessionHandoff(pending![index]!);
-      pending?.splice(index, 1);
-    }
+  removePaneSessionHandoffs(paneHandoffs(context, paneId, false), (handoff) =>
+    areUiSessionKeysEquivalent(handoff.sessionKey, sessionKey),
+  );
+}
+
+export function retireSessionPaneHandoffs(
+  context: ApplicationContext<RouteId>,
+  targets: readonly { key: string; retireBeforeRevision: number }[],
+): void {
+  for (const pending of paneSessionHandoffs.get(context)?.values() ?? []) {
+    removePaneSessionHandoffs(pending, (handoff) =>
+      targets.some(
+        ({ key, retireBeforeRevision }) =>
+          areUiSessionKeysEquivalent(handoff.sessionKey, key) &&
+          handoff.expiresAt - PANE_SESSION_HANDOFF_TTL_MS < retireBeforeRevision,
+      ),
+    );
   }
 }
 
@@ -166,7 +181,10 @@ export const boardChatDockLayout = createDockPanelLayout({
 });
 
 export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
-export const CHAT_HISTORY_INTENT_EDGE_PX = 300;
+// One distance owns both halves of early history loading: upward intent within
+// this range arms the sentinel observer, and the observer's rootMargin fires
+// the same distance out. Splitting them re-creates the wall at the smaller value.
+export const CHAT_HISTORY_PREFETCH_EDGE_PX = 1200;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
 export const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
 export const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);

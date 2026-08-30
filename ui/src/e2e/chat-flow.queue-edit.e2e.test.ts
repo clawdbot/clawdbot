@@ -174,7 +174,7 @@ suite.define(() => {
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -192,6 +192,28 @@ suite.define(() => {
       const active = requireRecord((await gateway.waitForRequest("chat.send")).params);
       const activeRunId = requireString(active.idempotencyKey, "active run idempotency key");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      // The active seed turn is delivered; only the four later turns are queued.
+      const acceptedSession = {
+        key: "agent:main:main",
+        sessionId: "session:agent:main:main",
+        hasActiveRun: true,
+        activeRunIds: [activeRunId],
+        status: "running",
+      };
+      await gateway.setMethodResponse("chat.history", {
+        sessionId: acceptedSession.sessionId,
+        sessionInfo: acceptedSession,
+        messages: [
+          {
+            role: "user",
+            content: "keep the first run active",
+            idempotencyKey: `${activeRunId}:user`,
+          },
+        ],
+      });
+      await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
+      await page.locator(".chat-send-status").waitFor({ state: "detached" });
 
       for (const message of ["send first", "edit before send", "remove me", "send last"]) {
         await composer.fill(message);
@@ -294,7 +316,16 @@ suite.define(() => {
           { capture: true },
         );
       });
-      await row.locator(".chat-queue__remove").dblclick();
+      await row.locator(".chat-queue__remove").click();
+      await row.waitFor({ state: "detached", timeout: 10_000 });
+      // Queue reflow can move the next row away from the first click's coordinates.
+      // Aim the native second click at its remove control without another first click.
+      await page
+        .locator(".chat-queue__item", { hasText: "edited before send" })
+        .locator(".chat-queue__remove")
+        .hover();
+      await page.mouse.down({ clickCount: 2 });
+      await page.mouse.up({ clickCount: 2 });
       expect(
         await page.evaluate(
           () =>
@@ -308,7 +339,6 @@ suite.define(() => {
         { detail: 1, rowText: "remove me" },
         { detail: 2, rowText: "edited before send" },
       ]);
-      await row.waitFor({ state: "detached", timeout: 10_000 });
       await page.getByRole("alert").waitFor({ state: "detached", timeout: 10_000 });
       await expect
         .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents())
@@ -340,6 +370,24 @@ suite.define(() => {
         await page.screenshot({ path: `${artifactDir}/02-duplicate-noop.png`, fullPage: true });
       }
 
+      const terminalSession = {
+        ...acceptedSession,
+        activeRunIds: [],
+        hasActiveRun: false,
+        lastRunId: activeRunId,
+        status: "done",
+      };
+      await gateway.setMethodResponse("chat.history", {
+        sessionId: acceptedSession.sessionId,
+        sessionInfo: terminalSession,
+        messages: [
+          {
+            role: "user",
+            content: "keep the first run active",
+            idempotencyKey: `${activeRunId}:user`,
+          },
+        ],
+      });
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);
       await page
@@ -348,13 +396,7 @@ suite.define(() => {
         )
         .waitFor({ state: "detached", timeout: 10_000 });
       await gateway.emitChatFinal({ runId: activeRunId, text: "Initial run completed." });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        activeRunIds: [],
-        agentId: "main",
-        hasActiveRun: false,
-        key: "global",
-        status: "done",
-      });
+      await gateway.emitGatewayEvent("sessions.changed", terminalSession);
 
       const first = requireRecord((await waitForRequests(gateway, "chat.send", 2))[1]?.params);
       expect(first.message).toBe("send last");

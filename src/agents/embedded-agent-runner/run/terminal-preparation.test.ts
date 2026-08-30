@@ -357,6 +357,25 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect.objectContaining({ lastAssistant: yieldedAssistant, currentAssistant: null }),
     );
   });
+
+  it("carries the canonical restart reason into terminal payload rendering", async () => {
+    await prepareAttempt({
+      attempt: attemptResult({
+        lastToolError: {
+          toolName: "gateway_exec",
+          error: "OpenClaw dynamic tool call aborted.",
+        },
+      }),
+      terminalState: {
+        outcome: { reason: "cancelled", status: "error", stopReason: "restart" },
+        signalOwnedInterruption: true,
+      },
+    });
+
+    expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ runAborted: true, runStopReason: "restart" }),
+    );
+  });
 });
 
 describe("prepareEmbeddedRunTerminal run stats", () => {
@@ -477,6 +496,28 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(resolved.agentMeta).toMatchObject({
       contextTokens: 272_000,
       contextTokensSource: "resolved",
+    });
+  });
+
+  it("reports the terminal physical attempt's redacted credential source", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        modelAttempt: {
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          credentialSource: {
+            kind: "direct",
+            evidence: "environment",
+            authorization: "declared",
+          },
+        },
+      },
+    });
+
+    expect(prepared.agentMeta.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "environment",
+      authorization: "declared",
     });
   });
 

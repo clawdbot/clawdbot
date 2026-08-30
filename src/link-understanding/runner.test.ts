@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig } from "../config/types.tools.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { applyLinkUnderstanding } from "./apply.js";
 import { runLinkUnderstanding } from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
@@ -131,6 +132,67 @@ describe("runLinkUnderstanding", () => {
       timeoutMs: 30000,
     });
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      agentText: "prepared transcript",
+      BodyForAgent: "stale alias",
+      expected: "prepared transcript",
+    },
+    { BodyForAgent: "SDK transcript", expected: "SDK transcript" },
+    { agentText: "", BodyForAgent: "stale alias", expected: "" },
+    { expected: "transport envelope" },
+  ])(
+    "preserves the prepared model text $expected through link enrichment",
+    async ({ expected, ...text }) => {
+      mockGuardedFetch("page body");
+      mockCommand("summarized page");
+      const context: MsgContext = {
+        Body: "transport envelope",
+        RawBody: "see https://example.com/page",
+        CommandBody: "see https://example.com/page",
+        ...text,
+      };
+
+      await applyLinkUnderstanding({
+        cfg: cfg({ type: "cli", command: "summarize" }),
+        ctx: context,
+      });
+
+      expect(context.Body).toBe("transport envelope\n\nsummarized page");
+      expect(context.agentText).toBe(
+        expected ? `${expected}\n\nsummarized page` : "summarized page",
+      );
+      expect(context.BodyForAgent).toBe(context.agentText);
+      expect(context).toMatchObject({
+        RawBody: "see https://example.com/page",
+        CommandBody: "see https://example.com/page",
+        rawText: "see https://example.com/page",
+        commandText: "see https://example.com/page",
+        LinkUnderstanding: ["summarized page"],
+      });
+    },
+  );
+
+  it("leaves context untouched when guarded link fetch produces no output", async () => {
+    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error("blocked by DNS policy"));
+    const context: MsgContext = {
+      Body: "transport envelope",
+      agentText: "prepared transcript",
+      BodyForAgent: "SDK transcript",
+      CommandBody: "see https://example.com/page",
+    };
+    const before = structuredClone(context);
+
+    const result = await applyLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: context,
+    });
+
+    expect(result.outputs).toEqual([]);
+    expect(context).toEqual(before);
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
   it("does not run configured curl fetchers against attacker-controlled URLs", async () => {

@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   openOpenClawAgentDatabase,
@@ -409,6 +410,22 @@ export async function waitForSessionTranscriptIndexReconcile(
   params: OpenClawAgentDatabaseOptions,
 ): Promise<void> {
   await runningReconciles.get(reconcileKey(params))?.promise;
+}
+
+/** Test and maintenance drain for scheduled reconciles owned by one state directory. */
+export async function waitForSessionTranscriptIndexReconcilesInStateDir(
+  stateDir: string,
+): Promise<void> {
+  while (true) {
+    const owners = [...runningReconciles]
+      .filter(([databasePath]) => isPathInside(stateDir, databasePath))
+      .flatMap(([, owner]) => (owner.promise ? [owner.promise] : []));
+    if (owners.length === 0) {
+      return;
+    }
+    // Handoffs and other fixture databases may register owners while this batch settles.
+    await Promise.all(owners);
+  }
 }
 
 /** Waits only until the requested session's scheduled projection rebuild settles. */

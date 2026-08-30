@@ -203,6 +203,7 @@ jobs:
       contents: read
     outputs:
       built_at: ${{ steps.build_provenance.outputs.built_at }}
+      release_version: ${{ needs.resolve_release_policy.outputs.version }}
       source_sha: ${{ steps.build_provenance.outputs.source_sha }}
     steps:
       - name: Checkout selected source
@@ -448,6 +449,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
@@ -470,6 +472,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
             OPENCLAW_INSTALL_BROWSER=1
           tags: ${{ steps.tags.outputs.browser }}
@@ -657,6 +660,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
@@ -679,6 +683,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
             OPENCLAW_INSTALL_BROWSER=1
           tags: ${{ steps.tags.outputs.browser }}

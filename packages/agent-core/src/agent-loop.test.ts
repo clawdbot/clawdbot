@@ -7,9 +7,11 @@ import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from
 import { Agent } from "./agent.js";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
 import {
+  acknowledgeInternalToolResult,
   attachInternalSyncSteeringGetter,
   attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
+  attachInternalToolResultAcknowledgement,
   setInternalBeforeToolBatch,
   takeInternalToolBatchLifecycle,
 } from "./internal-hooks.js";
@@ -1125,6 +1127,152 @@ describe("agentLoop tool termination", () => {
       result: { details: { status: "skipped", deniedReason: "steering" } },
     });
     expect(skippedEnd).not.toHaveProperty("errorKind");
+  });
+
+  it("restores drained steering in order when turn_end aborts before injection", async () => {
+    const firstReleased = createDeferred();
+    const firstStarted = createDeferred();
+    const secondExecute = vi.fn(async () => ({ content: [], details: {} }));
+    const requestMessages: Message[][] = [];
+    const agent = new Agent({
+      initialState: {
+        model,
+        tools: [
+          {
+            ...makeTool("first", []),
+            execute: async () => {
+              firstStarted.resolve();
+              await firstReleased.promise;
+              return { content: [{ type: "text", text: "first result" }], details: {} };
+            },
+          },
+          { ...makeTool("second", []), execute: secondExecute },
+        ],
+      },
+      streamFn: createTurnSequenceStream(
+        [
+          [
+            { type: "toolCall", id: "call-first", name: "first", arguments: {} },
+            { type: "toolCall", id: "call-second", name: "second", arguments: {} },
+          ],
+          [{ type: "text", text: "handled steering" }],
+        ],
+        requestMessages,
+      ),
+      steeringMode: "all",
+      toolExecution: "sequential",
+    });
+    agent.subscribe((event) => {
+      if (event.type === "turn_end" && event.toolResults.length > 0) {
+        agent.abort();
+      }
+    });
+    const firstSteer = { role: "user" as const, content: "first steer", timestamp: 2 };
+    const secondSteer = { role: "user" as const, content: "second steer", timestamp: 3 };
+
+    const run = agent.prompt("start");
+    await firstStarted.promise;
+    agent.steer(firstSteer);
+    agent.steer(secondSteer);
+    firstReleased.resolve();
+    await run;
+
+    expect(secondExecute).not.toHaveBeenCalled();
+    expect(agent.state.messages).not.toContain(firstSteer);
+    expect(agent.state.messages).not.toContain(secondSteer);
+    expect(agent.hasQueuedMessages()).toBe(true);
+
+    await agent.prompt("again");
+
+    expect(requestMessages).toHaveLength(2);
+    expect(requestMessages[1]?.slice(-2)).toEqual([firstSteer, secondSteer]);
+    expect(agent.hasQueuedMessages()).toBe(false);
+  });
+
+  it("cancels a drained steering message and permits an explicit re-enqueue", async () => {
+    const turnStarted = createDeferred();
+    const releaseTurn = createDeferred();
+    const requestMessages: Message[][] = [];
+    const agent = new Agent({
+      initialState: {
+        model,
+        messages: [makeAssistantMessage([{ type: "text", text: "ready" }])],
+      },
+      streamFn: createTurnSequenceStream(
+        [[{ type: "text", text: "re-enqueued response" }]],
+        requestMessages,
+      ),
+    });
+    const target = { role: "user" as const, content: "cancel after drain", timestamp: 2 };
+    agent.steer(target);
+    agent.subscribe(async (event) => {
+      if (event.type === "turn_start") {
+        turnStarted.resolve();
+        await releaseTurn.promise;
+      }
+    });
+
+    const run = agent.continue();
+    await turnStarted.promise;
+    expect(agent.cancelSteeringMessage((message) => message === target)).toBe(target);
+    releaseTurn.resolve();
+    await run;
+
+    expect(requestMessages).toHaveLength(0);
+    expect(agent.state.messages).not.toContain(target);
+    expect(agent.hasQueuedMessages()).toBe(false);
+
+    agent.steer(target);
+    await agent.continue();
+
+    expect(requestMessages).toHaveLength(1);
+    expect(requestMessages[0]?.at(-1)).toBe(target);
+    expect(agent.state.messages).toContain(target);
+  });
+
+  it("restores drained follow-ups to their deferred queue in order", async () => {
+    const requestMessages: Message[][] = [];
+    const agent = new Agent({
+      initialState: {
+        model,
+        messages: [makeAssistantMessage([{ type: "text", text: "ready" }])],
+      },
+      streamFn: createTurnSequenceStream(
+        [
+          [{ type: "text", text: "new prompt response" }],
+          [{ type: "text", text: "follow-up response" }],
+        ],
+        requestMessages,
+      ),
+      followUpMode: "all",
+    });
+    const firstFollowUp = { role: "user" as const, content: "first follow-up", timestamp: 2 };
+    const secondFollowUp = { role: "user" as const, content: "second follow-up", timestamp: 3 };
+    agent.followUp(firstFollowUp);
+    agent.followUp(secondFollowUp);
+    let abortBeforeInjection = true;
+    agent.subscribe((event) => {
+      if (event.type !== "agent_start" || !abortBeforeInjection) {
+        return;
+      }
+      abortBeforeInjection = false;
+      const error = new Error("abort before queued prompt injection");
+      agent.abort(error);
+      throw error;
+    });
+
+    await agent.continue();
+
+    expect(requestMessages).toHaveLength(0);
+    expect(agent.hasQueuedMessages()).toBe(true);
+
+    await agent.prompt("again");
+
+    expect(requestMessages).toHaveLength(2);
+    expect(requestMessages[0]).not.toContain(firstFollowUp);
+    expect(requestMessages[0]).not.toContain(secondFollowUp);
+    expect(requestMessages[1]?.slice(-2)).toEqual([firstFollowUp, secondFollowUp]);
+    expect(agent.hasQueuedMessages()).toBe(false);
   });
 
   it("uses a private synchronous steer at the scheduler without invoking the public fallback", async () => {
@@ -2445,6 +2593,59 @@ describe("agentLoop tool termination", () => {
       expect(metadata(assistant)).toEqual(tainted ? { turnTainted: true } : undefined);
     },
   );
+
+  it.each([
+    { name: "attached", failAttachment: false, expectedAcknowledgements: 1 },
+    { name: "dropped", failAttachment: true, expectedAcknowledgements: 0 },
+  ])("acknowledges an internal tool result only after it is $name", async (testCase) => {
+    const acknowledge = vi.fn();
+    const tool: AgentTool = {
+      ...makeTool("commit_probe", []),
+      execute: async () =>
+        attachInternalToolResultAcknowledgement(
+          { content: [{ type: "text", text: "committed" }], details: { phase: "execute" } },
+          acknowledge,
+        ),
+    };
+    const streamFn = createTurnSequenceStream([
+      [{ type: "toolCall", id: "commit-probe", name: tool.name, arguments: {} }],
+      [{ type: "text", text: "done" }],
+    ]);
+    const run = runAgentLoop(
+      [{ role: "user", content: "commit", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [tool] },
+      {
+        ...config,
+        afterToolCall: async () => ({ details: { phase: "after-call" } }),
+        afterToolOutcome: async () => ({ details: { phase: "after-outcome" } }),
+      },
+      async (event) => {
+        if (
+          !testCase.failAttachment &&
+          event.type === "message_end" &&
+          event.message.role === "toolResult"
+        ) {
+          acknowledgeInternalToolResult(event.message);
+        }
+        if (
+          testCase.failAttachment &&
+          event.type === "message_end" &&
+          event.message.role === "toolResult"
+        ) {
+          throw new Error("attachment failed");
+        }
+      },
+      undefined,
+      streamFn,
+    );
+
+    if (testCase.failAttachment) {
+      await expect(run).rejects.toThrow("attachment failed");
+    } else {
+      await run;
+    }
+    expect(acknowledge).toHaveBeenCalledTimes(testCase.expectedAcknowledgements);
+  });
 
   it.each([
     ["sequential", "invalid arguments"],

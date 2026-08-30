@@ -11,7 +11,7 @@ export type { OcPath } from "./oc-path.js";
 export { OcPathError, formatOcPath, parseOcPath } from "./oc-path.js";
 
 export { parseMd } from "./parse.js";
-export { parseJsonc } from "./jsonc/parse.js";
+export { MAX_JSONC_INPUT_BYTES, parseJsonc } from "./jsonc/parse.js";
 export { parseJsonl } from "./jsonl/parse.js";
 export { parseYaml } from "./yaml/parse.js";
 

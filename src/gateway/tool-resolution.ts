@@ -50,7 +50,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import type { ExecMode } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,

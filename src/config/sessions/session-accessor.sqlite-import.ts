@@ -9,7 +9,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type { SessionAccessScope, TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -30,22 +30,21 @@ import {
   ensureTranscriptSessionRoot,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionEntry } from "./types.js";
 
 /** Internal doctor/migration import target for one legacy session row. */
-type SqliteSessionImportRowsParams = {
+type SqliteSessionImportRowsParams = Pick<
+  SessionAccessScope,
+  "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
+> & {
   allowMalformedRowRepair?: boolean;
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
   preserveExactStoredKey?: boolean;
   readExactTranscriptRows?: (
     append: (row: { createdAt: number; eventJson: string }) => void,
   ) => void;
   skipIfExists?: boolean;
-  storePath?: string;
-  sessionKey: string;
   entry: SessionEntry;
   readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void | (() => void);
   transcriptMtimeMs?: number;
@@ -63,12 +62,7 @@ function resolveSqliteSessionImport(params: SqliteSessionImportRowsParams) {
   if (params.readExactTranscriptRows && params.readTranscriptEvents) {
     throw new Error("SQLite session import accepts only one transcript row source");
   }
-  const resolvedScope = resolveSqliteScope({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    sessionKey: params.sessionKey,
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-  });
+  const resolvedScope = resolveSqliteScope(params);
   // Doctor can stage the exact legacy key so canonical repair compares every alias candidate.
   const resolved = params.preserveExactStoredKey
     ? { ...resolvedScope, sessionKey: params.sessionKey }
@@ -173,23 +167,23 @@ function importSqliteSessionRowsInTransaction(
     )) {
       stage.addSeen(row.event_json);
     }
-    for (const row of stage.rows(source)) {
-      if (stage.hasSeen(row.eventJson)) {
-        continue;
-      }
-      // SAFETY: staging serialized the caller's TranscriptEvent without transforming its contents.
-      const event = JSON.parse(row.eventJson) as TranscriptEvent;
-      if (
-        appendTranscriptEventInTransaction(database, transcriptScope, event, {
-          allowStoredAlias: true,
-          scheduleProjectionReconcile: false,
-          touchMutation: false,
-        })
-      ) {
-        stage.addSeen(row.eventJson);
-        transcriptEvents += 1;
-      }
-    }
+    transcriptEvents = appendTranscriptEventsInTransaction(
+      database,
+      transcriptScope,
+      (function* (): Generator<TranscriptEvent, void, boolean> {
+        for (const row of stage.rows(source)) {
+          if (stage.hasSeen(row.eventJson)) {
+            continue;
+          }
+          // SAFETY: staging serialized the caller's TranscriptEvent without transforming its contents.
+          const inserted = yield JSON.parse(row.eventJson) as TranscriptEvent;
+          if (inserted) {
+            stage.addSeen(row.eventJson);
+          }
+        }
+      })(),
+      { allowStoredAlias: true, scheduleProjectionReconcile: false, touchMutation: false },
+    );
     // Doctor imports run outside gateway requests and must finish with a complete projection.
     reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
     publishSessionEntryCacheInvalidation(database);

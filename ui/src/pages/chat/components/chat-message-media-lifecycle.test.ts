@@ -82,6 +82,30 @@ function observeSubscriber(subscriber: () => void): () => void {
 }
 
 describe("chat media resource lifecycle", () => {
+  it("marks one-to-five image turns for the transcript and sent-message layouts", () => {
+    const container = document.createElement("div");
+    for (const count of [1, 2, 3, 4, 5]) {
+      const images: RenderableImageBlock[] = Array.from({ length: count }, (_, index) => ({
+        url: `data:image/png;base64,image-${count}-${index}`,
+        displayUrl: `data:image/png;base64,image-${count}-${index}`,
+        alt: `Image ${index + 1}`,
+        width: count === 1 ? 16 : 640,
+        height: count === 1 ? 16 : 640,
+      }));
+      render(renderMessageImages(images), container);
+      const gallery = container.querySelector(".chat-message-images");
+      expect(gallery?.classList.contains("chat-message-images--single")).toBe(count === 1);
+      expect(gallery?.classList.contains("chat-message-images--gallery")).toBe(count > 1);
+      expect(gallery?.classList.contains("chat-message-images--two-column")).toBe(
+        count === 2 || count === 4,
+      );
+      expect(gallery?.classList.contains("chat-message-images--five")).toBe(count === 5);
+      if (count === 1) {
+        expect(container.querySelector(".chat-message-image--small")).not.toBeNull();
+      }
+    }
+  });
+
   it("refreshes every split pane when a shared pairing QR expires", async () => {
     const message = {
       content: [

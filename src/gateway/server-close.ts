@@ -1052,19 +1052,18 @@ export function createGatewayCloseHandler(
       });
     } finally {
       await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
-      // Rent: plugin cleanup may still read ambient slots, so drain their shared
-      // lifecycle only after the registry owner has finished retiring plugins.
-      await shutdownStep(
-        "ambient-runtime-state",
-        () => drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart"),
-        warnings,
-      );
       // Channel and plugin teardown still resolve account credentials. Keep the
       // active snapshot until every teardown owner is done, then always scrub it.
       try {
-        params.clearSecretsRuntimeSnapshot?.();
-      } catch {
-        /* ignore */
+        // Plugin cleanup may still read ambient slots. A failed owner drain must
+        // stop restart so the next lifecycle cannot reuse incomplete shutdown.
+        await drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart");
+      } finally {
+        try {
+          params.clearSecretsRuntimeSnapshot?.();
+        } catch {
+          /* ignore */
+        }
       }
     }
 

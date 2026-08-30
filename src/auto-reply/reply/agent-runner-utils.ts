@@ -74,7 +74,7 @@ export async function resolveQueuedReplyExecutionConfig(
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,
     commandName: "reply",
-    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    targetIds: getAgentRuntimeCommandSecretTargetIds({ config: runtimeConfig }),
     optionalActivePaths: getAgentRuntimeOptionalCommandSecretPaths(runtimeConfig),
   });
   const baseResolvedConfig = resolvedConfig ?? runtimeConfig;
@@ -277,6 +277,7 @@ function buildEmbeddedContextFromTemplate(params: {
     }),
     ...(sessionCtx.ChatType ? { chatType: sessionCtx.ChatType } : {}),
     agentAccountId: sessionCtx.AccountId,
+    conversationRoutePeerId: params.run.conversationRoutePeerId,
     messageTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
     messageThreadId: sessionCtx.MessageThreadId ?? undefined,
     chatId:
@@ -313,7 +314,7 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
 }
 
 /** Builds execution-specific embedded run params for queued reply dispatch. */
-export function buildEmbeddedRunExecutionParams(params: {
+export async function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
   sessionCtx: TemplateContext;
@@ -332,7 +333,7 @@ export function buildEmbeddedRunExecutionParams(params: {
     hasRepliedRef: params.hasRepliedRef,
   });
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
-  const runBaseParams = buildEmbeddedRunBaseParams({
+  const runBaseParams = await buildEmbeddedRunBaseParams({
     run: params.run,
     provider: params.provider,
     model: params.model,

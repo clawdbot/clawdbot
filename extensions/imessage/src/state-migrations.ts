@@ -14,25 +14,22 @@ import {
 } from "./accounts.js";
 import {
   IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
+  IMESSAGE_REPLY_CACHE_TTL_MS,
   IMESSAGE_REPLY_CACHE_COUNTER_KEY,
   IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
   IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
   IMESSAGE_REPLY_CACHE_NAMESPACE,
   resolveIMessageReplyCacheEntryKey,
-} from "./monitor-reply-cache.js";
-import {
   capFailureRetriesMap,
   IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
   IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
   resolveIMessageCatchupCursorKey,
   type IMessageCatchupCursor,
-} from "./monitor/catchup.js";
-import {
   IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
   IMESSAGE_SENT_ECHOES_NAMESPACE,
   IMESSAGE_SENT_ECHOES_TTL_MS,
   resolveIMessageSentEchoEntryKey,
-} from "./monitor/persisted-echo-cache.js";
+} from "./state-contract.js";
 
 type ReplyCacheEntry = {
   accountId: string;
@@ -51,8 +48,6 @@ type SentEchoEntry = {
   messageId?: string;
   timestamp: number;
 };
-
-const REPLY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 function resolveMigrationStateDir(params: { env: NodeJS.ProcessEnv; stateDir?: string }): string {
   return params.stateDir ?? resolveStateDir(params.env);
@@ -169,7 +164,7 @@ function listReplyCacheEntries(sourcePath: string): Array<{
     if (!entry) {
       continue;
     }
-    const ttlMs = remainingTtlMs(entry.timestamp, REPLY_CACHE_TTL_MS);
+    const ttlMs = remainingTtlMs(entry.timestamp, IMESSAGE_REPLY_CACHE_TTL_MS);
     if (!ttlMs) {
       continue;
     }

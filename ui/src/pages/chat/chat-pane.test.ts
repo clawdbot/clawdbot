@@ -103,6 +103,8 @@ describe("chat pane header state", () => {
     ["pin", { kind: "toggle-pin" } as const, { pinned: true }],
     ["unread", { kind: "toggle-unread" } as const, { unread: true }],
     ["icon", { kind: "set-icon", icon: "🦞" } as const, { icon: "🦞" }],
+    ["color", { kind: "set-color", color: "purple" } as const, { color: "purple" }],
+    ["clear color", { kind: "set-color", color: null } as const, { color: null }],
     ["group", { kind: "move-to-group", category: "Projects" } as const, { category: "Projects" }],
   ])("patches the active session from the header %s action", async (_name, action, expected) => {
     const patch = vi.fn(async () => ({}));
@@ -703,6 +705,7 @@ describe("chat pane initialization", () => {
     state.initialUserMessage = createInitialUserMessageHandoff();
     state.chatRunId = "run-reconnected";
     state.chatStream = "The response survived navigation.";
+    state.loadAssistantIdentity = vi.fn(async () => undefined);
     pane.sessionKey = canonicalSessionKey;
 
     (

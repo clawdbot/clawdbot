@@ -1,15 +1,17 @@
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
+import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
   adoptTailscaleProfileAvatar,
@@ -29,13 +31,44 @@ import {
   syncGitHubIdentity,
 } from "./user-profiles.js";
 
-const statePaths: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
+
+it("publishes profile changes only after the owning transaction commits", () => {
+  const options = stateOptions();
+  const profile = ensureProfileForEmail("publication@example.test", options);
+  const changed = vi.fn();
+  const stop = onUserProfilesChanged(changed);
+  const before = readUserProfileVersion();
+  try {
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        setDisplayName(profile.id, "Rolled back", options);
+        expect(changed).not.toHaveBeenCalled();
+        throw new Error("rollback");
+      }, options),
+    ).toThrow("rollback");
+    expect(readUserProfileVersion()).toBe(before);
+    expect(getUserProfileDisplay(profile.id, options).displayName).not.toBe("Rolled back");
+    runOpenClawStateWriteTransaction(() => {
+      setDisplayName(profile.id, "Committed", options);
+      expect(changed).not.toHaveBeenCalled();
+    }, options);
+    expect(changed).toHaveBeenCalledOnce();
+    expect(readUserProfileVersion()).toBe(before + 1);
+  } finally {
+    stop();
+  }
+});
 
 function stateOptions() {
-  const directory = mkdtempSync(join(tmpdir(), "openclaw-user-profiles-"));
-  const path = join(directory, "openclaw.sqlite");
-  statePaths.push(path);
-  return { path };
+  const directory = tempDirs.make("openclaw-user-profiles-");
+  return { path: join(directory, "openclaw.sqlite") };
 }
 
 function fixtureImage(path: string): Buffer {
@@ -95,12 +128,23 @@ function syncEmailGitHubProfile(
   );
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-});
-
 describe("user profiles", () => {
+  it.each([false, true])(
+    "display lookup leaves absent profile storage absent (database exists: %s)",
+    (databaseExists) => {
+      const options = stateOptions();
+      const database = databaseExists ? openOpenClawStateDatabase(options).db : undefined;
+      expect(() => getUserProfileDisplay("missing-profile", options)).toThrow(
+        "user profile not found",
+      );
+      if (database) {
+        expect(tableExists(database, "user_profiles")).toBe(false);
+      } else {
+        expect(existsSync(options.path)).toBe(false);
+      }
+    },
+  );
+
   it("lazily ensures and resolves lowercased email aliases idempotently", () => {
     const options = stateOptions();
     const database = openOpenClawStateDatabase(options).db;
@@ -119,7 +163,6 @@ describe("user profiles", () => {
       openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()?.user_version,
     ).toBe(versionBefore);
     expect(versionBefore).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(13);
     expect(second).toEqual(first);
     expect(ensureProfileForEmail("ADA@example.com", options)).toEqual(first);
     expect(listProfiles(options)).toEqual([

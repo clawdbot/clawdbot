@@ -38,6 +38,8 @@ export type CompactEmbeddedAgentSessionParams = {
   clientCaps?: string[];
   chatType?: ChatType;
   agentAccountId?: string;
+  /** Raw peer observed by the inbound routing owner, before identity linking. */
+  conversationRoutePeerId?: string;
   conversationToolPolicy?: GroupToolPolicyConfig;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -138,6 +140,8 @@ export type CompactEmbeddedAgentSessionParams = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  /** @internal Refreshes the host watchdog when delegated native compaction makes progress. */
+  compactionTimeoutReset?: () => void;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";
     messages: string[];

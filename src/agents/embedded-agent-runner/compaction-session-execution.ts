@@ -2,7 +2,12 @@
  * Executes compaction while owning the transcript lock, session lifecycle,
  * hooks, checkpoint, and optional successor transcript rotation.
  */
+import {
+  preserveCompactionReplayWindow,
+  resolveCompactionReplayEligibility,
+} from "@openclaw/ai/transports";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -15,8 +20,9 @@ import {
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
-  consumeCompactionSafeguardCancelReason,
-  setCompactionSafeguardCancelReason,
+  consumeCompactionSafeguardCancellation,
+  getCompactionSafeguardRuntime,
+  setCompactionSafeguardCancellation,
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import {
@@ -29,11 +35,16 @@ import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
-import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
+import {
+  agentSessionAutomaticCompaction,
+  agentSessionSetContextReplacementHook,
+} from "../sessions/agent-session-compaction.js";
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
-import { resolveCompactionFailureReason } from "./compact-reasons.js";
+import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
+import { normalizeUsage, type UsageLike } from "../usage.js";
+import { resolveCompactionFailure } from "./compact-reasons.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
   containsRealConversationMessages,
@@ -62,6 +73,8 @@ import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
+import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
+import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
@@ -120,7 +133,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
     });
+    const assertActive = captureOwnedTranscriptWriteAssertion(sessionTarget);
     try {
+      assertActive();
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
       const sessionManager = guardSessionManager(SessionManager.open(sessionTarget), {
         agentId: sessionAgentId,
@@ -142,6 +157,20 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         sessionTarget,
       });
       compactionSessionManager = sessionManager;
+      const accountingRecorder = readCompactionAccountingRecorder(
+        params.contextEngineRuntimeContext,
+      );
+      const recordUsage = accountingRecorder
+        ? (usage: UsageLike) => {
+            const normalized = normalizeUsage(usage);
+            if (normalized) {
+              accountingRecorder.recordUsage(normalized);
+            }
+          }
+        : undefined;
+      if (recordUsage) {
+        setSessionModelUsageSink(sessionManager, recordUsage);
+      }
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
         cwd: effectiveCwd,
         agentDir,
@@ -221,12 +250,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         apiRegistry: getModelRegistryRuntime(modelRegistry).apiRegistry,
       });
       while (true) {
+        // A thinking retry starts a new attempt; setup/endpoint failures must not reuse its predecessor's cause.
+        setCompactionSafeguardCancellation(sessionManager, undefined);
         // Rebuild the compaction session on retry so provider wrappers, payload
         // shaping, and the embedded system prompt all reflect the fallback level.
         attemptedThinking.add(thinkLevel);
         const systemPromptText = buildSystemPromptText(thinkLevel);
         let session: AgentSession | undefined;
         let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
+        let resetCompactionTimeout: (() => void) | undefined;
         try {
           const createdSession = await createAgentSessionForEmbeddedRunner(
             {
@@ -245,6 +277,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             {},
           );
           session = createdSession.session;
+          if (accountingRecorder) {
+            session[agentSessionSetContextReplacementHook](accountingRecorder.recordCompaction);
+          }
           session.setActiveToolsByName(sessionToolAllowlist);
           applySystemPromptToSession(session, systemPromptText);
           // Compaction builds the same embedded system prompt, so it must flow
@@ -279,6 +314,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
           });
+          const compactionReplayEnabled = resolveCompactionReplayEligibility(effectiveModel, {
+            extraParams: effectiveExtraParams,
+            apiKey: transportApiKey,
+          });
           diagnosticOwner = createDiagnosticEmbeddedRunOwner({
             sessionId: params.sessionId,
             ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -308,6 +347,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
               nextCallId: nextDiagnosticModelCallId,
               ownerGeneration: diagnosticOwner.generation,
+              // Multi-stage compaction intentionally serializes provider calls. Each new
+              // request is progress, so both native and delegated watchdogs get a fresh window.
+              onStarted: () => {
+                resetCompactionTimeout?.();
+                params.compactionTimeoutReset?.();
+              },
             },
           );
 
@@ -345,9 +390,22 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           // "Original" compaction metrics should describe the validated transcript that enters
           // limiting/compaction, not the raw on-disk session snapshot.
           const originalMessages = session.messages.slice();
-          const truncated = limitHistoryTurns(
-            session.messages,
-            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
+          const truncated = preserveCompactionReplayWindow(
+            originalMessages,
+            limitHistoryTurns(
+              session.messages,
+              getHistoryLimitFromSessionKey(params.sessionKey, params.config, {
+                accountId: params.agentAccountId,
+                peerId: params.conversationRoutePeerId,
+                chatType: params.chatType,
+              }),
+            ),
+            effectiveModel,
+            {
+              sessionId: params.sessionId,
+              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+              enabled: compactionReplayEnabled,
+            },
           );
           // Re-run tool_use/tool_result pairing repair after truncation, since
           // limitHistoryTurns can orphan tool_result blocks by removing the
@@ -379,6 +437,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             workspaceDir: effectiveWorkspace,
             messageProvider: resolvedMessageProvider,
             metrics: beforeHookMetrics,
+            assertActive,
             onHookMessages: params.onCompactionHookMessages,
           });
           const { messageCountOriginal, tokenCountBefore: limitedTranscriptTokensBefore } =
@@ -412,6 +471,25 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }
 
           const compactStartedAt = Date.now();
+          // Setup completed: give the first provider request a full safety window.
+          params.compactionTimeoutReset?.();
+          let serverTokensAfter: number | undefined;
+          const recordServerCompaction = () => {
+            // Endpoint output_tokens omits retained inputs; observe the actual
+            // replacement window synchronously with its accepted rewrite.
+            serverTokensAfter = estimateLlmBoundaryTokenPressure({
+              messages: sessionManager.buildSessionContext().messages,
+              systemPrompt: systemPromptText,
+              prompt: "",
+              replay: {
+                model: effectiveModel,
+                sessionId: params.sessionId,
+                authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+                enabled: compactionReplayEnabled,
+              },
+            });
+            accountingRecorder?.recordCompaction(serverTokensAfter);
+          };
           const serverResult = await attemptServerEndpointCompaction({
             trigger,
             streamFn: session.agent.streamFn,
@@ -420,6 +498,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionManager,
             extraParams: effectiveExtraParams,
             customInstructions: params.customInstructions,
+            config: params.config,
+            onUsage: recordUsage,
+            onCompactionCommitted: recordServerCompaction,
+            assertActive,
             requestOptions: {
               apiKey: transportApiKey,
               sessionId: params.sessionId,
@@ -429,11 +511,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             },
           });
           const activeSession = session;
-          const clientResult = serverResult
-            ? undefined
-            : await compactWithSafetyTimeout(
-                () => {
-                  setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
+          let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
+          if (!serverResult) {
+            try {
+              // The client watchdog starts here; refresh the delegated host watchdog with it.
+              params.compactionTimeoutReset?.();
+              clientResult = await compactWithSafetyTimeout(
+                (_signal, resetTimeout) => {
+                  resetCompactionTimeout = resetTimeout;
+                  setCompactionSafeguardCancellation(compactionSessionManager, undefined);
                   return resolveEffectiveCompactionMode(params.config) === "default" &&
                     trigger !== "manual"
                     ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
@@ -447,17 +533,22 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   },
                 },
               );
+            } finally {
+              resetCompactionTimeout = undefined;
+            }
+          }
+          // Compaction succeeded: post-processing gets its own full watchdog window.
+          params.compactionTimeoutReset?.();
           const effectiveFirstKeptEntryId = clientResult?.firstKeptEntryId;
           const tokensBefore = serverResult?.usage.input_tokens ?? clientResult!.tokensBefore;
-          // Estimate tokens after compaction by summing token estimates for remaining messages
-          const tokensAfter =
-            serverResult?.usage.output_tokens ??
-            estimateTokensAfterCompaction({
-              messagesAfter: session.messages,
-              observedTokenCount,
-              fullSessionTokensBefore: limitedTranscriptTokensBefore ?? 0,
-              estimateTokensFn: estimateTokens,
-            });
+          const tokensAfter = serverResult
+            ? serverTokensAfter
+            : estimateTokensAfterCompaction({
+                messagesAfter: session.messages,
+                observedTokenCount,
+                fullSessionTokensBefore: limitedTranscriptTokensBefore ?? 0,
+                estimateTokensFn: estimateTokens,
+              });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
           const activeSessionFile = formatSqliteSessionFileMarker({
@@ -470,6 +561,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionId: params.sessionId,
             agentId: sessionAgentId,
             sessionFile: activeSessionFile,
+            assertActive,
           });
           if (clientResult) {
             checkpointSnapshotRetained = await persistCompactionCheckpoint({
@@ -519,6 +611,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             summaryLength: clientResult?.summary.length,
             tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
+            assertActive,
             onHookMessages: params.onCompactionHookMessages,
           });
           return {
@@ -545,8 +638,14 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             },
           };
         } catch (err) {
+          assertActive();
+          const failure = resolveCompactionFailure({
+            error: err,
+            safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
+            abortSignal: params.abortSignal,
+          });
           const fallbackThinking = pickFallbackThinkingLevel({
-            message: formatErrorMessage(err),
+            message: formatErrorMessage(failure.error),
             attempted: attemptedThinking,
           });
           if (fallbackThinking) {
@@ -557,11 +656,14 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               `[compaction] request rejected for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );
             thinkLevel = fallbackThinking;
+            // The rejected request may have consumed nearly its full window. Rearm the
+            // delegated watchdog before rebuilding the session for the fallback attempt.
+            params.compactionTimeoutReset?.();
             continue;
           }
           throw err;
         } finally {
-          // Retire exact recovery authority before asynchronous session cleanup can yield.
+          // Retire diagnostic ownership before asynchronous session cleanup can yield.
           if (diagnosticOwner) {
             closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
           }
@@ -584,12 +686,14 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       await runtime.disposeToolRuntimes();
     }
   } catch (err) {
-    const reason = resolveCompactionFailureReason({
-      reason: formatErrorMessage(err),
-      safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
+    const failure = resolveCompactionFailure({
+      error: err,
+      safeguardCancellation: consumeCompactionSafeguardCancellation(compactionSessionManager),
+      abortSignal: params.abortSignal,
     });
-    return fail(reason, err);
+    return fail(failure.reason, failure.error);
   } finally {
+    setSessionModelUsageSink(compactionSessionManager, null);
     if (!checkpointSnapshotRetained) {
       await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
     }

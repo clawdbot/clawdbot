@@ -8,6 +8,7 @@ import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-r
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
@@ -406,48 +407,61 @@ describe("guardSessionManager transcript updates", () => {
     getBranchSpy.mockRestore();
   });
 
-  it("refreshes terminal run ownership when a guarded session manager is reused", async () => {
-    const updates: InternalSessionTranscriptUpdate[] = [];
-    listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
-    const { sessionManager, target } = await openPersistedSessionManager();
+  it.each([false, true])(
+    "refreshes terminal run ownership with hooks skipped=%s",
+    async (skipBeforeMessageWriteHooks) => {
+      const updates: InternalSessionTranscriptUpdate[] = [];
+      listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
+      const { sessionManager, target } = await openPersistedSessionManager();
 
-    const firstRun = guardSessionManager(sessionManager, {
-      agentId: target.agentId,
-      runId: "run-first",
-      sessionKey: target.sessionKey,
-    });
-    firstRun.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "first reply" }],
-      timestamp: Date.now(),
-    } as Parameters<typeof firstRun.appendMessage>[0]);
+      const firstRun = guardSessionManager(sessionManager, {
+        skipBeforeMessageWriteHooks,
+        agentId: target.agentId,
+        runId: "run-first",
+        sessionKey: target.sessionKey,
+        prepareAssistantTranscriptMessage: (message) =>
+          applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./first.json"] }),
+      });
+      firstRun.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "first reply\nMEDIA:./first.json" }],
+        timestamp: Date.now(),
+      } as Parameters<typeof firstRun.appendMessage>[0]);
 
-    const secondRun = guardSessionManager(sessionManager, {
-      agentId: target.agentId,
-      runId: "run-second",
-      sessionKey: target.sessionKey,
-    });
-    secondRun.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "second reply" }],
-      timestamp: Date.now(),
-    } as Parameters<typeof secondRun.appendMessage>[0]);
+      const secondRun = guardSessionManager(sessionManager, {
+        agentId: target.agentId,
+        runId: "run-second",
+        sessionKey: target.sessionKey,
+      });
+      secondRun.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "second reply" }],
+        timestamp: Date.now(),
+      } as Parameters<typeof secondRun.appendMessage>[0]);
 
-    const unknownRun = guardSessionManager(sessionManager);
-    unknownRun.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "unowned reply" }],
-      timestamp: Date.now(),
-    } as Parameters<typeof unknownRun.appendMessage>[0]);
+      const unknownRun = guardSessionManager(sessionManager);
+      unknownRun.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "unowned reply" }],
+        timestamp: Date.now(),
+      } as Parameters<typeof unknownRun.appendMessage>[0]);
 
-    expect(secondRun).toBe(firstRun);
-    expect(unknownRun).toBe(firstRun);
-    expect(
-      updates.map(({ messageId, messageSeq, runId }) => ({ messageId, messageSeq, runId })),
-    ).toEqual([
-      { messageId: expect.any(String), messageSeq: 1, runId: "run-first" },
-      { messageId: expect.any(String), messageSeq: 2, runId: "run-second" },
-      { messageId: expect.any(String), messageSeq: 3, runId: undefined },
-    ]);
-  });
+      expect(secondRun).toBe(firstRun);
+      expect(unknownRun).toBe(firstRun);
+      expect(updates[0]?.message).toMatchObject({
+        content: [{ type: "text", text: "first reply\nMEDIA:./first.json" }],
+        openclawDelivery: { mediaUrls: ["./first.json"] },
+      });
+      expect(
+        updates.slice(1).some(({ message }) => Reflect.has(message as object, "openclawDelivery")),
+      ).toBe(false);
+      expect(
+        updates.map(({ messageId, messageSeq, runId }) => ({ messageId, messageSeq, runId })),
+      ).toEqual([
+        { messageId: expect.any(String), messageSeq: 1, runId: "run-first" },
+        { messageId: expect.any(String), messageSeq: 2, runId: "run-second" },
+        { messageId: expect.any(String), messageSeq: 3, runId: undefined },
+      ]);
+    },
+  );
 });

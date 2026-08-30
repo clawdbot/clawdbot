@@ -190,7 +190,9 @@ function readSqlitePluginIndex(root = stateDir()) {
 
 export function readPluginInstallIndex(options = {}) {
   const root = options.stateDir ?? stateDir();
-  const config = readJsonMaybe(options.configPath ?? configPath());
+  // Failure diagnostics may inspect the persisted index without consulting config.
+  const config =
+    options.configPath === null ? {} : readJsonMaybe(options.configPath ?? configPath());
   const sqliteIndex = readSqlitePluginIndex(root);
   if (sqliteIndex.installRecords) {
     return sqliteIndex;
@@ -219,7 +221,12 @@ export function writePluginInstallIndexForE2E(index, options = {}) {
   const db = new DatabaseSync(dbPath);
   try {
     const now = Date.now();
-    const storageMode = options.storageMode ?? "current";
+    const storageMode =
+      options.storageMode === "existing-schema"
+        ? Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0) >= 13
+          ? "current"
+          : "pre-v13"
+        : (options.storageMode ?? "current");
     if (storageMode === "current") {
       db.exec(`
         CREATE TABLE IF NOT EXISTS config_machine_state (

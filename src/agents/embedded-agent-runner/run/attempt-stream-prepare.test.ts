@@ -5,13 +5,17 @@ import {
   type ReplyOperation,
 } from "../../../auto-reply/reply/reply-run-registry.js";
 import {
+  projectNestedToolActivityForHooks,
+  type NestedToolActivity,
+} from "../../../sessions/nested-tool-activity.js";
+import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
+import {
   isAgentRunRestartAbortReason,
   isAgentRunSupersededAbortReason,
 } from "../../run-termination.js";
-import {
-  projectToolSearchTargetTranscriptMessages,
-  type ToolSearchTargetTranscriptProjection,
-} from "../../tool-search.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { isToolResultError } from "../../tool-result-error.js";
+import { ACTIVE_EMBEDDED_RUNS } from "../run-state.js";
 
 const mocks = vi.hoisted(() => ({
   clearActiveRun: vi.fn(),
@@ -43,7 +47,7 @@ import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 
 function prepareCatalogExecutor(
-  projections: ToolSearchTargetTranscriptProjection[],
+  projections: NestedToolActivity[],
   options?: {
     getRunState?: () => {
       aborted: boolean;
@@ -69,13 +73,17 @@ function prepareCatalogExecutor(
       replyOperation: options?.replyOperation,
       onAttemptAbort: options?.onAttemptAbort,
     } as never,
-    activeSession: { agent: {}, isStreaming: false } as never,
+    activeSession: {
+      agent: {},
+      isStreaming: false,
+      sessionManager: SessionManager.inMemory(),
+    } as never,
     hookRunner: undefined as never,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
     diagnosticOwner: {} as never,
     clientToolCallSlots: [],
-    toolSearchTargetTranscriptProjections: projections,
+    nestedToolActivities: projections,
     isReplaySafeTool: () => false,
     runAbortController,
     abortRun: options?.abortRun ?? vi.fn(),
@@ -101,9 +109,32 @@ function prepareCatalogExecutor(
 describe("prepareEmbeddedAttemptStream", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    ACTIVE_EMBEDDED_RUNS.clear();
+    mocks.setActiveRun.mockImplementation((sessionId, handle) =>
+      ACTIVE_EMBEDDED_RUNS.set(sessionId, handle),
+    );
     mocks.subscribe.mockReturnValue({
       toolMetas: [],
-      runToolLifecycle: vi.fn(async ({ execute }) => await execute(() => undefined)),
+      runToolLifecycle: vi.fn(async ({ args, execute, onTerminal }) => {
+        try {
+          const result = await execute(() => undefined);
+          await onTerminal?.({
+            result,
+            isError: isToolResultError(result),
+            executedArguments: structuredClone(args),
+            effectReceipt: { state: "uncertain" },
+          });
+          return result;
+        } catch (error) {
+          await onTerminal?.({
+            result: buildToolLifecycleErrorResult(error),
+            isError: true,
+            executedArguments: structuredClone(args),
+            effectReceipt: { state: "uncertain" },
+          });
+          throw error;
+        }
+      }),
       isCompacting: vi.fn(() => false),
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
@@ -162,7 +193,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       diagnosticTrace: {} as never,
       diagnosticOwner: {} as never,
       clientToolCallSlots: [],
-      toolSearchTargetTranscriptProjections: [],
+      nestedToolActivities: [],
       isReplaySafeTool: () => false,
       runAbortController: new AbortController(),
       abortRun: vi.fn(),
@@ -241,7 +272,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       diagnosticTrace: {} as never,
       diagnosticOwner: {} as never,
       clientToolCallSlots: [],
-      toolSearchTargetTranscriptProjections: [],
+      nestedToolActivities: [],
       isReplaySafeTool: () => false,
       runAbortController: new AbortController(),
       abortRun: vi.fn(),
@@ -302,165 +333,101 @@ describe("prepareEmbeddedAttemptStream", () => {
     );
   });
 
-  it("validates hidden tool results before queuing transcript projections", async () => {
-    const projections: ToolSearchTargetTranscriptProjection[] = [];
-    const rawResult = {
-      content: [{ type: "text" as const, text: "rejected raw result" }],
-      details: { id: 42, unexpected: "must-not-enter-transcript" },
-    };
-    const prepared = prepareCatalogExecutor(projections);
-
-    await expect(
-      prepared.toolSearchCatalogExecutor({
+  it.each(["rejected", "accepted", "canonical failure", "thrown"] as const)(
+    "records one accepted terminal fact for %s output",
+    async (kind) => {
+      const activities: NestedToolActivity[] = [];
+      const prepared = prepareCatalogExecutor(activities);
+      const rawResult = {
+        content: [{ type: "text" as const, text: "tool output" }],
+        details: { id: 42, status: kind === "canonical failure" ? "error" : "success" },
+      };
+      const failure = kind === "thrown" ? "transport disconnected" : "declared output mismatch";
+      const toolName = "lookup";
+      const input = { path: "original.txt" };
+      const execution = prepared.toolSearchCatalogExecutor({
         tool: {
-          name: "orchard_bad_output",
-          description: "Return a rejected orchard result",
-          parameters: { type: "object", properties: {}, additionalProperties: false },
-          execute: vi.fn(async () => rawResult),
+          name: toolName,
+          description: "Look up a record",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+            additionalProperties: false,
+          },
+          execute: async () => {
+            if (kind === "thrown") {
+              throw new Error(failure);
+            }
+            return rawResult;
+          },
         } as never,
-        toolName: "orchard_bad_output",
-        source: "openclaw",
-        sourceName: "fixture-plugin",
-        toolCallId: "call-output-schema",
-        parentToolCallId: "call-code-mode",
-        input: {},
+        toolName,
+        source: kind === "canonical failure" || kind === "thrown" ? "mcp" : "openclaw",
+        toolCallId: "nested-lookup",
+        parentToolCallId: "outer-exec",
+        input,
         acceptResultBeforeProjection: async (candidate) => {
           expect(candidate).toBe(rawResult);
-          expect(projections).toHaveLength(0);
-          throw new Error("declared output mismatch");
-        },
-      }),
-    ).rejects.toThrow("declared output mismatch");
-
-    expect(projections).toEqual([
-      expect.objectContaining({
-        toolCallId: "call-output-schema",
-        toolName: "orchard_bad_output",
-        isError: true,
-      }),
-    ]);
-    expect(JSON.stringify(projections)).not.toContain("must-not-enter-transcript");
-    expect(mocks.notifyToolActivity).toHaveBeenCalledWith("run-output-schema");
-  });
-
-  it("snapshots accepted results before delayed transcript settlement", async () => {
-    const projections: ToolSearchTargetTranscriptProjection[] = [];
-    const rawResult = {
-      content: [{ type: "text" as const, text: "accepted result" }],
-      details: { id: 42 },
-    };
-    const prepared = prepareCatalogExecutor(projections);
-
-    const returned = await prepared.toolSearchCatalogExecutor({
-      tool: {
-        name: "orchard_output",
-        description: "Return an orchard result",
-        parameters: { type: "object", properties: {}, additionalProperties: false },
-        execute: vi.fn(async () => rawResult),
-      } as never,
-      toolName: "orchard_output",
-      source: "openclaw",
-      sourceName: "fixture-plugin",
-      toolCallId: "call-output-schema",
-      parentToolCallId: "call-code-mode",
-      input: {},
-      acceptResultBeforeProjection: async (candidate) => {
-        expect(candidate).toBe(rawResult);
-        expect(projections).toHaveLength(0);
-        const snapshot = structuredClone(candidate);
-        if (snapshot.details && typeof snapshot.details === "object") {
+          expect(activities).toHaveLength(0);
+          if (kind === "rejected") {
+            throw new Error(failure);
+          }
+          const snapshot = structuredClone(candidate);
           Object.freeze(snapshot.details);
-        }
-        return Object.freeze(snapshot);
-      },
-    });
-
-    rawResult.details.id = 99;
-    expect(returned).not.toBe(rawResult);
-    expect(projections[0]?.result).toBe(returned);
-    expect(returned).toMatchObject({ details: { id: 42 } });
-    expect(Object.isFrozen(returned)).toBe(true);
-    expect(Object.isFrozen(returned.details)).toBe(true);
-  });
-
-  it("marks accepted canonical failures in hidden tool transcript projections", async () => {
-    const projections: ToolSearchTargetTranscriptProjection[] = [];
-    const failedResult = {
-      content: [{ type: "text" as const, text: "Backend request failed" }],
-      details: { status: "error" },
-    };
-    const prepared = prepareCatalogExecutor(projections);
-
-    const returned = await prepared.toolSearchCatalogExecutor({
-      tool: {
-        name: "search_query",
-        description: "Query a search backend",
-        parameters: { type: "object", properties: {}, additionalProperties: false },
-        execute: vi.fn(async () => failedResult),
-      } as never,
-      toolName: "search_query",
-      source: "mcp",
-      sourceName: "searchServer",
-      toolCallId: "call-search-query",
-      parentToolCallId: "call-tool-call",
-      input: {},
-      acceptResultBeforeProjection: async (candidate) => candidate,
-    });
-
-    expect(returned).toBe(failedResult);
-    expect(projections).toEqual([
-      expect.objectContaining({
-        toolCallId: "call-search-query",
-        result: failedResult,
-        isError: true,
-      }),
-    ]);
-    expect(
-      projectToolSearchTargetTranscriptMessages([], projections).find(
-        (message) => message.role === "toolResult",
-      ),
-    ).toMatchObject({
-      toolCallId: "call-search-query",
-      toolName: "search_query",
-      isError: true,
-    });
-  });
-
-  it("records thrown hidden tool failures and rethrows them", async () => {
-    const projections: ToolSearchTargetTranscriptProjection[] = [];
-    const prepared = prepareCatalogExecutor(projections);
-
-    await expect(
-      prepared.toolSearchCatalogExecutor({
-        tool: {
-          name: "search_query",
-          description: "Query a search backend",
-          parameters: { type: "object", properties: {}, additionalProperties: false },
-          execute: vi.fn(async () => {
-            throw new Error("transport disconnected");
-          }),
-        } as never,
-        toolName: "search_query",
-        source: "mcp",
-        sourceName: "searchServer",
-        toolCallId: "call-search-query",
-        parentToolCallId: "call-tool-call",
-        input: {},
-        acceptResultBeforeProjection: async (candidate) => candidate,
-      }),
-    ).rejects.toThrow("transport disconnected");
-
-    expect(projections).toEqual([
-      expect.objectContaining({
-        toolCallId: "call-search-query",
-        isError: true,
-        result: {
-          content: [{ type: "text", text: "transport disconnected" }],
-          details: { status: "error", error: "transport disconnected" },
+          return Object.freeze(snapshot);
         },
-      }),
-    ]);
-  });
+      });
+      if (kind === "rejected" || kind === "thrown") {
+        await expect(execution).rejects.toThrow(failure);
+        expect(activities[0]?.details.result).toEqual({
+          content: [{ type: "text", text: failure }],
+          details: { status: "error", error: failure },
+        });
+        expect(JSON.stringify(activities)).not.toContain("tool output");
+      } else {
+        const returned = await execution;
+        rawResult.details.id = 99;
+        expect(returned).not.toBe(rawResult);
+        expect(returned.details).toMatchObject({ id: 42 });
+        expect(Object.isFrozen(returned)).toBe(true);
+        expect(Object.isFrozen(returned.details)).toBe(true);
+        expect(activities[0]?.details.result).toEqual(returned);
+      }
+      input.path = "changed-after-completion.txt";
+      expect(activities).toHaveLength(1);
+      expect(activities[0]?.details.input).toEqual({ path: "original.txt" });
+      expect(activities[0]?.details).toMatchObject({
+        parentToolCallId: "outer-exec",
+        toolCallId: "nested-lookup",
+        toolName,
+        isError: kind !== "accepted",
+      });
+      const ordinaryMessage = { role: "assistant", content: "Final answer" };
+      const hookMessages = projectNestedToolActivityForHooks([ordinaryMessage], activities);
+      expect(hookMessages).toEqual([
+        ordinaryMessage,
+        expect.objectContaining({
+          role: "custom",
+          display: true,
+          excludeFromContext: true,
+          content: expect.any(String),
+          details: activities[0]?.details,
+        }),
+      ]);
+      expect(hookMessages[0]).toBe(ordinaryMessage);
+      const activity = activities[0]!;
+      const nextInvocation = {
+        ...activity,
+        details: { ...activity.details, scopeId: "next-scope" },
+      };
+      const nextHookMessage = projectNestedToolActivityForHooks([], [nextInvocation])[0];
+      expect((nextHookMessage as { content: string }).content).not.toBe(
+        (hookMessages[1] as { content: string }).content,
+      );
+      expect(mocks.notifyToolActivity).toHaveBeenCalledWith("run-output-schema");
+    },
+  );
 
   it("distinguishes an accepted abort from normal steering closure and sessions_yield", () => {
     const runAbortController = new AbortController();

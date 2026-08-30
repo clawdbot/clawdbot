@@ -1,4 +1,4 @@
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   SessionCatalogHost,
@@ -80,6 +80,7 @@ function toGenericClaudeHost(
       return {
         threadId: session.threadId,
         ...(session.name ? { name: session.name } : {}),
+        ...(session.color ? { color: session.color } : {}),
         ...(session.cwd ? { cwd: session.cwd } : {}),
         status: session.status,
         ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
@@ -155,7 +156,7 @@ export function createClaudeSessionCatalogRuntime(
     },
     continueSession: async (request) => {
       assertClaudeLocalAccess(request.hostId, request.allowProcessHomeFallback);
-      const agentId = resolveSessionAgentIds({
+      const agentId = resolveSessionAgentIdsStrict({
         config: api.config,
         agentId: request.agentId,
       }).sessionAgentId;

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
 
@@ -21,6 +21,10 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
       return;
     }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   function nextCaseRoot(name: string): string {
@@ -66,12 +70,18 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(page).toContain("sourceType: memory-unsafe-local");
     expect(page).toContain("provenanceMode: unsafe-local");
 
+    const readFile = vi.spyOn(fs, "readFile");
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 
     expect(second.importedCount).toBe(0);
     expect(second.updatedCount).toBe(0);
     expect(second.skippedCount).toBe(3);
     expect(second.removedCount).toBe(0);
+    expect(
+      readFile.mock.calls.some(
+        ([filePath]) => typeof filePath === "string" && filePath.startsWith(vaultDir),
+      ),
+    ).toBe(false);
   });
 
   it.each([

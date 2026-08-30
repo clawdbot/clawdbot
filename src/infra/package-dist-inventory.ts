@@ -278,18 +278,12 @@ function isPackagedDistPath(relativePath: string, rules: PackageDistInventoryRul
   return true;
 }
 
-function isPackageFilesExcludedDistSubtree(
-  relativePath: string,
-  exclusions: PackageDistExclusionRules,
-): boolean {
-  // Directory exclusions end in "/"; match the root before inspecting excluded symlinks below it.
-  return isPackageFilesExcludedDistPath(`${relativePath}/`, exclusions);
-}
-
 function isOmittedDistSubtree(relativePath: string, rules: PackageDistInventoryRules): boolean {
   return (
     isExternalizedBundledExtensionDistPath(relativePath, rules.externalizedExtensionIds) ||
-    isPackageFilesExcludedDistSubtree(relativePath, rules.exclusions) ||
+    // npm directory exclusions can select the root itself or its trailing-slash subtree.
+    isPackageFilesExcludedDistPath(relativePath, rules.exclusions) ||
+    isPackageFilesExcludedDistPath(`${relativePath}/`, rules.exclusions) ||
     isLegacyPluginDependencyDirPath(relativePath) ||
     isOmittedPluginSdkTestPath(relativePath) ||
     OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
@@ -344,9 +338,15 @@ async function collectRelativeFiles(
 /** Collects package dist files that should be present after install/update publication. */
 export async function collectPackageDistInventory(
   packageRoot: string,
-  options: { onDirectory?: (directoryPath: string) => Promise<void> } = {},
+  options: {
+    onDirectory?: (directoryPath: string) => Promise<void>;
+    packageManifest?: unknown;
+  } = {},
 ): Promise<string[]> {
-  const rules = await collectPackageDistInventoryRulesForRoot(packageRoot);
+  const rules =
+    options.packageManifest === undefined
+      ? await collectPackageDistInventoryRulesForRoot(packageRoot)
+      : collectPackageDistInventoryRules(options.packageManifest);
   const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
   return await collectRelativeFiles(
     path.join(packageRoot, "dist"),

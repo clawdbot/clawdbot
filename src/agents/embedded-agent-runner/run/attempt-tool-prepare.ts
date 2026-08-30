@@ -8,9 +8,11 @@ import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
+import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
@@ -27,12 +29,11 @@ import {
   resolveSessionPermissionExecMode,
   type PreparedSessionPermissionPolicy,
 } from "../../tool-fs-policy.js";
-import { toolPolicyRestrictsTools } from "../../tool-policy.js";
+import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../../tool-policy.js";
 import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import {
   createToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
-  type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import { resolveAgentToolSurfacePlan } from "../../tool-surface-plan.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
@@ -45,12 +46,10 @@ import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
-  mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "./attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 import { TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES } from "./attempt-tool-search-run-plan.js";
-import { isCodeModeReconciliationTool } from "./code-mode-reconciliation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
@@ -76,18 +75,18 @@ export function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
-  const forceDirectMessageTool =
-    attempt.forceCodeModeReconciliationTools === true
-      ? false
-      : messageToolOwnsVisibleReply(attempt);
-  const toolsAllowWithForcedRuntimeTools =
-    attempt.forceCodeModeReconciliationTools === true
-      ? ["read"]
-      : mergeForcedEmbeddedAttemptToolsAllow(attempt.toolsAllow, {
-          forceMessageTool: forceDirectMessageTool,
-          forceToolNames:
-            attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : undefined,
-        });
+  const inspectingCodeModeRecovery = attempt.codeModeRecovery?.kind === "inspect";
+  const forceDirectMessageTool = inspectingCodeModeRecovery
+    ? false
+    : messageToolOwnsVisibleReply(attempt);
+  const toolRunContext = buildEmbeddedAttemptToolRunContext({
+    ...attempt,
+    forceMessageTool: forceDirectMessageTool,
+    trace: params.runTrace,
+  });
+  const toolsAllowWithForcedRuntimeTools = inspectingCodeModeRecovery
+    ? ["read"]
+    : toolRunContext.runtimeToolAllowlist;
   const toolsEnabled = supportsModelTools(attempt.model);
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
   const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
@@ -107,12 +106,15 @@ export function prepareEmbeddedAttemptToolBase(params: {
     sessionKey: params.sandboxSessionKey,
     forceDirectMessageTool,
     model: attempt.model,
+    modelProvider: attempt.provider,
+    modelId: attempt.modelId,
+    codeModeOverride: attempt.codeModeOverride,
     toolsEnabled,
     disableTools: attempt.disableTools,
     isRawModelRun,
     toolsAllow: attempt.toolsAllow,
     forceCodeModeControls: attempt.forceCodeModeTools,
-    forceDirectTools: attempt.forceCodeModeReconciliationTools,
+    forceDirectTools: inspectingCodeModeRecovery,
   });
   if (isCodeModeDiagnosticEnabled()) {
     logCodeModeDiagnostic(log, "activation", {
@@ -146,7 +148,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
       ? createToolSearchCatalogRef()
       : undefined;
-  const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
+  const nestedToolActivities: NestedToolActivity[] = [];
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
     ? []
     : params.codeModeSkills;
@@ -246,7 +248,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     : (() => {
         const allTools = createOpenClawCodingTools({
           agentId: params.sessionAgentId,
-          ...buildEmbeddedAttemptToolRunContext({ ...attempt, trace: params.runTrace }),
+          ...toolRunContext,
           messageChannel: attempt.messageChannel,
           clientCaps: attempt.clientCaps,
           toolBindings: attempt.toolBindings,
@@ -260,6 +262,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
             elevated: attempt.bashElevated,
           },
           sandbox: params.sandbox,
+          stagedMediaPaths: resolveStagedInputMediaPaths(attempt.media),
           sessionPermissionPolicy: params.sessionPermissionPolicy,
           messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),
           agentAccountId: attempt.agentAccountId,
@@ -349,8 +352,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
           taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
           inboundEventKind: attempt.currentInboundEventKind,
           disableMessageTool: attempt.disableMessageTool,
-          swarmCollector: attempt.swarmCollector,
-          swarmOutputSchema: attempt.swarmOutputSchema,
           forceMessageTool: attempt.forceMessageTool,
           enableHeartbeatTool: attempt.enableHeartbeatTool,
           forceHeartbeatTool: attempt.forceHeartbeatTool,
@@ -381,12 +382,11 @@ export function prepareEmbeddedAttemptToolBase(params: {
         params.markCoreToolStage("attempt:tools-allow");
         return filteredTools;
       })();
-  const toolsRaw =
-    attempt.forceCodeModeReconciliationTools === true
-      ? constructedToolsRaw.filter(isCodeModeReconciliationTool)
-      : attempt.forceRestartSafeTools
-        ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
-        : constructedToolsRaw;
+  const toolsRaw = inspectingCodeModeRecovery
+    ? constructedToolsRaw.filter((tool) => normalizeToolPolicyName(tool.name) === "read")
+    : attempt.forceRestartSafeTools
+      ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
+      : constructedToolsRaw;
   if (attempt.forceRestartSafeTools) {
     log.info(
       `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
@@ -412,7 +412,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolSearchConfig,
     toolSearchControlsEnabledForRun,
     toolSearchRuntimeConfig,
-    toolSearchTargetTranscriptProjections,
+    nestedToolActivities,
     toolsEnabled,
     toolsRaw,
   };

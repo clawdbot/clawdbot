@@ -1,5 +1,6 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsListResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -11,9 +12,23 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import {
+  readDeliveredQueuedChatSendForRun,
+  readQueuedMessageById,
+  removeDeliveredQueuedChatSendForRun,
+  sameQueuedDeliveryVersion,
+  updateQueuedMessageForSession,
+} from "./chat-queue.ts";
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import { storedChatOutboxScopeKey, type StoredChatOutboxScope } from "./composer-persistence.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import {
+  captureOutboxPayloadOwner,
+  failOutboxPayload,
+  prepareOutboxPayload,
+} from "./outbox-payloads.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
@@ -23,6 +38,21 @@ type ChatSendSupportHost = ChatState & {
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+
+// Hello permits RPCs before account recovery has claimed any retained first turn.
+// This holds ordinary admission, not offline queuing or stop/approval controls.
+export function chatSendHoldReason(
+  host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
+  sessionKey: string,
+  initialTurnPending = false,
+): string | null {
+  if (host.connected && host.client && !host.client.recoveryScopeReady) {
+    return t("chat.queue.connectionPending");
+  }
+  return initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
+    ? t("chat.queue.initialTurnPending")
+    : null;
+}
 
 export function formatTerminalChatSendAckError(
   ack: TerminalFailureChatSendAck,
@@ -68,24 +98,28 @@ function findQueuedSendMessageIndex(
 
 function durableDeliveredAttachments(
   attachments: readonly ChatAttachment[] | undefined,
-): ChatAttachment[] | undefined {
-  return attachments?.flatMap((attachment) => {
-    // Composer uploads keep their bytes in the payload store; queue rows carry
-    // metadata only. Resolve through the store before queue ownership ends.
+): ChatAttachment[] | null {
+  const pinned: ChatAttachment[] = [];
+  for (const attachment of attachments ?? []) {
     const dataUrl = getChatAttachmentDataUrl(attachment);
-    return dataUrl ? [{ ...attachment, dataUrl, previewUrl: dataUrl }] : [];
-  });
+    if (!dataUrl) {
+      return null;
+    }
+    pinned.push({ ...attachment, dataUrl, previewUrl: dataUrl });
+  }
+  return pinned;
 }
 
-export function preserveQueuedUserTurn(state: ChatSendSupportHost, item: ChatQueueItem): void {
+function preserveQueuedUserTurn(state: ChatSendSupportHost, item: ChatQueueItem): void {
   const runId = item.sendRunId;
   const sessionKey = item.sessionKey ?? state.sessionKey;
-  if (!runId) {
+  const attachments = durableDeliveredAttachments(item.attachments);
+  if (!runId || !attachments) {
     return;
   }
   const userMessage = buildLocalUserMessage({
     text: item.text,
-    attachments: durableDeliveredAttachments(item.attachments),
+    attachments,
     createdAt: item.createdAt,
     runId,
     ...(item.replyToId ? { replyToId: item.replyToId } : {}),
@@ -116,6 +150,120 @@ export function preserveQueuedUserTurn(state: ChatSendSupportHost, item: ChatQue
   if (!chatMessagesContainQueuedSend(cached, item, true)) {
     appendChatMessageToCache(state.chatMessagesBySession, state, target, userMessage);
   }
+}
+
+const MAX_REMEMBERED_DELIVERED_QUEUE_TURNS = 64;
+const deliveredQueueTurnsByClient = new WeakMap<object, Map<string, ChatQueueItem>>();
+type DeliveredTurnRetirement = "retired" | "retained" | "stale";
+
+/** Transfer every byte to the transcript/cache before retiring its durable owner. */
+export function retireDeliveredQueuedUserTurn(
+  host: ChatHost,
+  runId: string | undefined,
+  scope: StoredChatOutboxScope,
+): DeliveredTurnRetirement | Promise<DeliveredTurnRetirement> {
+  const client = host.client;
+  const owner = client ?? host;
+  const turns = deliveredQueueTurnsByClient.get(owner) ?? new Map<string, ChatQueueItem>();
+  deliveredQueueTurnsByClient.set(owner, turns);
+  const deliveryKey = JSON.stringify([
+    host.settings.gatewayUrl,
+    client?.recoveryScope,
+    storedChatOutboxScopeKey(scope),
+    runId,
+  ]);
+  const stored = readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
+  if (!stored) {
+    const remembered = turns.get(deliveryKey);
+    if (remembered) {
+      preserveQueuedUserTurn(host, remembered);
+    }
+    return "retired";
+  }
+  const connectionEpoch = host.connectionEpoch;
+  const connected = host.connected;
+  const payloadOwnerIsCurrent = captureOutboxPayloadOwner(host);
+  const isCurrent = () =>
+    host.connected === connected &&
+    host.connectionEpoch === connectionEpoch &&
+    payloadOwnerIsCurrent();
+  const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
+  const commit = (item: ChatQueueItem): DeliveredTurnRetirement => {
+    if (!isCurrent()) {
+      return "stale";
+    }
+    const current = currentItem();
+    if (!current) {
+      const remembered = turns.get(deliveryKey);
+      if (!remembered) {
+        return "stale";
+      }
+      preserveQueuedUserTurn(host, remembered);
+      return "retired";
+    }
+    if (!sameQueuedDeliveryVersion(current, stored)) {
+      return "stale";
+    }
+    preserveQueuedUserTurn(host, item);
+    // Every pane receives the terminal. Retain the complete, independent handoff
+    // before the first pane removes the queue and releases its Blob/preview URLs.
+    turns.delete(deliveryKey);
+    turns.set(deliveryKey, item);
+    if (turns.size > MAX_REMEMBERED_DELIVERED_QUEUE_TURNS) {
+      turns.delete(turns.keys().next().value!);
+    }
+    const beforeRemoval = currentItem();
+    if (!isCurrent() || !beforeRemoval || !sameQueuedDeliveryVersion(beforeRemoval, stored)) {
+      return "stale";
+    }
+    return removeDeliveredQueuedChatSendForRun(host, runId, scope) ? "retired" : "retained";
+  };
+  const live = readQueuedMessageById(host, stored.id);
+  const source =
+    live &&
+    live.attachmentPayload?.key === stored.attachmentPayload?.key &&
+    live.attachments?.length === stored.attachments?.length
+      ? live
+      : stored;
+  const attachments =
+    durableDeliveredAttachments(source.attachments) ??
+    durableDeliveredAttachments(stored.attachments);
+  if (
+    attachments &&
+    ((!stored.attachmentPayload && !stored.attachmentStorageError) || attachments.length > 0)
+  ) {
+    return commit({ ...stored, attachments, attachmentStorageError: undefined });
+  }
+  return prepareOutboxPayload(host, stored, "handoff").then((result): DeliveredTurnRetirement => {
+    if (!isCurrent()) {
+      return "stale";
+    }
+    if (result.status === "ready") {
+      const hydratedAttachments = durableDeliveredAttachments(result.item.attachments);
+      if (hydratedAttachments) {
+        return commit({
+          ...stored,
+          attachments: hydratedAttachments,
+          attachmentStorageError: undefined,
+        });
+      }
+    }
+    const current = currentItem();
+    if (!current || !sameQueuedDeliveryVersion(current, stored)) {
+      return "stale";
+    }
+    const reason = result.status === "failed" ? result.reason : "missing";
+    // Delivery proof must never become a fresh-send retry because local bytes
+    // were unavailable. Keep the same run identity and its no-replay barrier.
+    updateQueuedMessageForSession(
+      host,
+      scope.sessionKey,
+      stored.id,
+      (item) => failOutboxPayload({ ...item, sendState: "unconfirmed" }, reason),
+      scope.agentId,
+    );
+    return "retained";
+  });
 }
 
 type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {

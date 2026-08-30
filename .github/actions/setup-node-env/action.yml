@@ -209,6 +209,7 @@ runs:
           node_modules
           ui/node_modules
           packages/*/node_modules
+          extensions/*/node_modules
           examples/*/node_modules
           .cache/openclaw-pnpm-store
         key: ${{ steps.dependency-cache-key.outputs.key }}
@@ -367,7 +368,7 @@ runs:
 
         install_args=(
           install
-          --ignore-scripts=false
+          --config.ignore-scripts=false
           --config.engine-strict=false
           --config.enable-pre-post-scripts=true
           --config.side-effects-cache=true
@@ -376,22 +377,24 @@ runs:
           # Both trees live below the workspace. Prefer real hard links so the
           # single cache archive can preserve store/package identity; pnpm
           # safely falls back to copies for files it cannot hard-link.
-          install_args+=(--package-import-method=hardlink)
+          export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=hardlink
         fi
         if [ -n "$LOCKFILE_FLAG" ]; then
           install_args+=("$LOCKFILE_FLAG")
         fi
+        # Native pnpm reads these env settings; config flags also support older checkouts.
         append_pnpm_option_arg() {
           local env_name="$1"
           local option_name="$2"
           local value="${!env_name-}"
           if [ -n "$value" ]; then
-            install_args+=("--${option_name}=${value}")
+            install_args+=("--config.${option_name}=${value}")
           fi
         }
         append_pnpm_option_arg PNPM_CONFIG_CHILD_CONCURRENCY child-concurrency
         append_pnpm_option_arg PNPM_CONFIG_MODULES_DIR modules-dir
         append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
+        append_pnpm_option_arg PNPM_CONFIG_PACKAGE_IMPORT_METHOD package-import-method
         append_pnpm_option_arg PNPM_CONFIG_STORE_DIR store-dir
         append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
         run_pnpm_install() {
@@ -447,9 +450,9 @@ runs:
           # reconciliation validates them without reaching the registry. Later
           # build wrappers can use installed Node entrypoints directly.
           echo "OPENCLAW_BUILD_ALL_NO_PNPM=1" >> "$GITHUB_ENV"
-          # Postinstall intentionally prunes plugin-local node_modules. Pnpm's
-          # redundant pre-run check treats that as stale and can launch unsafe
-          # concurrent implicit installs after CI fans out.
+          # Install and frozen reconciliation own dependency writes. Keep later
+          # shard commands read-only so they cannot launch concurrent implicit
+          # installs after CI fans out.
           # zizmor: ignore[github-env] static pnpm policy owned by this action.
           echo "pnpm_config_verify_deps_before_run=false" >> "$GITHUB_ENV"
         fi

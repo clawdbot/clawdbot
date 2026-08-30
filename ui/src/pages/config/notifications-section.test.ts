@@ -1,8 +1,22 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderNotificationsSection } from "./notifications-section.ts";
+
+const userPreferences = {
+  categories: {
+    approvalRequested: true,
+    agentFinished: false,
+    agentQuestion: false,
+    scheduledTaskFailed: false,
+    backgroundTaskFailed: false,
+  },
+  detailLevel: "private" as const,
+  quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+  agentIds: [],
+};
 
 describe("native notification test outcome", () => {
   it("renders pending immediately and disables duplicate sends", () => {
@@ -56,5 +70,35 @@ describe("native notification test outcome", () => {
 
     expect(container.textContent).toContain("Granted");
     expect(container.textContent).toContain("Test notification queued");
+  });
+});
+
+describe("Web Push preference saves", () => {
+  it("disables every preference control while a save is in flight", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderNotificationsSection({
+        connected: true,
+        webPush: {
+          supported: true,
+          permission: "granted",
+          subscription: "registered",
+          loading: true,
+          preferences: {
+            durableIdentity: true,
+            user: userPreferences,
+            device: { enabled: true, label: "phone" },
+            effective: { ...userPreferences, enabled: true, label: "phone" },
+          },
+        },
+      }),
+      container,
+    );
+
+    const preferences = container.querySelector<HTMLElement>(".settings-page .settings-page");
+    const preferenceGroup = expectDefined(preferences, "notification preferences group");
+    expect(preferenceGroup.querySelector("input, select")).not.toBeNull();
+    expect(preferenceGroup.hasAttribute("inert")).toBe(true);
   });
 });

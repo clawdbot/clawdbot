@@ -63,7 +63,7 @@ export function tryNativeRequireJavaScriptModule(
   modulePath: string,
   options: {
     allowWindows?: boolean;
-    aliasMap?: Record<string, string>;
+    aliasMap?: Record<string, string> | ((specifier: string) => string | undefined);
     fallbackOnMissingDependency?: boolean;
     fallbackOnNativeError?: boolean;
   } = {},
@@ -91,14 +91,11 @@ export function tryNativeRequireJavaScriptModule(
   }
 }
 
-/** Clears a native-loaded module and dependency subtree under the plugin dependency root. */
-export function clearNativeRequireJavaScriptModuleCache(
+/** Clears native and source-transformed modules within the plugin dependency root. */
+export function clearPluginModuleRequireCache(
   modulePath: string,
   options: { dependencyRoot?: string } = {},
 ): void {
-  if (!isJavaScriptModulePath(modulePath)) {
-    return;
-  }
   try {
     const resolved = nodeRequire.resolve(modulePath);
     clearRequireCacheSubtree(
@@ -107,7 +104,7 @@ export function clearNativeRequireJavaScriptModuleCache(
       new Set(),
     );
   } catch {
-    // Best-effort lifecycle cleanup: unresolved paths were not native-loaded.
+    // Best-effort lifecycle cleanup: unresolved paths were not loaded.
   }
 }
 
@@ -141,23 +138,27 @@ function clearRequireCacheSubtree(
 
 function requireWithOptionalAliases(
   modulePath: string,
-  aliasMap: Record<string, string> | undefined,
+  aliasMap: Record<string, string> | ((specifier: string) => string | undefined) | undefined,
 ): unknown {
-  return withNativeRequireAliases(aliasMap, () => nodeRequire(modulePath));
+  // A process-wide require retains evicted modules through its synthetic parent's children.
+  // Keep that parent scoped to this load so retired graphs can be collected.
+  return withNativeRequireAliases(aliasMap, () => createRequire(import.meta.url)(modulePath));
 }
 
 /** Runs a native require block with temporary CJS/ESM alias hooks and restores both afterward. */
 function withNativeRequireAliases<T>(
-  aliasMap: Record<string, string> | undefined,
+  aliasMap: Record<string, string> | ((specifier: string) => string | undefined) | undefined,
   run: () => T,
 ): T {
-  if (!aliasMap || Object.keys(aliasMap).length === 0 || !moduleWithResolver["_resolveFilename"]) {
+  if (!aliasMap || !moduleWithResolver["_resolveFilename"]) {
     return run();
   }
+  const resolveAlias =
+    typeof aliasMap === "function" ? aliasMap : (specifier: string) => aliasMap[specifier];
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
   const esmHooks = moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {
-      const aliasTarget = aliasMap[specifier];
+      const aliasTarget = resolveAlias(specifier);
       if (aliasTarget) {
         return {
           shortCircuit: true,
@@ -168,7 +169,7 @@ function withNativeRequireAliases<T>(
     },
   });
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
-    const aliasTarget = aliasMap[request];
+    const aliasTarget = resolveAlias(request);
     if (aliasTarget) {
       return aliasTarget;
     }

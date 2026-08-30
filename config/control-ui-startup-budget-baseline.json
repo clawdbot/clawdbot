@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345524,
-  "reason": "typography picker module on the boot path (+301 B) plus unpinned boot growth from #131335 tooltips and #131336 new-session tab controls (~1.2 KiB) that predates this branch; measured on main 515c3d8ff3f",
-  "updatedAt": "2026-08-28"
+  "startupJsGzipBytes": 346185,
+  "reason": "Per-session colors in the boot path (#132570): sidebar stripe render, color tokens, and menu wiring measured 346185 B, +579 B over the prior baseline and 3 B past its growth allowance; below the maintainer-approved 347323 B ceiling; hard cap and allowances unchanged",
+  "updatedAt": "2026-08-29"
 }

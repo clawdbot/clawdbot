@@ -1,6 +1,5 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
@@ -40,7 +39,7 @@ import {
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
-import { chatHandlers } from "./chat.js";
+import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
@@ -93,7 +92,7 @@ describe("gateway agent handler", () => {
       },
       {
         client: {
-          connect: { scopes: ["operator.admin"] },
+          ...operatorWriteCliClient(["operator.admin"]),
           internal: { isLocalClient: true },
         } as AgentHandlerArgs["client"],
       },
@@ -325,10 +324,7 @@ describe("gateway agent handler", () => {
     expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("sessionKey");
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey: "agent:ops:main", runId },
       respond: abortRespond as never,
       context,
@@ -825,10 +821,7 @@ describe("gateway agent handler", () => {
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
 
     const abortRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: { sessionKey, runId },
       respond: abortRespond as never,
       context,
@@ -1194,8 +1187,19 @@ describe("gateway agent handler", () => {
     expect(store["agent:main:main"]).toBeUndefined();
   });
 
-  it("does not re-persist an admitted gateway user turn after the session key is rebound", async () => {
+  it("does not re-persist a committed gateway user turn after the session key is rebound", async () => {
     primeMainAgentRun({ sessionId: "accepted-session-id" });
+    mocks.agentCommand.mockImplementationOnce(
+      async (opts: {
+        userTurnTranscriptRecorder?: { persistApproved: () => Promise<unknown> };
+      }) => {
+        await requireValue(
+          opts.userTurnTranscriptRecorder,
+          "user turn recorder missing",
+        ).persistApproved();
+        return { payloads: [{ text: "ok" }], meta: { durationMs: 100 } };
+      },
+    );
 
     await runMainAgent("stale after reset", "idem-user-turn-rebound");
 
@@ -1278,7 +1282,7 @@ describe("gateway agent handler", () => {
       const call = await waitForAgentCommandCall<
         AgentCommandCall & {
           userTurnTranscriptRecorder?: {
-            getPersistedMessage: () => { __openclaw?: Record<string, unknown> } | undefined;
+            message?: { __openclaw?: Record<string, unknown> };
             hasPersisted: () => boolean;
           };
         }
@@ -1289,8 +1293,9 @@ describe("gateway agent handler", () => {
           mimeType: "image/png",
         }),
       ]);
-      expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
-      expect(call.userTurnTranscriptRecorder?.getPersistedMessage()?.["__openclaw"]).toMatchObject({
+      expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
+      expect(mocks.persistSessionTranscriptTurn).not.toHaveBeenCalled();
+      expect(call.userTurnTranscriptRecorder?.message?.["__openclaw"]).toMatchObject({
         media: [expect.objectContaining({ contentType: "image/png", kind: "image" })],
         mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
       });
@@ -1346,7 +1351,7 @@ describe("gateway agent handler", () => {
       const call = await waitForAgentCommandCall<
         AgentCommandCall & {
           userTurnTranscriptRecorder?: {
-            getPersistedMessage: () => { __openclaw?: Record<string, unknown> } | undefined;
+            message?: { __openclaw?: Record<string, unknown> };
             hasPersisted: () => boolean;
           };
         }
@@ -1354,8 +1359,9 @@ describe("gateway agent handler", () => {
       expect(call.images).toEqual([]);
       expect(call.imageOrder).toEqual(["offloaded"]);
       expect(call.message).toContain("[media attached: media://inbound/");
-      expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
-      expect(call.userTurnTranscriptRecorder?.getPersistedMessage()?.["__openclaw"]).toMatchObject({
+      expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
+      expect(mocks.persistSessionTranscriptTurn).not.toHaveBeenCalled();
+      expect(call.userTurnTranscriptRecorder?.message?.["__openclaw"]).toMatchObject({
         media: [expect.objectContaining({ contentType: "image/png", kind: "image" })],
         mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
       });

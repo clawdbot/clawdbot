@@ -1,8 +1,5 @@
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import type {
-  DurableComposerDraftAttachment,
-  DurableComposerDraftScope,
-} from "../../lib/chat/composer-draft-store.runtime.ts";
+import type { ChatAttachment, DurableComposerDraftAttachment } from "../../lib/chat/chat-types.ts";
+import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";

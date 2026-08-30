@@ -1,6 +1,7 @@
 // System prompt report tests cover prompt accounting, bootstrap injection
 // matching, and hash output used to compare prompt/tool parity.
 import { describe, expect, it } from "vitest";
+import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -28,8 +29,10 @@ describe("buildSystemPromptReport", () => {
       bootstrapMaxChars: params.bootstrapMaxChars ?? 20_000,
       bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
       systemPrompt: "system",
-      bootstrapFiles: [params.file],
-      injectedFiles: [{ path: params.injectedPath, content: params.injectedContent }],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [params.file],
+        injectedFiles: [{ path: params.injectedPath, content: params.injectedContent }],
+      }),
       skillsPrompt: "",
       tools: [],
     });
@@ -114,11 +117,13 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [
-        { path: 123 as unknown as string, content: "bad" },
-        { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
-      ],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [
+          { path: 123 as unknown as string, content: "bad" },
+          { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
+        ],
+      }),
       skillsPrompt: "",
       tools: [],
     });
@@ -136,8 +141,10 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "custom override",
-      bootstrapFiles: [file],
-      injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "rendered context" }],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "rendered context" }],
+      }),
       skillsPrompt: "",
       tools: [],
     });
@@ -156,8 +163,10 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [],
+      }),
       skillsPrompt: "<skill><name>docs</name></skill>",
       tools: [
         {
@@ -175,8 +184,10 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "systen",
-      bootstrapFiles: [file],
-      injectedFiles: [],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [],
+      }),
       skillsPrompt: "<skill><name>docs</name></skill>",
       tools: [],
     });
@@ -201,8 +212,10 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [],
+      }),
       skillsPrompt: "",
       tools: [
         {

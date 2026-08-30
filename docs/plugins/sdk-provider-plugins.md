@@ -206,6 +206,32 @@ catalog, API-key auth, and dynamic model resolution.
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
+    A custom interactive auth method that mints a static token or API key can
+    request protected persistence on its returned profile:
+
+    ```typescript
+    return {
+      profiles: [
+        {
+          profileId: "acme-ai:device",
+          credential: { type: "token", provider: "acme-ai", token },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "ACME_AI_TOKEN",
+          },
+        },
+      ],
+    };
+    ```
+
+    OpenClaw keeps the inline value only while staged validation runs. At the
+    final persistence boundary it writes the value to the protected local store
+    and saves a `tokenRef` or `keyRef` in the auth profile. `namePrefix` must be
+    an uppercase environment-style name. OpenClaw adds a stable suffix derived
+    from the provider and final profile id so multiple profiles remain separate.
+    Use this only for provider-minted static credentials, not rotating OAuth
+    credentials or values already supplied as SecretRefs.
+
     ### Live model discovery
 
     If your provider exposes an OpenAI-compatible `/models` API, opt the
@@ -1127,6 +1153,21 @@ catalog, API-key auth, and dynamic model resolution.
         `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
         `getCredentialValue`, `setCredentialValue`, and `createTool` are all
         required.
+
+        Search providers using `openclaw/plugin-sdk/provider-web-search` should
+        resolve `resolveSearchCacheTtlMs(searchConfig)` once per execution and
+        pass that value to both `readCachedSearchPayload(cacheKey, ttlMs)` and
+        `writeCachedSearchPayload(cacheKey, payload, ttlMs)`. A zero TTL bypasses
+        reads and writes; a positive TTL bounds entry age without extending its
+        original expiry. Reads return a payload marked `cached: true`, or
+        `undefined` on a miss. The reader's `ttlMs` argument is optional:
+        existing one-argument calls continue to use the stored expiry alone.
+
+        Both tool definitions accept `execute(args, context?)`, where the optional
+        context carries `signal?: AbortSignal`. Forward that signal to network
+        requests and check cancellation after asynchronous work. Existing
+        one-argument implementations remain valid; OpenClaw rejects late fetch
+        results after cancellation before publishing them to its fetch cache.
       </Tab>
     </Tabs>
 

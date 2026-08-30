@@ -435,6 +435,7 @@ export async function pruneImportedSourceEntries(params: {
   group: MemoryWikiImportedSourceGroup;
   activeKeys: Set<string>;
   state: MemoryWikiImportedSourceState;
+  prepareWrite?: () => Promise<unknown>;
 }): Promise<number> {
   let removedCount = 0;
   let vault: Awaited<ReturnType<typeof fsRoot>> | undefined;
@@ -442,6 +443,9 @@ export async function pruneImportedSourceEntries(params: {
     if (entry.group !== params.group || params.activeKeys.has(syncKey)) {
       continue;
     }
+    // Pruning is the first vault mutation when every active source was unchanged.
+    // Activate here so no-change polls keep using the process snapshot.
+    await params.prepareWrite?.();
     try {
       vault ??= await fsRoot(params.vaultRoot);
     } catch (error) {

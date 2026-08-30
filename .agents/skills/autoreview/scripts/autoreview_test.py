@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import copy
 import importlib.util
+import io
 import json
 import os
 import runpy
@@ -110,12 +111,79 @@ class AutoreviewPriorityTests(unittest.TestCase):
             args = AUTOREVIEW.parse_args()
         self.assertEqual(args.max_priority, "P0")
 
-    def test_priority_filter_omits_lower_findings_and_cleans_verdict(self) -> None:
+    def test_priority_filter_preserves_lower_findings_and_provider_verdict(self) -> None:
         report = copy.deepcopy(DRAFT_REPORT)
         AUTOREVIEW.filter_findings_by_priority(report, "P0")
         self.assertEqual(report["findings"], [])
-        self.assertEqual(report["overall_correctness"], "patch is correct")
-        self.assertIn("below the requested P0", report["overall_explanation"])
+        self.assertEqual(report["priority_filtered_findings"], DRAFT_REPORT["findings"])
+        for key in ("overall_correctness", "overall_explanation", "overall_confidence"):
+            self.assertEqual(report[key], DRAFT_REPORT[key])
+
+
+class AutoreviewResultScopeTests(unittest.TestCase):
+    def test_scope_rejection_preserves_provider_conclusion_and_audit(self) -> None:
+        report = copy.deepcopy(DRAFT_REPORT)
+        with contextlib.redirect_stderr(io.StringIO()):
+            AUTOREVIEW.validate_report(report, Path.cwd(), {"changed.js"}, [])
+        self.assertEqual(report["findings"], [])
+        for key in ("overall_correctness", "overall_explanation", "overall_confidence"):
+            self.assertEqual(report[key], DRAFT_REPORT[key])
+        self.assertEqual(report["scope_rejected_findings"], DRAFT_REPORT["findings"])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            AUTOREVIEW.print_report(report)
+        self.assertIn("incomplete", output.getvalue())
+        self.assertIn("Draft finding", output.getvalue())
+        self.assertIn("draft.js:1", output.getvalue())
+        self.assertNotIn("clean:", output.getvalue())
+
+    def test_chunk_merge_keeps_rejections_explanations_and_conservative_confidence(self) -> None:
+        rejected = copy.deepcopy(DRAFT_REPORT)
+        with contextlib.redirect_stderr(io.StringIO()):
+            AUTOREVIEW.validate_report(rejected, Path.cwd(), {"changed.js"}, [])
+        reports = [("chunk 1/2", copy.deepcopy(FINAL_REPORT)), ("chunk 2/2", rejected)]
+        merged = AUTOREVIEW.merge_chunk_reports(reports)
+        self.assertEqual(merged["overall_correctness"], "patch is incorrect")
+        self.assertEqual(merged["overall_confidence"], 0.2)
+        self.assertEqual(len(merged["scope_rejected_findings"]), 1)
+        self.assertEqual(merged["pass_reports"][1]["report"], rejected)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            AUTOREVIEW.print_report(merged)
+        self.assertIn("draft", output.getvalue())
+        self.assertIn("incomplete", output.getvalue())
+        self.assertNotIn("clean:", output.getvalue())
+
+    def test_required_finding_must_survive_priority_filter_for_every_pass_count(self) -> None:
+        args = argparse.Namespace(engine="codex", max_priority="P0", require_finding=["Draft finding"])
+        for count in (1, 2):
+            with self.subTest(count=count), mock.patch.object(
+                AUTOREVIEW, "scan_outgoing_review_pack"
+            ), mock.patch.object(AUTOREVIEW, "run_engine", return_value=json.dumps(DRAFT_REPORT)):
+                reports = AUTOREVIEW.run_review_passes(
+                    args, [args], Path.cwd(), ["pack"] * count, {"draft.js"}, False
+                )
+            report = reports[0][1] if count == 1 else AUTOREVIEW.merge_chunk_reports(reports)
+            self.assertEqual(
+                AUTOREVIEW.missing_required_findings(report, args.require_finding), ["Draft finding"]
+            )
+            self.assertEqual(report["overall_correctness"], "patch is incorrect")
+            self.assertTrue(report["priority_filtered_findings"])
+
+    def test_provider_cannot_supply_local_audit_metadata(self) -> None:
+        for key in ("scope_rejected_findings", "priority_filtered_findings", "pass_reports", "review_status"):
+            report = copy.deepcopy(FINAL_REPORT)
+            report[key] = []
+            with self.subTest(key=key), self.assertRaisesRegex(SystemExit, "unexpected top-level"):
+                AUTOREVIEW.validate_report(report, Path.cwd(), set(), [])
+
+    def test_required_finding_survives_merge_deduplication_and_body_prefix(self) -> None:
+        first = copy.deepcopy(DRAFT_REPORT)
+        second = copy.deepcopy(DRAFT_REPORT)
+        second["findings"][0]["body"] = "x" * 1980 + " required tail"
+        merged = AUTOREVIEW.merge_chunk_reports([("chunk 1/2", first), ("chunk 2/2", second)])
+        self.assertEqual(len(merged["findings"]), 1)
+        self.assertEqual(AUTOREVIEW.missing_required_findings(merged, ["required tail"]), [])
 
 
 def amp_test_stream(
@@ -770,6 +838,7 @@ class AutoreviewTruffleHogTests(unittest.TestCase):
                         "--results=verified,unknown",
                         "--fail",
                         "--fail-on-scan-errors",
+                        "--no-update",
                     ],
                 )
                 self.assertEqual(kwargs["check"], False)

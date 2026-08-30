@@ -1,9 +1,12 @@
+import type { MediaKind } from "@openclaw/media-core/constants";
 /**
  * Chat message types for the UI layer.
  */
-
-import type { MediaKind } from "@openclaw/media-core/constants";
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  ChatSendIntent,
+  QueueMode,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
@@ -26,12 +29,35 @@ export type ChatAttachment = {
   browserAnnotation?: BrowserAnnotationAttachment;
 };
 
+// Shared payload contract: draft and outbox storage must not import each other's runtime.
+export type DurableComposerDraftAttachment = {
+  blob: Blob;
+  mimeType: string;
+  fileName?: string;
+  sizeBytes?: number;
+  browserAnnotation?: BrowserAnnotationAttachment;
+};
+
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
   draftRevision: number;
 };
 
+export type ChatGoalDraftMode = { sessionId?: string } & (
+  | { action: "start" }
+  | { action: "edit"; goalId: string; previousDraft: string }
+);
+
+export type ChatGoalDraft = { sessionId?: string } & (
+  | { action: "start"; objective: string }
+  | { action: "edit"; goalId: string; objective: string }
+);
+
+export type ChatGoalAction = "pause" | "resume" | "clear";
+
 export type ChatComposerMemoryFallback = {
+  awaitingDefaults?: true;
+  goalMode?: ChatGoalDraftMode;
   message: string;
   attachments: ChatAttachment[];
   storageFailed: boolean;
@@ -66,6 +92,9 @@ export type ChatQueueItem = {
   createdAt: number;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
+  /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */
+  attachmentPayload?: { key: string; recoveryScope: string; tabId: string };
+  attachmentStorageError?: "capacity" | "unavailable" | "missing";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
   /** Transcript id of the replied-to message; Gateway hydrates reply context. */
@@ -78,6 +107,11 @@ export type ChatQueueItem = {
   sendRunId?: string;
   /** One-send override retained with the durable row for reconnect and retry. */
   queueMode?: QueueMode;
+  /** Admission intent and its original issue time survive transport retries together. */
+  intent?: ChatSendIntent;
+  /** For structured admissions, preserve the originally selected session incarnation. */
+  sessionId?: string;
+  expectedLeafEntryId?: string | null;
   sendState?:
     | "waiting-model"
     | "waiting-idle"
@@ -238,6 +272,15 @@ export type MessageContentItem =
       };
     }
   | {
+      type: "attachment_error";
+      attachment: {
+        code: "file-not-found" | "unsupported-format" | "delivery-failed";
+        kind: Exclude<MediaKind, "sticker" | "unknown">;
+        label: string;
+        mimeType?: string;
+      };
+    }
+  | {
       type: "canvas";
       preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
       rawText?: string | null;
@@ -284,27 +327,31 @@ export type ToolCard = {
   /** True once a result landed, including historical results with empty output. */
   completed?: boolean;
   messageId?: string;
-  preview?: {
-    kind: "canvas";
-    surface: "assistant_message";
-    render: "url";
-    title?: string;
-    preferredHeight?: number;
-    url?: string;
-    viewId?: string;
-    className?: string;
-    style?: string;
-    sandbox?: "strict" | "scripts";
-    boardWidgetName?: string;
-    mcpApp?: {
-      viewId: string;
-      serverName?: string;
-      toolName?: string;
-      uiResourceUri?: string;
-      toolCallId?: string;
-      originSessionKey?: string;
-    };
-  };
+  /** UI-local preview identity for results without a call or transcript id. */
+  previewRevision?: string;
+  preview?:
+    | {
+        kind: "canvas";
+        surface: "assistant_message";
+        render: "url";
+        title?: string;
+        preferredHeight?: number;
+        url?: string;
+        viewId?: string;
+        className?: string;
+        style?: string;
+        sandbox?: "strict" | "scripts";
+        boardWidgetName?: string;
+        mcpApp?: {
+          viewId: string;
+          serverName?: string;
+          toolName?: string;
+          uiResourceUri?: string;
+          toolCallId?: string;
+          originSessionKey?: string;
+        };
+      }
+    | (BrowserTabTarget & { kind: "browser-tab"; url?: string; title?: string });
 };
 
 export type ToolCardOutcome = "running" | "succeeded" | "failed" | "unknown";

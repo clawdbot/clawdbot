@@ -606,6 +606,7 @@ describe("handleChatGatewayEvent", () => {
 
   it("adopts canonical global deltas for the selected agent main alias", () => {
     const state = createState({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
       sessionKey: "agent:work:main",
       chatRunId: null,
       chatStream: null,
@@ -627,6 +628,7 @@ describe("handleChatGatewayEvent", () => {
 
   it("accepts delta events for the active run when gateway emits a canonical session key", () => {
     const state = createState({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
       sessionKey: "main",
       chatRunId: "run-1",
       chatStream: null,
@@ -737,6 +739,7 @@ describe("handleChatGatewayEvent", () => {
 
   it("adopts the run id when the selected main alias receives canonical live deltas", () => {
     const state = createState({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
       sessionKey: "main",
       chatRunId: null,
       chatStream: null,
@@ -757,6 +760,7 @@ describe("handleChatGatewayEvent", () => {
 
   it("accepts final events for the active run when gateway emits a canonical session key", () => {
     const state = createState({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
       sessionKey: "main",
       chatRunId: "run-1",
       chatStream: "Live reply",
@@ -2028,7 +2032,7 @@ describe("handleChatGatewayEvent", () => {
     for (const [index, [role, text]] of expected.entries()) {
       expectTextChatMessage(state.chatMessages[index], role, text);
     }
-    expect(state.chatRunError).toEqual({ summary: `Error: ${error}` });
+    expect(state.chatRunError).toEqual({ summary: `Error: ${error}`, runId: "run-1" });
     verify?.(state);
   });
   it.each([
@@ -2048,7 +2052,7 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([message]);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "chat error" });
+    expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-1" });
   });
 
   it("preserves a legacy terminal message that completes streamed assistant content", () => {
@@ -2068,7 +2072,7 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toHaveLength(1);
     expectTextChatMessage(state.chatMessages[0], "assistant", "Partial answer. Final detail.");
-    expect(state.chatRunError).toEqual({ summary: "chat error" });
+    expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-1" });
   });
 
   it("preserves a differing terminal message instead of classifying it as an error projection", () => {
@@ -2093,7 +2097,7 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe("error");
     expect(state.chatMessages).toEqual([message]);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error" });
+    expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error", runId: "run-1" });
   });
 
   it("uses server guidance when an error follows a source-reply final", () => {
@@ -2128,7 +2132,7 @@ describe("handleChatGatewayEvent", () => {
     ).toBe("error");
     expect(state.chatMessages).toHaveLength(1);
     expectTextChatMessage(state.chatMessages[0], "assistant", "Source reply delivered.");
-    expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure" });
+    expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure", runId: "run-1" });
   });
 
   it("deduplicates a delivered final and its late provider diagnostic", () => {
@@ -2155,7 +2159,10 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toHaveLength(1);
     expectTextChatMessage(state.chatMessages[0], "assistant", "Source reply delivered.");
     expect(state.chatRunError).toBe(displayedDiagnostic);
-    expect(state.chatRunError).toEqual({ summary: "Error: raw provider failure" });
+    expect(state.chatRunError).toEqual({
+      summary: "Error: raw provider failure",
+      runId: "run-source-reply",
+    });
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
   });
@@ -2360,7 +2367,10 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toEqual([existingMessage]);
     expect(state.chatRunId).toBe(null);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "Error: request failed before start" });
+    expect(state.chatRunError).toEqual({
+      summary: "Error: request failed before start",
+      runId: "run-failed-before-start",
+    });
   });
 
   it("uses the generic alert fallback for a blank orphan error", () => {
@@ -2376,7 +2386,7 @@ describe("handleChatGatewayEvent", () => {
     ).toBe("error");
     expect(state.chatMessages).toEqual([]);
     expect(state.lastError).toBeNull();
-    expect(state.chatRunError).toEqual({ summary: "chat error" });
+    expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-failed-before-start" });
   });
 
   it("drops NO_REPLY final payload from another run", () => {

@@ -630,6 +630,12 @@ export async function handleApprovalResolve<
         }
       : null,
     ...(params.extraResolvedHandlers ?? []),
+    params.context.approvalWebPushDelivery
+      ? {
+          run: params.context.approvalWebPushDelivery.handleResolved,
+          errorLabel: `${params.approvalKind} approvals: Web Push resolve failed`,
+        }
+      : null,
   ].filter(
     (
       entry,

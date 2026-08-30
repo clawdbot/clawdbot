@@ -9,13 +9,15 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
+import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
   fakeTool,
+  mcpTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
@@ -64,17 +66,23 @@ async function runCodeModeAgent(params: {
   programs: Array<string | { wait: true }>;
   hiddenTools: AnyAgentTool[];
   codeModeSkills?: CodeModeSkill[];
+  harness?:
+    | ReturnType<typeof createCodeModeHarness>
+    | ReturnType<typeof createSubscribedCodeModeHarness>;
   configureAgent?: (agent: Agent) => void;
 }) {
-  const { config, catalogRef, tools } = createCodeModeHarness({
-    codeModeSkills: params.codeModeSkills,
-  });
+  const harness =
+    params.harness ?? createCodeModeHarness({ codeModeSkills: params.codeModeSkills });
+  const { config, catalogRef, tools } = harness;
+  const sessionId = "sessionId" in harness ? harness.sessionId : "session-code-mode";
+  const sessionKey = "sessionKey" in harness ? harness.sessionKey : "agent:main:main";
+  const runId = "runId" in harness ? harness.runId : "run-code-mode";
   applyCodeModeCatalog({
     tools: [...tools, ...params.hiddenTools],
     config,
-    sessionId: "session-code-mode",
-    sessionKey: "agent:main:main",
-    runId: "run-code-mode",
+    sessionId,
+    sessionKey,
+    runId,
     catalogRef,
     codeModeSkills: params.codeModeSkills,
   });
@@ -123,7 +131,13 @@ async function runCodeModeAgent(params: {
       reconciliationCandidates += 1;
     },
   });
-  await agent.prompt("finish the task despite tool errors");
+  try {
+    await agent.prompt("finish the task despite tool errors");
+  } finally {
+    if ("dispose" in harness) {
+      harness.dispose();
+    }
+  }
 
   return { agent, providerContexts, reconciliationCandidates };
 }
@@ -439,6 +453,79 @@ describe("Code Mode agent-loop error recovery", () => {
     const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
       hiddenTools: [readOnly, recover],
       programs: ["return await sessions_history({});", "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(readOnly.execute).toHaveBeenCalledOnce();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("uses the terminal owner's input-aware read receipt for ordinary recovery", async () => {
+    const mixedAction = fakeTool("message", "Read or mutate messages");
+    mixedAction.parameters = {
+      type: "object",
+      properties: { action: { type: "string" } },
+      required: ["action"],
+    };
+    mixedAction.execute = vi.fn(async () => {
+      throw new Error("read-only operation failed after dispatch");
+    }) as AnyAgentTool["execute"];
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [mixedAction, recover],
+      harness: createSubscribedCodeModeHarness({ name: "input-aware-read-receipt" }),
+      programs: ['return await message({ action: "read" });', "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(mixedAction.execute).toHaveBeenCalledOnce();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("uses the namespace owner's local read receipt for ordinary recovery", async () => {
+    const listResources = mcpTool({
+      name: "mcp_files_resources_list",
+      serverName: "files",
+      toolName: "resources/list",
+      operation: "resources_list",
+    });
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [listResources, recover],
+      programs: ["json(await MCP.$api()); return missingFn();", "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(listResources.execute).not.toHaveBeenCalled();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("uses an exact plugin instance's replay-safe receipt for ordinary recovery", async () => {
+    const readOnly = pluginToolWithExecute("plugin_read", "Read plugin state", async () => {
+      throw new Error("plugin read failed after dispatch");
+    });
+    setPluginToolMeta(readOnly, {
+      pluginId: "replay-safe-read-test",
+      optional: false,
+      replaySafe: true,
+    });
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [readOnly, recover],
+      harness: createSubscribedCodeModeHarness({ name: "plugin-read-receipt" }),
+      programs: ["return await plugin_read({});", "return await recover_task({});"],
     });
 
     expect(providerContexts).toHaveLength(3);

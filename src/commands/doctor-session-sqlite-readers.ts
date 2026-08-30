@@ -12,7 +12,10 @@ import {
 } from "../agents/sessions/session-manager-codec.js";
 import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,6 +24,8 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 
 type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
+
+export type ExistingAgentDatabaseTarget = SessionStoreTarget & { sqlitePath: string };
 
 export type ReadOnlySqliteValidationSnapshot = {
   sessionIdsBySessionKey: ReadonlyMap<string, string>;
@@ -473,38 +478,51 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
   }
 }
 
-export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
-  if (target.sqlitePath) {
-    return resolveOpenClawAgentSqlitePath({ agentId: target.agentId, path: target.sqlitePath });
-  }
-  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
-    agentId: target.agentId,
-  });
-  return resolveOpenClawAgentSqlitePath({
-    agentId: sqliteTarget.agentId ?? target.agentId,
-    ...(sqliteTarget.path ? { path: sqliteTarget.path } : {}),
-  });
+export function resolveTargetSqliteOptions(target: SessionStoreTarget, env?: NodeJS.ProcessEnv) {
+  return toDatabaseOptions(
+    resolveSqliteReadScope({
+      agentId: target.agentId,
+      env,
+      storePath: target.sqlitePath ?? target.storePath,
+    }),
+  );
+}
+
+export function resolveTargetSqlitePath(
+  target: SessionStoreTarget,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return resolveOpenClawAgentSqlitePath(resolveTargetSqliteOptions(target, env));
 }
 
 /**
- * Enumerates existing per-agent session SQLite databases for a Doctor repair.
- * Deduplicates by resolved path (aliases collapse to one target) and skips
- * databases that do not yet exist on disk. Shared by every session-row repair
- * so target enumeration cannot drift between repair surfaces.
+ * Projects each caller's ordered targets onto existing physical databases.
+ * Keep target selection with the caller: canonical repair selects owners,
+ * while ordinary row repairs enumerate candidates. First physical path wins.
  */
-export function listExistingAgentDatabaseTargets(
-  cfg: OpenClawConfig,
+export function projectExistingAgentDatabaseTargets(
+  targets: readonly SessionStoreTarget[],
   env: NodeJS.ProcessEnv,
-): Array<{ agentId: string; sqlitePath: string; storePath: string }> {
+): ExistingAgentDatabaseTarget[] {
   const seenPaths = new Set<string>();
-  return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
-    const sqlitePath = resolveTargetSqlitePath(target);
+  return targets.flatMap((target) => {
+    const sqlitePath = resolveTargetSqlitePath(target, env);
     if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
       return [];
     }
     seenPaths.add(sqlitePath);
     return [{ agentId: target.agentId, sqlitePath, storePath: target.storePath }];
   });
+}
+
+export function listExistingAgentDatabaseTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): ExistingAgentDatabaseTarget[] {
+  return projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }),
+    env,
+  );
 }
 
 function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: number; text: string }> {

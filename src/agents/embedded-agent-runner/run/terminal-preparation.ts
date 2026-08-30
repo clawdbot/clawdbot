@@ -115,6 +115,7 @@ export function prepareEmbeddedRunTerminal(input: {
         }
       : {}),
     agentHarnessId: attempt.agentHarnessId,
+    credentialSource: attempt.modelAttempt?.credentialSource,
     usage: usageMeta.usage,
     lastCallUsage: usageMeta.lastCallUsage,
     promptTokens: usageMeta.promptTokens,
@@ -216,6 +217,7 @@ export function prepareEmbeddedRunTerminal(input: {
     agentId: runParams.agentId,
     runId: runParams.runId,
     runAborted: isEmbeddedRunTerminalInterrupted(input.terminalState.outcome),
+    runStopReason: input.terminalState.outcome.stopReason,
     deferAssistantTimeoutError:
       timedOutDuringPrompt &&
       (!hasMessagingToolDeliveryEvidence(attempt) ||

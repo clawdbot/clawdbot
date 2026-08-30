@@ -119,6 +119,21 @@ own `?session=` parameter because that parameter expands a row; it is not a
 session deep link. The one-shot composer value `?draft=` remains supported on
 chat and dashboard session paths.
 
+### Native catalog links
+
+Native catalog threads use the agent path with a source query:
+
+```text
+/chat/<agentId>?catalog=<catalogId>&host=<hostId>&thread=<threadId>
+```
+
+URL-encode each query value. The agent in the path owns the OpenClaw pane,
+including catalog reads and continuation; `catalog`, `host`, and `thread`
+identify the native source. Opening the same source under different agents
+keeps their panes and drafts separate, including in split view. Continuing a
+thread navigates to the adopted OpenClaw session link. The same catalog query
+also works under `/dashboard/<agentId>`.
+
 ## Focus presentation routes
 
 A focus route renders one supported content surface without the normal Control
@@ -263,7 +278,11 @@ These Gateway-served documents sit outside the application route table:
 - `/?onboarding=1` opens the first-run onboarding presentation.
 - `/approve/<approvalId>` opens a standalone approval document. With a base
   path, use `<basePath>/approve/<approvalId>`. The id identifies an approval but
-  never authorizes it; normal Gateway authentication still applies.
+  never authorizes it; normal Gateway authentication still applies. An approval
+  notification uses a scope-relative approval path and may add
+  `#gatewayUrl=<encoded-ws-url>` when the owning Gateway has
+  `gateway.publicOrigin`. The Control UI strips that fragment before
+  authentication and applies the normal remote-Gateway handoff below.
 
 Registered exact and prefix plugin HTTP routes can own `/focus` and
 `/focus/*`. After plugin authentication and dispatch decline a request, the

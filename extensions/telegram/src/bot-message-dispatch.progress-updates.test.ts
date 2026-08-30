@@ -365,6 +365,70 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
+  it("keeps a dynamic tool lifecycle and formatted summary in one row", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolResult?.({
+        text: "🧭 Agents",
+        channelData: { openclawToolProgressId: "dynamic-1" },
+      });
+      await replyOptions?.onToolStart?.({
+        name: "agents_list",
+        phase: "start",
+        itemId: "dynamic-1",
+        toolCallId: "dynamic-1",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working" } } },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview("Working\n\n🧭 Agents", "<b>Working</b>\n<b>🧭 Agents</b>"),
+    );
+  });
+
+  it("keeps raw structured detail when its formatted summary arrives", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        itemId: "command-1",
+        toolCallId: "command-1",
+        args: { command: "echo private" },
+        detailMode: "raw",
+      });
+      await replyOptions?.onToolResult?.({
+        text: "🛠️ Bash",
+        channelData: { openclawToolProgressId: "command-1" },
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { commandText: "raw", label: "Working" } },
+      },
+    });
+
+    const previewText = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text;
+    expect(previewText).toContain("echo private");
+    expect(previewText?.match(/🛠️/gu)).toHaveLength(1);
+  });
+
   it("reopens progress drafts for queued followups after the source dispatch settles", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

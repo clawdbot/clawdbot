@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
@@ -223,6 +223,51 @@ function dropStartupConfigPaths(
 }
 
 describe("loadPluginRegistrySnapshotWithMetadata", () => {
+  it.each(["persisted", "current"])(
+    "reselects checkout plugins for a fresh config request after a %s global selection",
+    (cache) => {
+      const root = fs.realpathSync(makeTempDir());
+      const packageRoot = path.join(root, "openclaw");
+      const bundledRoot = path.join(packageRoot, "dist", "extensions");
+      const bundledPlugin = path.join(bundledRoot, "demo");
+      const globalPlugin = path.join(root, "state", "extensions", "demo");
+      const env: NodeJS.ProcessEnv = {
+        ...createHermeticEnv(root),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      };
+      fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+      fs.mkdirSync(path.join(packageRoot, "extensions"));
+      fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+      fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n");
+      writeBundledPlugin(bundledPlugin, "demo", "index.js");
+      writeBundledPlugin(globalPlugin, "demo", "index.js");
+      const config = { plugins: { entries: { demo: { enabled: true } } } };
+      const index = loadInstalledPluginIndex({
+        config,
+        env,
+        installRecords: {
+          demo: { source: "path", sourcePath: globalPlugin, installPath: globalPlugin },
+        },
+      });
+      expect(requirePluginRecord(index.plugins, "demo").origin).toBe("global");
+      writePersistedInstalledPluginIndexSync(index, { stateDir: env.OPENCLAW_STATE_DIR });
+      if (cache === "current") {
+        setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config, env }), {
+          config,
+          env,
+        });
+      }
+      const result = loadPluginRegistrySnapshotWithMetadata({
+        config: structuredClone(config),
+        env: { ...env, OPENCLAW_DEV_SOURCE_ROOT: packageRoot },
+      });
+      expect(requirePluginRecord(result.snapshot.plugins, "demo")).toMatchObject({
+        origin: "bundled",
+        rootDir: bundledPlugin,
+      });
+    },
+  );
+
   it("reuses a compatible current metadata snapshot", () => {
     const env = createHermeticEnv(makeTempDir());
     const config = {};
@@ -244,6 +289,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       configFingerprint: "",
       workspaceDir,
       index,
+      registryIndex: index,
       registryDiagnostics: [],
       manifestRegistry: { plugins: [], diagnostics: [] },
       plugins: [],
@@ -332,6 +378,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
         configFingerprint: "",
         workspaceDir,
         index,
+        registryIndex: index,
         registrySource: "derived",
         registryDiagnostics: [
           {
@@ -415,6 +462,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
         configFingerprint: "",
         workspaceDir,
         index: currentIndex,
+        registryIndex: currentIndex,
         registryDiagnostics: [],
         manifestRegistry: { plugins: [], diagnostics: [] },
         plugins: [],

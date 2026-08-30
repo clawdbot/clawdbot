@@ -24,10 +24,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
+  normalizeCronToolsAllowExecTarget,
+  resolveCronToolsAllowExecTargetRecoveryError,
+  restoreCronPinnedExecGrant,
 } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
@@ -249,12 +251,24 @@ export async function persistAgentSessionPhase(params: {
                   "cron run continuation has no reusable native CLI session";
                 throw new Error(restoredCronContinuationError);
               }
+              restoredCronContinuationError = resolveCronToolsAllowExecTargetRecoveryError({
+                requirement: marker.toolsAllowExecTargetRequirement,
+                execTarget: marker.toolsAllowExecTarget,
+              });
+              if (restoredCronContinuationError) {
+                throw new Error(restoredCronContinuationError);
+              }
+              const restoredToolsAllow = restoreCronPinnedExecGrant({
+                toolsAllow: marker.toolsAllow,
+                requirement: marker.toolsAllowExecTargetRequirement,
+                execTarget: marker.toolsAllowExecTarget,
+              });
               restoredCronContinuation = {
                 ...params.restoredCronContinuationIdentity,
                 provider,
                 model,
                 ...(freshEntry.thinkingLevel ? { thinking: freshEntry.thinkingLevel } : {}),
-                ...(marker.toolsAllow !== undefined ? { toolsAllow: [...marker.toolsAllow] } : {}),
+                ...(restoredToolsAllow !== undefined ? { toolsAllow: restoredToolsAllow } : {}),
                 ...(marker.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
                 ...(normalizeCronScheduledToolPolicy(marker.scheduledToolPolicy)
                   ? {
@@ -267,6 +281,13 @@ export async function persistAgentSessionPhase(params: {
                   ? {
                       scheduledToolCallerOrigin: normalizeCronScheduledToolCallerOrigin(
                         marker.scheduledToolCallerOrigin,
+                      ),
+                    }
+                  : {}),
+                ...(normalizeCronToolsAllowExecTarget(marker.toolsAllowExecTarget)
+                  ? {
+                      toolsAllowExecTarget: normalizeCronToolsAllowExecTarget(
+                        marker.toolsAllowExecTarget,
                       ),
                     }
                   : {}),
@@ -317,7 +338,11 @@ export async function persistAgentSessionPhase(params: {
               operatorRoleActor?.kind === "operator"
                 ? {
                     ...params.creation,
-                    actor: { type: "human" as const, id: operatorRoleActor.profileId },
+                    actor: {
+                      type: "human" as const,
+                      source: "profile" as const,
+                      id: operatorRoleActor.profileId,
+                    },
                   }
                 : params.creation;
             const sandbox = freshEntry
@@ -505,15 +530,6 @@ export async function persistAgentSessionPhase(params: {
       sessionKey: params.canonicalSessionKey,
       agentId: params.sessionAgentId,
       entry: sessionEntry,
-    });
-  }
-  if (params.creation.actor?.type === "human" && params.creation.actor.id) {
-    recordSessionParticipantBestEffort({
-      actor: { type: "human", id: params.creation.actor.id },
-      agentId: params.sessionAgentId,
-      sessionKey: params.canonicalSessionKey,
-      source: "profile",
-      storePath: params.storePath,
     });
   }
   if (isNewSession && params.entry?.sessionId && resolvedSessionId !== params.entry.sessionId) {

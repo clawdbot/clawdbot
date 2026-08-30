@@ -164,6 +164,20 @@ describe("session pull request snapshot store", () => {
       const owner = {};
       const listener = vi.fn();
       const globalAlias = reason === "rewind";
+      harness.setSnapshot({
+        ...harness.gateway.snapshot,
+        hello: {
+          ...createHello(),
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "main",
+              mainKey: "main",
+              mainSessionKey: globalAlias ? "global" : "agent:main:main",
+              scope: globalAlias ? "global" : "per-sender",
+            },
+          },
+        },
+      });
       const key = globalAlias ? "agent:work:main" : "agent:main:demo";
       const otherKey = "agent:main:other";
       store.watch(owner, [key, otherKey]);

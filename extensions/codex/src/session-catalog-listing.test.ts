@@ -1,7 +1,9 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MAX_HOST_COUNT } from "./session-catalog-parsing.js";
 import {
+  commandRpcMocks,
+  pinnedConnectionMocks,
   tempDirs,
   createCodexSessionCatalogControl,
   listCodexSessionCatalog,
@@ -21,7 +23,7 @@ import {
   os,
   path,
   resolveAgentDir,
-  resolveSessionAgentIds,
+  resolveSessionAgentIdsStrict,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   resolveDefaultAgentDir,
@@ -35,103 +37,7 @@ import {
   createCodexSessionCatalogControlFactory,
   type CodexCatalogHome,
   type OpenClawConfig,
-  originalPath,
 } from "./session-catalog.test-helpers.js";
-
-const commandRpcMocks = vi.hoisted(() => ({
-  codexControlRequest: vi.fn(),
-}));
-const pinnedConnectionMocks = vi.hoisted(() => ({
-  client: { connectionId: "pinned-catalog-client" },
-  getClient: vi.fn(),
-  releaseClient: vi.fn(),
-  request: vi.fn(),
-}));
-const transcriptMirrorMocks = vi.hoisted(() => ({
-  importCodexThreadHistoryToTranscript: vi.fn(async () => ({
-    importedMessages: 0,
-    omittedMessages: 0,
-  })),
-}));
-const nodeHostMocks = vi.hoisted(() => ({
-  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
-  userShellPaths: new Map<string, string>(),
-}));
-
-vi.mock("./command-rpc.js", () => ({
-  codexControlRequest: commandRpcMocks.codexControlRequest,
-}));
-vi.mock("./app-server/request.js", () => ({
-  requestCodexAppServerClientJson: pinnedConnectionMocks.request,
-}));
-vi.mock("./app-server/shared-client.js", () => ({
-  getLeasedSharedCodexAppServerClient: pinnedConnectionMocks.getClient,
-  releaseLeasedSharedCodexAppServerClient: pinnedConnectionMocks.releaseClient,
-}));
-vi.mock("./app-server/transcript-mirror.js", () => ({
-  importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
-}));
-vi.mock("./session-catalog-pty.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-catalog-pty.runtime.js")>();
-  return {
-    ...actual,
-    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveNodeHostExecutable: (
-      command: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        pathEnv?: string;
-        includeExtensionless?: boolean;
-        strategy: "direct" | "fallback" | "prefer";
-      },
-    ) => {
-      const env = options.env ?? process.env;
-      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
-      const direct = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      if (direct && options.strategy !== "prefer") {
-        return direct;
-      }
-      const shellPath = nodeHostMocks.userShellPaths.get(command);
-      if (!shellPath) {
-        return direct;
-      }
-      const shellExecutable = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv: shellPath,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      return shellExecutable
-        ? { executable: shellExecutable.executable, pathEnv: shellPath }
-        : direct;
-    },
-  };
-});
-
-beforeEach(() => {
-  nodeHostMocks.runNodePtyCommand.mockClear();
-  nodeHostMocks.userShellPaths.clear();
-  commandRpcMocks.codexControlRequest.mockReset();
-  pinnedConnectionMocks.getClient.mockReset();
-  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
-  pinnedConnectionMocks.releaseClient.mockReset();
-  pinnedConnectionMocks.request.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
-    importedMessages: 0,
-    omittedMessages: 0,
-  });
-});
-
-afterEach(async () => {
-  process.env.PATH = originalPath;
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
 
 describe("Codex session catalog errors", () => {
   it("preserves fallback names returned by paired nodes", () => {
@@ -262,7 +168,7 @@ describe("Codex supervision catalog", () => {
       ) => {
         if (!options.agentDir) {
           try {
-            resolveSessionAgentIds({ config: options.config });
+            resolveSessionAgentIdsStrict({ config: options.config });
           } catch (error) {
             throw new Error((error as { code?: string }).code ?? String(error), { cause: error });
           }

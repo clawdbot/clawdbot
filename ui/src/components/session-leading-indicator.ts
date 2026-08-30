@@ -1,4 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type {
+  SessionParticipant,
+  SessionParticipantIdentity,
+} from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import {
@@ -49,14 +53,14 @@ export function renderSessionLeadingState(
   ownerActor: SessionCreatedActor | null | undefined,
   attribution: "created" | "owned" | "archived",
   ownerViewing?: boolean,
-  participants?: readonly SessionCreatedActor[],
+  participants?: readonly SessionParticipant[],
   participantCount?: number,
   avatarAuth?: SessionAvatarAuth,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
   trailingIndicator: TemplateResult | typeof nothing;
-  renderedOwnerId?: string;
+  renderedOwnerIdentity?: SessionParticipantIdentity;
 } {
   const running = sessionHasRunningWork(session);
   const trailingIndicator = session.isChild ? nothing : renderSessionState(session, false);
@@ -169,7 +173,7 @@ export function renderSessionLeadingState(
       trailingIndicator,
       // Single source for facepile dedup: only the identity actually shown in
       // the lead may be excluded, else attention/archived rows hide a viewer.
-      renderedOwnerId: ownerActor?.id,
+      renderedOwnerIdentity: ownerActor?.identity,
     };
   }
   return {

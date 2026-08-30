@@ -36,11 +36,7 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
-import {
-  buildSessionCreationStamp,
-  resolveProfileParticipantIdFromSessionCreation,
-  type SessionCreatedActor,
-} from "../../config/sessions/session-entry-provenance.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { SessionResetBoundaryRequest } from "../../config/sessions/session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -62,11 +58,17 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import {
+  captureSessionMemoryTranscript,
+  type SessionMemoryTranscript,
+} from "../../hooks/bundled/session-memory/capture.js";
+import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { emitSessionAutoResetHook } from "../../hooks/session-auto-reset.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
@@ -88,7 +90,8 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
+import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import {
   recordSessionCreated,
   classifySessionStateActor,
@@ -108,6 +111,7 @@ import type {
   MsgContext,
 } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
+import { readBeforeResetMessages } from "./commands-reset-hooks.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
@@ -190,6 +194,8 @@ export type SessionInitResult = {
   sessionEntry: SessionEntry;
   initialSessionEntry?: SessionEntry;
   previousSessionEntry?: SessionEntry;
+  previousSessionMemory?: SessionMemoryTranscript;
+  previousSessionResetMessages?: unknown[];
   sessionEntryHandle: ReplySessionEntryHandle;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -212,6 +218,7 @@ type InitSessionStateParams = {
   ctx: FinalizedRuntimeMsgContext;
   expectedExistingSessionId?: string;
   pinExpectedExistingSession?: boolean;
+  newlyCreatedSessionId?: string;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
@@ -288,7 +295,8 @@ function resolveBoundConversationSessionKey(params: {
   if (params.touch !== false) {
     getSessionBindingService().touch(binding.bindingId);
   }
-  return binding.targetSessionKey;
+  // Plugins own their target handoff; escaped commands still initialize the core session.
+  return isPluginOwnedSessionBindingRecord(binding) ? undefined : binding.targetSessionKey;
 }
 
 function resolveInitSessionStateAttemptContext(
@@ -297,8 +305,7 @@ function resolveInitSessionStateAttemptContext(
 ): InitSessionStateAttemptContext {
   const { cfg, ctx } = params;
   // Automated system events must not reset sessions or retarget conversation bindings.
-  const isSystemEvent =
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+  const isSystemEvent = ctx.InternalTurnSource !== undefined;
   const conversationBindingContext = isSystemEvent
     ? null
     : resolveSessionConversationBindingContext(cfg, ctx);
@@ -437,6 +444,7 @@ function resolveReplySessionRolloverState(
 }
 
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
+  prepareChannelParticipantObservation(params.ctx);
   return await runWithSessionInitConflictRetry(
     async () => await initSessionStateAttempt(params, false),
     { signal: params.signal },
@@ -1000,6 +1008,8 @@ async function initSessionStateAttemptLocked(
       : { context: "preserve-tail", reason: continuityReason }
     : undefined;
   const resetBoundaryAppended = resetBoundary !== undefined;
+  let previousSessionMemory: SessionMemoryTranscript | undefined;
+  let previousSessionResetMessages: unknown[] | undefined;
   const committed = await commitReplySessionInitialization({
     activeSessionKey: sessionKey,
     agentId,
@@ -1036,9 +1046,34 @@ async function initSessionStateAttemptLocked(
       });
     },
     ...(resetBoundary ? { resetBoundary } : {}),
-    beforeEntryMutation: ({ currentEntry, sessionEntry: entryToCommit }) => {
+    beforeEntryMutation: async ({ currentEntry, sessionEntry: entryToCommit }) => {
       if (!previousSessionEntry || !currentEntry) {
         return;
+      }
+      const memoryEvent = resetTriggered ? "command" : "session";
+      const memoryAction = resetTriggered ? (previousSessionEndReason ?? "new") : "auto-reset";
+      if (hasInternalHookListeners(memoryEvent, memoryAction)) {
+        // Capture before the same-identity reset changes the visible window.
+        // Only the successful lifecycle commit publishes this bounded snapshot.
+        previousSessionMemory = captureSessionMemoryTranscript(
+          {
+            agentId,
+            sessionId: currentEntry.sessionId,
+            sessionKey,
+            storePath,
+          },
+          cfg,
+        );
+      }
+      if (resetTriggered && getGlobalHookRunner()?.hasHooks("before_reset")) {
+        // Plugin observers retain their full-message contract independently of
+        // the bounded memory excerpt. This preparation runs outside the commit.
+        previousSessionResetMessages = await readBeforeResetMessages({
+          agentId,
+          sessionId: currentEntry.sessionId,
+          sessionKey,
+          storePath,
+        });
       }
       if (resetBoundaryAppended) {
         clearAllCliSessions(entryToCommit);
@@ -1079,34 +1114,20 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  // Admission may commit the first row before dispatch. Preserve its Goal and generation
+  // through initialization, then report the first lifecycle only for that winning dispatch.
+  const createdByAdmission =
+    pinExpectedExistingSession &&
+    params.newlyCreatedSessionId === sessionId &&
+    !previousSessionEntry;
+  const isFirstSessionTurn = isNewSession || createdByAdmission;
   if (!isSystemEvent && !isInterSession) {
-    const creation = ctx.SessionCreation;
-    const creationActor = creation?.actor;
-    const profileParticipantId = resolveProfileParticipantIdFromSessionCreation(creation);
-    const senderId = normalizeOptionalString(ctx.SenderId);
-    const participant:
-      | { actor: SessionCreatedActor & { id: string }; source: "profile" | "channel" | "agent" }
-      | undefined = profileParticipantId
-      ? { actor: { type: "human", id: profileParticipantId }, source: "profile" }
-      : creationActor?.type === "agent" && creationActor.id
-        ? {
-            actor: { ...creationActor, id: creationActor.id },
-            source: "agent",
-          }
-        : senderId
-          ? { actor: { type: "human", id: senderId }, source: "channel" }
-          : undefined;
-    if (participant) {
-      recordSessionParticipantBestEffort({
-        actor: participant.actor,
-        agentId,
-        sessionKey,
-        source: participant.source,
-        storePath,
-        promptedAt: now,
-        onError: (error) => log.warn("failed to record session participant", { error }),
-      });
-    }
+    recordAcceptedSessionParticipantInput(ctx, {
+      agentId,
+      sessionKey,
+      storePath,
+      onError: (error) => log.warn("failed to record session participant", { error }),
+    });
   }
   clearBootstrapSnapshotOnSessionBoundary({
     boundaryAppended: resetBoundaryAppended,
@@ -1146,6 +1167,7 @@ async function initSessionStateAttemptLocked(
       agentId,
       workspaceDir: previousSessionEntry.spawnedWorkspaceDir,
       storePath,
+      previousSessionMemory,
     });
   }
 
@@ -1192,12 +1214,12 @@ async function initSessionStateAttemptLocked(
     agentText: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
     BodyStripped: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
     SessionId: sessionId,
-    IsNewSession: isNewSession ? "true" : "false",
+    IsNewSession: isFirstSessionTurn ? "true" : "false",
   };
 
   // Run session plugin hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
-  if (hookRunner && isNewSession) {
+  if (hookRunner && isFirstSessionTurn) {
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
@@ -1257,9 +1279,11 @@ async function initSessionStateAttemptLocked(
       sessionEntryHandle,
       previousSessionEntry,
       sessionStore,
+      previousSessionMemory,
+      previousSessionResetMessages,
       sessionKey,
       sessionId: sessionId ?? crypto.randomUUID(),
-      isNewSession,
+      isNewSession: isFirstSessionTurn,
       resetTriggered,
       systemSent,
       abortedLastRun,

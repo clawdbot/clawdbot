@@ -1,12 +1,11 @@
-/** Prepared embedded-agent loop and cleanup. */
+/** Prepared embedded-agent loop. */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
-} from "../agent-bundle-mcp-tools.js";
+  getAdmittedRunDelegatedAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
@@ -17,7 +16,6 @@ import {
   selectContextEngineForTranscriptHost,
 } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
-import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { log } from "./logger.js";
@@ -25,15 +23,13 @@ import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
 } from "./post-compaction-loop-guard.js";
-import { clearProviderPromptState } from "./provider-prompt-state.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-preparation.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
-import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
-import { createMcpAttemptCarryover } from "./run/attempt-result.js";
-import { activateCodeModeReconciliation } from "./run/code-mode-reconciliation.js";
+import { createAttemptCarryover } from "./run/attempt-result.js";
+import { advanceCodeModeRecovery } from "./run/code-mode-reconciliation.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -55,6 +51,7 @@ import {
   type RunRetryBudget,
 } from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
+import { settleEmbeddedRun } from "./run/run-settlement.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";
@@ -88,7 +85,7 @@ export async function runPreparedEmbeddedLoop(
     lifecycleGeneration,
     suspendForFailure,
   } = input;
-  const { maybeEmitFastModeAutoResetBestEffort, notifyExecutionPhase } = input.progressController;
+  const { notifyExecutionPhase } = input.progressController;
   const { laneTaskAbortController } = input.laneController;
   let startupStagesEmitted = false;
   const preparedRuntime = await measureEmbeddedAgentPreparation(
@@ -111,6 +108,12 @@ export async function runPreparedEmbeddedLoop(
     { config: params.config },
   );
   params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
+  const abortSignal = params.abortSignal;
+  const accountingAuthority = getAdmittedRunDelegatedAuthority(preparedRuntime.admittedRunContext);
+  const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
+    preparedRuntime.admittedRunContext,
+    abortSignal,
+  );
   // Admission is resolved once before the retry loop. Carry that exact object through every
   // attempt/recovery owner so downstream dispatch cannot lose the admitted context.
   const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
@@ -125,7 +128,6 @@ export async function runPreparedEmbeddedLoop(
     pluginHarnessOwnsAuthBootstrap,
     attemptedThinking,
     maybeRefreshRuntimeAuthForAuthError,
-    stopRuntimeAuthRefreshTimer,
     getApiKeyInfo,
   } = preparedRuntime;
   let {
@@ -250,6 +252,10 @@ export async function runPreparedEmbeddedLoop(
     resolvedSessionKey,
     lifecycleGeneration,
   });
+  const originalCompactionTarget = { ...sessionPromptState.sessionTarget };
+  const durableCompactionAccounting =
+    params.sessionPersistence !== "detached" &&
+    !(params.sessionManager && !params.sessionManager.getSessionTarget());
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
     runParams: params,
     provider,
@@ -278,6 +284,9 @@ export async function runPreparedEmbeddedLoop(
         }),
       { config: params.config },
     ));
+  const ownedContextEngineLease = ownsContextEngineLogicalTurnLease
+    ? contextEngineLogicalTurnLease
+    : undefined;
   selectContextEngineForTranscriptHost({
     lease: contextEngineLogicalTurnLease,
     host: {
@@ -311,8 +320,14 @@ export async function runPreparedEmbeddedLoop(
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
-    const mcpAttemptCarryover = createMcpAttemptCarryover();
+    const attemptCarryover = createAttemptCarryover();
     while (true) {
+      // Every retry keeps its exact admission; only transcript mutation requires a writer claim.
+      abortSignal?.throwIfAborted();
+      if (!assertAdmittedActive) {
+        throw new Error("embedded run requires an active admitted run");
+      }
+      assertAdmittedActive();
       refreshPreparedRuntimeSnapshot();
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
         const message =
@@ -338,8 +353,7 @@ export async function runPreparedEmbeddedLoop(
           agentMeta: buildErrorAgentMeta({
             sessionId: sessionPromptState.sessionId,
             sessionFile: sessionPromptState.sessionFile,
-            provider,
-            model: model.id,
+            ...(attemptCarryover.modelAttempt ?? { provider, model: model.id }),
             ...outerContextTokenMeta,
             usageAccumulator,
             lastRunPromptUsage,
@@ -357,33 +371,48 @@ export async function runPreparedEmbeddedLoop(
         runLoopIterations: runRetryBudget.attemptsCounted,
         maxRunLoopIterations: runRetryBudget.maxAttempts,
       });
+      let recordedCompactionCount = 0;
+      const attemptRunInput: PreparedEmbeddedRunInput = {
+        ...admittedRunInput,
+        runParams: {
+          ...params,
+          onContextAccountingEvent: (event) => {
+            if (event.kind === "compaction") {
+              recordedCompactionCount += 1;
+            }
+            contextRecoveryState.observeContextAccounting(event);
+          },
+        },
+      };
       let dispatch: Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
       try {
-        dispatch = await prepareAndDispatchEmbeddedRunAttempt({
-          runInput: admittedRunInput,
-          preparedRuntime,
-          contextEngine,
-          sessionPromptState,
-          terminalRetryState,
-          replayState: accumulatedReplayState,
-          provider,
-          modelId,
-          startupStagesEmitted,
-          bootstrapPromptWarningSignaturesSeen,
-          resolveRuntimeFallbackReason,
-          observeToolOutcome,
-          isTurnTainted: turnTaintState.isTainted,
-          allocateToolOutcomeOrdinal: terminalToolPresentation.allocateOrdinal,
-          getPostCompactionAbortError: () => postCompactionAbortError,
-          setPostCompactionAbortController: (controller) => {
-            postCompactionAbortController = controller;
-          },
-          clearPostCompactionAbortController: (controller) => {
-            if (postCompactionAbortController === controller) {
-              postCompactionAbortController = undefined;
-            }
-          },
-        });
+        dispatch = await sessionPromptState.withSessionWriterContext(() =>
+          prepareAndDispatchEmbeddedRunAttempt({
+            runInput: attemptRunInput,
+            preparedRuntime,
+            contextEngine,
+            sessionPromptState,
+            terminalRetryState,
+            replayState: accumulatedReplayState,
+            provider,
+            modelId,
+            startupStagesEmitted,
+            bootstrapPromptWarningSignaturesSeen,
+            resolveRuntimeFallbackReason,
+            observeToolOutcome,
+            isTurnTainted: turnTaintState.isTainted,
+            allocateToolOutcomeOrdinal: terminalToolPresentation.allocateOrdinal,
+            getPostCompactionAbortError: () => postCompactionAbortError,
+            setPostCompactionAbortController: (controller) => {
+              postCompactionAbortController = controller;
+            },
+            clearPostCompactionAbortController: (controller) => {
+              if (postCompactionAbortController === controller) {
+                postCompactionAbortController = undefined;
+              }
+            },
+          }),
+        );
       } catch (error) {
         const retryTrace = await failoverRetryController.recoverThrownHarnessAuthFailure(error);
         if (!retryTrace) {
@@ -395,11 +424,12 @@ export async function runPreparedEmbeddedLoop(
       }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
-      mcpAttemptCarryover.apply(dispatchedAttempt.rawAttempt);
+      attemptCarryover.apply(dispatchedAttempt.rawAttempt);
       const normalizedAttempt = await normalizeEmbeddedRunAttempt({
         runInput: admittedRunInput,
         preparedRuntime,
         dispatchedAttempt,
+        recordedCompactionCount,
         sessionPromptState,
         provider,
         modelId,
@@ -524,7 +554,7 @@ export async function runPreparedEmbeddedLoop(
         continue;
       }
       if (
-        activateCodeModeReconciliation({
+        advanceCodeModeRecovery({
           attempt,
           hostOwnsToolSurface: !pluginHarnessOwnsTransport,
           retryState: terminalRetryState,
@@ -673,53 +703,17 @@ export async function runPreparedEmbeddedLoop(
       return terminalResolution.result;
     }
   } finally {
-    if (params.isFinalFallbackAttempt !== false) {
-      await maybeEmitFastModeAutoResetBestEffort();
-    }
-    forgetPromptBuildDrainCacheForRun(params.runId);
-    clearProviderPromptState(params.runId);
-    stopRuntimeAuthRefreshTimer();
-    if (ownsContextEngineLogicalTurnLease) {
-      await runAgentCleanupStep({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        step: "context-engine-dispose",
-        log,
-        cleanup: async () => {
-          await contextEngineLogicalTurnLease.dispose();
-        },
-      });
-    }
-    if (params.cleanupBundleMcpOnRunEnd === true) {
-      await runAgentCleanupStep({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        step: "bundle-mcp-retire",
-        log,
-        cleanup: async () => {
-          const onError = (errorLocal: unknown, sessionId: string) => {
-            log.warn(
-              `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
-            );
-          };
-          const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
-            sessionKey: params.sessionKey,
-            reason: "embedded-run-end",
-            // MCP App views hold bounded leases so their bridge can remain
-            // usable after a one-shot gateway run returns.
-            preserveActiveLeases: true,
-            onError,
-          });
-          if (!retiredBySessionKey) {
-            await retireSessionMcpRuntime({
-              sessionId: params.sessionId,
-              reason: "embedded-run-end",
-              preserveActiveLeases: true,
-              onError,
-            });
-          }
-        },
-      });
-    }
+    await settleEmbeddedRun({
+      runInput: admittedRunInput,
+      runtime: preparedRuntime,
+      compaction: {
+        state: contextRecoveryState,
+        session: sessionPromptState,
+        originalTarget: originalCompactionTarget,
+        durable: durableCompactionAccounting,
+        authority: accountingAuthority,
+      },
+      ownedContextEngineLease,
+    });
   }
 }

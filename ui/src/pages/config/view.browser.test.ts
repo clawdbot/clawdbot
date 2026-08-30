@@ -71,7 +71,6 @@ describe("config view", () => {
     localeProvenance: "default" as const,
     localeResetValue: undefined,
     onLocaleChange: vi.fn(),
-    resetLocale: vi.fn(),
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
     setAccent: vi.fn(),
@@ -97,6 +96,8 @@ describe("config view", () => {
     setSessionCatalogHidden: vi.fn(),
     chatMessageMaxWidth: undefined,
     setChatMessageMaxWidth: vi.fn(),
+    chatCollapseTaskProgress: false,
+    setChatCollapseTaskProgress: vi.fn(),
     showAdvancedSettings: false,
     setShowAdvancedSettings: vi.fn(),
     chatSendShortcut: "enter" as const,
@@ -104,7 +105,6 @@ describe("config view", () => {
     chatSendShortcutProvenance: "default" as const,
     chatSendShortcutResetValue: "enter" as const,
     setChatSendShortcut: vi.fn(),
-    resetChatSendShortcut: vi.fn(),
     chatFollowUpMode: undefined,
     chatFollowUpModeOverridden: false,
     chatFollowUpModeProvenance: "default" as const,
@@ -324,7 +324,7 @@ describe("config view", () => {
     ).toEqual(["Open links in Control UI browser", "Browser Enabled"]);
   });
 
-  it("routes restore-default actions through config removal", () => {
+  it("routes scalar clears and default selections through config callbacks", () => {
     const onFormPatch = vi.fn();
     const onFormRemove = vi.fn();
     const { container } = renderConfigView({
@@ -359,11 +359,9 @@ describe("config view", () => {
     const retriesRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
       (row) => row.textContent?.includes("Retries"),
     );
-    queryRequired(
-      retriesRow ?? container,
-      "button[aria-label='Reset to default']",
-      HTMLButtonElement,
-    ).click();
+    const retries = queryRequired(retriesRow ?? container, "input", HTMLInputElement);
+    retries.value = "";
+    retries.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFormRemove).toHaveBeenCalledWith(["gateway", "retries"]);
     expect(onFormPatch).not.toHaveBeenCalled();
 
@@ -925,7 +923,7 @@ describe("config view", () => {
       webPush: {
         supported: true,
         permission: "default",
-        subscribed: false,
+        subscription: "missing",
         loading: false,
       },
     });
@@ -952,7 +950,7 @@ describe("config view", () => {
       webPush: {
         supported: true,
         permission: "default",
-        subscribed: false,
+        subscription: "missing",
         loading: false,
       },
     });
@@ -1835,7 +1833,7 @@ describe("config view", () => {
     expect(findButtonByText(customContainer, "Claw").getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("shows Appearance defaults without reset actions", () => {
+  it("shows Appearance default descriptions", () => {
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
@@ -1868,30 +1866,16 @@ describe("config view", () => {
     expect(
       [...lobsterPreviews].every((preview) => Boolean(preview.getAttribute("aria-label")?.trim())),
     ).toBe(true);
-    expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
   });
 
-  it("keeps direct Appearance defaults while resetting unrelated overrides independently", () => {
-    const resetLocale = vi.fn();
+  it("keeps direct Appearance default selections independent", () => {
     const setTheme = vi.fn();
     const setThemeMode = vi.fn();
     const setAccent = vi.fn();
     const setTextScale = vi.fn();
-    const setSidebarLiveActivity = vi.fn();
-    const setChatMessageMaxWidth = vi.fn();
-    const setChatSendShortcut = vi.fn();
-    const resetChatSendShortcut = vi.fn();
-    const setCatalogOpenTarget = vi.fn();
-    const setComposerHoldToRecord = vi.fn();
-    const setLobsterPetVisits = vi.fn();
-    const setLobsterPetSounds = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
-      systemLocale: "de",
-      localeOverride: "pt-BR",
-      localeOverridden: true,
-      resetLocale,
       theme: "knot",
       themeOverridden: true,
       setTheme,
@@ -1904,30 +1888,7 @@ describe("config view", () => {
       textScale: 110,
       textScaleOverridden: true,
       setTextScale,
-      sidebarLiveActivity: false,
-      setSidebarLiveActivity,
-      chatMessageMaxWidth: "82%",
-      setChatMessageMaxWidth,
-      chatSendShortcut: "modifier-enter",
-      chatSendShortcutOverridden: true,
-      setChatSendShortcut,
-      resetChatSendShortcut,
-      catalogOpenTarget: "terminal",
-      setCatalogOpenTarget,
-      composerHoldToRecord: false,
-      setComposerHoldToRecord,
-      lobsterPetVisits: false,
-      setLobsterPetVisits,
-      lobsterPetSounds: true,
-      setLobsterPetSounds,
     });
-    const resetIn = (element: Element | null) => {
-      const button = element?.querySelector<HTMLButtonElement>(
-        'button[aria-label="Reset to default"]',
-      );
-      expect(button).not.toBeNull();
-      button?.click();
-    };
     const row = (title: string) =>
       Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
         (candidate) =>
@@ -1948,33 +1909,15 @@ describe("config view", () => {
       .find((button) => button.textContent?.includes("100%"))
       ?.click();
 
-    resetIn(container.querySelector("#settings-language .settings-row"));
-    resetIn(row("Show live agent activity in sidebar"));
-    resetIn(row("Message width"));
-    resetIn(row("Send shortcut"));
-    resetIn(row("Open external sessions in"));
-    resetIn(row("Hold microphone button to start dictation"));
-    resetIn(row("Lobster visits"));
-    resetIn(row("Lobster sounds"));
-
-    expect(resetLocale).toHaveBeenCalledOnce();
     expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
     expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
     expect(setAccent).toHaveBeenCalledWith(undefined);
     expect(setTextScale).toHaveBeenCalledWith(100);
-    expect(setSidebarLiveActivity).toHaveBeenCalledWith(true);
-    expect(setChatMessageMaxWidth).toHaveBeenCalledWith(undefined);
-    expect(resetChatSendShortcut).toHaveBeenCalledOnce();
-    expect(setCatalogOpenTarget).toHaveBeenCalledWith("viewer");
-    expect(setComposerHoldToRecord).toHaveBeenCalledWith(true);
-    expect(setLobsterPetVisits).toHaveBeenCalledWith(true);
-    expect(setLobsterPetSounds).toHaveBeenCalledWith(false);
   });
 
-  it("keeps authored visual defaults direct while preserving chat preference resets", () => {
+  it("keeps authored visual defaults direct", () => {
     const setTheme = vi.fn();
     const setThemeMode = vi.fn();
-    const resetChatSendShortcut = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
@@ -1989,7 +1932,6 @@ describe("config view", () => {
       chatSendShortcut: "enter",
       chatSendShortcutOverridden: true,
       chatSendShortcutProvenance: "synced",
-      resetChatSendShortcut,
     });
     const themeSection = queryRequired(container, "#settings-appearance-theme", HTMLElement);
     const shortcutRow = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
@@ -2002,15 +1944,12 @@ describe("config view", () => {
     expect(shortcutRow?.textContent).toContain("Default: Enter");
     findButtonByText(themeSection, "Claw").click();
     themeSection.querySelector<HTMLElement>('wa-radio[value="system"]')?.click();
-    shortcutRow?.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
 
     expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
     expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
-    expect(resetChatSendShortcut).toHaveBeenCalledOnce();
   });
 
   it("renders rejected theme and locale edits as browser-only fallbacks", () => {
-    const resetLocale = vi.fn();
     const setTheme = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
@@ -2019,7 +1958,6 @@ describe("config view", () => {
       localeOverridden: true,
       localeProvenance: "device-local",
       localeResetValue: "de",
-      resetLocale,
       theme: "knot",
       themeOverridden: true,
       themeProvenance: "device-local",
@@ -2051,10 +1989,8 @@ describe("config view", () => {
       themeSection.querySelector(".settings-theme-card--knot")?.getAttribute("aria-pressed"),
     ).toBe("true");
 
-    languageRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
     findButtonByText(themeSection, "Claw").click();
 
-    expect(resetLocale).toHaveBeenCalledOnce();
     expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
   });
 
@@ -2111,12 +2047,35 @@ describe("config view", () => {
     );
     for (const title of [
       "Message width",
+      "Collapse task progress by default",
       "Open external sessions in",
       "Hold microphone button to start dictation",
     ]) {
       expect(row(title)?.textContent).toContain("Stored in this browser only");
       expect(row(title)?.textContent).not.toContain("Synced across your devices");
     }
+  });
+
+  it("renders task progress auto-collapse off by default and enables it from Chat settings", () => {
+    const setChatCollapseTaskProgress = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      chatCollapseTaskProgress: false,
+      setChatCollapseTaskProgress,
+    });
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+      (candidate) =>
+        candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
+        "Collapse task progress by default",
+    );
+    const toggle = row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+
+    expect(toggle?.checked).toBe(false);
+    row?.click();
+    expect(setChatCollapseTaskProgress).toHaveBeenCalledWith(true);
+    expect(row?.textContent).toContain("Using default: Disabled");
+    expect(row?.textContent).toContain("Stored in this browser only");
   });
 
   it("shows the tweakcn importer once the custom slot is opened", () => {

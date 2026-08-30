@@ -124,11 +124,24 @@ On the first identified connection, the Control UI uploads existing browser-loca
 
 When a remote project session starts before its repository finishes cloning, chat shows workspace preparation progress. If preparation fails, opening or reloading chat restores the session's failure summary. Correct the reported problem, then send a new message in the same session to retry preparation.
 
+Inputs accepted through `sessions_send` or the Gateway `agent` method while a
+cloud turn is running remain visible with a waiting notice until their own turn
+starts. They are stored separately from the active model transcript. If
+cancellation or a Gateway restart interrupts that wait,
+the input stays readable with its recorded disposition and is never resent
+automatically. Copy it into the composer to start a new attempt. **Earlier
+accepted inputs** pages through retained inputs; **Latest accepted inputs**
+returns to the newest page. Long accepted input uses the normal full-message
+reader without becoming a transcript reply, fork, or rewind target.
+
+Ordinary browser follow-ups still use the existing chat queue, including collect
+mode; they do not yet have this durable pending-input custody.
+
 ## Personal identity
 
 Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional verified GitHub identity. Open **Settings → Profile → Identity** to update the editable fields. The profile follows the authenticated person across browsers; clearing browser site data does not delete it.
 
-GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the read-only **GitHub account** row with the verified public avatar and account link without replacing a custom OpenClaw avatar. **Git co-author credit** is a separate, default-off toggle for future commits from shared sessions. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for verification, retry, account-change, noreply privacy, and eligibility rules.
+GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the read-only **GitHub account** row with the verified public avatar and account link without replacing a custom OpenClaw avatar. **Git co-author credit** is a separate toggle, on by default for verified accounts, that controls future commits from shared sessions. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for verification, retry, account-change, noreply privacy, and eligibility rules.
 
 Set an agent's display name, emoji, and avatar under **Agent settings → Overview → Identity**. The identity is stored with that agent and is shared by Control UI clients.
 
@@ -256,6 +269,8 @@ Session previews are hidden by default for compact, single-line rows. Enable **S
 
 **Mark as unread** creates a reminder that remains unread while the current chat stays open, including while a run streams or completes. Leave and reopen the session, or choose **Mark as read**, to clear it.
 
+**Delete** removes the confirmed selection from loaded session lists immediately and leaves any deleted conversation that is open. The Gateway finishes deletion in the background, safely stopping and reclaiming an attached cloud worker first. If deletion fails, the affected session can reappear with an error; other successful deletions and any navigation you made in the meantime are preserved. Browser drafts are retired only after deletion is confirmed, not while the request is pending.
+
 **Rename** in the sidebar, chat header, and Sessions page targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
 
 **New group** from the sidebar, chat header, or Sessions page keeps the original session selection while the dialog is open and the group is being saved. A deleted or replaced session is not moved; an error is shown and the new group remains available. For a sidebar multi-selection, sessions that still exist can move even if another target fails. Paging a selected session out of the visible list does not cancel its move.
@@ -267,6 +282,10 @@ A selected session running on a worker shows a quiet **Runs on Cloud** chip in t
 ### Session icons
 
 Choose **Set icon** from a single session's context menu to give its sidebar row one persistent emoji or monochrome icon. The picker includes common emoji and six named icons: `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`. Choose **Custom emoji…** to enter any single emoji; on macOS, press Control-Command-Space to open the system emoji picker, or press Windows-period on Windows. The `sessions` agent tool can set the same `icon` field. An empty value removes it. This decoration replaces the owner avatar in the leading glyph slot, but temporary attention state always takes precedence so an operator request cannot be hidden.
+
+## Session colors
+
+Choose **Color** from a session menu to add a narrow color stripe to its sidebar row and a matching dot beside the chat title. Pick one of eight colors, or choose **Default** to clear it. The colors match Claude Code’s `/color` names, so imported Claude Code sessions keep the same color. Imported catalog rows show their color without offering color editing.
 
 ## New session page
 
@@ -284,13 +303,19 @@ Model and **Effort** are separate adjacent composer controls in chat and New ses
 
 Once the session is created, chat opens immediately. Remote startup uses the same transcript progress indicator and elapsed timer as GitHub workspace preparation, showing provisioning, workspace preparation, startup, and first-message delivery as they happen. The composer stays disabled until the first message is accepted; normal startup is not an error. Startup failures remain visible in the session, with **Retry** when recovery is available.
 
-Canceling or recovering an interrupted remote-placement startup reclaims the placement by session key. Cleanup archives a newly created draft before deleting it with the write-scoped archived-only contract, and any cleanup error remains visible for recovery.
+If remote startup fails before the first message is sent, chat retains the submitted text, attachments, selected destination, and a bounded error in the same browser tab and Gateway credential scope. Reloading shows the paused submission without provisioning another worker. **Retry** uses the already-created session and the original profile and machine class, device, or Auto selection; it waits for active placement before sending. The session keeps its model and reasoning settings, including any later changes you make in that session. This tab-local startup recovery uses the tab's existing session-storage lifetime, separately from the ordinary browser draft limits below. Incognito startup recovery remains in memory only. A disconnect hides the retained content until the same credential scope is verified again, but does not release its first-turn hold: later input stays in the composer instead of entering the ordinary offline queue. Sessions without an unresolved initial turn keep normal offline queuing.
+
+If the Gateway explicitly rejects the first send, **Retry** creates a new send attempt on that same session and destination. If delivery is uncertain, **Check delivery** only looks for the original user message in available history. It never resends the prompt, provisions a worker, or treats missing history as proof that delivery failed. An exact matching user-message receipt resolves the retained submission without implying that the run has finished. Otherwise, the prompt and attachments remain accessible and normal sending stays disabled. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt. This recovery does not promise exactly-once delivery across Gateway restarts. If browser storage rejects a recovery update, keep the current page open to preserve its in-memory input.
+
+When an interrupted remote-placement draft needs deletion, cleanup reclaims the placement by session key, archives it with its expected session identity, then uses the write-scoped archived-only delete contract. Cleanup errors remain visible. Restoring paused or unconfirmed recovery does not itself request deletion.
 
 Unsent text and staged attachments can be recovered only in the same browser profile and Gateway credential scope; they are never stored on the Gateway or synced across devices. The browser keeps the 20 most recently edited draft scopes per Gateway credential scope for up to seven days, with at most 25 MiB of attachment data per draft, but it can evict browser storage sooner. A successful send or New Session creation, explicit attachment removal, or confirmed session deletion retires the corresponding browser draft. If cleanup fails after deletion, clear site data for the Control UI origin to remove it. Clearing site data also removes every other browser draft. If a draft's attachments exceed the cap, the current tab keeps them and shows the existing storage warning, but only the text is restart-recoverable. OpenClaw **Incognito** drafts are never durable. In a private browser window, IndexedDB availability and lifetime are controlled by the browser and stored data is normally cleared when the private session ends. The **Incognito** toggle in the new-session page's top-right control rail retires that browser draft and creates a web-only thread whose session entry, transcript, and compaction state stay in memory until the Gateway restarts; OpenClaw also skips its automatic memory flush. The agent keeps its normal tools, so an explicit save request or tool-driven file write can still persist data. The model provider still processes messages, and content-free audit metadata is still recorded. Remote-placement starts persist their model and reasoning choices before dispatching the session to its worker.
 
 **Projects.** The Place picker lists configured agent workspaces and repositories recorded with `projects.register`. Read-only connections receive project names and IDs; checkout paths and origin URLs are included only at `operator.write`. An admin can browse to a Git checkout and choose **Register as project**; write-only operators see a hint directing them to that flow. Choosing a project sends its ID through `sessions.create`, so it can run directly or supply the source for optional Worktree isolation without submitting a raw path. If an agent workspace was moved or removed, update that agent's configured workspace path. If a recorded checkout was moved or removed, re-register it before starting another session there.
 
 **Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL to clone it into the Gateway-managed projects area and select it. Public repository search and cloning work anonymously. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. When it is omitted, the Gateway still uses its shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback from the shared process environment. When it is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
+
+Use the Effort menu to choose Fast Mode before creating a session. New Session persists that choice before the first local or remote turn starts.
 
 For agent GitHub CLI identity and Git author setup, see [`tools.github`](/gateway/config-tools#tools-github).
 
@@ -313,6 +338,8 @@ select it to open the owning Approvals page.
   <Accordion title="Chat and Talk">
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`). Archived sessions keep the composer disabled and show a banner with an **Unarchive** action before the conversation can continue.
     - Chat history refreshes request a bounded recent window with per-message text caps, so large sessions do not force the browser to render a full transcript payload before chat becomes usable.
+    - A previous run's error banner clears when Chat adopts a new run or history confirms a newer successful run. Retiring the banner does not erase recorded diagnostics. A late error from the same run can remain visible beside its delivered answer; reconnecting or refreshing metadata alone does not establish recovery.
+    - A saved assistant answer replaces its live stream without waiting for the run to finish. Remote workspace reconciliation can keep the working indicator and Stop control active after the answer appears; a later reconciliation failure remains visible beside the answer.
     - Scroll up to read earlier messages without following incoming output. Use the down-arrow button to return to the latest message. Scrolling manually interrupts that movement or a restored scroll position; messages continue to reserve their space as full text, images, and tool output load.
     - Links to `github.com` in chat messages — yours and the agent's — carry a small GitHub mark before their text, whether the message wrote a bare URL, a `[#3434](…)` shorthand, or any other label. The mark is drawn from the bundled icon set, never fetched from the network, and is decorative only: it is skipped for image-only links such as badges, never appears inside code spans or code blocks, is not read by screen readers, and is not part of copied text.
     - Hovering or keyboard-focusing a public GitHub issue or pull request link shows its state, title, author, recent activity, comments, and change statistics. The connected Gateway fetches and caches public metadata without changing the link target, including when the UI uses a remote Gateway. It uses the explicit Control UI GitHub credential, then the shared Gateway process-environment fallback, after confirming the repository is public; without either, it uses GitHub's anonymous API with a longer cache. It never uses an agent GitHub identity.
@@ -350,15 +377,15 @@ select it to open the owning Approvals page.
     - Privacy & Security: curated rows for gateway auth, exec policy, browser enablement, tool profile, device auth, and mobile pairing, above the schema-backed `security`/`approvals` sections.
     - Secrets (`/settings/secrets`) manages team-scoped secret and environment entries through `secrets.store.*`. Environment values remain visible, secret values are never returned after saving, Bulk Add accepts quoted multiline dotenv values, and mutation actions are hidden when the connected Gateway does not advertise them.
     - Approvals includes newest-first, 30-day history for resolved exec, plugin, and system-agent requests. Filter by kind or page through older rows to review the decision, reason, source session, and resolver attribution recorded by the Gateway.
-    - Labs exposes shipped experimental switches. Code Mode and Swarm are the current entries and save `tools.codeMode.enabled` and `tools.swarm.enabled` immediately; unshipped experiments do not appear or write speculative config keys.
+    - Labs exposes shipped experimental switches. Code Mode defaults off; turning it on writes `tools.codeMode.enabled: "auto"`, which engages only for models marked as preferred Code Mode performers. Code Mode and Swarm changes save immediately; unshipped experiments do not appear or write speculative config keys.
     - Notifications: browser web-push status, subscribe/unsubscribe, and a test send.
     - Advanced: every config section without a curated home, plus the raw JSON5 editor (previously the General page's Advanced mode).
     - In **Advanced → Communication → Channels**, use **Channel settings** to show one messaging channel at a time, including custom channel plugins. **Other** groups shared channel defaults and model overrides. Switching groups does not change the saved configuration.
-    - Model Setup (`/settings/model-setup`) is a subpage of Model Providers, launched from its header.
+    - Model Setup (`/settings/model-setup`) is a subpage of Model Providers, launched from its header. Detection runs on the page without holding navigation open: **Back to app** remains available while checks finish, and returning to setup starts a fresh check. Activation waits for the Gateway to apply the verified configuration; if it cannot apply it in place, setup shows that a restart is required.
     - Agents: a settings page (**Settings → Agents**, `/settings/agents`) with an **Agent defaults** row for the shared template plus per-agent tabs (Overview, Files, Tools, Skills, Channels, Automations, Memory). The Overview tab edits the agent's identity — display name, emoji, and an avatar image that is downscaled and size-bounded in the browser before `agents.update`. Saving stores configured identity fields and mirrors them to the workspace `IDENTITY.md`; configured values take precedence over manual edits to the same file fields. The Tools tab connects a system or per-agent GitHub identity through a user-clicked device-authorization link, shows the one-time code and credential health, and keeps one-use PAT setup as an explicit fallback.
     - Profile: a settings page showing the default agent's identity with all-time usage stats — lifetime tokens, peak day, longest session, activity streaks, a year-long token heatmap, top tools, and channel highlights (`usage.cost`, `sessions.usage`).
     - MCP has a dedicated settings page with server rows (transport, enablement, OAuth/filter/parallel summaries), direct add/enable/disable/remove controls, common operator commands, and the scoped `mcp` config editor. The Plugins page remains the home for one-click connectors and discovery.
-    - Model Providers: a settings page listing every configured model provider with its brand icon, auth state (`models.authStatus`), model availability (`models.list`), live plan/quota/billing data where the provider reports it (`usage.status`), and local session spend for the last 30 days (`sessions.usage`). The initial page reuses the Gateway's prepared model catalog. **Refresh** explicitly discovers the live provider catalog, then re-reads credential state and provider usage; discovery failures stay visible without discarding the last successful model list.
+    - Model Providers: a settings page listing every configured model provider with its brand icon, auth state (`models.authStatus`), model availability (`models.list`), live plan/quota/billing data where the provider reports it (`usage.status`), and local session spend for the last 30 days (`sessions.usage`). The initial page reuses the Gateway's prepared model catalog. **Refresh** explicitly discovers the live provider catalog, then re-reads credential state and provider usage; discovery failures stay visible without discarding the last successful model list. If the Gateway is preparing model authentication, the page shows an unavailable-status warning rather than treating it as a lost connection or a sign-out. Use **Refresh** after setup finishes; auth-status diagnostics do not block chat bootstrap.
     - Connection: a settings page (under **Connections**) owning the dashboard's own gateway link — WebSocket URL, gateway token, password, and default session key — plus the latest handshake snapshot (status, uptime, tick interval, last channels refresh). The offline login gate handles the disconnected case; this page edits the connection while connected.
     - Apply and restart with validation (`config.apply`), then wake the last active session.
     - Writes include a base-hash guard to prevent clobbering concurrent edits.
@@ -373,6 +400,8 @@ select it to open the owning Approvals page.
     - Session-derived token and estimated-cost analysis stays separate from provider billing.
     - Provider cards call `usage.status` and show live plan names, quota windows, balances, spend, and budgets reported by configured provider plugins.
     - A provider usage failure does not block the session/cost dashboard; unavailable provider cards show their own error state.
+    - Incomplete session/cost totals stay readable while the visible, focused page checks for updates. Automatic checks are bounded; if they pause, select **Refresh** to check again.
+    - The overview loads session summaries first. Full system-prompt breakdowns load when you select a session; the `has:context` filter still works before opening details.
 
   </Accordion>
   <Accordion title="Debug, logs, update">
@@ -384,9 +413,10 @@ select it to open the owning Approvals page.
   </Accordion>
   <Accordion title="Automations panel notes">
     - Selecting a row opens a full-page detail view with an Active/Paused switch and Run now in the header (run-if-due, clone, and remove in its menu); the Settings tab edits the automation inline (prompt, details, frequency, advanced overrides) and the Run history tab shows that automation's runs.
+    - Both Run history views show a recorded delivery-suppression reason alongside the delivery status when available. Intentional suppression remains separate from delivery errors; the history does not infer a reason from a successful run.
     - Starter automations under the table prefill the create form with an editable prompt and schedule.
-    - For isolated tasks, delivery defaults to announce summary; switch to none for internal-only runs.
-    - Channel/target fields appear when announce is selected.
+    - New isolated tasks default to internal-only delivery. Select announce explicitly to send a summary to a channel.
+    - Channel/target fields appear when announce is selected; provide an explicit destination when the channel requires one.
     - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
     - For main-session tasks, webhook and none delivery modes are available.
     - Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options, agent model/thinking overrides, and best-effort delivery toggles.
@@ -455,6 +485,8 @@ The Activity tab lives in **Settings › System**, next to Logs and Debug. It ha
 - **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
 - **Live activity** is the existing ephemeral browser-local observer for tool activity. It is derived from the same Gateway `session.tool` and tool event stream that powers Chat tool cards. It does not add another Gateway event family, endpoint, durable activity store, metrics feed, or external observer stream.
 - **Run inspector** is deep-link only and reads the Gateway's durable, immutable `audit.run.inspect` safe-only projection. The RPC contains required `decisionDisplays` and never a raw `decisions` field. Use **Inspect run** on an active session or the run ID link in Live activity, or open `/activity?view=run&run=<percent-encoded-run-id>` directly. Reloading or revisiting the link queries the Gateway again; it never reconstructs identity from Live activity.
+
+The Sessions view owns its query independently of the sidebar. Its people filter uses the Gateway's full visible-session associations before pagination, not the four-avatar participant preview. `sessions.list` accepts `involvingProfileId` and `includePeople`; the response reports the canonical selected profile ID, bounded people counts, and `peopleIncomplete`. Only Gateway profiles appear as people. Remote, agent, and unresolved identities cannot acquire profile names or links through an equal raw ID. Counts and dates describe associated sessions, not a person's last input; recorded participation, verified creation, and assigned responsibility remain distinct from permission to see a session. Old profile links follow profile merges. A limit notice identifies incomplete participant history or truncated results.
 
 Live activity entries keep only sanitized summaries and redacted, truncated output previews. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count. The in-memory list follows the current browser tab, survives navigation within the Control UI, and resets on page reload, session switch, Gateway switch, or **Clear**.
 
@@ -552,11 +584,11 @@ Chat error banners, including cloud runner failures, keep a compact preview. Ope
     - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
-    - When a visible assistant message was truncated in `chat.history`, **Show more** fetches the full display-normalized transcript entry inline through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. **Show less** restores the preview without discarding the fetched content. If the Gateway cannot return more, the message shows an explicit retryable error instead of silently repeating the truncated preview.
+    - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.
     - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails and provides Open, Download, and Copy actions for the full image.
     - When rendering `chat.history`, the Control UI strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens. It omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply` or the heartbeat acknowledgement token `HEARTBEAT_OK`.
-    - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
-    - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
+    - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first.
+    - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat). After an in-place `/clear` or `/reset`, fresh turns keep their user-before-reply order across live updates, incremental history catch-up, and reload.
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
     - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. When New Session creates a worktree without an explicit worktree name, OpenClaw also uses the session label or generated title for its branch name, falling back to a readable crustacean-themed name. Set `agents.defaults.utilityModel` (or `agents.entries.*.utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
     - Thread search lives in the command palette (⌘K, or the search button in the top-left control cluster): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The Threads page keeps the exhaustive searchable list with filters.
@@ -584,11 +616,13 @@ Chat error banners, including cloud runner failures, keep a compact preview. Ope
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.modelPolicy.allow` is non-empty, that policy drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows configured entries plus providers with usable auth; aliases and settings under `agents.defaults.models` do not restrict it. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
-    - When fresh Gateway session usage reports include current context tokens, the chat composer toolbar shows a small context usage ring with the used percentage. Open the ring for the current context window, latest-run token counts and estimated total cost, provider/model identity, and the latest provider response's input/output/cache cost breakdown when reported. The ring switches to warning styling at high context pressure. Stale token snapshots are hidden until the Gateway reports fresh usage again.
+    - Chat and New Session block sending when the Gateway reports missing provider credentials or a confirmed authentication failure. Missing credentials point to **Model Setup**; authentication failures ask you to review the credential or sign-in. Temporary credential cooldowns and unknown model availability do not block sending or show an authentication banner; run errors remain visible in the transcript. Unavailable model choices stay disabled in the picker.
+    - After a config change or a published credential update, connected Chat and New Session views re-read model readiness automatically; no page reload or picker action is needed. Chat also re-reads its session projection after a model or auth-profile selection changes. An existing missing-credential or authentication-failure block stays in place while that read is pending or fails, until replacement metadata changes it. Existing chats keep their session's selected auth profile; New Session uses the agent's default credential selection. This refresh is event-driven, not a timed polling guarantee.
+    - The chat composer usage ring follows the selected session and agent, including global sessions. Open it for the current context window, latest-run token counts, and the current provider's account, plan, and quota when reported. Subscription quota replaces dollar estimates; other sessions can show estimated total cost and the latest provider response's input/output/cache cost breakdown. Fresh usage switches to warning styling at high context pressure; stale token snapshots remain visible as approximate usage without that warning. During an agent switch, the previous agent's session row is not reused for the ring.
 
   </Accordion>
   <Accordion title="Talk mode (browser realtime)">
-    Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.realtime.provider: "openai"`. GA `gpt-realtime-*` browser WebRTC uses Platform auth in this order: `talk.realtime.providers.openai.apiKey`, an `openai` API-key profile, then `OPENAI_API_KEY`. Native GPT-Live browser WebRTC uses `api.openai.com/v1/live` through the Gateway offer broker and prefers a ChatGPT OAuth subscription profile over Platform auth. GPT-Live also supports Gateway relay through a direct Frameless Bidi WebSocket with Platform API-key auth and no browser or WebRTC provider connection; Platform `/v1/live` access remains waitlist-gated. Configure Google with `talk.realtime.provider: "google"` plus `talk.realtime.providers.google.apiKey`. The browser never receives a standard provider API key or a ChatGPT OAuth token: Platform GA OpenAI receives an ephemeral Realtime client secret, native GPT-Live WebRTC receives a one-use Gateway reservation, and Google Live receives a one-use constrained Live API auth token for a browser WebSocket session. Gateway relay keeps provider credentials and vendor sockets server-side while browser audio moves through authenticated Gateway RPCs. Platform GA sessions use the Gateway's direct-tool prompt, while GPT-Live uses provider delegations. `talk.client.create` does not accept caller-provided instruction overrides.
+    Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.realtime.provider: "openai"`. GA `gpt-realtime-*` browser WebRTC uses Platform auth in this order: `talk.realtime.providers.openai.apiKey`, an `openai` API-key profile, then `OPENAI_API_KEY`. Native GPT-Live browser WebRTC and Gateway relay prefer a ChatGPT OAuth subscription profile and create calls through the Codex backend offer route; Platform API-key calls use `api.openai.com/v1/live` and require access to that API. Both keep the authenticated GPT-Live sideband on the Gateway. Gateway relay also keeps the WebRTC media peer server-side. GPT-Live has its own voice choices, shown by the model-aware Talk picker; GA Realtime voices do not apply. See [Talk mode](/nodes/talk) for setup and transport details. Configure Google with `talk.realtime.provider: "google"` plus `talk.realtime.providers.google.apiKey`. The browser never receives a standard provider API key or a ChatGPT OAuth token: Platform GA OpenAI receives an ephemeral Realtime client secret, native GPT-Live WebRTC receives a one-use Gateway reservation, and Google Live receives a one-use constrained Live API auth token for a browser WebSocket session. Gateway relay keeps provider credentials and vendor sockets server-side while browser audio moves through authenticated Gateway RPCs. Platform GA sessions use the Gateway's direct-tool prompt, while GPT-Live uses provider delegations. `talk.client.create` does not accept caller-provided instruction overrides.
 
     Persistent provider, model, voice, transport, reasoning effort, exact VAD threshold, silence duration, and prefix padding defaults live in **Settings → Communications → Talk**; changing them requires `operator.admin` access. Configuring Gateway relay forces the backend relay path; configuring WebRTC keeps the session client-owned and fails instead of silently falling back to relay if the provider cannot create a browser session.
 
@@ -630,11 +664,66 @@ automatically when the Gateway returns. Live controls and slash commands remain 
 offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
 is not replayed because newer work may start in that session before the connection returns.
 
+Queued attachments use binary Blobs in the browser's IndexedDB; the outbox keeps only delivery
+metadata and payload references in session storage. Attachment bytes stay with the queued input;
+the captured queue metadata owns its destination, even when configured main-session defaults change. All attachments
+must be stored before the message is admitted, and all must be readable before sending. Failed admission leaves the draft
+unsent. Missing or unreadable queued payloads leave a visible row with recovery guidance; the
+browser never sends just the remaining attachments. Binary outbox storage requires browser
+storage access and Web Locks, available over HTTPS or localhost. Gateway attachment limits
+still apply.
+
+The outbox retains up to 25 MiB of attachments per message and 250 MiB across this browser origin,
+subject to the browser's own quota. Queued payloads have no age-based expiry. Delivery or discard
+releases them; closing a tab or interrupting a tab copy or cleanup can leave orphaned payloads
+within that bound. If capacity remains
+full after sending or discarding your queues, save any needed drafts before clearing this site's
+browser storage. That also clears browser-local drafts and sign-in state. Outbox queues belong to
+the browser tab; they are distinct from restart-recoverable composer drafts. Incognito sessions
+keep their existing tab-only inline outbox and its smaller browser storage limit; they never
+store queued attachment Blobs in IndexedDB.
+
+Duplicating a tab copies the same submission IDs. Once opened, the duplicate claims its own
+payload copies and marks those submissions **Delivery unconfirmed**. Check the conversation
+before retrying. A duplicate first opened after the source discarded or delivered a message may
+instead report missing attachments. Independent tabs do not share newly authored outbox messages.
+
+After connecting, chat waits for account-scoped recovery before accepting or sending ordinary
+messages. During this brief check, submitted text and attachments stay in the composer. Offline
+queues resume once recovery is ready, unless the session still owns an unresolved initial turn;
+resolve that turn with its **Retry** or **Check delivery** action first.
+
 If the connection drops before a send is acknowledged, reconnect checks the transcript and
 the session's active or last run ID for delivery proof. A matching run confirms receipt even
 before its transcript row appears. Without proof, an attempted message stays in the conversation
 with an amber **Delivery unconfirmed** footer and **Retry**. Check the conversation and retry only
 if the message did not arrive. Unconfirmed local commands keep their retry/discard queue controls.
+
+Queued messages and drafts keep the conversation and agent selected when they were created.
+Switching agents, opening a split pane, or reloading does not move them to another destination.
+A literal `global` conversation keeps its captured agent; an agent's main conversation stays
+separate unless the Gateway is configured with global session scope.
+
+Older browser state may have combined several destinations into one bucket. The Control UI uses
+metadata version 4 (`openclaw.control.chatComposer.v4:`), migrating version 1, 2, and 3 records
+directly when their destination is still identifiable. It verifies the new metadata before
+removing an older source, retaining complete sources when storage or recovery capacity blocks
+migration. This metadata change does not change the IndexedDB schema or durable-draft keys. Ambiguous records appear under
+**Saved messages need a destination** and remain unsent. Open the intended non-Incognito conversation with
+an empty composer and queue, expand the notice, and choose **Restore here for review**. Confirm
+the displayed conversation key and agent. Recovered queued messages stay paused: check for
+previous delivery before using **Retry**. Recovered attachment drafts return to the composer
+without sending. Reconnect, a replacement session, or enabling Incognito while confirmation is
+open cancels the transfer; confirm again in the intended conversation. Older attachment drafts
+whose destination is known stay cleared when that destination has a newer clear. Ambiguous saved
+data remains available for review. Queued Blob references and original submission IDs survive
+both automatic migration and explicit destination recovery. Credential-bound messages are shown
+only under their original Gateway credential scope, including when an older bucket contains
+messages from several scopes. Moving a message into or out of recovery does not delete its bytes;
+cleanup follows verified delivery or discard and accounts for retained recovery messages too.
+If the destination changes, a newer draft appears, or storage fails, recovery keeps the source
+available rather than overwriting newer input. Do not clear browser site data
+while you still have saved messages or attachment drafts to recover.
 
 First opens and reloads show a small animated OpenClaw mark while the Gateway resolves the initial
 connection, including when authentication comes from a trusted proxy or Tailscale instead of a
@@ -652,12 +741,12 @@ See [Notifications](/web/notifications) for the browser and macOS setup steps.
 
 If the page shows **Protocol mismatch** right after an OpenClaw update, first reopen the dashboard with `openclaw dashboard` and hard-refresh. If it still fails, clear site data for the dashboard origin or test in a private browser window; an old tab or browser service-worker cache can keep running a pre-update Control UI bundle against the newer Gateway.
 
-| Surface                                                                | What it does                                                                 |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `ui/public/manifest.webmanifest`                                       | PWA manifest. Browsers offer "Install app" once it is reachable.             |
-| `ui/public/sw.js`                                                      | Service worker that handles `push` events and notification clicks.           |
-| `state/openclaw.sqlite` → `config_machine_state` (`webPush.vapidKeys`) | Auto-generated VAPID keypair used to sign Web Push payloads.                 |
-| `state/openclaw.sqlite` → `web_push_subscriptions`                     | Persisted browser subscription endpoints, keys, and registration timestamps. |
+| Surface                                                                | What it does                                                                |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `ui/public/manifest.webmanifest`                                       | PWA manifest. Browsers offer "Install app" once it is reachable.            |
+| `ui/public/sw.js`                                                      | Service worker that handles `push` events and notification clicks.          |
+| `state/openclaw.sqlite` → `config_machine_state` (`webPush.vapidKeys`) | Auto-generated VAPID keypair used to sign Web Push payloads.                |
+| `state/openclaw.sqlite` → `web_push_subscriptions`                     | Persisted browser endpoints, keys, device/profile bindings, and timestamps. |
 
 Upgrades from the retired `push/vapid-keys.json` and `push/web-push-subscriptions.json` stores are imported by `openclaw doctor --fix`. Stop the Gateway before running that repair so an older process cannot recreate retired state during import. Run the repair before using Web Push after an upgrade; registration, delivery, deletion, and key resolution refuse to proceed while either retired source or an interrupted Doctor claim remains. The Gateway runtime reads and writes SQLite only.
 
@@ -667,12 +756,16 @@ Override the VAPID keypair through env vars on the Gateway process when you want
 - `OPENCLAW_VAPID_PRIVATE_KEY`
 - `OPENCLAW_VAPID_SUBJECT` (defaults to `https://openclaw.ai`)
 
+One service-worker registration scope has one browser push subscription and therefore one application-server key. If one installed PWA switches among multiple logical Gateways, configure the same public/private VAPID pair on every Gateway and set each Gateway's `gateway.publicOrigin`; otherwise registration fails closed with a VAPID-identity mismatch. Sharing the private VAPID key and browser endpoint creates one push-signing trust domain, so do this only among mutually trusted Gateways. PWAs installed from separate HTTPS origins or base-path scopes have separate registrations and do not need to share keys.
+
 The Control UI uses these scope-gated Gateway methods to register and test browser subscriptions:
 
 - `push.web.vapidPublicKey` fetches the active VAPID public key.
-- `push.web.subscribe` registers an `endpoint` plus `keys.p256dh`/`keys.auth`.
+- `push.web.subscribe` registers an `endpoint` plus `keys.p256dh`/`keys.auth`; the Gateway binds it to the authenticated browser device and current user profile.
 - `push.web.unsubscribe` removes a registered endpoint.
 - `push.web.test` sends a test notification to registered browser subscriptions.
+
+Pending exec and plugin approvals also trigger Web Push. Approval delivery is narrower than `push.web.test`: the Gateway targets only bound subscriptions whose paired device, current operator token, profile role, and approval visibility still authorize the request. Legacy unbound subscriptions stay test-only until the Control UI reconnects and reconciles them. Push payloads contain generic text and an authenticated `/approve/<approvalId>` link, not approval details.
 
 <Note>
 Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway/configuration) for relay-backed push) and the `push.test` method, which targets native mobile pairing.
@@ -822,6 +915,8 @@ The Gateway serves static files from `dist/control-ui`:
 ```bash
 pnpm ui:build
 ```
+
+For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache keeps at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Configured `gateway.controlUi.root` builds do not use this cache.
 
 Optional absolute base (fixed asset URLs):
 
