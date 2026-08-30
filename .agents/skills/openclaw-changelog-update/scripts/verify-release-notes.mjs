@@ -269,9 +269,7 @@ function gitCommit(ref, required = false) {
 
 function fetchGithubApi(args) {
   try {
-    return JSON.parse(
-      run("ghx", ["api", ...args], { env: { GHX_NO_CACHE: "1" } }).replace(ansiEscapePattern, ""),
-    );
+    return JSON.parse(run("gh", ["api", ...args]).replace(ansiEscapePattern, ""));
   } catch (error) {
     if (typeof error.stdout === "string" && error.stdout.trim() !== "") {
       return JSON.parse(error.stdout.replace(ansiEscapePattern, ""));
@@ -436,12 +434,16 @@ function githubHandleFromNoreply(email) {
 }
 
 function editorialClassification(subject) {
-  const type = subject.match(/^\s*([a-z]+)(?:\([^)]*\))?!?:/i)?.[1]?.toLowerCase();
+  const conventional = subject.match(/^\s*([a-z]+)(?:\([^)]*\))?(!)?:/i);
+  const type = conventional?.[1]?.toLowerCase();
   return {
+    // A declared breaking API change needs migration notes even when its
+    // conventional type describes a refactor or other internal work.
     editorialEligible:
-      (Boolean(type) || editorialTitlePattern.test(subject)) &&
-      !nonEditorialTypes.has(type) &&
-      !nonEditorialTitlePattern.test(subject),
+      Boolean(conventional?.[2]) ||
+      ((Boolean(type) || editorialTitlePattern.test(subject)) &&
+        !nonEditorialTypes.has(type) &&
+        !nonEditorialTitlePattern.test(subject)),
     type: type ?? "other",
   };
 }
