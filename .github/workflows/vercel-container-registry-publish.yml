@@ -173,8 +173,8 @@ jobs:
       - name: Run custom-image Sandbox smoke
         id: sandbox_smoke
         env:
+          SANDBOX_CLI: ${{ steps.vercel_cli.outputs.sandbox_cli }}
           VERCEL_AUTH_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_CLI: ${{ steps.vercel_cli.outputs.cli }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
           VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
           VERCEL_VCR_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
@@ -187,7 +187,7 @@ jobs:
           while true; do
             set +e
             output="$(
-              "${VERCEL_CLI}" sandbox run \
+              "${SANDBOX_CLI}" run \
                 --silent \
                 --rm \
                 --non-persistent \

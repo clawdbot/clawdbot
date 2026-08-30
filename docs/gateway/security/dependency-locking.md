@@ -11,7 +11,13 @@ OpenClaw uses `pnpm-lock.yaml` as its committed product dependency review bounda
 
 OpenClaw does not commit npm-format locks for product packages or publish them in package tarballs. [npm 12 removed shrinkwrap support](https://github.com/npm/cli/releases/tag/v12.0.0), including the `npm shrinkwrap` command and loading `npm-shrinkwrap.json` from package roots or dependency tarballs.
 
-The trusted ClawHub release toolchain is a separate exception: `.github/release/clawhub-cli/package-lock.json` is a committed npm 12 project lock used by release automation. It is not shipped in an OpenClaw package.
+The trusted ClawHub and Vercel release toolchains are separate exceptions: `.github/release/clawhub-cli/package-lock.json` and `.github/release/vercel-cli/package-lock.json` are committed npm project locks used by release automation. Neither is shipped in an OpenClaw package.
+
+These projects do not inherit root pnpm overrides. The Vercel project uses approved, version-scoped npm overrides for vulnerable upstream pins; remove each override when its owning dependency accepts a fixed version. Lock audits cover resolved package identities, not code already bundled into upstream CLI artifacts.
+
+`pnpm deps:vuln:gate` audits the product pnpm lock and both release-tool locks independently against npm advisory data. Within each lockfile, known malware and critical advisories block anywhere, and high advisories block in the production/runtime graph. Dev-only high advisories and moderate or lower non-malware advisories are reported without blocking. Reports retain the source lockfile, so a release-tool finding does not imply product runtime exposure. Missing or invalid expected locks fail the gate.
+
+Release dependency evidence runs this gate. Ordinary CI's `security-fast` job and the production audit pre-commit hook still audit only the product production graph.
 
 ## Published package behavior
 
