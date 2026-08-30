@@ -414,8 +414,16 @@ link-local, and private-network targets.
 
 - **Webhook verification fails:** ensure the webhook URL is HTTPS and the
   `channelSecret` matches the LINE console.
-- **No inbound events:** confirm the webhook path matches `channels.line.webhookPath`
-  and that the gateway is reachable from LINE.
+- **No inbound events:** run `openclaw channels status --probe`. LINE only delivers
+  events while the channel's webhook URL is registered and **Use webhook** is on in
+  the Messaging API tab of the LINE Developers Console, and the probe reports both —
+  a channel whose webhook is off or unregistered is named with the setting to change.
+  OpenClaw does not set either for you: the URL has an API but depends on a public
+  address OpenClaw does not know, and the **Use webhook** switch has no API at all.
+  The webhook state comes from the probe, so
+  `openclaw channels status` without `--probe` does not report it. If the probe
+  reports the webhook as on, confirm the webhook path matches
+  `channels.line.webhookPath` and that the gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
 - **Bot silently skips messages (events dead-lettered):** `openclaw logs` shows

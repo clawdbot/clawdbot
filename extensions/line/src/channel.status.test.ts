@@ -33,6 +33,64 @@ describe("linePlugin status.collectStatusIssues", () => {
     expect(snapshot).toMatchObject({ lifecycle: "recovering", connected: false });
   });
 
+  it.each([
+    {
+      name: "registered but switched off",
+      webhook: { status: "disabled", endpoint: "https://gateway.example/line/webhook" },
+      message:
+        "LINE is not delivering webhook events: this channel's webhook URL is registered but switched off.",
+    },
+    {
+      name: "never registered",
+      webhook: { status: "unset" },
+      message: "LINE is not delivering webhook events: this channel has no webhook URL registered.",
+    },
+  ])("reports a webhook that is $name", ({ webhook, message }) => {
+    expect(
+      collectIssues([
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          tokenSource: "config",
+          probe: { ok: true, webhook },
+        },
+      ]),
+    ).toEqual([
+      {
+        channel: "line",
+        accountId: "default",
+        kind: "config",
+        message,
+        fix: "open the channel's Messaging API tab in the LINE Developers Console, set the webhook URL to your gateway's /line/webhook path, and turn Use webhook on",
+      },
+    ]);
+  });
+
+  it("stays quiet about the webhook when it is on, and when LINE did not answer", () => {
+    expect(
+      collectIssues([
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          tokenSource: "config",
+          probe: {
+            ok: true,
+            webhook: { status: "active", endpoint: "https://gateway.example/line/webhook" },
+          },
+        },
+        {
+          accountId: "quiet",
+          enabled: true,
+          configured: true,
+          tokenSource: "config",
+          probe: { ok: false, error: "timeout" },
+        },
+      ]),
+    ).toStrictEqual([]);
+  });
+
   it("does not warn when a sanitized snapshot is configured", () => {
     expect(
       collectIssues([

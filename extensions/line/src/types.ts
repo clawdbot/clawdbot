@@ -73,6 +73,11 @@ export interface LineSendResult {
   receipt: MessageReceipt;
 }
 
+/** Console-side webhook state, which decides whether LINE delivers anything at all. */
+export type LineProbeWebhookState =
+  | { status: "active" | "disabled"; endpoint: string }
+  | { status: "unset" };
+
 export type LineProbeResult = BaseProbeResult<string> & {
   elapsedMs?: number;
   bot?: {
@@ -81,6 +86,8 @@ export type LineProbeResult = BaseProbeResult<string> & {
     basicId?: string;
     pictureUrl?: string;
   };
+  /** Absent when LINE did not answer, which stays "unknown" rather than "fine". */
+  webhook?: LineProbeWebhookState;
 };
 
 type LineFlexMessagePayload = {
