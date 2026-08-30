@@ -1,4 +1,5 @@
 // Control UI chat module owns editing a queued message in its queue row.
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
@@ -10,11 +11,7 @@ import {
   removeVisibleOrScopedQueuedMessageWithoutReleasing,
   type ChatQueueScopedSessionHost,
 } from "./chat-queue.ts";
-import {
-  resolveStoredChatOutboxScope,
-  storedChatOutboxScopeKey,
-  type ChatComposerPersistenceState,
-} from "./composer-persistence.ts";
+import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 
 /**
  * The edited row stays in the queue, holding its own place, so the operator can
@@ -37,10 +34,11 @@ export type QueuedMessageEdit = {
   sourceWasDurable: boolean;
 };
 
-type QueuedMessageEditHost = ChatQueueScopedSessionHost &
-  Pick<ChatComposerPersistenceState, "client" | "connected"> & {
-    chatQueuedEdit?: QueuedMessageEdit | null;
-  };
+type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
+  client?: Pick<GatewayBrowserClient, "recoveryScope" | "recoveryScopeReady"> | null;
+  connected?: boolean;
+  chatQueuedEdit?: QueuedMessageEdit | null;
+};
 
 function currentQueuedMessageEditOwner(host: QueuedMessageEditHost) {
   // Recovery resolves after hello. While offline, the client retains its last
