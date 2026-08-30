@@ -176,7 +176,7 @@ const VOLATILE_EXEC_FAILURE_PATTERNS = [
   /\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:z|[+-]\d{2}:\d{2})?/giu,
   /\d{1,2}:\d{2}:\d{2}(?:\.\d{1,6})?/gu,
   /\b(?:attempt|retry)\b[\s#:=]*\d+/giu,
-  /\b\d+(?:\.\d+)?\s?(?:ns|us|ms|seconds?|minutes?|hours?)\b/giu,
+  /\b\d+(?:\.\d+)?\s?(?:ns|us|ms|seconds?|minutes?|hours?|s)\b/giu,
   /\b(?:pid|ppid)\b[\s#:=]*\d+/giu,
 ] as const;
 

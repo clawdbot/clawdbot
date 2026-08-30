@@ -1230,6 +1230,7 @@ describe("tool-loop-detection", () => {
       { label: "attempt counters", output: (index: number) => `failed on attempt ${index}` },
       { label: "retry counters", output: (index: number) => `failed on retry=${index}` },
       { label: "elapsed durations", output: (index: number) => `failed after ${index + 1}ms` },
+      { label: "short elapsed durations", output: (index: number) => `failed after ${index + 1}s` },
       { label: "process ids", output: (index: number) => `failed in pid=${1000 + index}` },
     ])("blocks terminal exec failures with drifting $label", ({ output }) => {
       const state = createState();
