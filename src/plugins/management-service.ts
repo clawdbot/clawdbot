@@ -1390,12 +1390,12 @@ async function persistManagedSourceInstall(params: {
         await params.transaction?.rollback();
       } catch (rollbackError) {
         // Both errors are retained; the install failure remains the primary cause.
-        // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors preserves the rollback error.
-        throw new AggregateError(
+        const aggregate = new AggregateError(
           [error, rollbackError],
           "Plugin install failed and payload rollback failed",
-          { cause: error },
         );
+        aggregate.cause = error;
+        throw aggregate;
       }
     }
     throw error;
