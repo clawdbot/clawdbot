@@ -144,6 +144,7 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
     };
     const first = { ...message, timestamp: 10 };
     const second = { ...message, id: "two", parentId: "one", timestamp: 30 };
+    const rejected = { ...second, timestamp: 99 };
     const opaque = { custom: "no identity", timestamp: 25 };
     const readTranscriptEvents = (append: (event: unknown) => void) => {
       for (const event of [
@@ -153,7 +154,9 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
         opaque,
         opaque,
         second,
-        { ...second, timestamp: 99 },
+        rejected,
+        { ...second, timestamp: 50 },
+        rejected,
       ]) {
         append(event);
       }
