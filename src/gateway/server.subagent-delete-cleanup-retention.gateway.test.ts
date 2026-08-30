@@ -11,8 +11,9 @@ import {
   testing as subagentRegistryTesting,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import type { callGateway } from "./call.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
-import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
+import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const gatewaySuite = installConnectedSessionStoreGatewaySuite(
@@ -24,17 +25,45 @@ const CHILD_SESSION_KEY = "agent:main:subagent:gw-delete-retention";
 const REQUESTER_SESSION_KEY = "agent:main:main";
 
 afterEach(() => {
+  subagentRegistryTesting.setDepsForTest();
   resetSubagentRegistryForTests({ persist: false });
 });
+
+/** Route registry gateway calls at the live ephemeral gateway so cleanup really deletes. */
+function useLiveGatewayForRegistryCleanup(): void {
+  const callLiveGateway = async (options: { method: string; params?: unknown }) => {
+    const res = await rpcReq<Record<string, unknown>>(
+      gatewaySuite.ws,
+      options.method,
+      options.params,
+    );
+    if (!res.ok) {
+      throw new Error(`gateway ${options.method} failed: ${JSON.stringify(res.error)}`);
+    }
+    return res.payload;
+  };
+  subagentRegistryTesting.setDepsForTest({
+    callGateway: callLiveGateway as unknown as typeof callGateway,
+  });
+}
 
 describe("delete-cleanup archive retention through a real gateway", () => {
   test("cleanup, retained listing, restart recovery, and expiry", async () => {
     testState.sessionStorePath = gatewaySuite.sessionStorePath;
+    useLiveGatewayForRegistryCleanup();
     await writeSessionStore({
       entries: {
+        [REQUESTER_SESSION_KEY]: {
+          sessionId: "sess-gw-delete-retention-parent",
+          updatedAt: Date.now(),
+        },
         [CHILD_SESSION_KEY]: {
           sessionId: "sess-gw-delete-retention",
           updatedAt: Date.now(),
+          spawnedBy: REQUESTER_SESSION_KEY,
+          // Delete cleanup submits sessions.delete only with both lifecycle
+          // identities; without the revision it suppresses child-session effects.
+          lifecycleRevision: "rev-gw-delete-retention",
         },
       },
     });
@@ -66,11 +95,44 @@ describe("delete-cleanup archive retention through a real gateway", () => {
       return entry!;
     });
 
+    // Retention must not leak into session navigation: delete cleanup removed
+    // the child session, so the parent must expose no expandable child toggle
+    // and the spawnedBy query must stay empty while the run itself stays listed.
+    // Delete cleanup dispatches sessions.delete asynchronously; the completion
+    // stamp lands only after the live gateway acknowledges the deletion.
+    const cleanupCompletedAt = await vi.waitFor(
+      () => {
+        const completedAt = getSubagentRunByRunId(RUN_ID)?.cleanupCompletedAt;
+        expect(completedAt).toBeTypeOf("number");
+        return completedAt as number;
+      },
+      { timeout: 10_000, interval: 25 },
+    );
+
+    const listed = await vi.waitFor(async () => {
+      const res = await rpcReq<{
+        sessions: Array<{ key: string; childSessions?: string[] }>;
+      }>(gatewaySuite.ws, "sessions.list", { includeUnknown: true });
+      expect(res.ok).toBe(true);
+      const keys = res.payload?.sessions.map((row) => row.key) ?? [];
+      expect(keys).not.toContain(CHILD_SESSION_KEY);
+      return res.payload?.sessions ?? [];
+    });
+    const parentRow = listed.find((row) => row.key === REQUESTER_SESSION_KEY);
+    expect(parentRow).toBeDefined();
+    expect(parentRow?.childSessions).toBeUndefined();
+
+    const spawnedChildren = await rpcReq<{ sessions: Array<{ key: string }> }>(
+      gatewaySuite.ws,
+      "sessions.list",
+      { includeUnknown: true, spawnedBy: REQUESTER_SESSION_KEY },
+    );
+    expect(spawnedChildren.ok).toBe(true);
+    expect(spawnedChildren.payload?.sessions ?? []).toEqual([]);
+
     const afterRestart = loadSubagentRegistryFromSqlite().get(RUN_ID);
     expect(afterRestart?.archiveAtMs).toBe(retained.archiveAtMs);
-    expect(afterRestart?.cleanupCompletedAt ?? afterRestart?.execution.endedAt).toBeTypeOf(
-      "number",
-    );
+    expect(afterRestart?.cleanupCompletedAt).toBe(cleanupCompletedAt);
 
     // Expire the live map row the sweeper reads. Listing snapshots are clones.
     const live = getSubagentRunByRunId(RUN_ID);
@@ -96,6 +158,12 @@ describe("delete-cleanup archive retention through a real gateway", () => {
       path: "delete-cleanup archive retention",
       cleanup: { terminal: true, archiveAtMs: retained.archiveAtMs },
       retainedListing: { runId: RUN_ID, visible: true },
+      sessionNavigation: {
+        childSessionDeleted: true,
+        childSessionListed: false,
+        parentChildToggle: parentRow?.childSessions ?? null,
+        spawnedByChildren: spawnedChildren.payload?.sessions.length ?? -1,
+      },
       restartRecovery: { present: Boolean(afterRestart) },
       expiry: { presentAfterSweep: false },
     };

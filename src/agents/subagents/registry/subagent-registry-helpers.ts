@@ -28,6 +28,7 @@ import {
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasCompletedDeleteCleanup } from "./subagent-run-liveness.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -340,8 +341,7 @@ export function reconcileOrphanedRestoredRuns(params: {
       continue;
     }
     if (
-      entry.cleanup === "delete" &&
-      typeof entry.cleanupCompletedAt === "number" &&
+      hasCompletedDeleteCleanup(entry) &&
       typeof entry.archiveAtMs === "number" &&
       entry.archiveAtMs > now
     ) {

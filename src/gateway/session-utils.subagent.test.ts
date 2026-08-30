@@ -369,6 +369,53 @@ describe("session list subagent metadata", () => {
     expect(failed?.runtimeMs).toBe(5_000);
   });
 
+  test("does not link a retained delete-cleanup run whose child session is gone", () => {
+    const now = Date.now();
+    const parentKey = "agent:main:main";
+    const childSessionKey = "agent:main:subagent:deleted-child";
+    // Delete cleanup removed the child session row; the registry row survives
+    // until its archive deadline so recent-run listings keep the finished run.
+    const store: Record<string, SessionEntry> = {
+      [parentKey]: {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-deleted-child",
+      childSessionKey,
+      controllerSessionKey: parentKey,
+      requesterSessionKey: parentKey,
+      requesterDisplayKey: "main",
+      task: "deleted child task",
+      cleanup: "delete",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+      endedAt: now - 1_000,
+      outcome: { status: "ok" },
+      cleanupCompletedAt: now - 500,
+      archiveAtMs: now + 30 * 60 * 1_000,
+    });
+
+    const parent = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    }).sessions.find((session) => session.key === parentKey);
+    // No expandable toggle, because expanding it resolves to nothing.
+    expect(parent?.childSessions).toBeUndefined();
+    expect(
+      listSessionsFromStore({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: { spawnedBy: parentKey },
+      }).sessions,
+    ).toEqual([]);
+  });
+
   test("does not show stale registry-only subagent runs as actively running", async () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:stale-display";

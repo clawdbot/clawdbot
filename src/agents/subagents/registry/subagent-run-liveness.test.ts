@@ -127,4 +127,29 @@ describe("subagent run liveness", () => {
       ),
     ).toBe(false);
   });
+
+  it("drops child links once delete cleanup removed the child session", () => {
+    const endedAt = now - 60_000;
+    const entry = {
+      createdAt: now - 120_000,
+      execution: { endedAt },
+      cleanup: "delete" as const,
+      cleanupCompletedAt: endedAt + 1_000,
+    };
+    expect(shouldKeepSubagentRunChildLink(entry, { now })).toBe(false);
+    expect(shouldKeepSubagentRunChildLink(entry, { activeDescendants: 1, now })).toBe(false);
+  });
+
+  it("keeps the child link while delete cleanup has not completed", () => {
+    expect(
+      shouldKeepSubagentRunChildLink(
+        {
+          createdAt: now - 120_000,
+          execution: { endedAt: now - 60_000 },
+          cleanup: "delete" as const,
+        },
+        { now },
+      ),
+    ).toBe(true);
+  });
 });

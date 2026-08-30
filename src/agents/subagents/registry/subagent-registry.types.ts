@@ -334,6 +334,9 @@ export type SubagentRunReadRecord = Pick<
   | "accumulatedRuntimeMs"
   | "runTimeoutSeconds"
   | "endedReason"
+  // Both cleanup facts: completed delete cleanup means the child session is
+  // gone while the row waits out its archive deadline (see child-link liveness).
+  | "cleanup"
   | "cleanupCompletedAt"
   | "delivery"
 > & {
