@@ -116,12 +116,9 @@ export async function loadCatalogShareRouteFromLocation(
         face: "chat",
       };
     }
-    if (matches.length === 0) {
-      return missingSessionRouteData(context, "chat", agentId);
-    }
     const session = matches[0];
     if (!session) {
-      return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
+      return missingSessionRouteData(context, "chat", agentId);
     }
     const pathname = buildControlUiCatalogSharePath({
       shareRoute,
