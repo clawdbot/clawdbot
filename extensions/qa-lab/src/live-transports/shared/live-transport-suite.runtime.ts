@@ -56,7 +56,6 @@ export async function runLiveTransportQaSuiteCommand(params: {
     failFast: options.failFast,
     channelDriver: "live",
     channel: params.channelId,
-    concurrency: 1,
     scenarioIds: selectedScenarioIds,
     sutAccountId: options.sutAccountId,
     ...(options.credentialFile ? { credentialFile: options.credentialFile } : {}),

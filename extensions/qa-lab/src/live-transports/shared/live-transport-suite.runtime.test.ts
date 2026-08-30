@@ -52,7 +52,6 @@ describe("live transport suite runtime", () => {
       failFast: true,
       channelDriver: "live",
       channel: "slack",
-      concurrency: 1,
       scenarioIds: ["slack-canary"],
       sutAccountId: "slack-sut",
       credentialFile: "/secure/slack-qa.json",
