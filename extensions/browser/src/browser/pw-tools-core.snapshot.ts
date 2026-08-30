@@ -104,16 +104,19 @@ function buildStoredAriaRefs(
 ): Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }> {
   const refs: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }> =
     {};
-  const refsByKey = new Map<string, string[]>();
+  const groups = new Map<string, { count: number; firstRef: string }>();
 
   for (const node of nodes) {
     const role = normalizeLowercaseStringOrEmpty(node.role) || "unknown";
     const name = node.name.trim();
     const key = `${role}:${name}`;
-    const refsForKey = refsByKey.get(key) ?? [];
-    const nth = refsForKey.length;
-    refsForKey.push(node.ref);
-    refsByKey.set(key, refsForKey);
+    const group = groups.get(key);
+    const nth = group?.count ?? 0;
+    if (group) {
+      group.count += 1;
+    } else {
+      groups.set(key, { count: 1, firstRef: node.ref });
+    }
     refs[node.ref] = {
       role,
       name,
@@ -123,13 +126,10 @@ function buildStoredAriaRefs(
     };
   }
 
-  for (const refsForKey of refsByKey.values()) {
-    if (refsForKey.length > 1) {
-      continue;
-    }
-    const ref = refsForKey[0];
-    if (ref) {
-      delete refs[ref]?.nth;
+  // Resolve by ref after grouping: later input nodes can overwrite the same ref.
+  for (const { count, firstRef } of groups.values()) {
+    if (count === 1 && firstRef) {
+      delete refs[firstRef]?.nth;
     }
   }
 
