@@ -22,6 +22,7 @@ import {
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  SessionGroupNotEmptyError,
   SessionGroupNotFoundError,
   updateSessionGroupDefaults,
 } from "../session-groups.js";
@@ -72,10 +73,22 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const groups = putSessionGroups(params.names, params.sectionOrder);
-    respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
-    // Catalog-only changes still need to reach other open clients.
-    emitSessionsChanged(context, { reason: "groups" });
+    try {
+      const groups = putSessionGroups({
+        cfg: context.getRuntimeConfig(),
+        names: params.names,
+        sectionOrder: params.sectionOrder,
+      });
+      respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
+      // Catalog-only changes still need to reach other open clients.
+      emitSessionsChanged(context, { reason: "groups" });
+    } catch (error) {
+      if (error instanceof SessionGroupNotEmptyError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
   },
   "sessions.groups.rename": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (

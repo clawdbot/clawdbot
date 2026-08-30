@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const groupMocks = vi.hoisted(() => ({
+  NotEmpty: class SessionGroupNotEmptyError extends Error {},
   NotFound: class SessionGroupNotFoundError extends Error {},
+  put: vi.fn(),
   rename: vi.fn(),
   update: vi.fn(),
 }));
@@ -17,8 +19,9 @@ vi.mock("../session-groups.js", () => ({
   listSessionGroupDefaults: vi.fn(() => []),
   listSessionGroups: vi.fn(() => []),
   listSidebarSectionOrder: vi.fn(() => []),
-  putSessionGroups: vi.fn(() => []),
+  putSessionGroups: groupMocks.put,
   renameSessionGroup: groupMocks.rename,
+  SessionGroupNotEmptyError: groupMocks.NotEmpty,
   SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
 }));
@@ -52,6 +55,50 @@ function renameOptions(params: Record<string, unknown>, respond: ReturnType<type
     context: { getRuntimeConfig: () => ({}) },
   } as unknown as GatewayRequestHandlerOptions;
 }
+
+describe("sessions.groups.put", () => {
+  beforeEach(() => {
+    groupMocks.put.mockReset();
+  });
+
+  it("rejects dropping a non-empty group as an invalid request", async () => {
+    const message = "cannot drop Gone; remove it via sessions.groups.delete";
+    groupMocks.put.mockImplementation(() => {
+      throw new groupMocks.NotEmpty(message);
+    });
+    const respond = vi.fn();
+    await expectDefined(
+      sessionGroupHandlers["sessions.groups.put"],
+      'sessionGroupHandlers["sessions.groups.put"] test invariant',
+    )(updateOptions({ names: ["Keep"] }, respond));
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST", message }),
+    );
+  });
+
+  it("replaces the catalog using the runtime config", async () => {
+    const cfg = { agents: { list: [{ id: "main" }] } };
+    const names = ["Keep"];
+    const sectionOrder = ["category:Keep", "ungrouped"];
+    const groups = [{ name: "Keep", position: 0 }];
+    groupMocks.put.mockReturnValue(groups);
+    const respond = vi.fn();
+    const options = updateOptions({ names, sectionOrder }, respond);
+    options.context.getRuntimeConfig = () => cfg;
+
+    await expectDefined(
+      sessionGroupHandlers["sessions.groups.put"],
+      'sessionGroupHandlers["sessions.groups.put"] test invariant',
+    )(options);
+
+    expect(groupMocks.put).toHaveBeenCalledExactlyOnceWith({ cfg, names, sectionOrder });
+    expect(groupMocks.put.mock.calls[0]?.[0].cfg).toBe(cfg);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, groups, sectionOrder: [] }, undefined);
+  });
+});
 
 describe("sessions.groups.update", () => {
   beforeEach(() => {

@@ -629,7 +629,7 @@ describe("session sharing policy", () => {
 
   it("rechecks group members before committing a defaults update", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      putSessionGroups(["Race"]);
+      putSessionGroups({ cfg: {}, names: ["Race"] });
       updateSessionGroupDefaults("Race", { cwd: "/repos/race", worktree: true });
       const viewer = client({ user: "viewer@example.com" });
       const context = {
@@ -672,7 +672,7 @@ describe("session sharing policy", () => {
 
   it("filters group defaults and blocks updates for sessions the caller cannot mutate", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      putSessionGroups(["Projects", "Personal"]);
+      putSessionGroups({ cfg: {}, names: ["Projects", "Personal"] });
       updateSessionGroupDefaults("Projects", { cwd: "/repos/projects", worktree: true });
       updateSessionGroupDefaults("Personal", { cwd: "/repos/personal", worktree: false });
       await upsertSessionEntryCore(

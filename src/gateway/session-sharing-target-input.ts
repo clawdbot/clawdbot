@@ -10,9 +10,10 @@ import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export function resolveSessionGroupMutationTargetsByName(
   cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
 ): Map<string, SessionMutationTarget[]> {
   const targetsByName = new Map<string, SessionMutationTarget[]>();
-  for (const storeTarget of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+  for (const storeTarget of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
     for (const { sessionKey, entry } of listSessionEntriesReadOnly({
       agentId: storeTarget.agentId,
       storePath: storeTarget.storePath,

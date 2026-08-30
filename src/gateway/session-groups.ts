@@ -14,6 +14,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveSessionGroupMutationTargetsByName } from "./session-sharing-target-input.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
 // Write transactions must run on the same env-scoped handle as their
@@ -40,6 +41,17 @@ export class SessionGroupNotFoundError extends Error {
   constructor(name: string) {
     super(`unknown session group: ${name}`);
     this.name = "SessionGroupNotFoundError";
+  }
+}
+
+export class SessionGroupNotEmptyError extends Error {
+  constructor(readonly groups: ReadonlyArray<{ name: string; memberSessions: number }>) {
+    super(
+      `sessions.groups.put cannot drop groups that still have member sessions: ${groups
+        .map((group) => `"${group.name}" (${group.memberSessions})`)
+        .join(", ")}; include them in names or remove them via sessions.groups.delete`,
+    );
+    this.name = "SessionGroupNotEmptyError";
   }
 }
 
@@ -185,15 +197,33 @@ export function listSidebarSectionOrder(env: NodeJS.ProcessEnv = process.env): s
   return readConfigMachineState<string[]>(SIDEBAR_SECTION_ORDER_STATE_KEY, { env }) ?? [];
 }
 
-/** Replaces the ordered catalog. Sessions keep their category even when a name is dropped. */
-export function putSessionGroups(
-  names: readonly string[],
-  sectionOrder?: readonly string[],
-  env: NodeJS.ProcessEnv = process.env,
-): SessionGroupRecord[] {
+/**
+ * Replaces the ordered catalog. Dropping a name whose group still has member
+ * sessions is rejected: member sweeps stay owned by sessions.groups.delete,
+ * so a put can never leave dangling categories that resurrect the group.
+ */
+export function putSessionGroups(params: {
+  cfg: OpenClawConfig;
+  names: readonly string[];
+  sectionOrder?: readonly string[];
+  env?: NodeJS.ProcessEnv;
+}): SessionGroupRecord[] {
+  const { cfg, names, sectionOrder, env = process.env } = params;
   const normalized = normalizeGroupNames(names);
   const normalizedSectionOrder =
     sectionOrder === undefined ? undefined : normalizeSidebarSectionOrder(sectionOrder, normalized);
+  const dropped = listSessionGroups(env).filter((group) => !normalized.includes(group.name));
+  if (dropped.length > 0) {
+    // Accepted race: sessions.patch can assign a dropped category between this scan and commit.
+    // That residue self-heals via ensureSessionGroupRegistered absorption on the next patch.
+    const targetsByName = resolveSessionGroupMutationTargetsByName(cfg, env);
+    const nonEmpty = dropped
+      .map(({ name }) => ({ name, memberSessions: targetsByName.get(name)?.length ?? 0 }))
+      .filter((group) => group.memberSessions > 0);
+    if (nonEmpty.length > 0) {
+      throw new SessionGroupNotEmptyError(nonEmpty);
+    }
+  }
   const now = Date.now();
   runOpenClawStateWriteTransaction(
     ({ db }) => {
