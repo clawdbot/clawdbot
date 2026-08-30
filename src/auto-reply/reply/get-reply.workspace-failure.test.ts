@@ -79,9 +79,23 @@ describe("getReplyFromConfig workspace failures", () => {
     const reply = await getReplyFromConfig(buildGetReplyCtx(), undefined, {});
 
     expect(reply).toMatchObject({
-      text: expect.stringContaining("openclaw doctor --fix"),
+      text: expect.stringContaining("openclaw doctor"),
     });
     expect((reply as { text: string }).text).toContain("⚠️");
+  });
+
+  it("never sends workspace paths to the channel", async () => {
+    (await workspaceMock()).mockRejectedValueOnce(repointedAliasError());
+
+    const reply = (await getReplyFromConfig(buildGetReplyCtx(), undefined, {})) as {
+      text: string;
+    };
+
+    // The typed error message embeds absolute host paths; the channel reply
+    // must stay a fixed repair notice with no filesystem layout in it.
+    expect(reply.text).not.toContain("/home/user");
+    expect(reply.text).not.toContain("/srv/data");
+    expect(reply.text).not.toMatch(/(^|[\s(])\/[A-Za-z0-9_.-]+\//u);
   });
 
   it("turns a vanished workspace into a visible terminal reply", async () => {
@@ -92,7 +106,7 @@ describe("getReplyFromConfig workspace failures", () => {
     const reply = await getReplyFromConfig(buildGetReplyCtx(), undefined, {});
 
     expect(reply).toMatchObject({
-      text: expect.stringContaining("Restore the workspace"),
+      text: expect.stringContaining("workspace is missing"),
     });
   });
 

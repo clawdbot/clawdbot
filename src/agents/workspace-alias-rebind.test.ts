@@ -14,7 +14,10 @@ import {
   detectRepointedWorkspaceAlias,
   rebindRepointedWorkspaceAlias,
 } from "./workspace-alias-rebind.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
+import {
+  resolveWorkspaceStateIdentity,
+  WorkspaceAliasRepointedError,
+} from "./workspace-state-identity.js";
 import {
   mergeWorkspaceSetupState,
   deleteWorkspaceState,
@@ -115,6 +118,31 @@ describe("workspace alias rebind", () => {
     expect(rebindRepointedWorkspaceAlias(alias, approvedFacts)).toBe("repoint-changed");
     expect(readWorkspaceStateSnapshot(original).setupExists).toBe(true);
     expect(readWorkspaceStateSnapshot(secondReplacement).setupExists).toBe(false);
+  });
+
+  it("fails closed again when the alias is repointed after a committed rebind", () => {
+    const original = testState!.workspaceDir;
+    const alias = testState!.path("workspace-link");
+    const replacement = testState!.path("replacement-workspace");
+    const lateTarget = testState!.path("late-target");
+    fs.mkdirSync(replacement, { recursive: true });
+    fs.mkdirSync(lateTarget, { recursive: true });
+    fs.symlinkSync(original, alias, process.platform === "win32" ? "junction" : "dir");
+    mergeWorkspaceSetupState(alias, { bootstrapSeededAt: "2026-07-16T01:00:00.000Z" }, 1_000);
+    fs.unlinkSync(alias);
+    fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+    const facts = detectRepointedWorkspaceAlias(alias)!;
+    expect(rebindRepointedWorkspaceAlias(alias, facts)).toBe("rebound");
+
+    // A repoint racing the committed transfer cannot be adopted: state moved
+    // only to the operator-approved target, and the guard re-engages for the
+    // unapproved one instead of serving it.
+    fs.unlinkSync(alias);
+    fs.symlinkSync(lateTarget, alias, process.platform === "win32" ? "junction" : "dir");
+
+    expect(() => readWorkspaceStateSnapshot(alias)).toThrow(WorkspaceAliasRepointedError);
+    expect(readWorkspaceStateSnapshot(replacement).setupExists).toBe(true);
+    expect(readWorkspaceStateSnapshot(lateTarget).setupExists).toBe(false);
   });
 
   it("rejects malformed persisted attestation rows during detection", () => {

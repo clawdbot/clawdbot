@@ -535,12 +535,21 @@ export async function getReplyFromConfig(
   } catch (error) {
     // Permanent workspace state failures cannot heal through ingress retries.
     // Return a visible terminal reply; heartbeat logging owns heartbeat failures.
-    if (
-      opts?.isHeartbeat !== true &&
-      (error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)
-    ) {
+    // Channel senders get fixed repair text only: the error messages embed
+    // absolute host paths, which must never reach a chat.
+    if (opts?.isHeartbeat !== true && error instanceof WorkspaceAliasRepointedError) {
       typing.cleanup();
-      return { text: `⚠️ ${error.message}` };
+      logVerbose(`workspace alias repointed; replying with repair notice: ${error.message}`);
+      return {
+        text: "⚠️ This agent's workspace state needs repair: the configured workspace path no longer matches its stored identity. Ask the gateway operator to run `openclaw doctor` and confirm the rebind, or `openclaw doctor --fix --force`.",
+      };
+    }
+    if (opts?.isHeartbeat !== true && error instanceof WorkspaceVanishedError) {
+      typing.cleanup();
+      logVerbose(`workspace vanished; replying with repair notice: ${error.message}`);
+      return {
+        text: "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore it, or run a full OpenClaw reset if the removal was intentional.",
+      };
     }
     throw error;
   }
