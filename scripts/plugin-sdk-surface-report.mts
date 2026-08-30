@@ -442,7 +442,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: session-catalog family and node-host binding composers.
       // +2: bounded provider stream and read-only SecretRef resolver.
       // -1: remove the obsolete transcript tool-call predicate.
-      // -1: remove the obsolete transcript tool-call predicate.
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
       // +2: structural Gateway transport and request-error guards for plugin CLI routing.
