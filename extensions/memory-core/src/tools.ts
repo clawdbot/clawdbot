@@ -43,6 +43,11 @@ import {
   resolveMemorySearchAbortError,
   runMemorySearchWithDeadline,
 } from "./memory/search-deadline.js";
+import {
+  filterCurrentSemanticLifecycle,
+  shouldApplyCurrentLifecycle,
+  type MemoryLifecycleMode,
+} from "./semantic-lifecycle.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   decorateCitations,
@@ -98,6 +103,17 @@ function readCorpusParam<T extends string>(
     return raw as T;
   }
   throw new Error(`corpus must be one of: ${allowed.join(", ")}`);
+}
+
+function readLifecycleParam(rawParams: Record<string, unknown>): MemoryLifecycleMode | undefined {
+  const raw = readStringParam(rawParams, "lifecycle");
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw === "auto" || raw === "current" || raw === "all") {
+    return raw;
+  }
+  throw new Error("lifecycle must be one of: auto, current, all");
 }
 
 function resolveMemorySearchToolCooldownKey(options: {
@@ -287,6 +303,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         const query = readStringParam(rawParams, "query", { required: true });
         const maxResults = readPositiveIntegerParam(rawParams, "maxResults");
         const minScore = readFiniteNumberParam(rawParams, "minScore");
+        const lifecycleMode = readLifecycleParam(rawParams);
         const modelRequestedCorpus = readCorpusParam(rawParams, [
           "memory",
           "wiki",
@@ -364,7 +381,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                   : requestedCorpus === "memory"
                     ? ["memory"]
                     : undefined;
-              return await executeMemorySearchToolQuery({
+              const executed = await executeMemorySearchToolQuery({
                 initialManager: { manager: memory.manager, managerMs: memory.debug?.managerMs },
                 refreshManager: async () => {
                   const refreshed = trackMemoryManager(
@@ -381,7 +398,9 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 },
                 query: {
                   text: query,
-                  resultLimit: maxResults ?? settings?.query.maxResults ?? 10,
+                  resultLimit: shouldApplyCurrentLifecycle({ query, mode: lifecycleMode })
+                    ? Math.max(1, maxResults ?? settings?.query.maxResults ?? 10) * 4
+                    : (maxResults ?? settings?.query.maxResults ?? 10),
                   minScore,
                   explicitSources,
                   defaultSources,
@@ -394,6 +413,15 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 visibility: { cfg, agentId, sandboxed: options.sandboxed === true },
                 signal,
               });
+              return {
+                ...executed,
+                rawResults: await filterCurrentSemanticLifecycle({
+                  query,
+                  mode: lifecycleMode,
+                  hits: executed.rawResults,
+                  readFile: async (readParams) => await memory.manager.readFile(readParams),
+                }),
+              };
             },
           });
           if (attempted.outcome !== "ok") {

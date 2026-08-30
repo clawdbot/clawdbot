@@ -2,6 +2,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   MemorySearchManager,
+  MemorySearchResult,
   MemorySearchRuntimeDebug,
   MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -129,9 +130,10 @@ export async function executeMemorySearchToolQuery(params: {
         : "memory index identity is missing or mismatched"
       : undefined;
   if (pausedIndexIdentityReason) {
+    const rawResults: MemorySearchResult[] = [];
     return {
       status,
-      rawResults: [],
+      rawResults,
       pausedIndexIdentityReason,
       searchMode: undefined,
       debug: undefined,

@@ -13,6 +13,7 @@ import {
   setMemoryCloseImpl,
   setMemoryCustomStatus,
   setMemoryPendingSyncSources,
+  setMemoryReadFileImpl,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
   setMemorySourceCounts,
@@ -63,6 +64,10 @@ describe("memory tool schemas", () => {
     expect(MEMORY_GET_TOOL_CONTRACT.parameters.properties.corpus).toEqual({
       type: "string",
       enum: ["memory", "wiki", "all"],
+    });
+    expect(MEMORY_SEARCH_TOOL_CONTRACT.parameters.properties.lifecycle).toEqual({
+      type: "string",
+      enum: ["auto", "current", "all"],
     });
   });
 });
@@ -129,6 +134,54 @@ describe("memory_search unavailable payloads", () => {
     });
 
     expect(seenMinScore).toBe(0.8);
+  });
+
+  it("overfetches and filters governed lifecycle records for current-state queries", async () => {
+    let seenMaxResults: number | undefined;
+    setMemorySearchImpl(async (opts) => {
+      seenMaxResults = opts?.maxResults;
+      return [
+        {
+          path: "memory/semantic/old.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.99,
+          snippet: "old",
+          source: "memory" as const,
+        },
+        {
+          path: "memory/semantic/current.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.8,
+          snippet: "current",
+          source: "memory" as const,
+        },
+      ];
+    });
+    setMemoryReadFileImpl(async (params) => ({
+      status: "ok",
+      text: `---\nschema_version: openclaw.semantic_memory.v2\nstatus: ${
+        params.relPath.endsWith("old.md") ? "superseded" : "active"
+      }\n---`,
+      path: params.relPath,
+    }));
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("current-lifecycle", {
+      query: "what is the current gate?",
+      maxResults: 2,
+    });
+
+    expect(seenMaxResults).toBe(8);
+    expect((result.details as { results?: Array<{ path: string }> }).results).toEqual([
+      expect.objectContaining({ path: "memory/semantic/current.md" }),
+    ]);
   });
 
   it("preserves manager ranking when public scores omit path precedence", async () => {
