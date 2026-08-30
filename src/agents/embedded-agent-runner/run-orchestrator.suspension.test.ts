@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -31,6 +32,7 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/t
 
 const tempRoots = createTempDirTracker();
 const runAttempt = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+const summaryStream = vi.fn();
 type ProductionRun = typeof import("./run.js").runEmbeddedAgent;
 let runEmbeddedAgent: ProductionRun;
 let acquireRuntime: typeof import("../prepared-model-runtime.js").acquireAgentRunPreparedModelRuntime;
@@ -39,11 +41,22 @@ let runWithModelFallback: typeof import("../model-fallback-runner.js").runWithMo
 beforeAll(async () => {
   installEmbeddedRunnerBaseE2eMocks();
   installEmbeddedRunnerFastRunE2eMocks({ runEmbeddedAttempt: runAttempt });
+  vi.doUnmock("../runtime-plan/build.js");
+  vi.doUnmock("../../plugins/provider-runtime.js");
+  vi.doUnmock("../../plugins/provider-hook-runtime.js");
   vi.doMock("../models-config.js", () => ({ ensureOpenClawModelsJson: vi.fn() }));
-  vi.doMock("./model.js", () => ({
-    resolveModelAsync: async (provider: string, modelId: string) =>
-      createResolvedEmbeddedRunnerModel(provider, modelId),
-  }));
+  vi.doMock("./model.js", async () => {
+    const { AuthStorage, ModelRegistry } = await import("../sessions/index.js");
+    return {
+      resolveModelAsync: async (provider: string, modelId: string) => {
+        const resolved = createResolvedEmbeddedRunnerModel(provider, modelId);
+        const authStorage = AuthStorage.inMemory();
+        authStorage.setRuntimeApiKey(provider, "synthetic-compaction-key");
+        const modelRegistry = ModelRegistry.inMemory(authStorage);
+        return { ...resolved, authStorage, modelRegistry };
+      },
+    };
+  });
   ({ acquireAgentRunPreparedModelRuntime: acquireRuntime } =
     await import("../prepared-model-runtime.js"));
   const { runEmbeddedAgent: run } = await import("./run.js");
@@ -64,8 +77,14 @@ beforeAll(async () => {
   ({ runWithModelFallback } = await import("../model-fallback-runner.js"));
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   runAttempt.mockReset();
+  summaryStream.mockReset();
+  const providerRuntime = await import("../../plugins/provider-runtime.js");
+  vi.spyOn(providerRuntime, "resolveProviderStreamFn").mockReturnValue(summaryStream);
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+    throw new Error("Unexpected network request in detached compaction proof");
+  });
 });
 
 async function joinSuspensionWrites() {
@@ -83,6 +102,7 @@ afterEach(async () => {
   await joinSuspensionWrites();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   tempRoots.cleanup();
 });
@@ -414,14 +434,28 @@ describe("embedded run detached session metadata", () => {
   );
 
   it.each([
-    ["overflow", false],
-    ["overflow", true],
-    ["timeout", false],
-    ["timeout", true],
+    ["overflow", false, "active"],
+    ["overflow", true, "active"],
+    ["timeout", false, "active"],
+    ["timeout", true, "active"],
+    ["timeout", false, "replaced"],
   ] as const)(
-    "does not reopen a detached transcript for outer %s compaction (existing row: %s)",
-    async (trigger, existing) => {
-      const { params, scope, stateDir } = await createRun("research", "detached");
+    "compacts the caller's buffer for outer %s recovery without durable access (existing row: %s, owner: %s)",
+    async (trigger, existing, owner) => {
+      const { params, scope, stateDir, database } = await createRun("research", "detached");
+      params.config.agents!.defaults!.compaction = { mode: "default", keepRecentTokens: 1 };
+      const manager = params.sessionManager;
+      manager.appendMessage({
+        role: "user",
+        content: "Remember the memory-only project.",
+        timestamp: 1,
+      });
+      manager.appendMessage(
+        buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "The project is called Blue Heron." }],
+        }),
+      );
+      manager.appendMessage({ role: "user", content: "What is the project called?", timestamp: 3 });
       if (existing) {
         await upsertSessionEntryCore(scope, {
           sessionId: params.sessionId,
@@ -430,33 +464,106 @@ describe("embedded run detached session metadata", () => {
           providerOverride: "openai",
           modelOverride: "mock-1",
         });
+        SessionManager.open({ ...scope, sessionId: params.sessionId }).appendMessage({
+          role: "user",
+          content: "BORROWED DURABLE HISTORY MUST NOT BE READ",
+          timestamp: 1,
+        });
       }
       const before = loadSessionEntry(scope);
+      closeOpenClawAgentDatabasesForTest();
+      const databaseBefore = existing ? await fs.readFile(database) : undefined;
+      const open = vi.spyOn(SessionManager, "open");
+      const targetResolver =
+        await import("../../config/sessions/session-accessor.transcript-target.js");
+      const resolveTarget = vi.spyOn(targetResolver, "resolveSessionTranscriptRuntimeTarget");
+      let replacement: import("../admitted-run-context.js").PreparedAgentRunAdmission | undefined;
+      let historyAtSummary: ReturnType<SessionManager["getEntries"]> | undefined;
+      summaryStream.mockImplementation(async (_model, context: Context) => {
+        const prompt = JSON.stringify(context.messages);
+        expect(prompt).toContain("Blue Heron");
+        expect(prompt).not.toContain("BORROWED DURABLE HISTORY");
+        historyAtSummary = structuredClone(manager.getEntries());
+        if (owner === "replaced") {
+          const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
+          replacement = prepareSystemAgentRunAdmission(
+            params.config,
+            params.runId,
+            "research",
+            "replacement",
+          );
+          await replacement.admit("embedded");
+        }
+        const stream = createAssistantMessageEventStream();
+        const message = buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "The memory-only project is Blue Heron." }],
+        });
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+        return stream;
+      });
       const registry = await import("../../context-engine/registry.js");
       const { delegateCompactionToRuntime } = await import("../../context-engine/delegate.js");
       const engines = await registry.resolveLogicalTurnContextEngines(params.config);
       const compact = vi.fn(delegateCompactionToRuntime);
       engines.configured.engine.compact = compact;
       vi.mocked(registry.resolveLogicalTurnContextEngines).mockResolvedValueOnce(engines);
-      runAttempt.mockResolvedValue(
-        makeEmbeddedRunnerAttempt({
-          sessionIdUsed: params.sessionId,
-          terminal:
-            trigger === "overflow"
-              ? { kind: "failed", source: "prompt", error: new Error("context overflow") }
-              : { kind: "timeout", phase: "prompt", source: "runtime" },
-          attemptUsage: { input: 150_000, total: 150_000 },
-          lastAssistant: buildEmbeddedRunnerAssistant({ usage: createMockUsage(150_000, 0) }),
-        }),
-      );
-      if (trigger === "overflow") {
-        await expect.soft(runEmbeddedAgent(params)).rejects.toThrow("context overflow");
-      } else {
-        await expect(runEmbeddedAgent(params)).rejects.toMatchObject({ reason: "timeout" });
+      runAttempt
+        .mockImplementationOnce(async () => {
+          // Recovery starts after the real run owner has prepared portable identity.
+          resolveTarget.mockClear();
+          return makeEmbeddedRunnerAttempt({
+            sessionIdUsed: params.sessionId,
+            terminal:
+              trigger === "overflow"
+                ? { kind: "failed", source: "prompt", error: new Error("context overflow") }
+                : { kind: "timeout", phase: "prompt", source: "runtime" },
+            attemptUsage: { input: 150_000, total: 150_000 },
+            lastAssistant: buildEmbeddedRunnerAssistant({ usage: createMockUsage(150_000, 0) }),
+          });
+        })
+        .mockImplementationOnce(async (raw) => {
+          const attempt = raw as EmbeddedRunAttemptParams;
+          expect(attempt.sessionManager).toBe(manager);
+          expect(manager.getEntries()).toContainEqual(
+            expect.objectContaining({
+              type: "compaction",
+              summary: "The memory-only project is Blue Heron.",
+            }),
+          );
+          expect(JSON.stringify(manager.buildSessionContext().messages)).toContain("Blue Heron");
+          return makeEmbeddedRunnerAttempt({
+            sessionIdUsed: params.sessionId,
+            assistantTexts: ["Blue Heron."],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              content: [{ type: "text", text: "Blue Heron." }],
+            }),
+          });
+        });
+      try {
+        const run = runEmbeddedAgent(params);
+        if (owner === "replaced") {
+          await expect(run).rejects.toBeInstanceOf(Error);
+          expect(manager.getEntries()).toEqual(historyAtSummary);
+        } else {
+          await run.catch(() => {});
+          const compaction = await compact.mock.results[0]?.value;
+          expect(compaction, compaction?.reason).toMatchObject({ ok: true, compacted: true });
+          await expect(run).resolves.toMatchObject({ payloads: [{ text: "Blue Heron." }] });
+        }
+      } finally {
+        replacement?.close();
       }
-      expect.soft(compact).not.toHaveBeenCalled();
+      expect(compact).toHaveBeenCalledOnce();
+      expect(summaryStream).toHaveBeenCalledOnce();
+      expect(runAttempt).toHaveBeenCalledTimes(owner === "replaced" ? 1 : 2);
+      expect(open).not.toHaveBeenCalled();
+      expect(resolveTarget).not.toHaveBeenCalled();
       expect.soft(loadSessionEntry(scope)).toEqual(before);
-      if (!existing) {
+      closeOpenClawAgentDatabasesForTest();
+      if (existing) {
+        expect(await fs.readFile(database)).toEqual(databaseBefore);
+      } else {
         await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
       }
     },

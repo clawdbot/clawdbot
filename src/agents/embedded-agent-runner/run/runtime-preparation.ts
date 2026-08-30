@@ -208,9 +208,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   let { activePreparedAuthPlan } = preparedAuthPlan;
   preparedThinkingCapabilityReady = true;
   applyResolvedRuntimeModel(runtimeModel);
-  // Generic recovery reopens and rewrites the durable transcript, which detached runs do not own.
-  const genericCompactionRecoveryAllowed =
-    !pluginHarnessOwnsTransport && params.sessionPersistence !== "detached";
+  const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
   const profileCandidates = preparedAuthAttempts.map((attempt) => attempt.profileId);
   const forwardedPluginHarnessProfileId = pluginHarnessOwnsTransport
     ? activePreparedAuthPlan.forwardedAuthProfileId
