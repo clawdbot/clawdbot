@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -117,7 +118,87 @@ function createVersion14Bindings() {
   }
 }
 
+async function holdGatewayLifecycle(databasePath: string): Promise<{
+  child: ChildProcess;
+  release: () => Promise<void>;
+}> {
+  const coordinatorUrl = new URL("../infra/state-database-coordinator.ts", import.meta.url).href;
+  const source = `
+    import { acquireGatewayLifecycleCoordinator } from ${JSON.stringify(coordinatorUrl)};
+    const coordinator = acquireGatewayLifecycleCoordinator({ databasePath: ${JSON.stringify(databasePath)}, busyTimeoutMs: 0 });
+    process.stdout.write("ready\\n");
+    process.stdin.resume();
+    process.stdin.once("end", () => coordinator.release());
+  `;
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", source],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("Gateway lifecycle holder timed out")),
+        5_000,
+      );
+      let stdout = "";
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+        if (!stdout.includes("ready\n")) {
+          return;
+        }
+        clearTimeout(timeout);
+        resolve();
+      });
+      child.once("exit", (code, signal) => {
+        clearTimeout(timeout);
+        reject(new Error(`Gateway lifecycle holder exited early: code=${code} signal=${signal}`));
+      });
+    });
+  } catch (error) {
+    child.kill("SIGTERM");
+    throw error;
+  }
+  return {
+    child,
+    release: async () => {
+      child.stdin?.end();
+      if (child.exitCode === null && child.signalCode === null) {
+        await new Promise<void>((resolve) => {
+          child.once("exit", () => resolve());
+        });
+      }
+    },
+  };
+}
+
 describe("conversation binding target migration", () => {
+  it("refuses runtime and doctor schema mutation while another Gateway owns the state", async () => {
+    const { options, databasePath } = createVersion14Bindings();
+    const holder = await holdGatewayLifecycle(databasePath);
+    try {
+      for (const migrate of [
+        () => openOpenClawStateDatabase(options),
+        () => repairOpenClawStateDatabaseSchema(options),
+      ]) {
+        expect(migrate).toThrow(
+          expect.objectContaining({
+            name: "StateSchemaMutationConflictError",
+            message: expect.stringContaining("another Gateway owns that state directory"),
+          }),
+        );
+      }
+      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      try {
+        expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 });
+      } finally {
+        preserved.close();
+      }
+    } finally {
+      await holder.release();
+    }
+  });
+
   it.each(migrationPaths)(
     "preserves bindings and additive data through %s and reopen",
     (migrationPath) => {
