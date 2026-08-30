@@ -541,41 +541,58 @@ type TelegramHtmlIsland = {
   detailsBodyRanges?: Array<{ start: number; end: number }>;
 };
 
-function findDetailsBodyRanges(
-  text: string,
+type DetailsSummaryState = {
+  start?: number;
+  end?: number;
+  depth: number;
+  selfClosing: boolean;
+};
+
+function recordDetailsSummaryTag(
+  state: DetailsSummaryState,
+  tag: { start: number; end: number; name: string; closing: boolean; selfClosing: boolean },
+): void {
+  if (tag.name !== "summary") {
+    return;
+  }
+  if (tag.closing) {
+    if (state.depth > 0) {
+      state.depth -= 1;
+      if (state.depth === 0) {
+        state.end = tag.end;
+      }
+    }
+    return;
+  }
+  if (state.start === undefined) {
+    state.start = tag.start;
+    state.selfClosing = tag.selfClosing;
+    if (!tag.selfClosing) {
+      state.depth = 1;
+    }
+    return;
+  }
+  if (state.depth > 0 && !tag.selfClosing) {
+    state.depth += 1;
+  }
+}
+
+function detailsBodyRangesFromSummary(
+  state: DetailsSummaryState,
   contentStart: number,
   contentEnd: number,
 ): Array<{ start: number; end: number }> {
-  const content = text.slice(contentStart, contentEnd);
-  const tags = [...tokenizeHtmlTags(content)];
-  const summaryIndex = tags.findIndex((tag) => !tag.closing && tag.name === "summary");
-  const summary = summaryIndex >= 0 ? tags[summaryIndex] : undefined;
-  if (!summary || summary.selfClosing || VOID_TAGS.has(summary.name)) {
+  if (state.start === undefined || state.selfClosing || state.end === undefined) {
     return [{ start: contentStart, end: contentEnd }];
   }
-  let depth = 1;
-  for (let index = summaryIndex + 1; index < tags.length; index += 1) {
-    const tag = tags[index];
-    if (!tag || tag.name !== "summary") {
-      continue;
-    }
-    if (tag.closing) {
-      depth -= 1;
-    } else if (!tag.selfClosing) {
-      depth += 1;
-    }
-    if (depth === 0) {
-      const ranges: Array<{ start: number; end: number }> = [];
-      if (summary.start > 0) {
-        ranges.push({ start: contentStart, end: contentStart + summary.start });
-      }
-      if (tag.end < content.length) {
-        ranges.push({ start: contentStart + tag.end, end: contentEnd });
-      }
-      return ranges;
-    }
+  const ranges: Array<{ start: number; end: number }> = [];
+  if (state.start > contentStart) {
+    ranges.push({ start: contentStart, end: state.start });
   }
-  return [{ start: contentStart, end: contentEnd }];
+  if (state.end < contentEnd) {
+    ranges.push({ start: state.end, end: contentEnd });
+  }
+  return ranges;
 }
 
 /**
@@ -616,6 +633,7 @@ export function findTelegramHtmlIslands(text: string): TelegramHtmlIsland[] {
     const contentStart = tag.end;
     let contentEnd = tag.end;
     let matched = tag.selfClosing || VOID_TAGS.has(tag.name);
+    const summaryState: DetailsSummaryState = { depth: 0, selfClosing: false };
     if (!matched) {
       let depth = 1;
       // Tag names quoted in prose (<code><details></code>) must not count
@@ -632,6 +650,9 @@ export function findTelegramHtmlIslands(text: string): TelegramHtmlIsland[] {
           }
           scan += 1;
           continue;
+        }
+        if (candidate && codeDepth === 0) {
+          recordDetailsSummaryTag(summaryState, candidate);
         }
         if (candidate && candidate.name === tag.name && codeDepth === 0) {
           depth += candidate.closing ? -1 : candidate.selfClosing ? 0 : 1;
@@ -668,13 +689,15 @@ export function findTelegramHtmlIslands(text: string): TelegramHtmlIsland[] {
     }
     const blocks = htmlNodesToBlocks(parseHtmlFragment(text.slice(tag.start, end)));
     if (blocks.length > 0) {
+      const detailsBodyRanges =
+        tag.name === "details"
+          ? detailsBodyRangesFromSummary(summaryState, contentStart, contentEnd)
+          : undefined;
       islands.push({
         start: tag.start,
         end,
         blocks,
-        ...(tag.name === "details"
-          ? { detailsBodyRanges: findDetailsBodyRanges(text, contentStart, contentEnd) }
-          : {}),
+        ...(detailsBodyRanges ? { detailsBodyRanges } : {}),
       });
     }
     index += 1;

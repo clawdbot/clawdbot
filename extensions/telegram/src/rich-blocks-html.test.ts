@@ -111,6 +111,16 @@ describe("block HTML islands", () => {
     expect(JSON.stringify(block)).not.toContain("<details>");
   });
 
+  it("ignores tag-shaped code while finding the details summary", () => {
+    const block = single("<details><summary><code><summary></code>Title</summary>Body</details>");
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.summary).toEqual([{ type: "code", text: "<summary>" }, "Title"]);
+    expect(block.blocks).toEqual([{ type: "paragraph", text: "Body" }]);
+  });
+
   it("keeps same-offset tables before nested <details>", () => {
     const block = single(
       [
