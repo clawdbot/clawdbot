@@ -165,6 +165,9 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
     const stages = observeStages();
     await importSqliteSessionRows({ ...params, readTranscriptEvents: (append) => append(first) });
     const db = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).db;
+    db.prepare("UPDATE session_windows SET created_at = 7 WHERE session_id = ?").run(
+      params.entry.sessionId,
+    );
     const generation = db.prepare("SELECT generation FROM transcript_rewrite_watermarks").get();
     expect(await importSqliteSessionRows({ ...params, readTranscriptEvents })).toMatchObject({
       transcriptEvents: 2,
@@ -188,7 +191,10 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
     expect(
       db.prepare("SELECT event_id FROM transcript_event_identities ORDER BY seq").all(),
     ).toEqual([{ event_id: "one" }, { event_id: "two" }]);
-    expect(db.prepare("SELECT updated_at FROM session_windows").get()).toEqual({ updated_at: 99 });
+    expect(db.prepare("SELECT created_at, updated_at FROM session_windows").get()).toEqual({
+      created_at: 7,
+      updated_at: 99,
+    });
     expect(db.prepare("SELECT generation FROM transcript_rewrite_watermarks").get()).toEqual(
       generation,
     );
