@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Telegram tests cover bot message dispatch plugin behavior.
 import type { Bot } from "grammy";
 import {
@@ -30,7 +29,11 @@ export function requireInvocationOrder(
   index: number,
   context: string,
 ): number {
-  return expectDefined(mock.mock.invocationCallOrder[index], context);
+  const value = mock.mock.invocationCallOrder[index];
+  if (value === undefined) {
+    throw new Error("expected " + context + " to be defined");
+  }
+  return value;
 }
 
 const createTelegramDraftStreamHoisted = vi.hoisted(() => vi.fn());
@@ -677,7 +680,7 @@ export {
   createReasoningForumTopicContext,
   createReasoningStreamContext,
   dispatchWithContext,
-} from "./bot-message-dispatch.test-harness-contexts.js";
+} from "./bot-message-dispatch-contexts.test-harness.js";
 
 export function describeTelegramDispatch(name: string, registerTests: () => void): void {
   describe(name, () => {
