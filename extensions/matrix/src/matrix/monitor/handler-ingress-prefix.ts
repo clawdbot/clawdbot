@@ -30,8 +30,6 @@ type MatrixIngressPrefixConfig = {
     }) => Promise<boolean>;
   };
   claimInboundReplay: (handle: ReplayClaimHandle) => void;
-  /** Preview-only access probes must not consume the root id reserved for the promoted final. */
-  skipInboundReplayClaim?: boolean;
 };
 
 export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig) {
@@ -51,7 +49,6 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     logVerboseMessage,
     directTracker,
     claimInboundReplay,
-    skipInboundReplayClaim,
   } = config;
   const selfUserId = await client.getUserId();
   if (senderId === selfUserId) {
@@ -91,7 +88,7 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
   if (hasBundledMatrixReplacementRelation(event)) {
     return undefined;
   }
-  if (eventId && inboundDeduper && !skipInboundReplayClaim) {
+  if (eventId && inboundDeduper) {
     const claim = await inboundDeduper.claim({ roomId, eventId });
     // Missing identifiers fail open; committed and in-flight events do not.
     if (claim.kind === "claimed") {

@@ -30,6 +30,7 @@ export type SessionDisplayRow = {
   sessionStartedAt?: number;
   lastInteractionAt?: number;
   label?: string;
+  color?: string;
   status?: SessionEntry["status"];
   visibility?: SessionEntry["visibility"];
   createdActor?: SessionEntry["createdActor"];
@@ -81,6 +82,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     sessionStartedAt: entry?.sessionStartedAt,
     lastInteractionAt: entry?.lastInteractionAt,
     label: entry?.label,
+    color: entry?.color,
     status: entry?.status,
     visibility: entry?.visibility ?? "shared",
     createdActor: entry?.createdActor,

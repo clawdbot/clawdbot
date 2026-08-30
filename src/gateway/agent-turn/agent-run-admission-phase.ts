@@ -395,6 +395,13 @@ export async function prepareAgentRunDispatch(params: {
         agentDir: replyDispatchRuntime.agentDir,
         allowGatewaySubagentBinding: true,
         workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
+        runtimePluginSelections: [
+          {
+            provider: resolvedRuntime.provider,
+            modelId: resolvedRuntime.model,
+            runtime: resolvedRuntime.harness,
+          },
+        ],
       },
       {
         catalogMode: "static",
@@ -405,6 +412,10 @@ export async function prepareAgentRunDispatch(params: {
     if (!revalidateAdmission()) {
       return undefined;
     }
+    replyDispatchRuntime = Object.freeze({
+      ...replyDispatchRuntime,
+      pluginGeneration: preparedModelRuntimeLease.pluginGeneration,
+    });
   } catch (err) {
     if (!revalidateAdmission()) {
       return undefined;

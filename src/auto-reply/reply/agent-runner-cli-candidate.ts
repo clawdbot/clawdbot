@@ -353,8 +353,6 @@ export async function runCliFallbackCandidate(
             lane: params.runLane,
             extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
             sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
-            deferSourceMessageToolDelivery: turn.followupRun.run.deferSourceMessageToolDelivery,
-            onBeforeAgentFinalize: turn.followupRun.onBeforeAgentFinalize,
             taskSuggestionDeliveryMode: turn.followupRun.run.taskSuggestionDeliveryMode,
             // Heartbeat ambient routes are never implicit message recipients.
             ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),

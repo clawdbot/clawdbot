@@ -37,11 +37,15 @@ import {
 } from "./loader.test-fixtures.js";
 import { buildMemoryPromptSection, registerMemoryCapability } from "./memory-state.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  captureActivePluginRegistrySnapshot,
   clearActivePluginRegistry,
+  commitStagedPluginRegistry,
   getActivePluginRegistry,
+  rollbackStagedPluginRegistry,
   setActivePluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
@@ -548,6 +552,41 @@ describe("resolveRuntimePluginRegistry", () => {
 });
 
 describe("clearPluginRegistryLoadCache", () => {
+  it.each(["commit", "rollback"])(
+    "releases only the retired cache aliases after staged %s",
+    (action) => {
+      const original = createEmptyPluginRegistry();
+      const candidate = createEmptyPluginRegistry();
+      pluginLoaderCacheState.set("original", original);
+      pluginLoaderCacheState.set("original-alias", original);
+      pluginLoaderCacheState.set("candidate", candidate);
+      pluginLoaderCacheState.set("candidate-alias", candidate);
+      setActivePluginRegistry(original, "original");
+      const snapshot = captureActivePluginRegistrySnapshot();
+
+      stageActivePluginRegistry(candidate, "candidate", "default");
+      expect(pluginLoaderCacheState.get("original") === original).toBe(true);
+      expect(pluginLoaderCacheState.get("candidate") === candidate).toBe(true);
+      // Reusing a key must not let the old value's retirement evict its successor.
+      pluginLoaderCacheState.set("reused-key", original);
+      pluginLoaderCacheState.set("reused-key", candidate);
+
+      if (action === "commit") {
+        commitStagedPluginRegistry(original, candidate);
+      } else {
+        rollbackStagedPluginRegistry(snapshot);
+      }
+
+      const committed = action === "commit";
+      for (const key of ["original", "original-alias"]) {
+        expect(pluginLoaderCacheState.get(key) === original).toBe(!committed);
+      }
+      for (const key of ["candidate", "candidate-alias", "reused-key"]) {
+        expect(pluginLoaderCacheState.get(key) === candidate).toBe(committed);
+      }
+    },
+  );
+
   it.each(["clear", "replacement"])(
     "rebuilds plugin registrations after runtime %s with unchanged load options",
     async (retirement) => {
@@ -592,6 +631,7 @@ describe("clearPluginRegistryLoadCache", () => {
         return await tool.execute("probe", {});
       };
       const original = loadOpenClawPlugins(options);
+      const originalKey = resolvePluginLoadCacheContext(options).cacheKey;
       expect(loadOpenClawPlugins(options)).toBe(original);
       expect(await read(original)).toMatchObject({ content: [{ text: "live" }] });
 
@@ -606,8 +646,12 @@ describe("clearPluginRegistryLoadCache", () => {
           expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
         });
         expect(loadOpenClawPlugins(replacementOptions)).toBe(replacement);
+        expect(
+          pluginLoaderCacheState.get(resolvePluginLoadCacheContext(replacementOptions).cacheKey),
+        ).toBe(replacement);
       }
 
+      expect(pluginLoaderCacheState.get(originalKey) === undefined).toBe(true);
       expect(await read(original)).toMatchObject({ content: [{ text: "closed" }] });
       const reloaded = loadOpenClawPlugins(options);
       expect(await read(reloaded)).toMatchObject({ content: [{ text: "live" }] });

@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
@@ -28,6 +30,8 @@ function context(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgCont
 }
 
 describe("session transcript inbound context", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     readRecent.mockReset();
   });
@@ -42,7 +46,7 @@ describe("session transcript inbound context", () => {
     await runPreparedChannelTurn({
       channel: "slack",
       routeSessionKey: ctx.SessionKey!,
-      storePath: "/tmp/sessions.json",
+      storePath: path.join(tempDirs.make("openclaw-session-transcript-context-"), "sessions.json"),
       ctxPayload: ctx,
       recordInboundSession: vi.fn(async () => undefined),
       runDispatch: vi.fn(async () => ({ queuedFinal: false })),

@@ -1,8 +1,8 @@
 // Tests media path handling and sandbox staging inside agent runner inputs.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../agents/embedded-agent-runner/runs.js";
 import {
   runInitialModelFallbackAttempt,
@@ -21,6 +21,9 @@ import {
   createMockReplyOperation,
   createMockTypingController,
 } from "./test-helpers.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let testWorkspaceDir: string;
 
 const runEmbeddedAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
@@ -304,16 +307,15 @@ function makeRunReplyAgentParams(
 ): Parameters<typeof runReplyAgent>[0] {
   const provider = overrides.provider ?? "whatsapp";
   const prompt = overrides.prompt ?? "generate chart";
-  const workspaceDir = overrides.workspaceDir ?? "/tmp/workspace";
+  const runWorkspaceDir = overrides.workspaceDir ?? testWorkspaceDir;
   const followupRun =
     overrides.followupRun ??
     createMockFollowupRun({
       prompt,
       run: {
         agentId: "main",
-        agentDir: "/tmp/agent",
         messageProvider: provider,
-        workspaceDir,
+        workspaceDir: runWorkspaceDir,
       },
     });
   const replyOperation =
@@ -394,9 +396,8 @@ function makeRunReplyAgentParams(
 }
 
 describe("runReplyAgent media path normalization", () => {
-  const cleanupPaths: string[] = [];
-
   beforeEach(() => {
+    testWorkspaceDir = tempDirs.make("openclaw-agent-media-workspace-");
     runEmbeddedAgentMock.mockReset();
     runWithModelFallbackMock.mockReset();
     abortEmbeddedAgentRunMock.mockReset();
@@ -455,8 +456,6 @@ describe("runReplyAgent media path normalization", () => {
       operation.complete();
     }
     vi.useRealTimers();
-    const paths = cleanupPaths.splice(0);
-    return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
   });
 
   it("normalizes final MEDIA replies against the run workspace", async () => {
@@ -483,9 +482,9 @@ describe("runReplyAgent media path normalization", () => {
       mediaUrls: ["/tmp/outbound-media/generated.png"],
     });
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
-      path.join("/tmp/workspace", "out", "generated.png"),
+      path.join(testWorkspaceDir, "out", "generated.png"),
       5 * 1024 * 1024,
-      { mediaAccess: expect.objectContaining({ workspaceDir: "/tmp/workspace" }) },
+      { mediaAccess: expect.objectContaining({ workspaceDir: testWorkspaceDir }) },
     );
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(createReplyMediaContextRuntimeMock).not.toHaveBeenCalled();
@@ -716,7 +715,7 @@ describe("runReplyAgent media path normalization", () => {
     const mediaContext = createReplyMediaContext({
       cfg: {},
       sessionKey: "main",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
       messageProvider: "telegram",
       accountId: "default",
     });
@@ -762,7 +761,7 @@ describe("runReplyAgent media path normalization", () => {
         run: {
           provider: "ollama",
           model: "gemma4:latest",
-          workspaceDir: "/tmp/workspace",
+          workspaceDir: testWorkspaceDir,
           config: {},
         },
       }),
@@ -818,7 +817,7 @@ describe("runReplyAgent media path normalization", () => {
       run: {
         provider: "anthropic",
         model: "claude",
-        workspaceDir: "/tmp/workspace",
+        workspaceDir: testWorkspaceDir,
         config: {},
       },
     });
@@ -868,8 +867,7 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   it("passes current inbound media paths as native OpenClaw images", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-agent-media-"));
-    cleanupPaths.push(tmpDir);
+    const tmpDir = tempDirs.make("openclaw-native-agent-media-");
     const imagePath = path.join(tmpDir, "photo.png");
     await writeFile(
       imagePath,
@@ -918,8 +916,7 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   it("does not pass recent history images as unlabeled native OpenClaw images", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-agent-history-"));
-    cleanupPaths.push(tmpDir);
+    const tmpDir = tempDirs.make("openclaw-native-agent-history-");
     const imagePath = path.join(tmpDir, "recent.png");
     await writeFile(
       imagePath,
@@ -972,8 +969,7 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   it("retains resolved current images and skips unresolved attachments", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-agent-partial-"));
-    cleanupPaths.push(tmpDir);
+    const tmpDir = tempDirs.make("openclaw-native-agent-partial-");
     const imagePath = path.join(tmpDir, "present.png");
     await writeFile(
       imagePath,

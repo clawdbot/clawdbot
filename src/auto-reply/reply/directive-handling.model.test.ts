@@ -737,8 +737,6 @@ function externalChannelPolicy(overrides: Partial<HandleDirectiveParams> = {}) {
 
 function expectExecDefaults(sessionEntry: SessionEntry, persisted: boolean) {
   expect(sessionEntry.execHost).toBe(persisted ? "node" : undefined);
-  expect(sessionEntry.execSecurity).toBe(persisted ? "allowlist" : undefined);
-  expect(sessionEntry.execAsk).toBe(persisted ? "always" : undefined);
   expect(sessionEntry.execNode).toBe(persisted ? "worker-1" : undefined);
 }
 
@@ -2987,9 +2985,10 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("operator.admin");
+    expect(result?.text).toContain(
+      "Exec policy for this run only (security=allowlist, ask=always).",
+    );
     expect(sessionEntry.execHost).toBeUndefined();
-    expect(sessionEntry.execSecurity).toBeUndefined();
-    expect(sessionEntry.execAsk).toBeUndefined();
     expect(sessionEntry.execNode).toBeUndefined();
   });
 
@@ -3018,19 +3017,39 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.verboseLevel).toBe("full");
   });
 
-  it("allows internal operator.admin exec persistence in directive-only handling", async () => {
-    const sessionEntry = createSessionEntry();
-    const result = await runHandleCommand(
-      "/exec host=node security=allowlist ask=always node=worker-1",
-      { sessionEntry, surface: "webchat", gatewayClientScopes: ["operator.admin"] },
-    );
+  it.each([
+    { options: "security=deny", policy: "security=deny", scope: "operator.write" },
+    { options: "ask=always", policy: "ask=always", scope: "operator.write" },
+    {
+      options: "host=node security=allowlist ask=always node=worker-1",
+      policy: "security=allowlist, ask=always",
+      placement: { execHost: "node", execNode: "worker-1" },
+      scope: "operator.admin",
+    },
+  ])(
+    "acknowledges /exec $options policy for this run only",
+    async ({ options, policy, placement, scope }) => {
+      const sessionEntry = createSessionEntry();
+      const initialEntry = { ...sessionEntry };
+      const result = await runHandleCommand(`/exec ${options}`, {
+        sessionEntry,
+        surface: "webchat",
+        gatewayClientScopes: [scope],
+      });
 
-    expect(result?.text).toContain("Exec defaults set");
-    expect(sessionEntry.execHost).toBe("node");
-    expect(sessionEntry.execSecurity).toBe("allowlist");
-    expect(sessionEntry.execAsk).toBe("always");
-    expect(sessionEntry.execNode).toBe("worker-1");
-  });
+      expect(result?.text).toContain(`Exec policy for this run only (${policy}).`);
+      if (placement) {
+        expect(result?.text).toContain("Exec defaults set (host=node, node=worker-1).");
+      } else {
+        expect(result?.text).not.toContain("operator.admin");
+      }
+      expect(sessionEntry).toEqual({
+        ...initialEntry,
+        ...placement,
+        updatedAt: expect.any(Number),
+      });
+    },
+  );
 });
 
 describe("canonical session directive persistence policy", () => {

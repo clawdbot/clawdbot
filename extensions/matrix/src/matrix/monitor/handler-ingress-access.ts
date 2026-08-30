@@ -1,11 +1,13 @@
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { resolveMatrixMonitorAccessState } from "./access-state.js";
+import { resolveMatrixAllowBotsMode } from "./handler-helpers.js";
 import { loadMatrixReactionEvents, loadMatrixSendModule } from "./handler-runtime.js";
 import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
-import { prepareMatrixIngressAccessSnapshot } from "./ingress-access-snapshot.js";
 import type { MatrixLocationPayload } from "./location.js";
 import type { ReservedHistorySlot } from "./room-history.js";
 import { createRoomHistoryTracker } from "./room-history.js";
+import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
@@ -57,9 +59,15 @@ export async function resolveMatrixIngressAccess(config: {
     client,
     logVerboseMessage,
     groupPolicy,
+    dmEnabled,
     dmPolicy,
     dmThreadReplies,
     threadReplies,
+    roomsConfig,
+    accountAllowBots,
+    configuredBotUserIds,
+    needsRoomAliasesForConfig,
+    getRoomInfo,
     getMemberDisplayName,
   } = handler;
 
@@ -96,28 +104,30 @@ export async function resolveMatrixIngressAccess(config: {
     return undefined;
   }
 
-  const trustedEnhancedFinal = event["__openclawTrustedEnhancedFinal"] === true;
-  const snapshot = await prepareMatrixIngressAccessSnapshot({
-    handler,
-    roomId,
-    senderId,
-    isDirectMessage,
-    trustedEnhancedFinal,
-    isReactionEvent,
-    readStoreAllowFrom,
-    resolveLiveAccountAllowlists,
-  });
-  const {
-    roomConfig,
-    turnTakingDisabled,
-    allowBotsMode,
-    isConfiguredBotSender,
-    roomMatchMeta,
-    accessState,
-    roomBlock,
-    botBlocked,
-  } = snapshot;
-  if (botBlocked) {
+  const roomInfoForConfig =
+    isRoom && needsRoomAliasesForConfig
+      ? await getRoomInfo(roomId, { includeAliases: true })
+      : undefined;
+  const roomAliasesForConfig = roomInfoForConfig
+    ? [roomInfoForConfig.canonicalAlias ?? "", ...roomInfoForConfig.altAliases].filter(Boolean)
+    : [];
+  const roomConfigInfo = isRoom
+    ? resolveMatrixRoomConfig({
+        rooms: roomsConfig,
+        roomId,
+        aliases: roomAliasesForConfig,
+      })
+    : undefined;
+  const roomConfig = roomConfigInfo?.config;
+  const allowBotsMode = resolveMatrixAllowBotsMode(roomConfig?.allowBots ?? accountAllowBots);
+  const isConfiguredBotSender = configuredBotUserIds.has(senderId);
+  const roomMatchMeta = roomConfigInfo
+    ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
+        roomConfigInfo.matchSource ?? "none"
+      }`
+    : "matchKey=none matchSource=none";
+
+  if (isConfiguredBotSender && allowBotsMode === "off") {
     logVerboseMessage(
       `matrix: drop configured bot sender=${senderId} (allowBots=false${isDirectMessage ? "" : `, ${roomMatchMeta}`})`,
     );
@@ -129,7 +139,6 @@ export async function resolveMatrixIngressAccess(config: {
       ? {
           scopeId: accountId,
           conversationId: roomId,
-          eventId: messageId,
           senderId,
           receiverId: selfUserId,
           config: mergePairLoopGuardConfig(
@@ -142,15 +151,22 @@ export async function resolveMatrixIngressAccess(config: {
         }
       : undefined;
 
-  if (roomBlock) {
-    if (roomBlock === "room-disabled") {
-      logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
-    } else if (roomBlock === "no-allowlist" || roomBlock === "not-in-allowlist") {
-      const reason = roomBlock === "no-allowlist" ? "no allowlist" : "not in allowlist";
-      logVerboseMessage(`matrix: drop room message (${reason}, ${roomMatchMeta})`);
-    }
+  if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
+    logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
     await commitInboundEventIfClaimedAndDiscardReserved();
     return undefined;
+  }
+  if (isRoom && groupPolicy === "allowlist") {
+    if (!roomConfigInfo?.allowlistConfigured) {
+      logVerboseMessage(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
+      await commitInboundEventIfClaimedAndDiscardReserved();
+      return undefined;
+    }
+    if (!roomConfig) {
+      logVerboseMessage(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
+      await commitInboundEventIfClaimedAndDiscardReserved();
+      return undefined;
+    }
   }
 
   let senderNamePromise: Promise<string> | null = null;
@@ -158,10 +174,33 @@ export async function resolveMatrixIngressAccess(config: {
     senderNamePromise ??= getMemberDisplayName(roomId, senderId).catch(() => senderId);
     return await senderNamePromise;
   };
+  const storeAllowFrom =
+    isDirectMessage && dmPolicy !== "allowlist" && dmPolicy !== "open"
+      ? await readStoreAllowFrom()
+      : [];
+  const roomUsers = roomConfig?.users ?? [];
+  const { liveDmAllowFrom, liveGroupAllowFrom } = await resolveLiveAccountAllowlists();
+  const accessState = await resolveMatrixMonitorAccessState({
+    allowFrom: liveDmAllowFrom,
+    storeAllowFrom,
+    dmPolicy,
+    groupPolicy,
+    groupAllowFrom: liveGroupAllowFrom,
+    roomUsers,
+    senderId,
+    isRoom,
+    conversationId: roomId,
+    accountId,
+    eventKind: isReactionEvent ? "reaction" : "message",
+  });
   const { effectiveGroupAllowFrom, effectiveRoomUsers, messageIngress } = accessState;
   const ingressDecision = messageIngress.ingress;
 
   if (isDirectMessage) {
+    if (!dmEnabled || dmPolicy === "disabled") {
+      await commitInboundEventIfClaimedAndDiscardReserved();
+      return undefined;
+    }
     const senderReason = messageIngress.senderAccess.reasonCode;
     if (ingressDecision.decision !== "allow") {
       if (ingressDecision.admission === "pairing-required") {
@@ -263,8 +302,6 @@ export async function resolveMatrixIngressAccess(config: {
     markReservedHistorySlotConsumed,
     commitInboundEventIfClaimedAndDiscardReserved,
     roomConfig,
-    turnTakingDisabled,
-    trustedEnhancedFinal,
     allowBotsMode,
     isConfiguredBotSender,
     selfUserId,

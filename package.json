@@ -116,8 +116,6 @@
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
     "!dist/plugin-sdk/meeting-page-script-runtime.d.ts",
-    "!dist/plugin-sdk/matrix-source-finalization-test-fixtures.js",
-    "!dist/plugin-sdk/matrix-source-finalization-test-fixtures.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-curated.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",

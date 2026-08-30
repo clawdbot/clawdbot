@@ -5,6 +5,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -101,12 +102,11 @@ class RoomChatCommandOutboxTest {
     reconcileBranchScope(
       gatewayId = "gateway-a",
       scope = scope,
-      previousState = previousState,
+      evidence = ChatOutboxBranchEvidence.BranchListing(previousState, branchLeafEntryIds),
       activeLeafEntryId = activeLeafEntryId,
-      branchLeafEntryIds = branchLeafEntryIds,
       activeTranscriptEntryIds = activeTranscriptEntryIds,
       lastError = OUTBOX_BRANCH_CHANGED_ERROR,
-    )
+    ) != null
 
   private suspend fun insertLegacyCommand(
     id: String,
@@ -576,11 +576,68 @@ class RoomChatCommandOutboxTest {
     }
 
   @Test
+  fun historyAdvancePreservesEveryDeliveryStateAndAttachmentIdentity() =
+    runTest {
+      val scope = ChatOutboxScope("main", "main")
+      val initial = requireNotNull(store.branchState("gateway-a", scope))
+      assertTrue(store.recordTranscriptTip("gateway-a", scope, "leaf-a", initial))
+      val bytes = byteArrayOf(1, 2, 3, 4)
+      for (status in ChatOutboxStatus.entries) {
+        val row = store.enqueueQueued(status.name, nowMs = 10, attachments = listOf(payload(bytes)))
+        store.updateStatusIfAttempt(row.id, row.attemptVersion, status, 0, if (status == ChatOutboxStatus.Failed) "retained failure" else null)
+      }
+      val before = store.load("gateway-a")
+      val captured = requireNotNull(store.branchState("gateway-a", scope))
+
+      assertNotNull(
+        store.reconcileBranchScope(
+          "gateway-a",
+          scope,
+          ChatOutboxBranchEvidence.History(captured),
+          "leaf-b",
+          setOf("leaf-a", "leaf-b"),
+          OUTBOX_BRANCH_CHANGED_ERROR,
+        ),
+      )
+
+      assertEquals(before, store.load("gateway-a"))
+      for (row in before) {
+        val attachment = store.loadAttachments(row.id).single()
+        assertEquals(row.attachments.single(), attachment.attachment)
+        assertTrue(bytes.contentEquals(attachment.bytes))
+      }
+      assertEquals("leaf-b", store.branchState("gateway-a", scope)?.lastActiveLeafEntryId)
+    }
+
+  @Test
+  fun staleBranchResponseCannotExpireANewerLeaseAndOverwriteItsBranch() =
+    runTest {
+      val scope = ChatOutboxScope("main", "main")
+      val initial = requireNotNull(store.branchState("gateway-a", scope))
+      assertTrue(store.recordTranscriptTip("gateway-a", scope, "leaf-a", initial))
+      val stale = requireNotNull(store.branchState("gateway-a", scope))
+      assertTrue(store.confirmBranchChange("gateway-a", scope, "leaf-b", OUTBOX_BRANCH_CHANGED_ERROR))
+      assertNotNull(store.beginSessionMutation("gateway-a", scope, nowMs = 1))
+      val current = store.branchState("gateway-a", scope)
+
+      assertFalse(
+        store.reconcile(
+          scope,
+          stale,
+          activeLeafEntryId = "leaf-a",
+          branchLeafEntryIds = setOf("leaf-a"),
+          activeTranscriptEntryIds = setOf("leaf-a"),
+        ),
+      )
+      assertEquals(current, store.branchState("gateway-a", scope))
+    }
+
+  @Test
   fun ancestryDisambiguatesTranscriptAdvanceFromRemoteBranchChange() =
     runTest {
       val advancingScope = ChatOutboxScope("advance", "main")
       val initialAdvance = requireNotNull(store.branchState("gateway-a", advancingScope))
-      assertTrue(store.updateLastActiveLeafEntryId("gateway-a", advancingScope, "leaf-old", initialAdvance.epoch, initialAdvance.revision))
+      assertTrue(store.recordTranscriptTip("gateway-a", advancingScope, "leaf-old", initialAdvance))
       val advanceState = requireNotNull(store.branchState("gateway-a", advancingScope))
       val advancingRow = store.enqueueQueued("stay active", nowMs = 10, sessionKey = "advance")
       assertTrue(
@@ -596,7 +653,7 @@ class RoomChatCommandOutboxTest {
 
       val switchedScope = ChatOutboxScope("switched", "main")
       val initialSwitch = requireNotNull(store.branchState("gateway-a", switchedScope))
-      assertTrue(store.updateLastActiveLeafEntryId("gateway-a", switchedScope, "leaf-a", initialSwitch.epoch, initialSwitch.revision))
+      assertTrue(store.recordTranscriptTip("gateway-a", switchedScope, "leaf-a", initialSwitch))
       val switchState = requireNotNull(store.branchState("gateway-a", switchedScope))
       val switchedRow = store.enqueueQueued("park me", nowMs = 20, sessionKey = "switched")
       assertTrue(
@@ -655,8 +712,8 @@ class RoomChatCommandOutboxTest {
       val scope = ChatOutboxScope("main", "main")
       val captured = requireNotNull(store.branchState("gateway-a", scope))
 
-      assertTrue(store.updateLastActiveLeafEntryId("gateway-a", scope, "leaf-current", captured.epoch, captured.revision))
-      assertFalse(store.updateLastActiveLeafEntryId("gateway-a", scope, "leaf-stale", captured.epoch, captured.revision))
+      assertTrue(store.recordTranscriptTip("gateway-a", scope, "leaf-current", captured))
+      assertFalse(store.recordTranscriptTip("gateway-a", scope, "leaf-stale", captured))
       assertEquals("leaf-current", store.branchState("gateway-a", scope)?.lastActiveLeafEntryId)
     }
 

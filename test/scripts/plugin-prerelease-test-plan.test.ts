@@ -486,6 +486,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       required: false,
       type: "string",
     });
+    expect(pluginWorkflow.on.workflow_dispatch.inputs.target_context_ref).toEqual({
+      default: "",
+      description: "Canonical release context for an exact-SHA frozen-target validation",
+      required: false,
+      type: "string",
+    });
     expect(preflight.outputs.node_test_exclude_patterns_json).toBe(
       "${{ steps.node_test_exclusions.outputs.patterns_json }}",
     );
@@ -524,6 +530,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(runNodeShard?.env?.NODE_TEST_EXCLUDE_PATTERNS_JSON).toBe(
       "${{ needs.preflight.outputs.node_test_exclude_patterns_json }}",
     );
+    expect(runNodeShard?.env?.OPENCLAW_RELEASE_TARGET_CONTEXT_REF).toBe(
+      "${{ inputs.target_context_ref }}",
+    );
     expect(runNodeShard?.run).toContain('process.env.NODE_TEST_EXCLUDE_PATTERNS_JSON ?? "[]"');
     expect(runNodeShard?.run).toContain('pattern.slice("src/plugins/".length)');
     expect(runNodeShard?.run).toContain("`--exclude=${pattern.slice");
@@ -549,6 +558,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(pluginDispatch?.run).toContain(
       '-f node_test_exclude_patterns_json="$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON"',
     );
+    expect(pluginDispatch?.run).toContain('args+=(-f target_context_ref="$TARGET_CONTEXT_REF")');
     expect(pluginDispatch?.run).toContain("- Frozen-target Node test omissions:");
     expect(evidenceReuse?.env?.PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON).toBe(
       "${{ inputs.plugin_prerelease_node_exclude_patterns_json }}",

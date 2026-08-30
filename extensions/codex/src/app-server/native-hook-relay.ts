@@ -23,11 +23,6 @@ import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
-import type { CodexTurnLocalBeforeAgentFinalize } from "./turn-local-finalization-types.js";
-import {
-  createCodexTurnLocalFinalizationController,
-  type CodexTurnLocalFinalizeDisposition,
-} from "./turn-local-finalization.js";
 
 /** Codex hook events that can be registered through OpenClaw's native relay. */
 export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
@@ -47,7 +42,6 @@ const CODEX_NATIVE_HOOK_RELAY_COMMAND_MAX_PARENT_MARGIN_MS = 1_000;
 // The relay starts a niced Node subprocess, so busy hosts can exceed the former
 // five-second relay timeout before policy and task-mirroring work completes.
 const CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC = 10;
-const CODEX_TURN_LOCAL_FINALIZE_HOOK_MIN_TIMEOUT_SEC = 40;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 const MAX_PENDING_DIRECT_CHILD_ADMISSIONS = 32;
@@ -68,18 +62,11 @@ export type CodexNativePreToolUseFailure = {
   durationMs: number;
 };
 
-type CodexRetainedNativeHookRelay = ReturnType<
-  typeof registerRetainedNativeHookRelayForBundledRuntime
->;
-
-export type CodexNativeHookRelay = CodexRetainedNativeHookRelay & {
+export type CodexNativeHookRelay = NativeHookRelayRegistrationHandle & {
   authorizeRetentionAfterSuccessfulYield: () => void;
   hasClaimedDirectChild: () => boolean;
   claimDirectChild: (threadId: string) => () => void;
   rejectPendingDirectChild: (threadId: string, reason: string) => void;
-  bindTurnLocalFinalizationTurn: (turnId: string) => void;
-  sealTurnLocalFinalization: (turnId: string) => CodexTurnLocalFinalizeDisposition | undefined;
-  acceptTurnLocalFinalization: (turnId: string) => Promise<void>;
 };
 
 /** Enterprise managed-only policy silently drops the session-layer hooks that enforce OpenClaw. */
@@ -220,27 +207,9 @@ export function createCodexNativeHookRelay(params: {
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParams["hostCapabilities"];
-  turnLocalBeforeAgentFinalize?: CodexTurnLocalBeforeAgentFinalize;
-  turnLocalProvider: string;
-  turnLocalModel: string;
-  turnLocalRevisionAttempt: number;
-  turnLocalMaxRevisionAttempts?: number;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): CodexNativeHookRelay | undefined {
-  const turnLocalFinalization = createCodexTurnLocalFinalizationController({
-    callback: params.turnLocalBeforeAgentFinalize,
-    runId: params.runId,
-    sessionId: params.sessionId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    provider: params.turnLocalProvider,
-    model: params.turnLocalModel,
-    revisionAttempt: params.turnLocalRevisionAttempt,
-    ...(params.turnLocalMaxRevisionAttempts !== undefined
-      ? { maxRevisionAttempts: params.turnLocalMaxRevisionAttempts }
-      : {}),
-  });
-  const hasTurnLocalFinalizer = turnLocalFinalization.enabled;
-  if (params.options?.enabled === false && !hasTurnLocalFinalizer) {
+  if (params.options?.enabled === false) {
     return undefined;
   }
   const directChildClaims = new Map<string, symbol>();
@@ -262,12 +231,6 @@ export function createCodexNativeHookRelay(params: {
     }
     pendingDirectChildAdmissions.clear();
   };
-  const allowedEvents =
-    params.options?.enabled === false && hasTurnLocalFinalizer
-      ? (["before_agent_finalize"] as const)
-      : hasTurnLocalFinalizer && !params.events.includes("before_agent_finalize")
-        ? [...params.events, "before_agent_finalize" as const]
-        : params.events;
   const relay = registerRetainedNativeHookRelayForBundledRuntime({
     provider: "codex",
     relayId: buildCodexNativeHookRelayId({
@@ -287,7 +250,7 @@ export function createCodexNativeHookRelay(params: {
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.requester ? { requester: params.requester } : {}),
     ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
-    allowedEvents,
+    allowedEvents: params.events,
     preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
@@ -298,14 +261,6 @@ export function createCodexNativeHookRelay(params: {
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
     assertActive: params.hostCapabilities.assertActive,
-    ...(hasTurnLocalFinalizer
-      ? {
-          turnLocalBeforeAgentFinalize: {
-            evaluate: turnLocalFinalization.evaluate,
-            ...(params.options?.enabled === false ? { skipGlobalBeforeAgentFinalize: true } : {}),
-          },
-        }
-      : {}),
     retention: {
       readClaim: readCodexNativeChildThreadId,
       // A child claim identifies the subject; successful parent finalization
@@ -372,11 +327,6 @@ export function createCodexNativeHookRelay(params: {
       pendingDirectChildAdmissions.delete(threadId);
       pending.reject(new Error(reason));
     },
-    bindTurnLocalFinalizationTurn: (turnIdInput) => {
-      turnLocalFinalization.bindTurn(turnIdInput);
-    },
-    sealTurnLocalFinalization: (turnIdInput) => turnLocalFinalization.seal(turnIdInput),
-    acceptTurnLocalFinalization: (turnIdInput) => turnLocalFinalization.accept(turnIdInput),
     claimDirectChild: (threadIdInput) => {
       const threadId = threadIdInput.trim();
       if (!threadId) {
@@ -421,21 +371,17 @@ function readCodexNativeChildThreadId(rawPayload: unknown): string | undefined {
 export function resolveCodexNativeHookRelayEvents(params: {
   configuredEvents?: readonly NativeHookRelayEvent[];
   appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy">;
-  requireBeforeAgentFinalize?: boolean;
 }): readonly NativeHookRelayEvent[] {
-  const configuredEvents = params.configuredEvents?.length
-    ? params.configuredEvents
-    : // Codex emits PermissionRequest before the app-server approval reviewer has
-      // resolved the command. In native approval modes, let Codex's app-server
-      // approval bridge own the real escalation instead of surfacing a stale
-      // pre-guardian OpenClaw plugin approval prompt.
-      params.appServer.approvalPolicy === "never"
-      ? CODEX_NATIVE_HOOK_RELAY_EVENTS
-      : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
-  if (params.requireBeforeAgentFinalize && !configuredEvents.includes("before_agent_finalize")) {
-    return [...configuredEvents, "before_agent_finalize"];
+  if (params.configuredEvents?.length) {
+    return params.configuredEvents;
   }
-  return configuredEvents;
+  // Codex emits PermissionRequest before the app-server approval reviewer has
+  // resolved the command. In native approval modes, let Codex's app-server
+  // approval bridge own the real escalation instead of surfacing a stale
+  // pre-guardian OpenClaw plugin approval prompt.
+  return params.appServer.approvalPolicy === "never"
+    ? CODEX_NATIVE_HOOK_RELAY_EVENTS
+    : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
 }
 
 /** Derives the native hook relay TTL from the turn budget unless explicitly configured. */
@@ -490,25 +436,13 @@ const CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS = [
   "<session-flags>/config.toml",
 ] as const;
 
-type CodexNativeHookRelayConfigParams = {
+/** Builds the Codex config overlay that installs trusted command hooks for relay events. */
+export function buildCodexNativeHookRelayConfig(params: {
+  relay: NativeHookRelayRegistrationHandle;
   events?: readonly NativeHookRelayEvent[];
   hookTimeoutSec?: number;
   clearOmittedEvents?: boolean;
-} & (
-  | {
-      relay: CodexRetainedNativeHookRelay;
-      authoritativeBeforeAgentFinalize?: boolean;
-    }
-  | {
-      relay: NativeHookRelayRegistrationHandle;
-      authoritativeBeforeAgentFinalize?: never;
-    }
-);
-
-/** Builds the Codex config overlay that installs trusted command hooks for relay events. */
-export function buildCodexNativeHookRelayConfig(
-  params: CodexNativeHookRelayConfigParams,
-): JsonObject {
+}): JsonObject {
   const events = params.events?.length ? params.events : CODEX_NATIVE_HOOK_RELAY_EVENTS;
   const selectedEvents = new Set<NativeHookRelayEvent>(events);
   const config: JsonObject = {
@@ -532,21 +466,10 @@ export function buildCodexNativeHookRelayConfig(
       }
       continue;
     }
-    const authoritativeBeforeAgentFinalize =
-      event === "before_agent_finalize" && params.authoritativeBeforeAgentFinalize === true;
-    const timeout = authoritativeBeforeAgentFinalize
-      ? Math.max(
-          normalizeHookTimeoutSec(params.hookTimeoutSec),
-          CODEX_TURN_LOCAL_FINALIZE_HOOK_MIN_TIMEOUT_SEC,
-        )
-      : normalizeHookTimeoutSec(params.hookTimeoutSec);
-    const relayCommandTimeoutMs = resolveCodexNativeHookRelayCommandTimeoutMs(timeout);
-    const command = authoritativeBeforeAgentFinalize
-      ? params.relay.commandForEvent(event, {
-          timeoutMs: relayCommandTimeoutMs,
-          minimumTimeoutMs: relayCommandTimeoutMs,
-        })
-      : params.relay.commandForEvent(event, { timeoutMs: relayCommandTimeoutMs });
+    const timeout = normalizeHookTimeoutSec(params.hookTimeoutSec);
+    const command = params.relay.commandForEvent(event, {
+      timeoutMs: resolveCodexNativeHookRelayCommandTimeoutMs(timeout),
+    });
     const matcher = buildCodexNativeToolMatcher(params.relay.toolMatcherForEvent(event));
     config[`hooks.${codexEvent}`] = [
       {

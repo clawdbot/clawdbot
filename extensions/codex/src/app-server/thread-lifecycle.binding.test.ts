@@ -2309,21 +2309,17 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
   );
 
-  it.each([
-    { mode: "ring-zero", feature: "hooks" },
-    { mode: "tools-disabled", feature: "multi_agent" },
-  ])("fails closed when $mode requirements pin $feature on", async ({ mode, feature }) => {
+  it("fails closed when requirements pin a restricted Codex feature on", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = mode === "ring-zero" ? ["openclaw"] : undefined;
-    params.disableTools = mode === "tools-disabled";
+    params.toolsAllow = ["openclaw"];
     const request = vi.fn(async (method: string) => {
       if (method === "config/read") {
         return { config: {}, layers: [] };
       }
       if (method === "configRequirements/read") {
-        return { requirements: { featureRequirements: { [feature]: true } } };
+        return { requirements: { featureRequirements: { hooks: true } } };
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -2333,13 +2329,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
         client: { request } as never,
         params,
         cwd: workspaceDir,
-        dynamicTools: mode === "ring-zero" ? [createNamedDynamicTool("openclaw")] : [],
+        dynamicTools: [createNamedDynamicTool("openclaw")],
         appServer: createThreadLifecycleAppServerOptions(),
         nativeCodeModeEnabled: false,
         userMcpServersEnabled: false,
         hostSystemAgentActive: true,
       }),
-    ).rejects.toThrow(`cannot override required feature ${feature}`);
+    ).rejects.toThrow("cannot override required feature hooks");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "config/read",
       "configRequirements/read",
@@ -3562,29 +3558,8 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
     const appServer = createThreadLifecycleAppServerOptions();
-    const config = {
-      "features.hooks": false,
-      "features.skill_search": true,
-      "features.multi_agent": true,
-      "tools.experimental_request_user_input.enabled": true,
-      notify: ["notify-completion"],
-      mcp_servers: { inherited: { command: "example-mcp" } },
-    };
-    const finalConfigPatch = {
-      "features.hooks": true,
-      "hooks.Stop": [{ hooks: [{ type: "command", command: "host-stop", async: false }] }],
-    };
     let starts = 0;
     const request = vi.fn(async (method: string, requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: { featureRequirements: { hooks: true } } };
-      }
-      if (method === "mcpServerStatus/list") {
-        return { data: [disabledMcpServerStatus("inherited")], nextCursor: null };
-      }
       if (method === "thread/start") {
         starts += 1;
         return threadStartResult(`thread-${starts}`);
@@ -3597,57 +3572,41 @@ describe("Codex app-server thread lifecycle bindings", () => {
       throw new Error(`unexpected method: ${method}`);
     });
 
-    const common = {
+    await startOrResumeThread({
       client: { request } as never,
       params,
       cwd: workspaceDir,
       dynamicTools: [],
       appServer,
-      userMcpServersEnabled: false,
-      config,
-      finalConfigPatch,
-    };
-    await startOrResumeThread(common);
+    });
     params.disableTools = true;
     const restrictedBinding = await startOrResumeThread({
-      ...common,
-      nativeCodeModeEnabled: false,
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
     });
     const savedAfterRestriction = await readCodexAppServerBinding(sessionFile);
     params.disableTools = false;
-    const resumedBinding = await startOrResumeThread(common);
+    const resumedBinding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
 
     expect(restrictedBinding.threadId).toBe("thread-2");
     expect(savedAfterRestriction?.threadId).toBe("thread-1");
     expect(resumedBinding.threadId).toBe("thread-1");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
-      "config/read",
-      "configRequirements/read",
       "thread/start",
-      "mcpServerStatus/list",
       "thread/resume",
     ]);
-    const threadRequests = request.mock.calls.filter(([method]) => method.startsWith("thread/"));
-    expect(threadRequests[1]?.[1]).toMatchObject({
-      environments: [],
-      dynamicTools: [],
-      config: {
-        ...finalConfigPatch,
-        notify: config.notify,
-        "tools.experimental_request_user_input.enabled": false,
-        "features.skill_search": false,
-        "features.multi_agent": false,
-        "orchestrator.skills.enabled": false,
-        "features.plugins": false,
-        "features.apps": false,
-        web_search: "disabled",
-        mcp_servers: { inherited: { command: "example-mcp", enabled: false } },
-      },
-    });
-    expect(threadRequests[2]?.[1]).toMatchObject({
-      threadId: "thread-1",
-      config: { ...config, ...finalConfigPatch },
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      config: { web_search: "disabled" },
     });
   });
 

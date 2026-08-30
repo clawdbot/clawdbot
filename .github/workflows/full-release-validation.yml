@@ -897,6 +897,9 @@ jobs:
               dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plugin-prerelease-${PHASE}"
               dispatch_run_name="Plugin Prerelease ${dispatch_id}"
               args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f phase="$PHASE" -f dispatch_id="$dispatch_id" -f node_test_exclude_patterns_json="$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON")
+              if [[ -n "${TARGET_CONTEXT_REF:-}" ]]; then
+                args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
+              fi
               if [[ -n "${CANDIDATE_ARTIFACT_JSON// }" ]]; then
                 args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")
               fi

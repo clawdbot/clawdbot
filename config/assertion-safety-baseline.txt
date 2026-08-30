@@ -2195,7 +2195,7 @@ src/auto-reply/reply/exec/directive.ts	1
 src/auto-reply/reply/followup-delivery-payloads.ts	1
 src/auto-reply/reply/followup-turn-execution.ts	1
 src/auto-reply/reply/get-reply-directives.ts	8
-src/auto-reply/reply/get-reply-exec-overrides.ts	3
+src/auto-reply/reply/get-reply-exec-overrides.ts	1
 src/auto-reply/reply/get-reply-fast-path.ts	1
 src/auto-reply/reply/get-reply-inline-actions.ts	5
 src/auto-reply/reply/get-reply-native-slash-fast-path.ts	1

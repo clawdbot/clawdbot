@@ -315,6 +315,7 @@ async function runEmbeddedAgentInternal(
       );
       startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
+      let preparedLeaseActive = true;
       try {
         if (
           params.pluginGeneration &&
@@ -475,11 +476,13 @@ async function runEmbeddedAgentInternal(
           withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
         return params.pluginGeneration
           ? await withPreparedModelRuntimePluginGenerationScope(
-              params.pluginGeneration,
+              preparedModelRuntimeLease.pluginGeneration,
               runWithPreparedRuntime,
+              () => (preparedLeaseActive ? preparedModelRuntimeOwnerSnapshot : undefined),
             )
           : await runWithPreparedRuntime();
       } finally {
+        preparedLeaseActive = false;
         preparedModelRuntimeLease.release();
       }
     });

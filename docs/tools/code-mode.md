@@ -1029,6 +1029,24 @@ output is delivered incrementally. An unchanged cumulative summary is not repeat
 new output or a changed final-value/error reservation can produce a replacement
 summary of that same original output.
 
+Model-facing `exec` and `wait` results also fit the effective model's per-result
+context and persistence limits. OpenClaw reserves the complete result envelope,
+including status, continuation, diagnostics, telemetry, and JSON formatting,
+before projecting output from its retained original source. Network-derived
+results retain the untrusted-content wrapper and its smaller content limit.
+These limits do not reduce the nested tool's byte allowance. Headless execution
+and low-level controls without model context retain their byte-only allowance
+(with the existing security wrapper limit for network-derived control output).
+
+This protects fresh results; it is not an archival JSON guarantee. Later
+aggregate reduction, cache-TTL pruning, and replay into a smaller model may
+still shorten or replace historical tool text. Already-sent results stay
+unchanged during ordinary continuation. Conventional tools keep their own text
+and image formats: a declared output schema describes `details`, not model-visible
+text. The file-read producer reserves its exact paging footer within the same
+model limits, and oversized skill instructions are refused rather than silently
+served in part.
+
 ## Tool catalog
 
 The hidden catalog includes tools after effective policy filtering, in this

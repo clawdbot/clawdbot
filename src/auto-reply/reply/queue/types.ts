@@ -36,12 +36,7 @@ import type {
 import type { ReplyPayload } from "../../reply-payload.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ThinkingCatalogEntry } from "../../thinking.js";
-import { hasQueuedSourceReplyDeliveryCapability } from "../automatic-room-event-final-capability.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
-import type {
-  QueuedSourceReplyDelivery,
-  TurnLocalBeforeAgentFinalize,
-} from "../source-finalization.types.js";
 import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
@@ -117,8 +112,6 @@ export type FollowupRun = {
   /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */
   queueAbortSignal?: AbortSignal;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
-  /** Exact source dispatcher and presentation owner retained for this queued turn. */
-  queuedSourceReplyDelivery?: QueuedSourceReplyDelivery;
   /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
@@ -133,8 +126,6 @@ export type FollowupRun = {
   disableTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
-  /** Runtime-only final-candidate gate; never merged across queued turns. */
-  onBeforeAgentFinalize?: TurnLocalBeforeAgentFinalize;
   /** The current-turn hook already ran before this steer became a fallback. */
   /** Pending same-turn acceptance while this item remains parked in FIFO order. */
   steerPending?: {
@@ -249,8 +240,6 @@ export type FollowupRun = {
     runtimePluginToolGrant?: RuntimePluginToolGrant;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-    /** Runtime-only fence for message-tool sends back into this exact source conversation. */
-    deferSourceMessageToolDelivery?: boolean;
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;
@@ -266,18 +255,6 @@ export type FollowupRun = {
     skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   };
 };
-
-/** True only when a queued room event retains its exact authorized automatic source owner. */
-export function hasAuthorizedQueuedRoomEventSourceDelivery(
-  run: Pick<FollowupRun, "currentInboundEventKind" | "queuedSourceReplyDelivery"> & {
-    run: Pick<FollowupRun["run"], "sourceReplyDeliveryMode">;
-  },
-): boolean {
-  return (
-    run.currentInboundEventKind === "room_event" &&
-    hasQueuedSourceReplyDeliveryCapability(run.queuedSourceReplyDelivery)
-  );
-}
 
 export function isFollowupRunAborted(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,

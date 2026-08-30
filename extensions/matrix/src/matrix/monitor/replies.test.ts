@@ -10,25 +10,6 @@ vi.mock("../send.js", () => ({
     sendMessageMatrixMock(to, message, opts),
 }));
 
-vi.mock("../accounts.js", () => ({
-  listMatrixAccountIds: () => ["alpha", "beta"],
-  resolveMatrixAccount: ({ accountId }: { accountId: string }) => ({
-    accountId,
-    enabled: true,
-    configured: true,
-  }),
-}));
-
-vi.mock("./route.js", () => ({
-  resolveMatrixInboundRoute: ({ accountId }: { accountId: string }) => ({
-    route: {
-      accountId,
-      agentId: `agent-${accountId}`,
-      sessionKey: `agent:${accountId}:main`,
-    },
-  }),
-}));
-
 import { setMatrixRuntime } from "../../runtime.js";
 import { deliverMatrixReplies } from "./replies.js";
 

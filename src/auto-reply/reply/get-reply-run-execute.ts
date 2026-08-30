@@ -43,7 +43,6 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { normalizeToolProgressDetail } from "./prompt-session-context.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
-import { readSourceFinalizationPrivateOptions } from "./source-finalization-private.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -132,7 +131,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     sessionKey,
     storePath,
   } = params;
-  const sourceFinalizationPrivateOptions = readSourceFinalizationPrivateOptions(opts);
   const {
     resolvedVerboseLevel,
     resolvedReasoningLevel,
@@ -365,7 +363,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     explicitSkillSelections: params.explicitSkillSelections,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
-    queuedSourceReplyDelivery: opts?.queuedSourceReplyDelivery,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
@@ -381,14 +378,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
     ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
-    ...(sourceFinalizationPrivateOptions?.onBeforeAgentFinalize || opts?.queuedSourceReplyDelivery
-      ? {
-          ...(sourceFinalizationPrivateOptions?.onBeforeAgentFinalize
-            ? { onBeforeAgentFinalize: sourceFinalizationPrivateOptions.onBeforeAgentFinalize }
-            : {}),
-          disableCollectBatching: true,
-        }
-      : {}),
     enqueuedAt: Date.now(),
     currentTurnImagesPrepared: true as const,
     images: currentTurnImages.images,
@@ -512,8 +501,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         : {}),
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
-      deferSourceMessageToolDelivery:
-        sourceFinalizationPrivateOptions?.deferSourceMessageToolDelivery,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic,

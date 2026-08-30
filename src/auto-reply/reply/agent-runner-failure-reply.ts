@@ -29,7 +29,6 @@ import {
   resolveProviderRequestFailureCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
-import { isPluginHarnessSourceFinalizationUnsupportedError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
@@ -221,12 +220,6 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
-  if (isPluginHarnessSourceFinalizationUnsupportedError(error)) {
-    return {
-      text: `⚠️ ${renderUserFacingText(normalizedMessage, { errorContext: true })}`,
-      isGenericRunnerFailure: false,
-    };
-  }
   const failoverFacts =
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);

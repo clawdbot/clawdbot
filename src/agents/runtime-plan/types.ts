@@ -267,8 +267,6 @@ type AgentRuntimeReplyPayload = {
     question: string;
   };
   replyToId?: string;
-  /** Internal provenance for an explicitly requested message-tool reply relation. */
-  replyToIdSource?: "explicit";
   replyToTag?: boolean;
   replyToCurrent?: boolean;
   audioAsVoice?: boolean;

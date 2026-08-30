@@ -12,7 +12,6 @@ import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { hasAuthorizedQueuedRoomEventSourceDelivery } from "./queue/types.js";
 import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
@@ -75,9 +74,7 @@ export async function executeFollowupTurn(params: {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
-  const authorizedQueuedRoomEvent = hasAuthorizedQueuedRoomEventSourceDelivery(turn.queued);
-  const progressAllowed = () =>
-    turn.sendPolicy === "allow" && (!roomEvent || authorizedQueuedRoomEvent);
+  const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const currentVerboseLevel = (): VerboseLevel => {
     const session = turn.session;
     if (session.kind === "session" && session.storePath) {
@@ -195,25 +192,11 @@ export async function executeFollowupTurn(params: {
     // queued turn. Never let a later callback widen or narrow an older item.
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
-    turnAdoptionLifecycle: turn.queued.turnAdoptionLifecycle,
     commentaryPayloadsEnabled,
     runId: turn.runId,
     onBlockReply: undefined,
-    onPartialReply: authorizedQueuedRoomEvent
-      ? wrapVisibility(sourceOpts?.onPartialReply)
-      : undefined,
-    onAssistantMessageStart:
-      authorizedQueuedRoomEvent && sourceOpts?.onAssistantMessageStart
-        ? () =>
-            enqueueProgressResult(async () => {
-              if (!progressAllowed()) {
-                return false;
-              }
-              return (
-                await settleProgressVisibilityCallbackResult(sourceOpts.onAssistantMessageStart!())
-              ).visible;
-            })
-        : undefined,
+    onPartialReply: undefined,
+    onAssistantMessageStart: undefined,
     onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
     onCommandOutput: sourceOpts?.onCommandOutput
       ? (output) =>

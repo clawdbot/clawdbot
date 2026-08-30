@@ -21,8 +21,6 @@ function buildCliMcpExecSession(
       : permissionMode;
   const execSession = {
     execHost: normalizeOptionalMcpContextValue(sessionEntry?.execHost),
-    execSecurity: normalizeOptionalMcpContextValue(sessionEntry?.execSecurity),
-    execAsk: normalizeOptionalMcpContextValue(sessionEntry?.execAsk),
     execNode: normalizeOptionalMcpContextValue(sessionEntry?.execNode),
     ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
   };
@@ -177,7 +175,6 @@ export function buildCliMcpGrantContext(params: {
     accountId: normalizeOptionalMcpContextValue(params.run.agentAccountId),
     inboundEventKind: params.run.currentInboundEventKind,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
-    deferSourceMessageToolDelivery: params.run.deferSourceMessageToolDelivery,
     ...(sourceReplyOnly ? { sourceReplyOnly: true } : {}),
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,

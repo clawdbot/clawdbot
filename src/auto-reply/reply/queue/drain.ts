@@ -40,7 +40,6 @@ import { FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
-  hasAuthorizedQueuedRoomEventSourceDelivery,
   isFollowupRunAborted,
   isFollowupRunDeferredError,
   retireFollowupRunCancellation,
@@ -364,7 +363,6 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
-    hasAuthorizedQueuedRoomEventSourceDelivery(run),
     execution.taskSuggestionDeliveryMode ?? "",
     execution.silentReplyPromptMode ?? "",
     execution.enforceFinalTag === true,
@@ -499,8 +497,6 @@ type FollowupRuntimeMetadata = Pick<
   | "channelAdmissionEvidence"
   | "toolsAllow"
   | "disableTools"
-  | "onBeforeAgentFinalize"
-  | "queuedSourceReplyDelivery"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
@@ -517,12 +513,7 @@ function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
 }
 
 function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
-  return (
-    item.currentInboundEventKind === "room_event" ||
-    item.currentInboundAudio === true ||
-    item.onBeforeAgentFinalize !== undefined ||
-    item.queuedSourceReplyDelivery !== undefined
-  );
+  return item.currentInboundEventKind === "room_event" || item.currentInboundAudio === true;
 }
 
 function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
@@ -743,7 +734,6 @@ function collectRuntimeMetadata(
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
-  const queuedSourceReplyDelivery = authoritySource?.queuedSourceReplyDelivery;
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const explicitSkillSelections = [
     ...new Map(
@@ -763,12 +753,6 @@ function collectRuntimeMetadata(
     ),
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
-    onBeforeAgentFinalize: queuedSourceReplyDelivery
-      ? authoritySource.onBeforeAgentFinalize
-      : items.length === 1
-        ? items[0]?.onBeforeAgentFinalize
-        : undefined,
-    queuedSourceReplyDelivery,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -1150,8 +1134,6 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
-    queuedSourceReplyDelivery: source.queuedSourceReplyDelivery,
-    onBeforeAgentFinalize: source.onBeforeAgentFinalize,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,
     ...(source.currentInboundEventKind === "room_event"
@@ -1220,8 +1202,6 @@ async function runSyntheticOverflowSummary(params: {
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
     queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
-    onBeforeAgentFinalize: runtimeMetadata.onBeforeAgentFinalize,
-    queuedSourceReplyDelivery: runtimeMetadata.queuedSourceReplyDelivery,
     ...(params.onAdmitted
       ? {
           turnAdoptionLifecycle: {

@@ -1445,7 +1445,7 @@ function collectToolTelemetry(params: {
     return undefined;
   }
   params.telemetry.didSendViaMessagingTool = true;
-  const sourceReplyPayload = extractSourceReplyPayload(params.result?.details);
+  const sourceReplyPayload = extractInternalSourceReplyPayload(params.result?.details);
   if (sourceReplyPayload) {
     const record = {
       ...sourceReplyPayload,
@@ -1477,36 +1477,15 @@ function collectToolTelemetry(params: {
   params.telemetry.messagingToolSentTargets.push(record);
   return record;
 }
-function extractSourceReplyPayload(details: unknown): MessagingToolSourceReplyPayload | undefined {
-  if (!isRecord(details)) {
-    return undefined;
-  }
-  const hostFinalDeferred =
-    details.sourceReplySink === "host-final" &&
-    details.hostFinalDeferred === true &&
-    details.deliveryStatus === "deferred";
-  if (details.sourceReplySink !== "internal-ui" && !hostFinalDeferred) {
+function extractInternalSourceReplyPayload(
+  details: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  if (!isRecord(details) || details.sourceReplySink !== "internal-ui") {
     return undefined;
   }
   const rawPayload = details.sourceReply;
   if (!isRecord(rawPayload)) {
     return undefined;
-  }
-  if (hostFinalDeferred) {
-    // SAFETY: The bundled message tool emits host-final only after canonical ReplyPayload preparation; this copy preserves that payload across result type erasure.
-    const payload = { ...rawPayload } as MessagingToolSourceReplyPayload;
-    if (
-      payload.idempotencyKey === undefined &&
-      typeof details.idempotencyKey === "string" &&
-      details.idempotencyKey.trim()
-    ) {
-      payload.idempotencyKey = details.idempotencyKey.trim();
-    }
-    if (details.sourceReplyTranscriptOwner === true) {
-      payload.transcriptOwner = true;
-    }
-    payload.hostFinalDeferred = true;
-    return payload;
   }
   const text = readFirstString(rawPayload, ["text", "message"]);
   const mediaUrls = collectMediaUrls(rawPayload);

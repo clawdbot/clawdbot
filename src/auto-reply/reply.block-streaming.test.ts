@@ -1,12 +1,17 @@
 /** Tests block streaming behavior for auto-reply output delivery. */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withFastReplyConfig } from "./reply/get-reply-fast-path.test-support.js";
 import { loadGetReplyModuleForTest } from "./reply/get-reply.test-loader.js";
 import { createMockTypingController } from "./reply/reply.test-helpers.js";
 import type { MsgContext } from "./templating.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 const mocks = vi.hoisted(() => ({
+  rootDir: "",
   resolveReplyDirectives: vi.fn(),
   handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
@@ -19,8 +24,8 @@ vi.mock("../agents/agent-scope.js", async () => {
   );
   return {
     ...actual,
-    resolveAgentDir: vi.fn(() => "/tmp/agent"),
-    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+    resolveAgentDir: vi.fn(() => path.join(mocks.rootDir, "agent")),
+    resolveAgentWorkspaceDir: vi.fn(() => path.join(mocks.rootDir, "workspace")),
     resolveSessionAgentId: vi.fn(() => "main"),
     resolveAgentSkillsFilter: vi.fn(() => undefined),
   };
@@ -39,7 +44,7 @@ vi.mock("../agents/timeout.js", () => ({
 }));
 vi.mock("../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/workspace",
-  ensureAgentWorkspace: vi.fn(async () => ({ dir: "/tmp/workspace" })),
+  ensureAgentWorkspace: vi.fn(async () => ({ dir: path.join(mocks.rootDir, "workspace") })),
 }));
 vi.mock("../channels/model-overrides.js", () => ({
   resolveChannelModelOverride: vi.fn(() => undefined),
@@ -109,7 +114,7 @@ function createReplyConfig(streamMode?: "block"): OpenClawConfig {
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-6" },
-        workspace: "/tmp/workspace",
+        workspace: path.join(mocks.rootDir, "workspace"),
       },
     },
     channels: {
@@ -118,7 +123,7 @@ function createReplyConfig(streamMode?: "block"): OpenClawConfig {
         ...(streamMode ? { streaming: { mode: streamMode } } : {}),
       },
     },
-    session: { store: "/tmp/sessions.json" },
+    session: { store: path.join(mocks.rootDir, "sessions.json") },
   } as OpenClawConfig);
 }
 
@@ -178,6 +183,7 @@ describe("block streaming", () => {
   });
 
   beforeEach(() => {
+    mocks.rootDir = tempDirs.make("openclaw-block-streaming-");
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     mocks.resolveReplyDirectives.mockReset();
     mocks.handleInlineActions.mockReset();
@@ -204,7 +210,7 @@ describe("block streaming", () => {
       resetTriggered: false,
       systemSent: false,
       abortedLastRun: false,
-      storePath: "/tmp/sessions.json",
+      storePath: path.join(mocks.rootDir, "sessions.json"),
       sessionScope: "per-sender",
       groupResolution: undefined,
       isGroup: false,

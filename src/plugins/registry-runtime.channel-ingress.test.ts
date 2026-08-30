@@ -1,6 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { hasAutomaticRoomEventFinalCapability } from "../auto-reply/reply/automatic-room-event-final-capability.js";
-import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import type { BuildChannelInboundEventContextParams } from "../channels/inbound-event/context.js";
 import { buildChannelInboundEventContext } from "../channels/inbound-event/context.js";
 import {
@@ -10,7 +8,6 @@ import {
 } from "../channels/message-access/admission-evidence.js";
 import type { ResolvedChannelMessageIngress } from "../channels/message-access/runtime-types.js";
 import { resolveStableChannelMessageIngress } from "../channels/message-access/runtime.js";
-import { runChannelTurn } from "../channels/turn/run-channel-turn.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
@@ -19,16 +16,11 @@ import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-vi.mock("../channels/session.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../channels/session.js")>()),
-  recordInboundSession: vi.fn(async () => undefined),
-}));
-
 function createRuntimeBuilder(params: { origin: PluginOrigin; id?: string }) {
   const registryBuilder = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: {
-      channel: { inbound: { buildContext: buildChannelInboundEventContext, run: runChannelTurn } },
+      channel: { inbound: { buildContext: buildChannelInboundEventContext } },
     } as PluginRuntime,
     activateGlobalSideEffects: false,
   });
@@ -70,17 +62,7 @@ function createRuntimeBuilder(params: { origin: PluginOrigin; id?: string }) {
     }
     return runtime.inbound.buildContext;
   };
-  const channelRuntime = registryBuilder.registry.channels[0]?.resolveChannelRuntime?.();
-  if (!channelRuntime) {
-    throw new Error(`missing registered channel runtime for ${record.id}`);
-  }
-  return {
-    buildContext: channelRuntime.inbound.buildContext,
-    channelRuntime,
-    record,
-    registryBuilder,
-    resolveBuildContext,
-  };
+  return { buildContext: resolveBuildContext(), record, registryBuilder, resolveBuildContext };
 }
 
 async function resolveIngress(
@@ -332,106 +314,6 @@ describe("bundled channel ingress runtime ownership", () => {
       }
     },
   );
-
-  it("authorizes automatic room-event finals only through the exact bundled build and run", async () => {
-    const external = createRuntimeBuilder({ origin: "workspace" });
-    const bundled = createRuntimeBuilder({ origin: "bundled" });
-
-    const runThrough = async (
-      runtimeBuilder: ReturnType<typeof createRuntimeBuilder>,
-      messageId: string,
-      expectedHostEvidence: boolean,
-      admission: "dispatch" | "observeOnly" = "dispatch",
-    ) => {
-      const sessionKey = "agent:main:channel-owner:dm:dm-1";
-      const ingress = await resolveIngress("person-a", {
-        conversation: { kind: "direct", id: "dm-1" },
-        contextBinding: {
-          agentId: "main",
-          sessionKey,
-          messageId,
-          inboundEventKind: "room_event",
-        },
-      });
-      const ctxPayload = runtimeBuilder.buildContext(
-        contextParams({
-          ingress,
-          conversation: { kind: "direct", id: "dm-1" },
-          route: { agentId: "main", routeSessionKey: sessionKey },
-          reply: { to: "channel-owner:dm-1" },
-          messageId,
-          inboundEventKind: "room_event",
-        }),
-      );
-      expect(ctxPayload).toMatchObject({
-        AccountId: "default",
-        InboundEventKind: "room_event",
-        MessageSid: messageId,
-        OriginatingChannel: "channel-owner",
-        Provider: "channel-owner",
-        Surface: "channel-owner",
-      });
-      expect(inspect(ctxPayload).ingressState).toBe(expectedHostEvidence ? "present" : "unknown");
-      let authorized = false;
-      let mode: string | undefined;
-      await runtimeBuilder.channelRuntime.inbound.run({
-        channel: "channel-owner",
-        accountId: "default",
-        raw: { messageId },
-        adapter: {
-          ingest: () => ({ id: messageId, rawText: "hello" }),
-          resolveTurn: () => ({
-            admission:
-              admission === "observeOnly"
-                ? { kind: "observeOnly" as const, reason: "test-observer" }
-                : { kind: "dispatch" as const },
-            cfg: {} as OpenClawConfig,
-            channel: "channel-owner",
-            accountId: "default",
-            route: { agentId: "main", sessionKey },
-            ctxPayload,
-            delivery: { deliver: vi.fn(async () => undefined) },
-            replyOptions: { sourceReplyDeliveryMode: "automatic" },
-            dispatchReplyFromConfig: async (params) => {
-              authorized = hasAutomaticRoomEventFinalCapability({
-                capability: params.replyOptions?.automaticRoomEventFinalCapability,
-                context: params.ctx,
-              });
-              mode = resolveSourceReplyDeliveryMode({
-                cfg: params.cfg,
-                ctx: params.ctx,
-                requested: params.replyOptions?.sourceReplyDeliveryMode,
-                automaticRoomEventFinalCapability:
-                  params.replyOptions?.automaticRoomEventFinalCapability,
-              });
-              return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-            },
-          }),
-        },
-      });
-      return { authorized, mode };
-    };
-
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    await expect(runThrough(external, "external-message", false)).resolves.toEqual({
-      authorized: false,
-      mode: "message_tool_only",
-    });
-    try {
-      await expect(runThrough(bundled, "bundled-message", true)).resolves.toEqual({
-        authorized: true,
-        mode: "automatic",
-      });
-      await expect(
-        runThrough(bundled, "observe-only-message", true, "observeOnly"),
-      ).resolves.toEqual({
-        authorized: false,
-        mode: "message_tool_only",
-      });
-    } finally {
-      cleanup();
-    }
-  });
 
   it("consumes the exact resolution-to-context handoff on its first attempt", async () => {
     const cleanup = configureChannelAdmissionEvidenceCollection(true);

@@ -55,9 +55,6 @@ export {
   tryResolveSoleAgentId,
   tryResolveDefaultAgentId,
   AgentSelectionRequiredError,
-  type AgentSelectionContext,
-  type AgentWorkspaceProvisioning,
-  type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 
 const AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS = 5 * 60 * 1000;
@@ -489,7 +486,7 @@ function resolveFirstModelFallbacksOverride(
   return undefined;
 }
 
-export type SubagentModelConfigSelectionSource = "subagent" | "agent" | "default-subagent";
+type SubagentModelConfigSelectionSource = "subagent" | "agent" | "default-subagent";
 
 export type SubagentModelConfigSelectionResult = {
   raw: AgentModelConfig;
@@ -542,7 +539,7 @@ export function resolveSubagentModelFallbacksOverride(
   return undefined;
 }
 
-function resolveSubagentSpawnModelFallbacksOverride(
+export function resolveSubagentSpawnModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {

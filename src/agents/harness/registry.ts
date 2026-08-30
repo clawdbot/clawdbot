@@ -17,7 +17,7 @@ import type {
 } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
-const CODEX_AGENT_HARNESS_ID = "codex";
+const CODEX_NATIVE_COMPACTION_OWNER_ID = "codex";
 
 function getAgentHarnesses() {
   return getPluginRegistryForContext()?.agentHarnesses ?? [];
@@ -36,7 +36,7 @@ export function registerAgentHarness(
   }
   if (
     options?.nativeCompaction &&
-    (id !== CODEX_AGENT_HARNESS_ID || pluginId !== CODEX_AGENT_HARNESS_ID)
+    (id !== CODEX_NATIVE_COMPACTION_OWNER_ID || pluginId !== CODEX_NATIVE_COMPACTION_OWNER_ID)
   ) {
     throw new Error("native compaction requires the registry-owned Codex harness");
   }
@@ -64,23 +64,6 @@ export function registerAgentHarness(
   }
 }
 
-/** Resolves the unexported second-argument ABI only for the exact bundled Codex harness. */
-export function hasBundledCodexAgentHarnessSourceFinalization(harness: AgentHarness): boolean {
-  if (harness.id !== CODEX_AGENT_HARNESS_ID) {
-    return false;
-  }
-  const registration = getAgentHarnesses().find(
-    (entry) => entry.harness.id === CODEX_AGENT_HARNESS_ID,
-  );
-  if (registration?.harness !== harness) {
-    throw new Error(`Agent harness ${harness.id} changed during source finalization resolution.`);
-  }
-  return (
-    registration.pluginId === CODEX_AGENT_HARNESS_ID &&
-    registration.bundledCodexSourceFinalization === true
-  );
-}
-
 /** Returns the harness plus plugin ownership metadata for registry diagnostics. */
 export function getRegisteredAgentHarness(id: string): RegisteredAgentHarness | undefined {
   const registration = getAgentHarnesses().find((entry) => entry.harness.id === id.trim());
@@ -105,16 +88,16 @@ export function resolveAgentHarnessOwnerPluginId(harness: AgentHarness): string 
 export function resolveCodexAgentHarnessNativeCompaction(
   harness: AgentHarness,
 ): AgentHarnessNativeCompaction | undefined {
-  if (harness.id !== CODEX_AGENT_HARNESS_ID) {
+  if (harness.id !== CODEX_NATIVE_COMPACTION_OWNER_ID) {
     return undefined;
   }
   const registration = getAgentHarnesses().find(
-    (entry) => entry.harness.id === CODEX_AGENT_HARNESS_ID,
+    (entry) => entry.harness.id === CODEX_NATIVE_COMPACTION_OWNER_ID,
   );
   if (registration?.harness !== harness) {
     throw new Error(`Agent harness ${harness.id} changed during native compaction resolution.`);
   }
-  return registration.pluginId === CODEX_AGENT_HARNESS_ID
+  return registration.pluginId === CODEX_NATIVE_COMPACTION_OWNER_ID
     ? registration.nativeCompaction
     : undefined;
 }

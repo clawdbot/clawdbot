@@ -30,10 +30,6 @@ export function matrixEventToRaw(
   if (typeof stateKey === "string") {
     raw.state_key = stateKey;
   }
-  const redacts = event.event?.redacts;
-  if (typeof redacts === "string") {
-    raw.redacts = redacts;
-  }
   return raw;
 }
 

@@ -56,6 +56,7 @@ import {
 import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
+import type { ToolResultBudget } from "./tool-result-limits.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -64,6 +65,7 @@ export async function runCodeModeExec(params: {
   toolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
+  resultBudget?: ToolResultBudget;
   code: string;
   assistantTurnId?: string;
   language?: CodeModeLanguage;
@@ -100,7 +102,7 @@ export async function runCodeModeExec(params: {
   const approvalWait = observeAgentRunApprovalWait(params.ctx);
   const owner = createCodeModeRunOwner(params.ctx);
   const signal = owner.bindCall(params.signal);
-  const output = new CodeModeOutputState(config.maxOutputBytes);
+  const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);
   try {
     const source = await awaitCodeModeDeadline({
       operation: () => prepareSource({ code: params.code, language: params.language, config }),
@@ -150,21 +152,22 @@ export async function runCodeModeExec(params: {
     });
   } catch (error) {
     const code = signal.aborted ? ("aborted" as const) : codeModeFailureCode(error);
-    return {
-      status: "failed" as const,
-      ...output.take({
-        error: signal.aborted ? "code mode execution aborted" : codeModeFailureMessage(error),
-      }),
-      code,
-      failurePhase: bridgeDispatch.started
-        ? ("bridge" as const)
-        : code === "invalid_input"
-          ? ("input" as const)
-          : ("host" as const),
-      bridgeDispatchStarted: bridgeDispatch.started,
-      replaySafe: params.restartSafe,
-      telemetry: telemetry(runtime),
-    };
+    return output.takeResult(
+      {
+        status: "failed" as const,
+        code,
+        failurePhase: bridgeDispatch.started
+          ? ("bridge" as const)
+          : code === "invalid_input"
+            ? ("input" as const)
+            : ("host" as const),
+        bridgeDispatchStarted: bridgeDispatch.started,
+        replaySafe: params.restartSafe,
+        telemetry: telemetry(runtime),
+      },
+      { error: signal.aborted ? "code mode execution aborted" : codeModeFailureMessage(error) },
+      runtime.hasNetworkContent(),
+    );
   } finally {
     approvalWait.dispose();
     if (!activeRuns.has(owner.runId)) {
@@ -427,19 +430,22 @@ async function settleCodeModeResult(params: {
     );
     if (params.replaySafe && !pendingReplaySafe) {
       cancelPendingBridgeStates(pending);
-      return {
-        status: "failed" as const,
-        ...output.take({
+      return output.takeResult(
+        {
+          status: "failed" as const,
+          code: "invalid_input" as const,
+          failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
+          bridgeDispatchStarted: params.bridgeDispatch.started,
+          replaySafe: true,
+          telemetry: telemetry(params.runtime),
+        },
+        {
           error: result.pendingRequests.every((request) => request.method === "namespace")
             ? "restart-safe code mode cannot call namespace tools."
             : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; recovery runs must use audited read, grep, or find tools.",
-        }),
-        code: "invalid_input" as const,
-        failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
-        bridgeDispatchStarted: params.bridgeDispatch.started,
-        replaySafe: true,
-        telemetry: telemetry(params.runtime),
-      };
+        },
+        params.runtime.hasNetworkContent(),
+      );
     }
     let releaseReservation: (() => void) | undefined;
     try {
@@ -501,24 +507,23 @@ async function settleCodeModeResult(params: {
   // Defensive cleanup covers aborts or terminal failures; successful runs have
   // already drained every dispatched call before releasing their snapshot.
   cancelPendingBridgeStates(pending);
-  const bounded = output.take({
+  const channels = {
     ...(result.status === "completed" ? { value: result.value } : {}),
     ...(result.status === "failed" ? { error: result.error } : {}),
-  });
-  const finalized = {
-    ...result,
-    ...(bounded.error !== undefined ? { error: bounded.error } : {}),
-    ...(result.status === "completed" ? { value: bounded.value } : {}),
+  };
+  const metadata = {
     ...(result.status === "failed"
       ? {
+          status: result.status,
+          code: result.code,
           failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : result.failurePhase,
           bridgeDispatchStarted: params.bridgeDispatch.started,
         }
-      : {}),
-    output: bounded.output,
+      : { status: result.status }),
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
+  const finalized = output.takeResult(metadata, channels, params.runtime.hasNetworkContent());
   if (finalized.status === "failed" && isCodeModeBridgeRepairEligible(params.bridgeDispatch)) {
     registerRepairableCodeModeFailure(finalized);
   }
@@ -585,15 +590,18 @@ export async function runWait(params: {
       // so the next wait can resume with a fresh deadline instead of losing
       // the run to a restore-only interrupt timeout.
       const pending = state.pending.filter((entry) => !entry.settled);
-      return {
-        status: "waiting" as const,
-        runId: state.runId,
-        reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
-        pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
-        replaySafe: state.replaySafe,
-        output: state.output.take().output,
-        telemetry: telemetry(state.runtime),
-      };
+      return state.output.takeResult(
+        {
+          status: "waiting" as const,
+          runId: state.runId,
+          reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
+          pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
+          replaySafe: state.replaySafe,
+          telemetry: telemetry(state.runtime),
+        },
+        {},
+        state.runtime.hasNetworkContent(),
+      );
     }
 
     const settledRequests: SettledBridgeRequest[] = settledBridgeRequestsInCompletionOrder(
@@ -647,17 +655,18 @@ export async function runWait(params: {
     const aborted = signal.aborted;
     state.owner.close();
     cancelPendingBridgeStates(state.pending);
-    return {
-      status: "failed" as const,
-      ...state.output.take({
-        error: aborted ? "code mode execution aborted" : codeModeFailureMessage(error),
-      }),
-      code: aborted ? ("aborted" as const) : codeModeFailureCode(error),
-      failurePhase: "bridge" as const,
-      bridgeDispatchStarted: state.bridgeDispatch.started,
-      replaySafe: state.replaySafe,
-      telemetry: telemetry(state.runtime),
-    };
+    return state.output.takeResult(
+      {
+        status: "failed" as const,
+        code: aborted ? ("aborted" as const) : codeModeFailureCode(error),
+        failurePhase: "bridge" as const,
+        bridgeDispatchStarted: state.bridgeDispatch.started,
+        replaySafe: state.replaySafe,
+        telemetry: telemetry(state.runtime),
+      },
+      { error: aborted ? "code mode execution aborted" : codeModeFailureMessage(error) },
+      state.runtime.hasNetworkContent(),
+    );
   } finally {
     approvalWait.dispose();
     releaseActiveRunSlot?.();

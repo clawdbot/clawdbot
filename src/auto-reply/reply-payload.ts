@@ -72,8 +72,6 @@ export type ReplyPayload = {
     question: string;
   };
   replyToId?: string;
-  /** Internal provenance for an explicitly requested message-tool reply relation. */
-  replyToIdSource?: "explicit";
   replyToTag?: boolean;
   /** True when [[reply_to_current]] was present but not yet mapped to a message id. */
   replyToCurrent?: boolean;

@@ -89,6 +89,11 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "channel-pairing": () =>
     import("./server-methods/channel-pairing.js").then((module) => module.channelPairingHandlers),
   chat: () => import("./server-methods/chat.js").then((module) => module.chatHandlers),
+  // Cancellation must not wait for unrelated chat history and send workflows to load.
+  "chat-abort": () =>
+    import("./server-methods/chat-abort-handler.js").then((module) => ({
+      "chat.abort": module.handleChatAbortRequest,
+    })),
   commands: () => import("./server-methods/commands.js").then((module) => module.commandsHandlers),
   config: () => import("./server-methods/config.js").then((module) => module.configHandlers),
   conversations: () =>
@@ -255,10 +260,7 @@ function authorizeGatewayMethod(
 ) {
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
-  if (!client?.connect) {
-    return null;
-  }
-  if (method === "health") {
+  if (!client?.connect || method === "health") {
     return null;
   }
   const roleRaw = client.connect.role ?? "operator";

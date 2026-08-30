@@ -114,11 +114,10 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const ringZeroActive =
     hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params.params);
-  const isolateNativeHooks =
+  const restrictedToolSurface =
     ringZeroActive ||
     messageOnlySourceReply ||
     params.params.pluginHarnessToolPolicyRestricted === true;
-  const restrictedToolSurface = isolateNativeHooks || params.params.disableTools === true;
   const imageGenerationDenied =
     params.params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate") === true;
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
@@ -135,7 +134,6 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         params.client,
         {
           restrictedToolSurface,
-          preserveNativeHooks: !isolateNativeHooks,
           additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
         },
         params.signal,

@@ -14,7 +14,6 @@ import {
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { joinPresentSections } from "./run-attempt-state.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
-import { shouldEnableCodexTurnLocalFinalization } from "./turn-local-finalization.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
   const {
@@ -122,21 +121,13 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeHookRelayRequired:
-        (params.operation !== "settled-tool-finalization" &&
-          shouldEnableCodexTurnLocalFinalization({
-            callback: params.onBeforeAgentFinalize,
-            revisionAttempt: params.beforeAgentFinalizeRevisionAttempts ?? 0,
-            ...(params.maxBeforeAgentFinalizeRevisions !== undefined
-              ? { maxRevisionAttempts: params.maxBeforeAgentFinalizeRevisions }
-              : {}),
-          })) ||
-        (connection.options.nativeHookRelay?.enabled !== false &&
-          params.pluginHarnessToolPolicyRestricted !== true &&
-          connection.nativeHookRelayEvents.includes("pre_tool_use") &&
-          (hasBeforeToolCallPolicy() ||
-            (appServer.loopDetectionPreToolUseRelay &&
-              Boolean(connection.sandboxSessionKey) &&
-              loopDetectionEnabled))),
+        connection.options.nativeHookRelay?.enabled !== false &&
+        params.pluginHarnessToolPolicyRestricted !== true &&
+        connection.nativeHookRelayEvents.includes("pre_tool_use") &&
+        (hasBeforeToolCallPolicy() ||
+          (appServer.loopDetectionPreToolUseRelay &&
+            Boolean(connection.sandboxSessionKey) &&
+            loopDetectionEnabled)),
       bundleMcpThreadConfig,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
       nativeToolSurfaceEnabled,

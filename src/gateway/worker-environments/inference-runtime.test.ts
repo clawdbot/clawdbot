@@ -288,6 +288,12 @@ function setup(
     leasedPreparedModelRuntime = leased;
     return {
       snapshot: leased,
+      pluginGeneration: {
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
+        pluginMetadataSnapshot: leased.metadataSnapshot,
+        pluginRegistry: leased.pluginRegistry,
+      },
       release: releaseRuntime,
     };
   });

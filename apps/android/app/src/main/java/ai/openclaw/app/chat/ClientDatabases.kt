@@ -716,31 +716,21 @@ private class DeferredChatCommandOutbox(
     lease: ChatOutboxMutationLease?,
   ): ChatOutboxBranchState? = ready().commandOutbox.demoteSessionMutationToReconciliationState(gatewayId, scope, lease)
 
-  override suspend fun updateLastActiveLeafEntryId(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    leafEntryId: String,
-    expectedEpoch: Int,
-    expectedRevision: Int,
-  ): Boolean = ready().commandOutbox.updateLastActiveLeafEntryId(gatewayId, scope, leafEntryId, expectedEpoch, expectedRevision)
-
   override suspend fun reconcileBranchScope(
     gatewayId: String,
     scope: ChatOutboxScope,
-    previousState: ChatOutboxBranchState,
+    evidence: ChatOutboxBranchEvidence,
     activeLeafEntryId: String?,
-    branchLeafEntryIds: Set<String>,
     activeTranscriptEntryIds: Set<String>,
     lastError: String,
-  ): Boolean =
+  ): ChatOutboxBranchState? =
     ready()
       .commandOutbox
       .reconcileBranchScope(
         gatewayId,
         scope,
-        previousState,
+        evidence,
         activeLeafEntryId,
-        branchLeafEntryIds,
         activeTranscriptEntryIds,
         lastError,
       )

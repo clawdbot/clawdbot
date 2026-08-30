@@ -369,7 +369,7 @@ export function truncateToolResultText(
     suffixFactory,
     minimumRawWeight: options.minimumRawWeight,
   });
-  if (estimateToolResultTextChars(text, budgetOptions) <= maxChars) {
+  if (text.length <= maxChars && estimateToolResultTextChars(text, budgetOptions) <= maxChars) {
     return text;
   }
   const initialKeptText = sliceToolResultTextToBudget(text, maxChars, budgetOptions);
@@ -501,6 +501,7 @@ export function truncateToolResultMessage(
     (block, index) =>
       (blockTextChars[index] ?? 0) > 0 &&
       isToolResultTextBlock(block) &&
+      block.text.length <= minKeepChars &&
       estimateToolResultTextChars(block.text) <= minKeepChars,
   );
   const blockNoticeChars = content.map((block, index) =>

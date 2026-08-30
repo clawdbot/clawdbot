@@ -948,33 +948,6 @@ describe("codex plugin", () => {
     );
   });
 
-  it("accepts source finalization only through the private second-argument handoff", async () => {
-    const harness = createCodexAppServerAgentHarness({
-      pluginConfig: { appServer: {} },
-      bindingStore: testCodexAppServerBindingStore,
-    });
-    const params = { prompt: "hello" };
-    const onBeforeAgentFinalize = vi.fn(async () => ({ action: "continue" as const }));
-    runCodexAppServerAttemptMock.mockResolvedValueOnce({ success: true });
-
-    await (
-      harness.runAttempt as unknown as (
-        attempt: typeof params,
-        finalizer: typeof onBeforeAgentFinalize,
-      ) => Promise<unknown>
-    ).call(harness, params, onBeforeAgentFinalize);
-
-    expect(params).not.toHaveProperty("onBeforeAgentFinalize");
-    expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
-      { prompt: "hello", onBeforeAgentFinalize },
-      {
-        bindingStore: testCodexAppServerBindingStore,
-        pluginConfig: { appServer: {} },
-        nativeHookRelay: { enabled: true },
-      },
-    );
-  });
-
   it("owns auth bootstrap for forwarded profiles and native Codex sign-in", () => {
     const harness = createCodexAppServerAgentHarness({
       bindingStore: testCodexAppServerBindingStore,
