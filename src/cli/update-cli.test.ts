@@ -7805,7 +7805,7 @@ describe("update-cli", () => {
     },
   ])("$name", async (testCase) => {
     const setup = testCase.customSetup ? undefined : setupUpdatedRootRefresh();
-    const context = (await testCase.invoke()) as { originalCwd: string } | undefined;
+    await testCase.invoke();
     const runCommandWithTimeoutMock = vi.mocked(runCommandWithTimeout) as unknown as {
       mock: { calls: Array<[unknown, { cwd?: string }?]> };
     };
@@ -7818,7 +7818,7 @@ describe("update-cli", () => {
     expect(installCall?.[1].cwd).toBe(String(root));
     expect(installCall?.[1].timeoutMs).toBe(60_000);
     const expectedEnv =
-      "expectedEnv" in testCase && testCase.expectedEnv ? testCase.expectedEnv(context) : {};
+      "expectedEnv" in testCase && testCase.expectedEnv ? testCase.expectedEnv() : {};
     for (const [key, value] of Object.entries(expectedEnv)) {
       expect((installCall?.[1].env as NodeJS.ProcessEnv | undefined)?.[key]).toBe(value);
     }
