@@ -1,8 +1,5 @@
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeControlUiBasePath } from "./grammar.js";
 
-const LOWERCASE_HEX_RE = /^[0-9a-f]+$/u;
-const CATALOG_SHARE_ROUTE_SEGMENT_RE = /^[a-z][a-z0-9-]*$/u;
 const CATALOG_SHARE_PATH_RE = /^([a-z][a-z0-9-]*)\/([a-zA-Z0-9]{12,})$/u;
 
 // This stable contract is shared by URL producers and consumers. The Control UI
@@ -64,21 +61,6 @@ export type ControlUiCatalogSharePathMatch = {
   shortId: string;
 };
 
-export function isControlUiCatalogShareId(
-  shareRoute: ControlUiCatalogShareRoute,
-  value: string,
-): boolean {
-  return (
-    value.length >= shareRoute.minPrefixLength &&
-    value.length <= shareRoute.fullLength &&
-    LOWERCASE_HEX_RE.test(value)
-  );
-}
-
-export function isControlUiCatalogShareRouteSegment(value: string): boolean {
-  return CATALOG_SHARE_ROUTE_SEGMENT_RE.test(value);
-}
-
 export function isControlUiReservedRouteSegment(value: string): boolean {
   return CONTROL_UI_RESERVED_ROUTE_SEGMENTS.includes(value.toLowerCase());
 }
@@ -103,31 +85,4 @@ export function matchControlUiCatalogSharePath(params: {
     routeSegment: match[1],
     shortId: match[2],
   };
-}
-
-export function buildControlUiCatalogSharePath(params: {
-  shareRoute: ControlUiCatalogShareRoute;
-  threadId: string;
-  basePath?: string;
-  prefixLength?: number;
-}): string | null {
-  const threadId = normalizeNullableString(params.threadId);
-  const shareRoute = params.shareRoute;
-  if (
-    !threadId ||
-    !isControlUiCatalogShareRouteSegment(shareRoute.routeSegment) ||
-    isControlUiReservedRouteSegment(shareRoute.routeSegment) ||
-    threadId.length !== shareRoute.fullLength ||
-    !LOWERCASE_HEX_RE.test(threadId)
-  ) {
-    return null;
-  }
-  const length = Math.min(
-    shareRoute.fullLength,
-    Math.max(
-      shareRoute.minPrefixLength,
-      Math.floor(params.prefixLength ?? shareRoute.minPrefixLength),
-    ),
-  );
-  return `${normalizeControlUiBasePath(params.basePath)}/${shareRoute.routeSegment}/${threadId.slice(0, length)}`;
 }

@@ -1,9 +1,9 @@
 // Private runtime helpers for active registered session catalogs.
+export { buildControlUiCatalogSessionUrl } from "../../packages/session-url-contract/src/index.js";
 export {
-  buildControlUiCatalogSessionUrl,
   buildControlUiCatalogSharePath,
   isControlUiCatalogShareId,
-} from "../../packages/session-url-contract/src/index.js";
+} from "../../packages/session-url-contract/src/share-build.js";
 export {
   listActiveSessionCatalogs,
   type ActiveSessionCatalog,

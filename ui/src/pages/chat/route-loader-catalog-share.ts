@@ -1,8 +1,8 @@
+import { matchControlUiCatalogSharePath } from "@openclaw/session-url-contract/parse";
 import {
   buildControlUiCatalogSharePath,
   isControlUiCatalogShareId,
-  matchControlUiCatalogSharePath,
-} from "@openclaw/session-url-contract";
+} from "@openclaw/session-url-contract/share-build";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";

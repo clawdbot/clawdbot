@@ -10,10 +10,7 @@ import {
 export { normalizeControlUiBasePath };
 export * from "./focus.js";
 export {
-  buildControlUiCatalogSharePath,
   CONTROL_UI_RESERVED_ROUTE_SEGMENTS,
-  isControlUiCatalogShareId,
-  isControlUiCatalogShareRouteSegment,
   isControlUiReservedRouteSegment,
   matchControlUiCatalogSharePath,
   type ControlUiCatalogShareRoute,

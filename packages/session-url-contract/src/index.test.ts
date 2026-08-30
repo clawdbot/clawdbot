@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildControlUiCatalogSharePath,
   buildControlUiCatalogSessionUrl,
   buildControlUiSessionPath,
   controlUiSessionSlug,
 } from "./index.js";
+import { buildControlUiCatalogSharePath } from "./share-build.js";
 
 const SHARE_ROUTE = {
   kind: "thread-id-prefix",
