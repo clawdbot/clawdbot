@@ -35,8 +35,8 @@ import {
   upsertTranscriptSessionWindowInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
+  createTranscriptIndexAppenderInTransaction,
   deleteSessionTranscriptIndexInTransaction,
-  indexAppendedTranscriptEventInTransaction,
   markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
   shouldRebuildSessionTranscriptIndexSynchronously,
@@ -57,7 +57,11 @@ type TranscriptAppendOptions = {
   touchMutation?: boolean;
 };
 
-type TranscriptAppendCursor = { initialized: boolean; nextSeq?: number };
+type TranscriptAppendCursor = {
+  initialized?: boolean;
+  nextSeq?: number;
+  appendToIndex?: ReturnType<typeof createTranscriptIndexAppenderInTransaction>;
+};
 
 export function appendTranscriptEventInTransaction(
   database: OpenClawAgentDatabase,
@@ -73,12 +77,12 @@ function appendTranscriptEvent(
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   options: TranscriptAppendOptions,
-  cursor?: TranscriptAppendCursor,
+  cursor: TranscriptAppendCursor = {},
 ): boolean {
   const persistedEvent = canonicalizeTranscriptEventMedia(event);
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
-  if (cursor?.initialized) {
+  if (cursor.initialized) {
     // Even rejected identities update window recency. Only root/generation setup
     // is shared by the synchronous batch; per-attempt writes stay in order.
     upsertTranscriptSessionWindowInTransaction(database, scope, createdAt);
@@ -87,9 +91,7 @@ function appendTranscriptEvent(
       allowStoredAlias: options.allowStoredAlias === true,
     });
     ensureTranscriptGenerationInTransaction(database, scope.sessionId);
-    if (cursor) {
-      cursor.initialized = true;
-    }
+    cursor.initialized = true;
   }
   const identity = readTranscriptEventIdentity(persistedEvent);
   if (identity && readTranscriptIdentityByEventId(database, scope.sessionId, identity.eventId)) {
@@ -106,7 +108,7 @@ function appendTranscriptEvent(
   ) {
     return false;
   }
-  const seq = cursor?.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
+  const seq = cursor.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
   executeSqliteQuerySync(
     database.db,
     db.insertInto("transcript_events").values({
@@ -116,14 +118,12 @@ function appendTranscriptEvent(
       created_at: createdAt,
     }),
   );
-  if (cursor) {
-    cursor.nextSeq = seq + 1;
-  }
+  cursor.nextSeq = seq + 1;
   if (options.touchMutation !== false) {
     touchTranscriptMutationInTransaction(database, scope.sessionId);
   }
-  const projectionNeedsRebuild = indexAppendedTranscriptEventInTransaction(database.db, {
-    sessionId: scope.sessionId,
+  cursor.appendToIndex ??= createTranscriptIndexAppenderInTransaction(database.db, scope.sessionId);
+  const projectionNeedsRebuild = cursor.appendToIndex({
     seq,
     event: persistedEvent,
     eventId: identity?.eventId ?? null,
@@ -192,7 +192,9 @@ export function appendTranscriptEventsInTransaction(
 ): number {
   let appended = 0;
   let projectionNeedsRebuild = false;
-  const cursor: TranscriptAppendCursor = { initialized: false };
+  // Prepared arrays and the import spool cannot mutate the destination between
+  // rows. Sequence and projection facts belong only to this synchronous batch.
+  const cursor: TranscriptAppendCursor = {};
   const iterator = events[Symbol.iterator]();
   const appendOptions = {
     ...options,
@@ -259,8 +261,8 @@ function appendTranscriptEventRowInTransaction(
       created_at: createdAt,
     }),
   );
-  indexAppendedTranscriptEventInTransaction(database.db, {
-    sessionId: scope.sessionId,
+  const appendToIndex = createTranscriptIndexAppenderInTransaction(database.db, scope.sessionId);
+  appendToIndex({
     seq,
     event: persistedEvent,
     eventId: identity?.eventId ?? null,

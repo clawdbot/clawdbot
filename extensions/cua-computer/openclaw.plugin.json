@@ -3,8 +3,7 @@
   "activation": {
     "onStartup": true
   },
-  "enabledByDefault": false,
-  "enabledByDefaultOnPlatforms": ["darwin"],
+  "enabledByDefault": true,
   "name": "CUA Computer",
   "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.",
   "configSchema": {

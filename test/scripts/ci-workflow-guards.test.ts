@@ -1,5 +1,6 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   constants as fsConstants,
@@ -3729,68 +3730,75 @@ NODE
     ).toBe(96);
   });
 
-  it("honors trusted dispatch runner selection for check shards", () => {
-    const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
-    const lintMatrix = {
-      runner: "blacksmith-32vcpu-ubuntu-2404",
-      task: "lint",
-    };
-    const evaluateDispatch = (
-      runnerBackend: "blacksmith" | "github" | "hybrid",
-      overrides: {
-        dispatchId?: string;
-        frozenTarget?: boolean;
-        matrix?: Record<string, unknown>;
-        releaseGate?: boolean;
-        repository?: string;
-        targetContextRef?: string;
-      } = {},
-    ) =>
-      evaluateWorkflowExpression(runsOn, {
-        eventName: "workflow_dispatch",
-        matrix: lintMatrix,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        runnerBackend,
-        ...overrides,
-      });
+  it.each(["", "release/2026.9.1"])(
+    "honors trusted dispatch runner selection for check shards with context %j",
+    (targetContextRef) => {
+      const runsOn = readCiWorkflow().jobs["check-shard"]["runs-on"];
+      const lintMatrix = {
+        runner: "blacksmith-32vcpu-ubuntu-2404",
+        task: "lint",
+      };
+      const evaluateDispatch = (
+        runnerBackend: "blacksmith" | "github" | "hybrid",
+        overrides: {
+          dispatchId?: string;
+          frozenTarget?: boolean;
+          matrix?: Record<string, unknown>;
+          releaseGate?: boolean;
+          repository?: string;
+          targetContextRef?: string;
+        } = {},
+      ) =>
+        evaluateWorkflowExpression(runsOn, {
+          eventName: "workflow_dispatch",
+          matrix: lintMatrix,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend,
+          ...overrides,
+        });
 
-    expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
-    expect(evaluateDispatch("blacksmith", { releaseGate: true })).toBe("ubuntu-24.04");
-    expect(evaluateDispatch("github")).toBe("ubuntu-24.04");
-    expect(evaluateDispatch("hybrid")).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("blacksmith")).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("blacksmith", { releaseGate: true })).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("github")).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("hybrid")).toBe("ubuntu-24.04");
 
-    const frozenFrv = {
-      dispatchId: "full-release-validation-33128772779-ci",
-      frozenTarget: true,
-      targetContextRef: "release/2026.9.1",
-    };
-    expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-32vcpu-ubuntu-2404");
-    expect(evaluateDispatch("hybrid", { ...frozenFrv, dispatchId: "manual-ci-proof" })).toBe(
-      "ubuntu-24.04",
-    );
-    expect(evaluateDispatch("hybrid", { ...frozenFrv, releaseGate: true })).toBe("ubuntu-24.04");
-    expect(
-      evaluateDispatch("hybrid", {
-        ...frozenFrv,
-        matrix: { runner: "blacksmith-16vcpu-ubuntu-2404", task: "test-types" },
-      }),
-    ).toBe("ubuntu-24.04");
-    expect(evaluateDispatch("hybrid", { ...frozenFrv, repository: "fork/openclaw" })).toBe(
-      "ubuntu-24.04",
-    );
-    expect(
-      evaluateWorkflowExpression(runsOn, {
-        authorAssociation: "NONE",
-        eventName: "pull_request",
-        headRepository: "openclaw/openclaw",
-        matrix: lintMatrix,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        runnerBackend: "blacksmith",
-      }),
-    ).toBe("ubuntu-24.04");
-  });
+      const frozenFrv = {
+        dispatchId: "full-release-validation-33128772779-ci",
+        frozenTarget: true,
+        targetContextRef,
+      };
+      expect(evaluateDispatch("hybrid", frozenFrv)).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateDispatch("github", frozenFrv)).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, frozenTarget: false })).toBe(
+        "ubuntu-24.04",
+      );
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, dispatchId: "manual-ci-proof" })).toBe(
+        "ubuntu-24.04",
+      );
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, releaseGate: true })).toBe("ubuntu-24.04");
+      expect(
+        evaluateDispatch("hybrid", {
+          ...frozenFrv,
+          matrix: { runner: "blacksmith-16vcpu-ubuntu-2404", task: "test-types" },
+        }),
+      ).toBe("ubuntu-24.04");
+      expect(evaluateDispatch("hybrid", { ...frozenFrv, repository: "fork/openclaw" })).toBe(
+        "ubuntu-24.04",
+      );
+      expect(
+        evaluateWorkflowExpression(runsOn, {
+          authorAssociation: "NONE",
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          matrix: lintMatrix,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend: "blacksmith",
+        }),
+      ).toBe("ubuntu-24.04");
+    },
+  );
 
   it("encodes GitHub, Blacksmith, and hybrid runner-backend shapes", () => {
     const workflow = readCiWorkflow();
@@ -6037,6 +6045,100 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("owns Docs Agent Git without changing cadence, deadlines, or action authority", () => {
+    const source = readFileSync(".github/workflows/docs-agent.yml", "utf8");
+    const workflow = parse(source);
+    const job = workflow.jobs["update-docs"];
+    const steps = job.steps as WorkflowStep[];
+    expect(steps.map(({ name }) => name)).toEqual([
+      "Checkout",
+      "Prepare Git owner",
+      "Gate trusted main activity and hourly cadence",
+      "Setup Node environment",
+      "Ensure docs agent key exists",
+      "Run Codex docs agent",
+      "Enforce existing-docs-only patch",
+      "Restore Node 24 path",
+      "Check docs",
+      "Commit docs updates",
+    ]);
+    expect(steps[1]).toEqual({
+      name: "Prepare Git owner",
+      uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+    });
+    expect(steps[0]).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: {
+        ref: "main",
+        "fetch-depth": 0,
+        "persist-credentials": false,
+        submodules: false,
+      },
+    });
+    expect(job["timeout-minutes"]).toBe(30);
+    expect(workflow.permissions).toEqual({ actions: "read", contents: "write" });
+    expect(workflow.concurrency).toEqual({ group: "docs-agent-main", "cancel-in-progress": false });
+    expect(steps[5]).toEqual({
+      name: "Run Codex docs agent",
+      if: "steps.gate.outputs.run_agent == 'true'",
+      uses: "openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56",
+      env: {
+        DOCS_AGENT_BASE_SHA: "${{ steps.gate.outputs.review_base_sha }}",
+        DOCS_AGENT_HEAD_SHA: "${{ steps.gate.outputs.review_head_sha }}",
+      },
+      with: {
+        "openai-api-key":
+          "${{ secrets.OPENCLAW_DOCS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}",
+        "prompt-file": ".github/codex/prompts/docs-agent.md",
+        model: "${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}",
+        effort: "medium",
+        sandbox: "workspace-write",
+        "safety-strategy": "drop-sudo",
+        "codex-args": '["--full-auto"]',
+      },
+    });
+    const gate = expectDefined(steps[2]?.run, "gate policy");
+    const commit = expectDefined(steps[9]?.run, "commit policy");
+    const enforce = expectDefined(steps[6]?.run, "enforcement producers");
+    expect(gate.match(/python3 -I -S "\$CI_GIT_OWNER" --policy -/gu)).toHaveLength(2);
+    expect(gate.indexOf("--policy -")).toBeLessThan(gate.indexOf("gh api"));
+    expect(gate.lastIndexOf("--policy -")).toBeGreaterThan(gate.indexOf("gh api"));
+    expect(commit).toContain('exec python3 -I -S "$CI_GIT_OWNER" --policy -');
+    for (const policy of [gate, commit]) {
+      expect(policy.match(/for attempt in range\(1, 6\):/gu)).toHaveLength(1);
+      expect(policy).toContain("except (GitFailure, FetchTimeout):");
+      expect(policy).not.toMatch(
+        /except (?:Exception|BaseException)|except:|error\.code|\$\?|\|\| true/u,
+      );
+    }
+    expect(gate).toContain(
+      'if attempt == 5:\n            print("Failed to fetch main after retries.", file=sys.stderr)\n            raise SystemExit(1)',
+    );
+    expect(gate.match(/backoff\(attempt \* 2\)/gu)).toHaveLength(1);
+    expect(commit.match(/backoff\(attempt \* 2\)/gu)).toHaveLength(2);
+    const calls = [
+      ...`${gate}\n${commit}`.matchAll(/(?:run_git|git_output)\(([\s\S]*?)\)(?=\.rstrip|\n|$)/gu),
+    ].map((match) => match[1]!);
+    const fetches = calls.filter((call) => /^workspace, "fetch"/u.test(call));
+    expect(fetches).toEqual([
+      'workspace, "fetch", "--no-tags", "origin", "main", timeout=120, reclaim_locks=True',
+      'workspace, "fetch", "--no-tags", "origin", target, timeout=120, reclaim_locks=True',
+    ]);
+    expect(calls.filter((call) => call.includes("timeout="))).toEqual(fetches);
+    expect(enforce.match(/--checkout-git 0 (?:ls-files|diff)/gu)).toHaveLength(3);
+    expect(`${gate}\n${commit}\n${enforce}`).not.toMatch(
+      /\btimeout --|\bgit (?:fetch|rev-parse|cat-file|diff|ls-files|config|add|commit|push)\b/u,
+    );
+    // The corrected REST cadence contract is deliberately byte-stable across Git migration.
+    const cadence = source.slice(
+      source.indexOf("          runs_json="),
+      source.indexOf('          python3 -I -S "$CI_GIT_OWNER" --policy - "$remote_main"'),
+    );
+    expect(createHash("sha256").update(cadence).digest("hex")).toBe(
+      "f130607e377acff6983fc2efaa015025ae2865d340dfad1fb865ee61e081f83e",
+    );
+  });
+
   it("owns docs mirror Git lifecycle without changing transport or stale-source policy", () => {
     const source = readFileSync(".github/workflows/docs-sync-publish.yml", "utf8");
     const workflow = parse(source);
@@ -7944,6 +8046,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     {
       label: "Git-owner action",
       changedPath: ".github/actions/git-owner/owner.py",
+      selectedJobs: ["macos-node", "checks-windows"],
+    },
+    {
+      label: "Docs Agent",
+      changedPath: ".github/workflows/docs-agent.yml",
       selectedJobs: ["macos-node", "checks-windows"],
     },
     {

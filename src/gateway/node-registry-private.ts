@@ -143,7 +143,11 @@ type NodeRegistryPrivateState = {
   bundleStatusByConn: Map<string, NodeWorkerBundleStatusObservation>;
   runnerState: NodeRunnerStatePublisher;
   generationBoundInvokes: WeakMap<PendingInvoke, GenerationBoundPendingInvoke>;
-  invokeCore: (params: NodeInvokeParams, allowPrivateCommand: boolean) => Promise<NodeInvokeResult>;
+  invokeCore: (
+    params: NodeInvokeParams,
+    allowPrivateCommand: boolean,
+    isCompletionAuthorized?: () => boolean,
+  ) => Promise<NodeInvokeResult>;
   updateRunnerInventory: (params: {
     nodeId: string;
     connId: string | undefined;
@@ -250,6 +254,7 @@ async function invokeNodeRegistryCore(
   state: NodeRegistryPrivateState,
   params: NodeInvokeParams,
   allowPrivateCommand: boolean,
+  isCompletionAuthorized?: () => boolean,
 ): Promise<NodeInvokeResult> {
   let timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
   // Explicit budgets include pairing and serialization; omitted budgets retain
@@ -384,8 +389,8 @@ async function invokeNodeRegistryCore(
       progressChunks: new Map(),
       nextInputSeq: 0,
       ...(params.onProgress ? { onProgress: params.onProgress } : {}),
-      // Private transport retains its exact lifecycle owner through reply settlement.
-      ...(allowPrivateCommand ? { isCompletionAuthorized: params.isDispatchAuthorized } : {}),
+      // Lifecycle cleanup retains its exact owner through reply settlement.
+      ...(isCompletionAuthorized ? { isCompletionAuthorized } : {}),
     };
     const generationController = params.expectedPairingGeneration
       ? new AbortController()
@@ -449,8 +454,8 @@ export function registerNodeRegistryPrivateRuntime(
   state.bundleStatusByConn = new Map();
   state.runnerState = createNodeRunnerStatePublisher(context.getNode, state.runnerInventoryByConn);
   state.generationBoundInvokes = new WeakMap();
-  state.invokeCore = async (params, allowPrivateCommand) =>
-    await invokeNodeRegistryCore(state, params, allowPrivateCommand);
+  state.invokeCore = async (params, allowPrivateCommand, isCompletionAuthorized) =>
+    await invokeNodeRegistryCore(state, params, allowPrivateCommand, isCompletionAuthorized);
   state.updateRunnerInventory = (params) => updateWorkerRunnerInventory(state, params);
   state.workerSupervisorTransport = {
     listCurrentNodes: async () => {
@@ -541,6 +546,7 @@ export function registerNodeRegistryPrivateRuntime(
           ...(params.onDispatchReady ? { onDispatchReady: params.onDispatchReady } : {}),
         },
         true,
+        isProofCurrent,
       );
     },
   };
@@ -592,6 +598,17 @@ export function invokePublicNodeRegistry(
     throw new Error("node registry private runtime was not initialized");
   }
   return state.invokeCore(params, false);
+}
+
+export function invokeLifecycleNodeRegistry(
+  nodeRegistry: object,
+  params: NodeInvokeParams & { isDispatchAuthorized: () => boolean },
+): Promise<NodeInvokeResult> {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
+  if (!state) {
+    throw new Error("node registry private runtime was not initialized");
+  }
+  return state.invokeCore(params, false, params.isDispatchAuthorized);
 }
 
 export function updateNodeRunnerInventory(params: {

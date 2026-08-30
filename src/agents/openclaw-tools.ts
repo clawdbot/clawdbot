@@ -332,10 +332,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       : [
           nodesTool,
           createMobileUiTool({ idempotencyScope: options?.runId }),
-          ...(options?.modelHasVision === false
+          ...(options?.modelHasVision === false || options?.computerTransport === null
             ? []
             : [
                 createComputerTool({
+                  transport: options?.computerTransport,
                   config: options?.config,
                   modelHasVision: options?.modelHasVision,
                   // Run ids expire before later assistant runs can reuse a provider call id.

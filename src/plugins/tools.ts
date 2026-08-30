@@ -5,14 +5,12 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
-import type { McpCodexToolAnnotations } from "../agents/mcp-codex-tool-approval.js";
 import {
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   normalizeToolPolicyName,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
-import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -52,35 +50,8 @@ import {
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
 import { isPluginToolAllowed } from "./tool-grant-allowlist.js";
+import { copyPluginToolMeta, setPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
-
-/** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
-export type PluginToolMcpMeta = {
-  serverName: string;
-  safeServerName: string;
-  toolName: string;
-  operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
-  deniedBySession?: true;
-  codexApproval?: {
-    mode: McpCodexToolApprovalMode;
-    annotations?: McpCodexToolAnnotations;
-  };
-  node?: {
-    id: string;
-    displayName?: string;
-  };
-};
-
-/** Runtime metadata used to trace an agent tool back to its owning plugin registration. */
-type PluginToolMeta = {
-  pluginId: string;
-  kind?: PluginManifestRecord["kind"];
-  optional: boolean;
-  replaySafe?: boolean;
-  sideEffecting?: boolean;
-  trustedLocalMedia?: boolean;
-  mcp?: PluginToolMcpMeta;
-};
 
 type PluginToolFactoryTimingResult = "array" | "error" | "null" | "single";
 
@@ -101,28 +72,9 @@ const PLUGIN_TOOL_FACTORY_WARN_TOTAL_MS = 5_000;
 const PLUGIN_TOOL_FACTORY_WARN_FACTORY_MS = 1_000;
 const PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT = 20;
 
-const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
 const scopedPluginTools = new WeakMap<AnyAgentTool, Map<string, AnyAgentTool>>();
 const pluginRegistryScopeIds = new WeakMap<PluginRegistry, number>();
 let nextPluginRegistryScopeId = 1;
-
-/** Attaches plugin ownership metadata to a concrete agent tool instance. */
-export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
-  pluginToolMeta.set(tool, meta);
-}
-
-/** Reads plugin ownership metadata for a concrete agent tool instance. */
-export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
-  return pluginToolMeta.get(tool);
-}
-
-/** Copies plugin ownership metadata when wrappers replace a tool object. */
-export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): void {
-  const meta = pluginToolMeta.get(source);
-  if (meta) {
-    pluginToolMeta.set(target, meta);
-  }
-}
 
 function pluginToolScopeKey(
   entry: PluginToolRegistration,
@@ -290,22 +242,6 @@ function blocksHostRestrictedConversationReadRegistration(params: {
       ctx: params.ctx,
     })
   );
-}
-
-/**
- * Builds a collision-proof key for plugin-owned tool metadata lookups.
- */
-export function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
-  return JSON.stringify([pluginId, toolName]);
-}
-
-/** Binds a side-effect declaration to the concrete plugin tool that owns it. */
-export function getPluginToolSideEffectOwnerKey(tool: AnyAgentTool): string | undefined {
-  const meta = getPluginToolMeta(tool);
-  const toolName = normalizeToolPolicyName(tool.name);
-  return meta?.sideEffecting && toolName
-    ? buildPluginToolMetadataKey(meta.pluginId, toolName)
-    : undefined;
 }
 
 function normalizeAllowlist(list?: string[]) {
@@ -1553,7 +1489,7 @@ export function resolvePluginTools(params: {
         manifestPlugin,
         toolName: tool.name,
       });
-      pluginToolMeta.set(tool, {
+      setPluginToolMeta(tool, {
         pluginId: entry.pluginId,
         ...(manifestPlugin?.kind ? { kind: manifestPlugin.kind } : {}),
         optional,

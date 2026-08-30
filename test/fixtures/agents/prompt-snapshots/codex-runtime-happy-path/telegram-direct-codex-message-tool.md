@@ -63,9 +63,11 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
-    "code_mode.direct_only_tool_namespaces": ["openclaw_direct"],
     "features.apply_patch_streaming_events": true,
-    "features.code_mode": true,
+    "features.code_mode": {
+      "direct_only_tool_namespaces": ["openclaw_direct"],
+      "enabled": true
+    },
     "features.code_mode_only": false,
     "features.goals": false,
     "features.standalone_web_search": false,

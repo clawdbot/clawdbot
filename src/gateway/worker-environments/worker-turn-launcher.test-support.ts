@@ -18,6 +18,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import {
@@ -264,6 +265,21 @@ export function browserEnvironment(): WorkerTurnEnvironmentRecord {
     },
     desktopAvailable: true,
     desktopApps: ["browser"],
+  };
+}
+
+export function computerDescriptor(nodeId: string): WorkerComputerLaunchDescriptor {
+  return {
+    nodeId,
+    computerUse: {
+      contractVersion: 2,
+      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+      actions: ["screenshot"],
+      targets: ["screen"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    },
   };
 }
 

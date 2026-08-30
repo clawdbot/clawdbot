@@ -1023,11 +1023,14 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("routes docs mirror edits through docs, workflow, and native Git owner proof", () => {
+  it.each([
+    ["docs-sync-publish", "docs-sync-publish"],
+    ["docs-agent", "docs-agent-workflow"],
+  ])("routes %s edits through docs, workflow, and native Git owner proof", (workflow, test) => {
     expectChangedTargets(
-      [".github/workflows/docs-sync-publish.yml"],
+      [`.github/workflows/${workflow}.yml`],
       [
-        "test/scripts/docs-sync-publish.test.ts",
+        `test/scripts/${test}.test.ts`,
         "test/scripts/ci-git-owner.test.ts",
         "test/scripts/ci-linux-git.test.ts",
         "test/scripts/ci-platform-checkout.test.ts",

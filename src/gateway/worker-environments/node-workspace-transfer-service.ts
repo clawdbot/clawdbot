@@ -40,7 +40,6 @@ const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
 type TransferCredential = {
   ownerEpoch: number;
-  expiresAtMs: number;
   sessionId: string | null;
 };
 
@@ -114,13 +113,11 @@ type TransferAuthorization = {
   route: NodeWorkspaceTransferHttpRoute;
 };
 
-function contextOwnerValid(
-  context: TransferContext,
-  owner: TransferOwner | undefined,
-  nowMs: number,
-): boolean {
+function contextOwnerValid(context: TransferContext, owner: TransferOwner | undefined): boolean {
   const environment = owner?.environment;
   const credential = owner?.credential;
+  // Deleting the credential fences teardown before its asynchronous tunnel stop.
+  // Its RPC admission expiry does not end the node workspace; each transfer has its own TTL.
   return Boolean(
     !context.abortController.signal.aborted &&
     context.isAuthorized() &&
@@ -132,8 +129,7 @@ function contextOwnerValid(
     environment.attachedSessionIds.length === 1 &&
     environment.attachedSessionIds[0] === context.sessionId &&
     credential.ownerEpoch === context.ownerEpoch &&
-    credential.sessionId === context.sessionId &&
-    credential.expiresAtMs > nowMs,
+    credential.sessionId === context.sessionId,
   );
 }
 
@@ -183,7 +179,7 @@ export function createNodeWorkspaceTransferService(options: {
       return undefined;
     }
     const owner = options.getOwner(context.environmentId);
-    return contextOwnerValid(context, owner, now()) ? owner : undefined;
+    return contextOwnerValid(context, owner) ? owner : undefined;
   };
 
   const isCurrentContext = (context: TransferContext): boolean => Boolean(currentOwner(context));
@@ -214,14 +210,8 @@ export function createNodeWorkspaceTransferService(options: {
     signal?: AbortSignal,
   ): string => {
     signal?.throwIfAborted();
-    const credential = currentOwner(context)?.credential;
-    const nowMs = now();
-    if (!credential || isAuthorized?.() === false) {
+    if (!isCurrentContext(context) || isAuthorized?.() === false) {
       throw new Error("Node workspace transfer owner is no longer current");
-    }
-    const expiresAtMs = Math.min(credential.expiresAtMs, nowMs + TRANSFER_TIMEOUT_MS);
-    if (expiresAtMs <= nowMs) {
-      throw new Error("Worker workspace transfer credential is expired");
     }
     const token = mintNodeWorkspaceTransferToken();
     context.downloads.set(token, {
@@ -232,7 +222,7 @@ export function createNodeWorkspaceTransferService(options: {
       sessionId: context.sessionId,
       generation: context.generation,
       manifestRef,
-      expiresAtMs,
+      expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
       ...(isAuthorized ? { isAuthorized } : {}),
       ...(signal ? { signal } : {}),
     });
@@ -385,17 +375,11 @@ export function createNodeWorkspaceTransferService(options: {
 
     prepareUpload(environmentId: string, baseManifestRef: string): string {
       const context = contexts.get(environmentId);
-      const credential = context ? currentOwner(context)?.credential : undefined;
-      const nowMs = now();
-      if (!context || !MANIFEST_REF_PATTERN.test(baseManifestRef) || !credential) {
+      if (!context || !MANIFEST_REF_PATTERN.test(baseManifestRef) || !isCurrentContext(context)) {
         throw new Error("Node workspace transfer context is unavailable");
       }
       if (context.upload) {
         throw new Error("Node workspace transfer upload is already active");
-      }
-      const expiresAtMs = Math.min(credential.expiresAtMs, nowMs + TRANSFER_TIMEOUT_MS);
-      if (expiresAtMs <= nowMs) {
-        throw new Error("Worker workspace transfer credential is expired");
       }
       const token = mintNodeWorkspaceTransferToken();
       context.upload = {
@@ -406,7 +390,7 @@ export function createNodeWorkspaceTransferService(options: {
         sessionId: context.sessionId,
         generation: context.generation,
         baseManifestRef,
-        expiresAtMs,
+        expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
         state: "ready",
       };
       return token;

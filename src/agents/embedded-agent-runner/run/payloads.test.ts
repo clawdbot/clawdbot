@@ -562,6 +562,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         mutatingAction: true,
       },
       runAborted: true,
+      runStopReason: "aborted",
     });
 
     expectSingleToolErrorPayload(payloads, {
@@ -569,6 +570,25 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       absentDetail: "codex native tool blocked",
     });
   });
+
+  it.each([undefined, true])(
+    "renders an intentional Gateway restart as status with suppressToolErrors=$s",
+    (suppressToolErrors) => {
+      const payloads = buildPayloads({
+        config: { messages: { suppressToolErrors } },
+        lastToolError: {
+          toolName: "gateway_exec",
+          error: "OpenClaw dynamic tool call aborted.",
+          executionStarted: true,
+        },
+        runAborted: true,
+        runStopReason: "restart",
+        toolResultFormat: "markdown",
+      });
+
+      expect(payloads).toEqual([{ text: "Gateway restarting…" }]);
+    },
+  );
 
   it("keeps timed-out cron exec failures compact when verbose mode is off", () => {
     const payloads = buildPayloads({

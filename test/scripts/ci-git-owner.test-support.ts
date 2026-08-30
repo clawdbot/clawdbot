@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
 import { parse } from "yaml";
@@ -93,6 +100,14 @@ export async function runCiGitStep(options: {
   pushResults?: FetchResult[];
   revParseResult?: FetchResult;
   diffResult?: number;
+  commandResults?: Record<string, { code: FetchResult; output?: string }>;
+  workflowRuns?: {
+    id: number;
+    created_at: string;
+    status: string;
+    conclusion: string | null;
+    head_sha: string;
+  }[];
   publishPath?: "directory" | "file" | "symlink";
   checkoutResults?: number[];
   mergeSnapshots?: { sha: string; head: string }[];
@@ -116,6 +131,9 @@ export async function runCiGitStep(options: {
   const docsPublish =
     typeof options.workflow === "object" &&
     options.workflow.file === ".github/workflows/docs-sync-publish.yml";
+  const docsAgent =
+    typeof options.workflow === "object" &&
+    options.workflow.file === ".github/workflows/docs-agent.yml";
   const externalOwner = options.workflow || options.action === "mantis-validate-trusted-ref";
   const clock = {
     ...options,
@@ -159,6 +177,10 @@ export async function runCiGitStep(options: {
         ...options.env,
       });
       const workspace = path.join(root, "workspace");
+      if (docsAgent) {
+        env.GITHUB_TOKEN = "fixture-docs-agent-token";
+        env.GH_TOKEN = "";
+      }
       if (docsPublish) {
         env.GITHUB_SHA = candidate;
         // Never let a caller's credential reach fixture command reports.
@@ -240,6 +262,9 @@ export async function runCiGitStep(options: {
           pushResults: options.pushResults,
           revParseResult: options.revParseResult,
           diffResult: options.diffResult,
+          commandResults: options.commandResults,
+          workflowRuns: options.workflowRuns,
+          docsAgent,
           docsPublish,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
@@ -302,6 +327,11 @@ ${run}`;
       expect(result, stderr).toEqual({ code: 0, signal: null });
       expect(report.error, stderr).toBeUndefined();
       expectCiCheckoutCleanup(report);
+      if (docsAgent) {
+        expect(
+          readdirSync(path.join(root, "temp")).filter((name) => name.startsWith("docs-agent-")),
+        ).toEqual([]);
+      }
       if (externalOwner) {
         for (const directory of new Set([
           workspace,
