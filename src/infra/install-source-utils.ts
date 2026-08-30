@@ -14,7 +14,11 @@ import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
-import { isExactSemverVersion, resolveNpmJsonEntries } from "./npm-registry-spec.js";
+import {
+  isExactSemverVersion,
+  parseRegistryNpmSpec,
+  resolveNpmJsonEntries,
+} from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -68,20 +72,30 @@ function resolveNpmSpecVersionSelector(spec: string): string | undefined {
   return separator > 0 ? normalizeOptionalString(spec.slice(separator + 1)) : undefined;
 }
 
+function resolveNpmSpecSemverConstraint(
+  spec: string,
+): { selector: string; range: string } | undefined {
+  const selector = resolveNpmSpecVersionSelector(spec);
+  if (!selector || parseRegistryNpmSpec(spec)?.selectorKind === "tag") {
+    return undefined;
+  }
+  const range = validSemverRange(selector);
+  return range ? { selector, range } : undefined;
+}
+
 function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
   if (!Array.isArray(value)) {
     return value;
   }
   const entries = value.filter((entry) => isRecord(entry) && !Array.isArray(entry));
-  const selector = resolveNpmSpecVersionSelector(spec);
-  const range = selector ? validSemverRange(selector) : null;
-  if (range) {
+  const constraint = resolveNpmSpecSemverConstraint(spec);
+  if (constraint) {
     // npm view output order tracks publication, not SemVer (a backport can be
     // published after a higher release), so pick the max satisfying version.
     let best: { entry: unknown; version: string } | undefined;
     for (const entry of entries) {
       const version = normalizeOptionalString(entry.version);
-      if (!version || !satisfiesSemver(version, range)) {
+      if (!version || !satisfiesSemver(version, constraint.range)) {
         continue;
       }
       if (!best || gtSemver(version, best.version)) {
@@ -97,7 +111,7 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
 
 function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResolution | null {
   // npm output varies by version, selector, and field projection. npm orders
-  // view arrays ascending, so non-semver selectors intentionally use the last entry.
+  // view arrays ascending, so dist-tag selectors intentionally use the last entry.
   const entry = selectNpmViewMetadataEntry(value, spec);
   if (!isRecord(entry) || Array.isArray(entry)) {
     return null;
@@ -180,12 +194,11 @@ export async function resolveNpmSpecMetadata(params: {
         category: "metadata-env",
       };
     }
-    const selector = resolveNpmSpecVersionSelector(params.spec);
-    const requestedRange = selector ? validSemverRange(selector) : null;
-    if (selector && requestedRange && !satisfiesSemver(metadata.version, requestedRange)) {
-      const expectation = isExactSemverVersion(selector)
-        ? `expected exact version ${selector}`
-        : `expected version satisfying ${selector}`;
+    const constraint = resolveNpmSpecSemverConstraint(params.spec);
+    if (constraint && !satisfiesSemver(metadata.version, constraint.range)) {
+      const expectation = isExactSemverVersion(constraint.selector)
+        ? `expected exact version ${constraint.selector}`
+        : `expected version satisfying ${constraint.selector}`;
       return {
         ok: false,
         error: `npm metadata resolved ${metadata.name}@${metadata.version}, but ${expectation} for ${params.spec}`,
