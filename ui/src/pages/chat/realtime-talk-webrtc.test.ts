@@ -207,7 +207,9 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   beforeEach(() => {
     FakePeerConnection.instances = [];
     stopInputTrack = vi.fn();
-    const track = { stop: stopInputTrack } as unknown as MediaStreamTrack;
+    const track = Object.assign(new EventTarget(), {
+      stop: stopInputTrack,
+    }) as unknown as MediaStreamTrack;
     const stream = {
       getAudioTracks: () => [track],
       getTracks: () => [track],
@@ -291,7 +293,9 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     const fetchMock = vi.fn(async () => new Response("answer-sdp"));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const stopTrack = vi.fn();
-    const track = { stop: stopTrack } as unknown as MediaStreamTrack;
+    const track = Object.assign(new EventTarget(), {
+      stop: stopTrack,
+    }) as unknown as MediaStreamTrack;
     const stream = {
       getAudioTracks: () => [track],
       getTracks: () => [track],

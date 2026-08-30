@@ -219,7 +219,7 @@ async function awaitRealtimeTalkMediaRequest(
   }
 }
 
-export async function openRealtimeTalkInput(
+async function openRealtimeTalkInput(
   inputDeviceId: string | undefined,
   options: { signal?: AbortSignal } = {},
 ): Promise<MediaStream> {
@@ -259,6 +259,59 @@ export async function openRealtimeTalkInput(
     throw realtimeTalkAbortReason(options.signal);
   }
   return audio;
+}
+
+export class RealtimeTalkInputController {
+  private controller: AbortController | null = null;
+  private media: MediaStream | null = null;
+
+  constructor(private readonly onEnded: (detail: string) => void) {}
+
+  get stream(): MediaStream | null {
+    return this.media;
+  }
+
+  async open(inputDeviceId: string | undefined): Promise<MediaStream> {
+    this.stop();
+    const controller = new AbortController();
+    this.controller = controller;
+    try {
+      const media = await openRealtimeTalkInput(inputDeviceId, { signal: controller.signal });
+      if (controller.signal.aborted) {
+        media.getTracks().forEach((track) => track.stop());
+        throw realtimeTalkAbortReason(controller.signal);
+      }
+      this.media = media;
+      const onEnded = () => {
+        // A queued event from a retired microphone must not end its replacement.
+        if (this.controller !== controller) {
+          return;
+        }
+        this.stop();
+        this.onEnded(t("chat.composer.microphoneStopped"));
+      };
+      for (const track of media.getTracks()) {
+        track.addEventListener("ended", onEnded, { signal: controller.signal });
+      }
+      return media;
+    } catch (error) {
+      if (this.controller === controller) {
+        this.stop();
+      }
+      throw error;
+    }
+  }
+
+  stop(): void {
+    const controller = this.controller;
+    const media = this.media;
+    this.controller = null;
+    this.media = null;
+    // Abort removes only this acquisition's listeners before releasing tracks,
+    // keeping normal stop quiet without disturbing other consumers' listeners.
+    controller?.abort();
+    media?.getTracks().forEach((track) => track.stop());
+  }
 }
 
 export async function openRealtimeTalkCamera(

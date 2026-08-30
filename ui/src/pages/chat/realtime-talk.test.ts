@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as gatewayRelayTransport from "./realtime-talk-gateway-relay.ts";
 import * as googleLiveTransport from "./realtime-talk-google-live.ts";
+import { createRealtimeTalkEventEmitter } from "./realtime-talk-shared.ts";
 import type {
   RealtimeTalkTransport,
   RealtimeTalkTransportContext,
@@ -152,6 +153,61 @@ describe("RealtimeTalkSession", () => {
     expect(webRtcStart).toHaveBeenCalledTimes(1);
     expect(googleInstances).toHaveLength(0);
   });
+
+  it.each(["webrtc", "provider-websocket"] as const)(
+    "closes a failed %s voice owner after draining transcripts without hiding the error",
+    async (transport) => {
+      const saved = createDeferred<unknown>();
+      let generation = 0;
+      const result = () => ({
+        provider: transport === "webrtc" ? "openai" : "google",
+        voiceSessionId: `voice-${++generation}`,
+        transport,
+        clientSecret: "test-session",
+      });
+      const request = vi.fn((method: string) => {
+        if (method === "talk.client.create") {
+          return Promise.resolve(result());
+        }
+        if (method === "talk.client.transcript") {
+          return saved.promise;
+        }
+        return Promise.resolve({ ok: true });
+      });
+      const onStatus = vi.fn();
+      const session = new RealtimeTalkSession({ request } as never, "main", { onStatus });
+      await session.start();
+      const instances = transport === "webrtc" ? webRtcInstances : googleInstances;
+      const stop = transport === "webrtc" ? webRtcStop : googleStop;
+      const ctx = transportContext(instances[0]);
+      const emit = createRealtimeTalkEventEmitter(ctx, {
+        provider: "test",
+        transport: "webrtc",
+        clientSecret: "test-session",
+      });
+      ctx.callbacks.onTranscript?.({ role: "user", text: "Keep this utterance", final: true });
+      ctx.callbacks.onStatus?.("error", "Microphone disconnected");
+      emit({ type: "session.closed", final: true });
+      expect(stop).toHaveBeenCalledOnce();
+      expect(onStatus).toHaveBeenLastCalledWith("error", "Microphone disconnected");
+      expect(request.mock.calls.filter(([method]) => method === "talk.client.close")).toEqual([]);
+      saved.resolve({ ok: true });
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "talk.client.close",
+          { sessionKey: "main", voiceSessionId: "voice-1" },
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        ),
+      );
+      await session.start();
+      emit({ type: "session.closed", final: true });
+      expect(stop).toHaveBeenCalledOnce();
+      expect(request.mock.calls.filter(([method]) => method === "talk.client.close")).toHaveLength(
+        1,
+      );
+      session.stop();
+    },
+  );
 
   it("accepts legacy WebRTC transport names", async () => {
     const request = vi.fn(async () => ({
