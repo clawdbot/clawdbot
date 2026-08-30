@@ -380,6 +380,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ? "workspace-conflict"
             : "other";
   const showAvatarGutter = opts.showAvatarGutter !== false;
+  const assistantAvatarIdentity = { name: assistantName, avatar: opts.assistantAvatar ?? null };
   const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
 
   // Aggregate usage/cost/model across all messages in the group
@@ -471,16 +472,25 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       showAvatarGutter &&
       (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
         ? isForwarded
-          ? (renderSenderAgentAvatar(group.senderSession?.agentId, opts) ??
-            html`<div class="chat-avatar chat-avatar--forwarded" aria-hidden="true">
-              ${icons.forward}
-            </div>`)
+          ? // Forwarded rows carry the source agent's identity: another
+            // agent's avatar via the sender map, the current agent's own
+            // avatar for same-agent sessions, and the forward glyph only for
+            // unresolvable or legacy sources.
+            (renderSenderAgentAvatar(group.senderSession?.agentId, opts) ??
+            (group.senderSession?.agentId && group.senderSession.agentId === opts.agentId
+              ? renderChatAvatar(
+                  "assistant",
+                  assistantAvatarIdentity,
+                  undefined,
+                  opts.resourceBasePath,
+                  opts.assistantAttachmentAuthToken,
+                )
+              : html`<div class="chat-avatar chat-avatar--forwarded" aria-hidden="true">
+                  ${icons.forward}
+                </div>`))
           : renderChatAvatar(
               group.role,
-              {
-                name: assistantName,
-                avatar: opts.assistantAvatar ?? null,
-              },
+              assistantAvatarIdentity,
               {
                 name: opts.userName ?? null,
                 avatar: opts.userAvatar ?? null,

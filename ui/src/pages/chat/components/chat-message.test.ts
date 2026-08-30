@@ -2524,7 +2524,8 @@ describe("grouped chat rendering", () => {
     { agentId: "research", avatar: null, expected: "initials" },
     { agentId: "research", avatar: "https://example.test/avatar.png", expected: "initials" },
     { agentId: "research", avatar: "/avatar/research", expected: "initials" },
-    { agentId: "main", avatar: "blob:main-avatar", expected: "glyph" },
+    // Same-agent sources wear the current agent's own avatar (fallback logo here).
+    { agentId: "main", avatar: "blob:main-avatar", expected: "assistant" },
     { agentId: "removed", avatar: "blob:stale-avatar", expected: "glyph" },
     { agentId: undefined, avatar: null, expected: "glyph" },
   ])(
@@ -2542,14 +2543,16 @@ describe("grouped chat rendering", () => {
       };
       render(renderTestMessageGroup(group, options), container);
 
-      const image = container.querySelector("img.chat-avatar");
+      const image = container.querySelector("img.chat-avatar:not(.chat-avatar--logo)");
       const initials = container.querySelector<HTMLElement>(".chat-avatar--sender-initials");
       expect(image !== null).toBe(expected === "image");
       expect(initials !== null).toBe(expected === "initials");
       expect(container.querySelector(".chat-avatar--forwarded") !== null).toBe(
         expected === "glyph",
       );
-      expect(container.querySelector(".chat-avatar--logo")).toBeNull();
+      if (expected === "assistant") {
+        expect(container.querySelector(".chat-avatar")).not.toBeNull();
+      }
       if (expected === "image") {
         expect(image?.getAttribute("src")).toBe(avatar);
         expect(image?.getAttribute("alt")).toBe("Research Agent");
