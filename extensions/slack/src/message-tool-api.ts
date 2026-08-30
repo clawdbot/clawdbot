@@ -78,6 +78,30 @@ export function describeSlackMessageTool({
   const actions = listSlackMessageActions(cfg, accountId);
   const capabilities = new Set<"presentation">();
   const schema: ChannelMessageToolSchemaContribution[] = [];
+  if (actions.includes("conversation-open")) {
+    schema.push({
+      actions: ["conversation-open"],
+      visibility: "all-configured",
+      properties: {
+        userIds: Type.Optional(
+          Type.Array(Type.String({ pattern: "^[UW][A-Z0-9]+$" }), {
+            minItems: 1,
+            maxItems: 8,
+            uniqueItems: true,
+            description:
+              'Slack conversation-open: 1-8 other member IDs. One opens a DM; multiple open or reuse a group DM. Exclude the calling account. Use the returned target with action="send".',
+          }),
+        ),
+        teamId: Type.Optional(
+          Type.String({
+            pattern: "^T[A-Z0-9]+$",
+            description:
+              "Slack workspace for conversation-open. Defaults to the trusted current workspace for the selected account; required for detached Enterprise operations.",
+          }),
+        ),
+      },
+    });
+  }
   if (actions.includes("send")) {
     capabilities.add("presentation");
   }

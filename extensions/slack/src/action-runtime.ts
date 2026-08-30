@@ -36,6 +36,7 @@ type ConversationReadInvocationOrigin = NonNullable<
 >;
 
 const messagingActions = new Set([
+  "openConversation",
   "sendMessage",
   "uploadFile",
   "editMessage",
@@ -73,6 +74,7 @@ export const slackActionRuntime = {
   listSlackEmojis: createLazySlackAction("listSlackEmojis"),
   listSlackPins: createLazySlackAction("listSlackPins"),
   listSlackReactions: createLazySlackAction("listSlackReactions"),
+  openSlackConversation: createLazySlackAction("openSlackConversation"),
   parseSlackBlocksInput,
   pinSlackMessage: createLazySlackAction("pinSlackMessage"),
   reactSlackMessage: createLazySlackAction("reactSlackMessage"),
@@ -661,6 +663,17 @@ export async function handleSlackAction(
       throw new Error("Slack messages are disabled.");
     }
     switch (action) {
+      case "openConversation": {
+        const teamId =
+          readStringParam(params, "teamId") ??
+          resolveTrustedCurrentSlackTeamId({ account, context });
+        assertSlackDetachedTargetAllowed(account.accountId, teamId);
+        const result = await slackActionRuntime.openSlackConversation(
+          params.userIds,
+          buildActionOpts("write", teamId),
+        );
+        return jsonResult({ ok: true, ...result });
+      }
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
         const target = resolveSlackActionTarget(account, to, context);

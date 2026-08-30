@@ -7,6 +7,7 @@ export {
   listSlackEmojis,
   listSlackPins,
   listSlackReactions,
+  openSlackConversation,
   pinSlackMessage,
   reactSlackMessage,
   readSlackMessages,

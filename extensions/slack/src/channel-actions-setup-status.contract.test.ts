@@ -11,6 +11,7 @@ import { slackSetupPlugin } from "../setup-plugin-api.js";
 
 const slackDefaultActions = [
   "send",
+  "conversation-open",
   "react",
   "reactions",
   "read",

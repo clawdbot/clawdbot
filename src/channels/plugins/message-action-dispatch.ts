@@ -112,6 +112,7 @@ const CHANNEL_MESSAGE_ACTION_READ_POLICIES = {
   "channel-info": CONVERSATION_READ,
   "channel-list": CONVERSATION_READ,
   "channel-create": NO_CONVERSATION_READ,
+  "conversation-open": NO_CONVERSATION_READ,
   "channel-edit": NO_CONVERSATION_READ,
   "channel-delete": NO_CONVERSATION_READ,
   "channel-move": NO_CONVERSATION_READ,

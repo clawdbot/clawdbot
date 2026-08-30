@@ -207,6 +207,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
@@ -220,6 +221,11 @@ describe("Slack message tools", () => {
     ]);
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
+    const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
+    expect(schemas.find((entry) => entry.actions?.includes("conversation-open"))).toMatchObject({
+      actions: ["conversation-open"],
+      visibility: "all-configured",
+    });
   });
 
   it("honors account-scoped action gates", () => {
@@ -261,6 +267,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
@@ -289,6 +296,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
@@ -345,6 +353,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
