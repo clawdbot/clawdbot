@@ -116,7 +116,7 @@ async function seedBaselinePluginState(packageRoot) {
   );
   const sdkExport = manifest.exports?.["./plugin-sdk/runtime-doctor"];
   let hasStoreDeclaration = false;
-  if (sdkExport) {
+  if (sdkExport?.types !== undefined) {
     assert.equal(typeof sdkExport.types, "string", "baseline doctor SDK type declaration missing");
     const declarations = fs.readFileSync(path.resolve(packageRoot, sdkExport.types), "utf8");
     hasStoreDeclaration = /\bcreatePluginStateSyncKeyedStore\b/u.test(declarations);
