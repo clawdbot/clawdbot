@@ -253,7 +253,6 @@ describe("server-owned pending input display", () => {
             tabId: reference.tabId,
             gatewayOwner: storageTargetForGateway(host.settings.gatewayUrl).gatewayOwner,
             recoveryScope: reference.recoveryScope,
-            scopeKey: reference.scopeKey,
             queueId: queued.id,
           }
         : undefined;

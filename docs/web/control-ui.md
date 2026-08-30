@@ -665,8 +665,9 @@ offline, except that **Stop** can queue an exact local run ID for replay. A sess
 is not replayed because newer work may start in that session before the connection returns.
 
 Queued attachments use binary Blobs in the browser's IndexedDB; the outbox keeps only delivery
-metadata and payload references in session storage. All attachments must be stored before the
-message is admitted, and all must be readable before sending. Failed admission leaves the draft
+metadata and payload references in session storage. Attachment bytes stay with the queued input
+when session aliases resolve or change; the queue metadata owns its destination. All attachments
+must be stored before the message is admitted, and all must be readable before sending. Failed admission leaves the draft
 unsent. Missing or unreadable queued payloads leave a visible row with recovery guidance; the
 browser never sends just the remaining attachments. Binary outbox storage requires browser
 storage access and Web Locks, available over HTTPS or localhost. Gateway attachment limits

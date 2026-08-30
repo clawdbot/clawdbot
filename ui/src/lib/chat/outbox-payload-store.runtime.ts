@@ -20,7 +20,6 @@ type PayloadOwner = {
   tabId: string;
   gatewayOwner: string;
   recoveryScope: string;
-  scopeKey: string;
   queueId: string;
 };
 type PayloadResult<T> =
@@ -79,7 +78,6 @@ export async function writeOutboxPayload(
     const key = JSON.stringify([
       owner.gatewayOwner,
       owner.recoveryScope,
-      owner.scopeKey,
       owner.queueId,
       crypto.randomUUID(),
     ]);
@@ -90,7 +88,6 @@ export async function writeOutboxPayload(
       value: {
         key,
         recoveryScope: owner.recoveryScope,
-        scopeKey: owner.scopeKey,
         tabId: owner.tabId,
       },
     };
@@ -103,7 +100,7 @@ export async function readOutboxPayload(
   owner: PayloadOwner,
   reference: PayloadReference,
 ): Promise<PayloadResult<DurableComposerDraftAttachment[]>> {
-  if (reference.recoveryScope !== owner.recoveryScope || reference.scopeKey !== owner.scopeKey) {
+  if (reference.recoveryScope !== owner.recoveryScope) {
     return { status: "failed", reason: "missing" };
   }
   try {
@@ -120,7 +117,6 @@ export async function readOutboxPayload(
       value.key !== reference.key ||
       value.owner.gatewayOwner !== owner.gatewayOwner ||
       value.owner.recoveryScope !== owner.recoveryScope ||
-      value.owner.scopeKey !== owner.scopeKey ||
       value.owner.queueId !== owner.queueId ||
       value.owner.tabId !== reference.tabId ||
       !Array.isArray(value.attachments) ||

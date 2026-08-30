@@ -65,6 +65,7 @@ import {
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { prepareOutboxPayload } from "./outbox-payloads.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
@@ -6886,6 +6887,232 @@ describe("handleSendChat", () => {
     );
   });
 
+  it("keeps queued attachment bytes when a configured main alias changes their metadata scope", async () => {
+    const { attachments, dataUrls } = createDeliveryAttachmentBatch();
+    const request = makeRequestMock({
+      "chat.history": () => idleChatHistory("global"),
+      "chat.send": (params: unknown) => ({
+        runId: requireRecord(params, "resolved alias send").idempotencyKey,
+        status: "started",
+      }),
+    });
+    const write = vi.spyOn(outboxPayloadStore, "writeOutboxPayload");
+    const source = makeChatHost({
+      client: clientWithRequest(request),
+      connected: false,
+      sessionKey: "agent:work:workspace",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", mainKey: "main" },
+      chatMessage: "keep these bytes with the queued input",
+      chatAttachments: attachments,
+    });
+    await handleSendChat(source);
+    const original = expectDefined(
+      listStoredChatOutboxes(source)[0]?.queue[0],
+      "admitted alias input",
+    );
+    const reference = expectDefined(original.attachmentPayload, "admitted alias payload");
+    const [payloadOwner] = expectDefined(write.mock.calls[0], "actual admitted payload owner");
+    expect(original).toMatchObject({
+      sessionKey: "agent:work:workspace",
+      agentId: "work",
+      sendAttempts: 0,
+    });
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+
+    reloadChatDocumentStorage(attachments);
+    expect(original.attachments?.map(getChatAttachmentDataUrl)).toEqual([null, null]);
+    const recovered = makeChatHost({
+      client: clientWithRequest(request),
+      sessionKey: source.sessionKey,
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", mainKey: "workspace" },
+    });
+    // Exercise today's alias migration without changing its transport-routing policy.
+    const moved = expectDefined(
+      listStoredChatOutboxes(recovered)[0]?.queue[0],
+      "resolved alias input",
+    );
+    expect(moved).toMatchObject({
+      id: original.id,
+      sendRunId: original.sendRunId,
+      sendAttempts: original.sendAttempts,
+      sendState: original.sendState,
+      sessionKey: "global",
+      agentId: "work",
+      attachmentPayload: reference,
+    });
+    const hydrated = await prepareOutboxPayload(recovered, moved);
+    const stored = await outboxPayloadStore.readOutboxPayload(payloadOwner, reference);
+    const storedAttachments = expectDefined(
+      stored.status === "ready" ? stored.value : undefined,
+      "original alias payload bytes",
+    );
+    expect(
+      await Promise.all(
+        storedAttachments.map(async (attachment) =>
+          Buffer.from(await attachment.blob.arrayBuffer()).toString("base64"),
+        ),
+      ),
+    ).toEqual(dataUrls.map((url) => url.split(",")[1]));
+    expect(hydrated).toMatchObject({ status: "ready", item: { attachmentPayload: reference } });
+    expect(write).toHaveBeenCalledTimes(1);
+
+    await retryReconnectableQueuedChatSends(recovered);
+    const sends = request.mock.calls.filter(([method]) => method === "chat.send");
+    expect(sends).toHaveLength(1);
+    expect(requireRecord(sends[0]?.[1], "resolved alias wire payload")).toMatchObject({
+      sessionKey: moved.sessionKey,
+      agentId: moved.agentId,
+      idempotencyKey: original.sendRunId,
+      attachments: attachments.map((attachment, index) => ({
+        type: attachment.mimeType.startsWith("image/") ? "image" : "file",
+        mimeType: attachment.mimeType,
+        fileName: attachment.fileName,
+        content: dataUrls[index]!.split(",")[1],
+      })),
+    });
+    expect(listStoredChatOutboxes(recovered)[0]?.queue[0]).toMatchObject({
+      id: original.id,
+      sendRunId: original.sendRunId,
+      sendAttempts: 1,
+      attachmentPayload: reference,
+    });
+  });
+
+  it.each([
+    { caller: "wrong queue", reason: "missing" },
+    { caller: "wrong source tab", reason: "missing" },
+    { caller: "wrong reference recovery scope", reason: "missing" },
+    { caller: "Incognito", reason: "unavailable" },
+    { caller: "unobserved owner", reason: "unavailable" },
+    { caller: "incomplete attachment metadata", reason: "missing" },
+    { caller: "wrong attachment MIME type", reason: "missing" },
+    { caller: "wrong attachment filename", reason: "missing" },
+    { caller: "wrong attachment size", reason: "missing" },
+    { caller: "matching owner", reason: null },
+    { caller: "remembered offline owner", reason: null },
+  ] as const)(
+    "validates a concurrent payload caller independently ($caller)",
+    async ({ caller, reason }) => {
+      const { attachments, dataUrls } = createDeliveryAttachmentBatch();
+      const request = makeRequestMock();
+      const client = clientWithRequest(request);
+      const source = makeChatHost({
+        client,
+        connected: false,
+        chatMessage: "one immutable attachment input",
+        chatAttachments: attachments,
+      });
+      const write = vi.spyOn(outboxPayloadStore, "writeOutboxPayload");
+      await handleSendChat(source);
+      const original = expectDefined(
+        listStoredChatOutboxes(source)[0]?.queue[0],
+        "admitted shared input",
+      );
+      const reference = expectDefined(original.attachmentPayload, "shared input reference");
+      const [payloadOwner] = expectDefined(write.mock.calls[0], "actual shared payload owner");
+      const other = makeChatHost({ client, connected: false });
+      const candidate: ChatQueueItem = {
+        ...original,
+        attachmentPayload: { ...reference },
+        attachments: original.attachments?.map((attachment) => ({ ...attachment })),
+      };
+      switch (caller) {
+        case "wrong queue":
+          candidate.id = `${original.id}-other`;
+          break;
+        case "wrong source tab":
+          candidate.attachmentPayload = { ...reference, tabId: "other-source-tab" };
+          break;
+        case "wrong reference recovery scope":
+          candidate.attachmentPayload = { ...reference, recoveryScope: "other-reference-owner" };
+          break;
+        case "Incognito":
+          other.selectedChatSessionIncognito = true;
+          break;
+        case "unobserved owner":
+          other.client = clientWithRequest(request);
+          vi.spyOn(other.client, "recoveryScopeReady", "get").mockReturnValue(false);
+          break;
+        case "incomplete attachment metadata":
+          candidate.attachments = candidate.attachments?.slice(0, 1);
+          break;
+        case "wrong attachment MIME type":
+          Object.assign(expectDefined(candidate.attachments?.[0], "first attachment metadata"), {
+            mimeType: "text/plain",
+          });
+          break;
+        case "wrong attachment filename":
+          Object.assign(expectDefined(candidate.attachments?.[0], "first attachment metadata"), {
+            fileName: "other-file.png",
+          });
+          break;
+        case "wrong attachment size":
+          Object.assign(expectDefined(candidate.attachments?.[0], "first attachment metadata"), {
+            sizeBytes: 1,
+          });
+          break;
+        case "remembered offline owner":
+          vi.spyOn(client, "recoveryScopeReady", "get").mockReturnValue(false);
+          break;
+        case "matching owner":
+          break;
+      }
+      const expected = reason ? { status: "failed", reason } : { status: "ready" };
+      expect(await prepareOutboxPayload(other, candidate)).toMatchObject(expected);
+
+      const readPayload = outboxPayloadStore.readOutboxPayload;
+      const readStarted = createDeferred();
+      const releaseRead = createDeferred();
+      const pending: Array<ReturnType<typeof prepareOutboxPayload>> = [];
+      const read = vi
+        .spyOn(outboxPayloadStore, "readOutboxPayload")
+        .mockImplementationOnce(async (...args) => {
+          const result = await readPayload(...args);
+          readStarted.resolve();
+          await releaseRead.promise;
+          return result;
+        });
+      try {
+        const first = prepareOutboxPayload(source, original);
+        pending.push(first);
+        await readStarted.promise;
+        const second = prepareOutboxPayload(other, candidate);
+        pending.push(second);
+        releaseRead.resolve();
+        const [valid, joined] = await Promise.all([first, second]);
+        expect(valid).toMatchObject({ status: "ready", item: { attachmentPayload: reference } });
+        expect(
+          valid.status === "ready" ? valid.item.attachments?.map(getChatAttachmentDataUrl) : [],
+        ).toEqual(dataUrls);
+        const stored = await readPayload(payloadOwner, reference);
+        const retained = expectDefined(
+          stored.status === "ready" ? stored.value : undefined,
+          "retained shared bytes",
+        );
+        expect(
+          await Promise.all(
+            retained.map(async (attachment) =>
+              Buffer.from(await attachment.blob.arrayBuffer()).toString("base64"),
+            ),
+          ),
+        ).toEqual(dataUrls.map((url) => url.split(",")[1]));
+        expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+        expect(joined).toMatchObject(expected);
+        if (!reason) {
+          expect(read).toHaveBeenCalledTimes(1);
+          expect(
+            joined.status === "ready" ? joined.item.attachments?.map(getChatAttachmentDataUrl) : [],
+          ).toEqual(dataUrls);
+        }
+      } finally {
+        releaseRead.resolve();
+        await Promise.allSettled(pending);
+      }
+    },
+  );
+
   it.each(["unavailable", "capacity"] as const)(
     "preserves inline bytes across a %s migration failure and reload before retry",
     async (reason) => {
@@ -7034,7 +7261,6 @@ describe("handleSendChat", () => {
             tabId: oldRef.tabId,
             gatewayOwner: "default",
             recoveryScope: oldRef.recoveryScope,
-            scopeKey: oldRef.scopeKey,
             queueId: current.id,
           },
           replacements,
@@ -8178,7 +8404,6 @@ describe("handleSendChat", () => {
               tabId: reference.tabId,
               gatewayOwner: "default",
               recoveryScope: "test-recovery-scope",
-              scopeKey: reference.scopeKey,
               queueId: stored.id,
             },
             reference,

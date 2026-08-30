@@ -490,7 +490,6 @@ describe("chat composer persistence", () => {
       const reference = {
         key: "original-payload",
         recoveryScope: "versioned-owner",
-        scopeKey: "versioned-scope",
         tabId: "versioned-tab",
       };
       const original: ChatQueueItem = {

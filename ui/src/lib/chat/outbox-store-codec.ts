@@ -84,13 +84,11 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
       isRecord(payload) &&
       typeof payload.key === "string" &&
       typeof payload.recoveryScope === "string" &&
-      typeof payload.scopeKey === "string" &&
       typeof payload.tabId === "string"
     ) {
       item.attachmentPayload = {
         key: payload.key,
         recoveryScope: payload.recoveryScope,
-        scopeKey: payload.scopeKey,
         tabId: payload.tabId,
       };
     } else {

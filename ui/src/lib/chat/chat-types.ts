@@ -82,8 +82,8 @@ export type ChatQueueItem = {
   createdAt: number;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
-  /** Immutable binary bundle; metadata stays in this tab’s outbox. */
-  attachmentPayload?: { key: string; recoveryScope: string; scopeKey: string; tabId: string };
+  /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */
+  attachmentPayload?: { key: string; recoveryScope: string; tabId: string };
   attachmentStorageError?: "capacity" | "unavailable" | "missing";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;

@@ -7,12 +7,7 @@ import {
   writeOutboxPayload,
   type OutboxPayloadFailure,
 } from "../../lib/chat/outbox-payload-store.runtime.ts";
-import {
-  resolveStoredChatOutboxScope,
-  storedChatOutboxScopeKey,
-  storageTargetForGateway,
-  type ChatComposerScope,
-} from "../../lib/chat/outbox-store.ts";
+import { storageTargetForGateway, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import {
   captureDurableChatAttachments,
   readBlobAsDataUrl,
@@ -103,9 +98,6 @@ async function preparePayload(
     tabId,
     gatewayOwner: storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner,
     recoveryScope,
-    scopeKey: storedChatOutboxScopeKey(
-      resolveStoredChatOutboxScope(host, item.sessionKey ?? "", item.agentId),
-    ),
     queueId: item.id,
   };
   if (item.attachmentPayload) {
@@ -191,8 +183,8 @@ async function preparePayload(
   };
 }
 
-// Preview and drain may request the same restored bundle in one turn. Share
-// that read/copy so a cloned tab cannot create two competing replacement refs.
+// Preview and drain share reads/copies so a cloned tab cannot create competing refs.
+// Check admission per caller; only equivalent bundle identities and metadata may join.
 const pendingPayloads = new Map<string, Promise<PayloadResult>>();
 export async function prepareOutboxPayload(
   host: Host,
@@ -200,14 +192,18 @@ export async function prepareOutboxPayload(
   purpose: "send" | "handoff" = "send",
 ): Promise<PayloadResult> {
   const reference = item.attachmentPayload;
-  if (!reference) {
+  if (!reference || host.selectedChatSessionIncognito || !observeOutboxRecoveryOwner(host)) {
     return preparePayload(host, item, purpose);
   }
   const key = JSON.stringify([
+    item.id,
     reference.key,
+    reference.tabId,
+    reference.recoveryScope,
     host.settings?.gatewayUrl,
     host.client?.recoveryScope,
     purpose,
+    item.attachments?.map(({ mimeType, fileName, sizeBytes }) => [mimeType, fileName, sizeBytes]),
   ]);
   const isCurrent = captureOutboxPayloadOwner(host);
   let pending = pendingPayloads.get(key);
