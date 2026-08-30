@@ -122,7 +122,9 @@ Before capture, OpenClaw removes per-lease worker identities, device tokens, and
 
 Scrubbing has a three-minute timeout. Checkpoint creation has a separate three-minute timeout, extended to ten minutes on `machine0` because image capture stops the source and waits for image availability even with `--wait=false`. Scrub failure releases only its own capture reservation. Once creation starts, failure, timeout, or unusable output leaves its outcome uncertain: the profile stays paused until explicit recovery. Neither case prevents lease teardown, and a retained usable image can still be forked; otherwise later workers provision cold. Capture needs a Crabbox release with fixed-ID checkpoint forks, and coordinator-brokered leases additionally need `broker.adminToken`. Correct missing capabilities or permissions before recovering an uncertain capture.
 
-Reuse is exact-class: a placement override does not reuse another class's image, and only successful node enrollment records the class used for later capture, including after a Gateway restart.
+Image reuse is keyed by the backend, setup command, sorted `setupEnv` variable names (not their values), desktop setting, and exact effective machine class. A placement override does not reuse another class's image, and only successful node enrollment records the class used for later capture, including after a Gateway restart.
+
+A warm start provisions a fresh lease with fresh node enrollment. It reuses machine-level caches, not a per-session snapshot or a suspended process.
 
 #### Recover a paused capture
 

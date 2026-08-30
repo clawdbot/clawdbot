@@ -1,11 +1,16 @@
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 
+type SwarmLaunch = {
+  start: () => Promise<void>;
+  /** True once failure is durable or the row no longer owns queued work. */
+  onStartFailure: (error: unknown) => boolean | Promise<boolean>;
+};
+
 type QueuedSwarmRun = {
   runId: string;
-  start?: () => Promise<void>;
-  /** True once failure is durable or the row no longer owns queued work. */
-  onStartFailure?: (error: unknown) => boolean | Promise<boolean>;
-  ready: boolean;
+  owner?: object;
+  launch?: SwarmLaunch;
+  holds: number;
   retryReady: boolean;
 };
 
@@ -14,6 +19,7 @@ type SwarmGroupLane = {
   limit: number;
   active: Set<string>;
   queue: QueuedSwarmRun[];
+  pumpScheduled: boolean;
 };
 
 const lanes = new Map<string, SwarmGroupLane>();
@@ -23,60 +29,58 @@ const runLocations = new Map<
   | { lane: SwarmGroupLane; state: "queued"; item: QueuedSwarmRun }
 >();
 
-function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
-  const start = item.start;
-  const onStartFailure = item.onStartFailure;
-  if (!start || !onStartFailure) {
-    return;
-  }
+async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch: SwarmLaunch) {
   lane.active.add(item.runId);
   runLocations.set(item.runId, { lane, state: "active", item });
-  queueMicrotask(() => {
-    void start().catch(async (error: unknown) => {
-      let failurePersisted = false;
-      try {
-        failurePersisted = await onStartFailure(error);
-      } catch {
-        // A durable queued row still owns this work; retry after a short backoff.
-      }
-      const location = runLocations.get(item.runId);
-      if (
-        !location ||
-        location.state !== "active" ||
-        location.lane !== lane ||
-        location.item !== item
-      ) {
-        return;
-      }
-      if (failurePersisted) {
-        releaseSwarmRun(item.runId);
-        return;
-      }
-      lane.active.delete(item.runId);
-      item.retryReady = false;
-      lane.queue.unshift(item);
-      runLocations.set(item.runId, { lane, state: "queued", item });
-      const timer = setTimeout(
-        () => {
-          item.retryReady = true;
-          pumpLane(lane);
-        },
-        isFastTestRuntimeEnv() ? 1 : 1_000,
-      );
-      timer.unref?.();
-    });
-  });
+  try {
+    // Acquiring capacity and invoking launch are one synchronous dispatch boundary.
+    await launch.start();
+  } catch (error) {
+    let failurePersisted = false;
+    try {
+      failurePersisted = await launch.onStartFailure(error);
+    } catch {
+      // A durable queued row still owns this work; retry after a short backoff.
+    }
+    const location = runLocations.get(item.runId);
+    if (location?.state !== "active" || location.lane !== lane || location.item !== item) {
+      return;
+    }
+    if (failurePersisted) {
+      releaseSwarmRun(item.runId);
+      return;
+    }
+    lane.active.delete(item.runId);
+    item.retryReady = false;
+    lane.queue.unshift(item);
+    runLocations.set(item.runId, { lane, state: "queued", item });
+    const timer = setTimeout(
+      () => {
+        item.retryReady = true;
+        pumpLane(lane);
+      },
+      isFastTestRuntimeEnv() ? 1 : 1_000,
+    );
+    timer.unref?.();
+  }
 }
 
 function pumpLane(lane: SwarmGroupLane) {
-  while (lane.active.size < lane.limit) {
-    const next = lane.queue[0];
-    if (!next || !next.ready || !next.retryReady) {
-      return;
-    }
-    lane.queue.shift();
-    startQueuedRun(lane, next);
+  if (lane.pumpScheduled) {
+    return;
   }
+  lane.pumpScheduled = true;
+  queueMicrotask(() => {
+    lane.pumpScheduled = false;
+    while (lanes.get(lane.groupId) === lane && lane.active.size < lane.limit) {
+      const next = lane.queue[0];
+      if (!next?.launch || !next.retryReady || next.holds > 0) {
+        return;
+      }
+      lane.queue.shift();
+      void startQueuedRun(lane, next, next.launch);
+    }
+  });
 }
 
 function ensureLane(params: {
@@ -89,6 +93,7 @@ function ensureLane(params: {
     limit: params.maxConcurrent,
     active: new Set<string>(),
     queue: [],
+    pumpScheduled: false,
   };
   lanes.set(params.groupId, lane);
   lane.limit = params.maxConcurrent;
@@ -122,10 +127,23 @@ export function reserveSwarmRun(params: {
     deleteLaneIfIdle(lane);
     return false;
   }
-  const item = { runId: params.runId, ready: false, retryReady: true };
+  const item: QueuedSwarmRun = { runId: params.runId, holds: 0, retryReady: true };
   lane.queue.push(item);
   runLocations.set(params.runId, { lane, state: "queued", item });
   return true;
+}
+
+/** Bind a committed registration without transferring a retained reservation to a replacement. */
+export function bindSwarmRunReservation(runId: string, owner: object): void {
+  const item = runLocations.get(runId)?.item;
+  if (item && item.owner === undefined) {
+    item.owner = owner;
+  }
+}
+
+/** Includes held/preactivation work and the launch awaiting Gateway acceptance. */
+export function ownsSwarmRunReservation(runId: string, owner: object): boolean {
+  return runLocations.get(runId)?.item?.owner === owner;
 }
 
 /** Attach launch work to an existing FIFO reservation. */
@@ -134,17 +152,14 @@ export function activateSwarmRun(params: {
   runId: string;
   start: () => Promise<void>;
   onStartFailure: (error: unknown) => boolean | Promise<boolean>;
-}): "started" | "queued" {
+}): void {
   const location = runLocations.get(params.runId);
   if (!location || location.state !== "queued" || location.lane.groupId !== params.groupId) {
     throw new Error(`swarm scheduler reservation missing for run ${params.runId}`);
   }
   const { lane, item } = location;
-  item.start = params.start;
-  item.onStartFailure = params.onStartFailure;
-  item.ready = true;
+  item.launch = { start: params.start, onStartFailure: params.onStartFailure };
   pumpLane(lane);
-  return lane.active.has(item.runId) ? "started" : "queued";
 }
 
 export function enqueueSwarmRun(params: {
@@ -154,7 +169,7 @@ export function enqueueSwarmRun(params: {
   activeRunIds: readonly string[];
   start: () => Promise<void>;
   onStartFailure: (error: unknown) => boolean | Promise<boolean>;
-}): "started" | "queued" {
+}): void {
   if (
     !reserveSwarmRun({
       groupId: params.groupId,
@@ -165,7 +180,7 @@ export function enqueueSwarmRun(params: {
   ) {
     throw new Error(`swarm scheduler run already exists: ${params.runId}`);
   }
-  return activateSwarmRun({
+  activateSwarmRun({
     groupId: params.groupId,
     runId: params.runId,
     start: params.start,
@@ -200,8 +215,35 @@ export function removeQueuedSwarmRun(runId: string): boolean {
   return true;
 }
 
-export function isSwarmRunQueued(runId: string): boolean {
-  return runLocations.get(runId)?.state === "queued";
+/** True only after launch was invoked (or an already-running slot was restored). */
+export function isSwarmRunActive(runId: string): boolean {
+  return runLocations.get(runId)?.state === "active";
+}
+
+/** Holds this exact reservation, including preparation that has not activated yet. */
+export function holdQueuedSwarmRun(runId: string) {
+  const location = runLocations.get(runId);
+  if (location?.state !== "queued") {
+    return undefined;
+  }
+  const { lane, item } = location;
+  item.holds += 1;
+  let released = false;
+  return {
+    release() {
+      if (released) {
+        return;
+      }
+      released = true;
+      item.holds -= 1;
+      pumpLane(lane);
+    },
+    withdraw() {
+      // A retained durable kill may withdraw only its never-started reservation.
+      // Reused IDs and lanes must not inherit an older cancellation scope.
+      return !released && runLocations.get(runId) === location && removeQueuedSwarmRun(runId);
+    },
+  };
 }
 
 const testing = {

@@ -53,6 +53,50 @@
   },
   "redirects": [
     {
+      "source": "/concepts/message-lifecycle-refactor",
+      "destination": "/plugins/sdk-channel-outbound"
+    },
+    {
+      "source": "/plan/cloud-workers",
+      "destination": "/gateway/cloud-workers"
+    },
+    {
+      "source": "/plan/computer-use",
+      "destination": "/nodes/computer-use"
+    },
+    {
+      "source": "/plan/memory-provenance",
+      "destination": "/concepts/memory-provenance"
+    },
+    {
+      "source": "/plan/runners",
+      "destination": "/gateway/cloud-sessions"
+    },
+    {
+      "source": "/plan/ui-channels",
+      "destination": "/plugins/message-presentation"
+    },
+    {
+      "source": "/plan/worker-hibernation",
+      "destination": "/gateway/cloud-workers#warm-images"
+    },
+    {
+      "source": "/refactor/acp",
+      "destination": "/tools/acp-agents"
+    },
+    {
+      "source": "/refactor/database-first",
+      "destination": "/reference/database-schemas"
+    },
+    {
+      "source": "/refactor/operator-approvals",
+      "destination": "/tools/exec-approvals"
+    },
+    {
+      "source": "/start/onboarding-redesign",
+      "destination": "/cli/onboard"
+    },
+    {
       "source": "/gateway/security/shrinkwrap",
       "destination": "/gateway/security/dependency-locking"
     },
@@ -1294,7 +1338,6 @@
                 "group": "Messages and delivery",
                 "pages": [
                   "concepts/messages",
-                  "concepts/message-lifecycle-refactor",
                   "concepts/streaming",
                   "concepts/progress-drafts",
                   "concepts/retry",

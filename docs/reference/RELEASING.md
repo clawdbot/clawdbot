@@ -236,6 +236,9 @@ This checklist is the public shape of the release flow. Private credentials, sig
 6. Commit only `CHANGELOG.md`. This commit is the **Release SHA**. The complete diff from Code SHA to Release SHA must be exactly `CHANGELOG.md`; any other changed path returns the release to step 2.
 7. Run SHA-pinned Full Release Validation for the Release SHA with evidence reuse enabled. The lightweight parent must record `changelog-only-release-v1`, point at the green Code SHA, and dispatch no product child lanes. This reuses product evidence; it does not reuse package bytes.
 8. Run `OpenClaw NPM Release` with `preflight_only=true` against the Release SHA/tag. Save the successful `preflight_run_id`. This builds and checks the exact package bytes that include the final changelog. Review its **Plugin SDK API diff** summary. If it reports changes, inspect the readable diff (also uploaded as `plugin-sdk-api-release-diff-<run-id>-<run-attempt>`) and record the 8-character acknowledgement digest printed by the report; omit the acknowledgement when it reports no Plugin SDK API changes.
+
+   If the packaged changelog exceeds 500 KiB, packaging keeps every editorial note and replaces only the complete contribution record with a link to the full record in the exact release tag's `CHANGELOG.md`. The full source changelog and contributor credits remain unchanged after postpack restoration. Editorial notes must still satisfy the release-note minimum, and packaging fails if the compact result still exceeds the cap.
+
 9. Run the candidate helper against the untagged Release SHA with the successful Release-SHA validation parent and npm preflight instead of dispatching either again:
 
    ```bash
@@ -608,11 +611,11 @@ gh workflow run openclaw-release-publish.yml \
 
 Include `plugin_sdk_api_acknowledgement` only when the npm preflight's Plugin SDK API report contains changes.
 
-If a beta package is already published but its container images are missing,
-do not rerun npm or plugin publication. Reuse the immutable beta tag plus its
+If a beta or regular stable package is already published but its container images are missing,
+do not rerun npm or plugin publication. Reuse the immutable release tag plus its
 successful npm preflight and Full Release Validation evidence through the
 Docker-only recovery path. The workflow rechecks the exact npm version, the
-`beta` selector, and the published tarball digest before building containers:
+selected npm dist-tag, and the published tarball digest before building containers:
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
@@ -625,6 +628,13 @@ gh workflow run openclaw-release-publish.yml \
   -f publish_openclaw_npm=false \
   -f publish_docker_only=true
 ```
+
+For regular stable recovery, use the same command with `tag=vYYYY.M.PATCH` and
+`npm_dist_tag=latest`. Only regular stable tags (patches 1–32, including correction
+suffixes) are accepted for `latest`; extended-stable recovery retains its own
+selector. Recovery builds the canonical versioned images without republishing
+npm packages or plugins, dispatching native releases, or finalizing the GitHub
+release. Existing approval and provenance checks still apply.
 
 Stable publish to the default beta dist-tag:
 
@@ -742,7 +752,7 @@ readback confirms that every exact package and `extended-stable` tag converged.
 - `windows_node_installer_digests`: candidate-approved compact JSON map of the current Windows installer names to their pinned `sha256:` digests; required for stable OpenClaw publish
 - `npm_telegram_run_id`: optional successful `NPM Telegram Beta E2E` run id to include in final release evidence
 - `npm_dist_tag`: npm target tag for the OpenClaw package, one of `alpha`, `beta`, `latest`, or `extended-stable`
-- `publish_docker_only`: beta or extended-stable recovery/closeout path. It requires `publish_openclaw_npm=false`, complete preflight and Full Release Validation evidence, then verifies the exact npm package, selected dist-tag, and tarball digest before invoking Docker publication.
+- `publish_docker_only`: beta, regular stable (`latest`), or extended-stable recovery/closeout path. It requires `publish_openclaw_npm=false`, complete preflight and Full Release Validation evidence, then verifies the exact npm package, selected dist-tag, and tarball digest before invoking Docker publication.
 - `plugin_publish_scope`: defaults to `all-publishable`; use `selected` only for focused plugin-only repair work with `publish_openclaw_npm=false`
 - `plugins`: comma-separated `@openclaw/*` package names when `plugin_publish_scope=selected`
 - `publish_openclaw_npm`: defaults to `true`; set `false` only when using the workflow as a plugin-only repair orchestrator

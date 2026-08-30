@@ -5370,6 +5370,8 @@ export const en: TranslationMap = {
       notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
       goToMain: "Go to main session",
       viewSessions: "View sessions",
+      catalogShareUnavailable: "This shared session route is unavailable.",
+      catalogShareInvalid: "This {catalog} share URL is invalid.",
     },
     commandResults: {
       startingNewThread: "Starting new session...",
@@ -5870,6 +5872,9 @@ export const en: TranslationMap = {
         "Delivery is unconfirmed. Check delivery looks for the original message without resending it or starting a worker. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt.",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
+      discard: "Discard",
+      discardPendingMessage:
+        "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
       removeQueuedMessage: "Remove queued message",
@@ -5880,6 +5885,8 @@ export const en: TranslationMap = {
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
         applyingSettings: "Applying chat settings",
+        blockedByUnconfirmed:
+          "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",

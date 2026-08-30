@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Codex/Linux: wait for a live app-server process to expose its startup command line within the existing inspection deadline, preserving process identity checks and preventing intermittent startup failures.
 - **Chat attachments:** protect prepared message-tool media from premature cleanup, attach it before publication, and complete interrupted attachment promotion on retries without duplicating the original reply.
 - **Upgrade state metadata:** record the current application version after repairing older databases with an unset version marker, allowing CLI commands to use the running Gateway without attempting another schema repair.
 - **Device workers:** preserve offline-runner classification and reconnect guidance when desktop preparation detects a disconnected device, without treating the disconnect as a model failure.

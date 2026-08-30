@@ -48,6 +48,7 @@ import {
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import * as chatCommandExecutor from "./chat-command-executor.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
+import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { getChatHistoryLoadState, type ChatHistoryResult } from "./chat-history.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-outbox-drain.ts";
@@ -85,6 +86,8 @@ import {
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
@@ -4451,6 +4454,7 @@ describe("handleSendChat", () => {
       },
       chatMessage: "tighten the plan",
       chatRunId: "run-1",
+      chatRunStartup: { state: "activity", runId: "run-1" },
       chatDisplayedLeafEntryId: "leaf-active",
       chatStream: "Working...",
       chatStreamSegments: [{ text: "Checking the active run", ts: 1, itemId: "active-commentary" }],
@@ -4475,6 +4479,7 @@ describe("handleSendChat", () => {
       ),
     );
     expect(host.chatRunId).toBe("run-1");
+    expect(host.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
     expect(host.chatStream).toBe("Working...");
     expect(host.chatStreamSegments).toEqual([
       { text: "Checking the active run", ts: 1, itemId: "active-commentary" },
@@ -4493,6 +4498,112 @@ describe("handleSendChat", () => {
     expect(payload).not.toHaveProperty("expectedRunId");
     expect(payload).not.toHaveProperty("expectedLeafEntryId");
   });
+
+  it.each([
+    { previousRunId: null, adoption: "ack" },
+    { previousRunId: null, adoption: "status" },
+    { previousRunId: "previous-run", adoption: "ack" },
+  ])(
+    "preserves pre-ACK activity through $adoption adoption after $previousRunId",
+    async ({ previousRunId, adoption }) => {
+      const acknowledgement = createDeferred<{ status: string; runId: string }>();
+      const host = makeChatHost({
+        requestHandlers: { "chat.send": () => acknowledgement.promise },
+        chatMessage: "Inspect the workspace",
+        chatRunId: previousRunId,
+        chatFollowUpMode: "interrupt",
+      });
+      const emitActivity = (runId: string) => {
+        const base = { runId, sessionKey: host.sessionKey, ts: 1 };
+        handleAgentEvent(host, {
+          ...base,
+          seq: 2,
+          stream: "tool",
+          data: {
+            phase: "start",
+            toolCallId: `tool-${runId}`,
+            name: "exec",
+            args: { command: "pwd" },
+          },
+        });
+        handleAgentEvent(host, {
+          ...base,
+          seq: 3,
+          stream: "lifecycle",
+          data: {
+            phase: "waiting-approval",
+            approvalId: `approval-${runId}`,
+            toolCallId: `tool-${runId}`,
+          },
+        });
+        handleAgentEvent(host, { ...base, seq: 4, stream: "compaction", data: { phase: "start" } });
+      };
+      if (previousRunId) {
+        emitActivity(previousRunId);
+      }
+      const sending = handleSendChat(host);
+      await waitForFast(() =>
+        expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything()),
+      );
+      const payload = findRequestPayload(host.request, "chat.send", "pending send");
+      const runId = payload.idempotencyKey;
+      if (typeof runId !== "string") {
+        throw new Error("expected the admitted client run id");
+      }
+      try {
+        expect(host.chatRunId).toBe(previousRunId);
+        if (previousRunId) {
+          expect(host.chatRunStartup).toEqual({ state: "activity", runId: previousRunId });
+          expect(host.waitingApprovalStatuses?.has(`approval-${previousRunId}`)).toBe(true);
+        }
+        emitActivity(runId);
+        const identity = buildToolStreamIdentity(runId, `tool-${runId}`);
+        const tool = structuredClone(
+          expectDefined(host.toolStreamById.get(identity), "expected incoming pre-ACK tool"),
+        );
+        const approval = structuredClone(host.waitingApprovalStatuses?.get(`approval-${runId}`));
+        const compaction = structuredClone(host.compactionStatus);
+        expect(tool).toMatchObject({ runId, toolCallId: `tool-${runId}`, name: "exec" });
+        expect(approval).toMatchObject({ runId, approvalId: `approval-${runId}` });
+        expect(compaction).toMatchObject({ runId, phase: "active" });
+        await waitForFast(() => expect(host.chatToolMessages).toContainEqual(tool.message));
+        const assertIncomingActivity = () => {
+          expect(host.toolStreamById.get(identity)).toEqual(tool);
+          expect(host.chatToolMessages).toContainEqual(tool.message);
+          expect(host.waitingApprovalStatuses?.get(`approval-${runId}`)).toEqual(approval);
+          expect(host.compactionStatus).toEqual(compaction);
+          expect(host.knownAgentRunIds?.has(runId)).toBe(true);
+        };
+        if (adoption === "status") {
+          handleChatGatewayEvent(host, {
+            sessionKey: host.sessionKey,
+            runId,
+            seq: 1,
+            state: "status",
+            phase: "starting_model",
+          });
+          expect(host.chatRunId).toBe(runId);
+          assertIncomingActivity();
+        }
+        acknowledgement.resolve({ status: "started", runId });
+        await sending;
+        expect(host.chatRunId).toBe(runId);
+        assertIncomingActivity();
+        expect(host.toolStreamById.size).toBe(1);
+        expect(host.waitingApprovalStatuses?.size).toBe(1);
+        if (previousRunId) {
+          expect(host.knownAgentRunIds?.has(previousRunId)).toBe(false);
+          expect(host.chatRunStartup?.runId).not.toBe(previousRunId);
+        }
+      } finally {
+        acknowledgement.resolve({ status: "started", runId });
+        await sending;
+        if (host.compactionClearTimer != null) {
+          window.clearTimeout(host.compactionClearTimer);
+        }
+      }
+    },
+  );
 
   it("adopts a steer-mode ACK when no run is active", async () => {
     const host = makeChatHost({
@@ -7209,7 +7320,9 @@ describe("handleSendChat", () => {
         expectDefined(stored.queue[0], "stored input"),
       );
       expect(
-        hydrated.status === "ready" ? hydrated.item.attachments?.map(getChatAttachmentDataUrl) : [],
+        hydrated.status === "ready"
+          ? hydrated.update.attachments?.map(getChatAttachmentDataUrl)
+          : [],
       ).toEqual(dataUrls);
       expect(host.chatMessage).toBe("newer input");
       expect(host.request).not.toHaveBeenCalled();
@@ -7249,7 +7362,7 @@ describe("handleSendChat", () => {
     recovery.mockReturnValue(originalRecovery);
     const hydrated = await prepareOutboxPayload(host, queued);
     expect(
-      hydrated.status === "ready" ? hydrated.item.attachments?.map(getChatAttachmentDataUrl) : [],
+      hydrated.status === "ready" ? hydrated.update.attachments?.map(getChatAttachmentDataUrl) : [],
     ).toEqual(dataUrls);
     expect(host.chatMessage).toBe("newer input");
     expect(host.request).not.toHaveBeenCalled();
@@ -7323,7 +7436,7 @@ describe("handleSendChat", () => {
         ),
       ),
     ).toEqual(dataUrls.map((url) => url.split(",")[1]));
-    expect(hydrated).toMatchObject({ status: "ready", item: { attachmentPayload: reference } });
+    expect(hydrated).toMatchObject({ status: "ready", update: { attachmentPayload: reference } });
     expect(write).toHaveBeenCalledTimes(1);
 
     await retryReconnectableQueuedChatSends(recovered);
@@ -7450,9 +7563,9 @@ describe("handleSendChat", () => {
         pending.push(second);
         releaseRead.resolve();
         const [valid, joined] = await Promise.all([first, second]);
-        expect(valid).toMatchObject({ status: "ready", item: { attachmentPayload: reference } });
+        expect(valid).toMatchObject({ status: "ready", update: { attachmentPayload: reference } });
         expect(
-          valid.status === "ready" ? valid.item.attachments?.map(getChatAttachmentDataUrl) : [],
+          valid.status === "ready" ? valid.update.attachments?.map(getChatAttachmentDataUrl) : [],
         ).toEqual(dataUrls);
         const stored = await readPayload(payloadOwner, reference);
         const retained = expectDefined(
@@ -7471,7 +7584,9 @@ describe("handleSendChat", () => {
         if (!reason) {
           expect(read).toHaveBeenCalledTimes(1);
           expect(
-            joined.status === "ready" ? joined.item.attachments?.map(getChatAttachmentDataUrl) : [],
+            joined.status === "ready"
+              ? joined.update.attachments?.map(getChatAttachmentDataUrl)
+              : [],
           ).toEqual(dataUrls);
         }
       } finally {

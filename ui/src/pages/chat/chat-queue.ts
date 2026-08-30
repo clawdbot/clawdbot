@@ -417,19 +417,6 @@ export function removeDeliveredQueuedChatSendForRun(
   return removed;
 }
 
-export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
-  return (
-    left.id === right.id &&
-    left.sendRunId === right.sendRunId &&
-    left.sendAttempts === right.sendAttempts &&
-    left.sendState === right.sendState &&
-    left.agentId === right.agentId &&
-    left.sessionKey === right.sessionKey &&
-    left.orderKey === right.orderKey &&
-    left.attachmentPayload?.key === right.attachmentPayload?.key
-  );
-}
-
 export function readDeliveredQueuedChatSendForRun(
   host: ChatQueueScopedSessionHost,
   runId: string | undefined,

@@ -165,7 +165,15 @@ describe("handleMessageEnd", () => {
   it("persists streamed usage when the final assistant snapshot is zeroed", () => {
     const ctx = createMessageEndContext({
       state: {
-        pendingAssistantUsage: { input: 7, output: 5, reasoningTokens: 2, total: 12 },
+        pendingAssistantUsage: {
+          input: 7,
+          output: 5,
+          reasoningTokens: 2,
+          cacheWrite: 4,
+          cacheWrite1h: 3,
+          total: 16,
+          cost: { total: 0.125, totalOrigin: "provider-billed" },
+        },
       },
     });
     const message = {
@@ -190,19 +198,13 @@ describe("handleMessageEnd", () => {
         input: 7,
         output: 5,
         cacheRead: 0,
-        cacheWrite: 0,
+        cacheWrite: 4,
+        cacheWrite1h: 3,
         reasoningTokens: 2,
-        totalTokens: 12,
+        totalTokens: 16,
+        cost: { total: 0.125, totalOrigin: "provider-billed" },
       },
     });
-    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        input: 7,
-        output: 5,
-        reasoningTokens: 2,
-        totalTokens: 12,
-      }),
-    );
   });
 
   it("keeps authoritative final usage instead of pending stream usage", () => {
@@ -228,7 +230,7 @@ describe("handleMessageEnd", () => {
     });
 
     expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toBe(message);
-    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(message.usage);
+    expect(message.usage).toMatchObject({ input: 11, output: 3, totalTokens: 14 });
   });
 
   it("warns when assistant text only pretends to call a registered tool", () => {

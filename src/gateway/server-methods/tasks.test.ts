@@ -39,7 +39,6 @@ import type { GatewayClient, RespondFn } from "./types.js";
 
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const cancelSessionMock = vi.fn();
-const killSubagentRunAdminMock = vi.fn();
 type TaskResponsePayload = {
   tasks?: Array<Record<string, unknown>>;
   task?: Record<string, unknown>;
@@ -64,13 +63,14 @@ beforeEach(async () => {
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   resetTaskRegistryForTests();
   cancelSessionMock.mockReset();
-  killSubagentRunAdminMock.mockReset();
   setTaskRegistryControlRuntimeForTests({
     cancelActiveCronTaskRun: () => false,
     getAcpSessionManager: () => ({
       cancelSession: cancelSessionMock,
     }),
-    killSubagentRunAdmin: async (params) => killSubagentRunAdminMock(params),
+    killSubagentRunAdmin: async () => {
+      throw new Error("Unexpected subagent cancellation in task handler fixture");
+    },
   });
 });
 

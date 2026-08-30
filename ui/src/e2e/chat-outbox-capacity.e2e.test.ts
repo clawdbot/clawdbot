@@ -212,7 +212,7 @@ suite.define(() => {
                 utf16Bytes: 2 * (key.length + sessionStorage.getItem(key)!.length),
               })),
             );
-            const error = await pane.locator(".chat-error__summary strong").allTextContents();
+            const error = await pane.getByRole("alert").allInnerTexts();
             const evidence = {
               gateway: "mock; no provider or operator Gateway contacted",
               browser: suite.browser.version(),

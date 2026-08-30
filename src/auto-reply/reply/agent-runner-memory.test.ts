@@ -383,7 +383,7 @@ async function commitMemoryCompaction(params: {
   params.run?.onCompactionAccounting?.({
     kind: "durable",
     count: 1,
-    currentContextTokens: 42,
+    currentContextSnapshot: { tokens: 42 },
     target: {
       ...accepted.sessionTarget,
       lifecycleRevision: accepted.entry.lifecycleRevision,
@@ -763,7 +763,7 @@ describe("runMemoryFlushIfNeeded", () => {
         params.onCompactionAccounting?.({
           kind: "durable",
           count: 0,
-          currentContextTokens: 120,
+          currentContextSnapshot: { tokens: 120 },
           target: {
             ...accepted.sessionTarget,
             lifecycleRevision: accepted.entry.lifecycleRevision,

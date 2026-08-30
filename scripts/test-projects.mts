@@ -4,6 +4,7 @@ import type { SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
+import { waitForever } from "../src/cli/wait.ts";
 import { formatMs } from "./lib/check-timing-summary.mts";
 import {
   prepareE2eVitestRuntime,
@@ -471,10 +472,9 @@ async function main() {
         process.off("SIGINT", onSignal);
         if (termination.signal) {
           process.kill(process.pid, termination.signal);
-          // Give the re-raised signal a turn before a CLI caller exits with the numeric result.
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          // Keep the loop alive for dependency signal handlers to finish cleanup
+          // and re-raise; a numeric return can win the race with signal delivery.
+          await waitForever();
         }
       }
     }

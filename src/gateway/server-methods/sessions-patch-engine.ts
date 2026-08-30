@@ -15,6 +15,7 @@ import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-sele
 import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
+import { parseSessionLabel } from "../../sessions/session-label.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -298,14 +299,14 @@ async function executeSessionPatchMutations(params: {
             [...groups.values()].map(async (group) => {
               const first = group[0]!;
               try {
-                // Labels need store-wide uniqueness. Other single patches retain every resolver
-                // candidate so writer-queued legacy aliases remain visible to revalidation.
-                const selectedSessionKeys =
-                  group.length === 1 && first.fullPatch.label === undefined
-                    ? Array.from(
-                        new Set([first.key, first.canonicalKey, ...first.initialStoreKeys]),
-                      )
-                    : undefined;
+                // Keep every resolver candidate for queued alias revalidation. Label
+                // uniqueness needs only the requested label's owners, not the full store.
+                const selectedSessionKeys = group.flatMap((target) => [
+                  target.key,
+                  target.canonicalKey,
+                  ...target.initialStoreKeys,
+                ]);
+                const requestedLabel = parseSessionLabel(first.fullPatch.label);
                 const worktreeTransitions = new Map<
                   number,
                   Awaited<ReturnType<typeof prepareSessionPatchWorktreeTransition>>
@@ -317,7 +318,8 @@ async function executeSessionPatchMutations(params: {
                     }
                   },
                   agentId: first.targetAgentId,
-                  ...(selectedSessionKeys ? { sessionKeys: selectedSessionKeys } : {}),
+                  sessionKeys: selectedSessionKeys,
+                  ...(requestedLabel.ok ? { includeLabelOwners: requestedLabel.label } : {}),
                   storePath: first.storePath,
                   skipMaintenance: true,
                   update: async (entries) => {

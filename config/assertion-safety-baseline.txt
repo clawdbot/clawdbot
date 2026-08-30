@@ -36,12 +36,9 @@ extensions/anthropic/session-catalog-listing.ts	1
 extensions/anthropic/session-catalog-parsing.ts	7
 extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
-extensions/anthropic/session-catalog.ts	3
 extensions/anthropic/stream-wrappers.ts	6
 extensions/baseten/models.ts	3
-extensions/beam/index.ts	1
 extensions/beam/src/mirror.ts	3
-extensions/beam/src/session-catalog.ts	6
 extensions/beam/src/types.ts	2
 extensions/bonjour/src/advertiser.ts	2
 extensions/brave/src/brave-web-search-provider.shared.ts	1
@@ -1353,7 +1350,7 @@ extensions/voice-call/src/realtime-agent-context.ts	1
 extensions/voice-call/src/response-generator.ts	3
 extensions/voice-call/src/runtime.ts	3
 extensions/voice-call/src/tts-provider-voice.ts	1
-extensions/voice-call/src/webhook.ts	11
+extensions/voice-call/src/webhook.ts	10
 extensions/voice-call/src/webhook/realtime-handler.ts	3
 extensions/volcengine/tts.ts	2
 extensions/voyage/embedding-batch.ts	1
@@ -1854,7 +1851,7 @@ src/agents/embedded-agent-runner/tool-result-context-guard.ts	13
 src/agents/embedded-agent-runner/tool-result-truncation.ts	23
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
-src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	5
+src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	4
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	6
 src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	3
@@ -1917,7 +1914,7 @@ src/agents/model-fallback-attempt.ts	1
 src/agents/model-fallback-runner.ts	2
 src/agents/model-provider-auth.ts	4
 src/agents/model-provider-auth.worker.ts	1
-src/agents/model-scan.ts	4
+src/agents/model-scan.ts	3
 src/agents/model-selection-shared.ts	1
 src/agents/model-tool-support.ts	1
 src/agents/models-config-state.ts	1
@@ -2013,7 +2010,6 @@ src/agents/subagents/announce/subagent-announce-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/announce/subagent-announce-output.ts	8
 src/agents/subagents/completion/subagent-completion-admission.store.ts	2
-src/agents/subagents/registry/subagent-control-messaging.ts	2
 src/agents/subagents/registry/subagent-recovery-state.ts	1
 src/agents/subagents/registry/subagent-registry-helpers.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
@@ -2114,7 +2110,6 @@ src/agents/transcript-policy.ts	2
 src/agents/transcript-redact-replay.ts	1
 src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
-src/agents/usage.ts	1
 src/agents/utils/frontmatter.ts	2
 src/agents/utils/tools-manager.ts	2
 src/agents/workspace-legacy-state.ts	3
@@ -2164,7 +2159,6 @@ src/auto-reply/reply/commands-reset-hooks.ts	3
 src/auto-reply/reply/commands-reset.ts	1
 src/auto-reply/reply/commands-setunset-standard.ts	3
 src/auto-reply/reply/commands-subagents/action-log.ts	1
-src/auto-reply/reply/commands-subagents/shared.ts	1
 src/auto-reply/reply/commands-system-prompt.ts	2
 src/auto-reply/reply/config-mutations.ts	3
 src/auto-reply/reply/conversation-turn-capture.ts	2
@@ -3528,7 +3522,7 @@ src/plugins/official-external-provider-endpoints.ts	1
 src/plugins/openai-compatible-embedding-provider.ts	2
 src/plugins/plugin-cache-primitives.ts	2
 src/plugins/plugin-command-dispatch-contract.ts	1
-src/plugins/plugin-command-execution.ts	3
+src/plugins/plugin-command-execution.ts	2
 src/plugins/plugin-command-runtime.ts	3
 src/plugins/plugin-config-trust.ts	1
 src/plugins/plugin-metadata-snapshot.runtime.ts	2
@@ -4060,7 +4054,6 @@ ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	2
 ui/src/pages/chat/components/chat-message-confirmation.ts	2
-ui/src/pages/chat/components/chat-message-group.ts	1
 ui/src/pages/chat/components/chat-message-markdown.ts	3
 ui/src/pages/chat/components/chat-message-media.ts	13
 ui/src/pages/chat/components/chat-message-timestamp.ts	4
@@ -4092,8 +4085,8 @@ ui/src/pages/chat/performance.ts	1
 ui/src/pages/chat/realtime-talk-gateway-relay.ts	1
 ui/src/pages/chat/realtime-talk-google-live.ts	2
 ui/src/pages/chat/realtime-talk-shared.ts	7
-ui/src/pages/chat/realtime-talk-webrtc.ts	3
-ui/src/pages/chat/realtime-talk.ts	7
+ui/src/pages/chat/realtime-talk-webrtc.ts	2
+ui/src/pages/chat/realtime-talk.ts	2
 ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	1
 ui/src/pages/chat/session-cache.ts	2

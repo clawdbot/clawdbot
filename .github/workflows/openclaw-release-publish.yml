@@ -84,7 +84,7 @@ on:
         default: true
         type: boolean
       publish_docker_only:
-        description: Publish Docker only after independently verifying an already-published beta or extended-stable npm package
+        description: Publish Docker only after independently verifying an already-published beta, stable, or extended-stable npm package
         required: true
         default: false
         type: boolean
@@ -239,10 +239,15 @@ jobs:
               echo "publish_docker_only requires publish_openclaw_npm=false." >&2
               exit 1
             fi
-            if [[ "${RELEASE_NPM_DIST_TAG}" != "beta" && "${RELEASE_NPM_DIST_TAG}" != "extended-stable" ]]; then
-              echo "publish_docker_only supports already-published beta or extended-stable releases only." >&2
+            if [[ "${RELEASE_NPM_DIST_TAG}" != "beta" && "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${RELEASE_NPM_DIST_TAG}" != "latest" ]]; then
+              echo "publish_docker_only supports already-published beta, stable, or extended-stable releases only." >&2
               exit 1
             fi
+          fi
+          # Before checkout, admit latest only for the regular stable train (patches 1-32).
+          if [[ "${PUBLISH_DOCKER_ONLY}" == "true" && "${RELEASE_NPM_DIST_TAG}" == "latest" && ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.([1-9]|1[0-2])\.([1-9]|[12][0-9]|3[0-2])(-[1-9][0-9]*)?$ ]]; then
+            echo "Docker-only latest recovery requires a regular stable release tag." >&2
+            exit 1
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
             echo "Extended-stable core npm publication stays on the canonical extended-stable release flow; use publish_docker_only=true only after its registry readback." >&2

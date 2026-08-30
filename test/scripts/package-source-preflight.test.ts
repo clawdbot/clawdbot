@@ -350,6 +350,16 @@ describe("package source preflight", () => {
     ).toThrow("CHANGELOG.md does not contain a release section for 2026.8.1.");
   });
 
+  it("accepts complete oversized contribution records through the package renderer", () => {
+    expect(
+      validatePackageSource({
+        aiManifestContent: aiManifest(),
+        rootManifestContent: rootManifest(),
+        changelogContent: `# Changelog\n\n## 2026.8.1\n\n- A complete release note with its original credit. Thanks @contributor.\n\n### Complete contribution record\n\n${"- **PR #123** Thanks @contributor.\n".repeat(20_000)}`,
+      }),
+    ).toBe("2026.8.1");
+  });
+
   it("rejects source package version drift", () => {
     expect(() =>
       validatePackageSource({

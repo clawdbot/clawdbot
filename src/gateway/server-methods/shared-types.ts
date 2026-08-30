@@ -169,6 +169,8 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Live reload owner, including same-config restart work and shutdown. */
+  isConfigReloadSettled: () => boolean;
   /** Prepared listener certificate pin; undefined when Gateway TLS is disabled. */
   gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;

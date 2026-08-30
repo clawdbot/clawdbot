@@ -178,6 +178,20 @@ suite.define(() => {
       await composer.fill(steerText);
       await composer.press("Control+Enter");
       const steerSend = await gateway.waitForRequest("chat.send", { after: sendsBeforeSteer });
+      await gateway.emitGatewayEvent("chat", {
+        runId,
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "status",
+        phase: "naming_worktree",
+      });
+      const startupIndicator = page.locator('.chat-working-indicator[role="status"]');
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const startupProofDir = path.resolve(".artifacts/control-ui-e2e/duplicate-session-naming");
+        await mkdir(startupProofDir, { recursive: true });
+        await page.screenshot({ path: path.join(startupProofDir, "steer.png"), fullPage: true });
+      }
+      await expect.poll(() => startupIndicator.textContent()).not.toContain("Naming worktree…");
       const steerParams = requireRecord(steerSend.params);
       expect(steerParams).toMatchObject({
         deliver: false,

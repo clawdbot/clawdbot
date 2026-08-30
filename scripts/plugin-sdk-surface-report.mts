@@ -197,9 +197,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical Computer Use wire contract and node-host provider seam.
       // -1: retire the deprecated messaging-targets subpath.
       // +2: bounded provider streams and read-only SecretRef resolution.
-      // +1: read-only authoritative conversation-binding inspection for route-owner plugins.
       // +1: diagnostic flag checks without event, trace, or redaction initialization.
-      148,
+      147,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -310,7 +309,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: named bounded structured-input surface for native harness protocol adapters.
       // +1: OpenAI-compatible video execution in the existing media-understanding owner.
       // -2: retire the uncalled secret-plan target resolver and its result type.
-      // +2: conversation-binding inspection result and runtime inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
       // +2: embedded foreground prompt context builder and its public context type.
@@ -331,7 +329,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      4355,
+      4353,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -420,7 +418,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: remove the test-only channel activity reset export.
       // +1: OpenAI-compatible video execution in the existing media-understanding owner.
       // -1: retire the uncalled secret-plan target resolver.
-      // +1: read-only authoritative conversation-binding inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
       // +1: embedded foreground prompt context builder.
@@ -438,7 +435,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      2592,
+      2591,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

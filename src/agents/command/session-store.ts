@@ -26,7 +26,7 @@ import type { CompactionAccountingFact } from "../embedded-agent-runner/run/inte
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
-import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
+import { deriveSessionTotalTokens, hasBillableUsage, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
@@ -195,10 +195,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
   }
   const hasUsage = hasNonzeroUsage(usage);
-  if (hasUsage && !preserveUserFacingRunState) {
-    const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
+  if (hasBillableUsage(usage) && !preserveUserFacingRunState) {
+    const { estimateAggregateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
     const runEstimatedCostUsd = asNonNegativeFiniteNumber(
-      estimateUsageCost({
+      estimateAggregateUsageCost({
         usage,
         cost: resolveModelCostConfig({
           provider: providerUsed,
@@ -208,19 +208,20 @@ export async function updateSessionStoreAfterAgentRun(params: {
         }),
       }),
     );
-    next.inputTokens = usage.input ?? 0;
-    next.outputTokens = usage.output ?? 0;
-    next.cacheRead = usage.cacheRead ?? 0;
-    next.cacheWrite = usage.cacheWrite ?? 0;
-    // Cumulative run billing is independent of the latest context observation.
-    // Assign its cost once; repeated finalization must not accumulate it again.
-    if (runEstimatedCostUsd !== undefined) {
-      next.estimatedCostUsd = runEstimatedCostUsd;
+    if (hasUsage) {
+      next.inputTokens = usage.input ?? 0;
+      next.outputTokens = usage.output ?? 0;
+      next.cacheRead = usage.cacheRead ?? 0;
+      next.cacheWrite = usage.cacheWrite ?? 0;
     }
+    // Snapshot cumulative run cost once, independently of current context.
+    // Unknown current cost must clear the previous run's snapshot too.
+    next.estimatedCostUsd = runEstimatedCostUsd;
   }
   if (!preserveUserFacingRunState) {
-    const totalTokens = params.compactionAccounting
-      ? params.compactionAccounting.currentContextTokens
+    const currentContextSnapshot = params.compactionAccounting?.currentContextSnapshot;
+    const totalTokens = currentContextSnapshot
+      ? currentContextSnapshot.tokens
       : hasUsage
         ? deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens })
         : undefined;
@@ -228,7 +229,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
       next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-    } else if (params.compactionAccounting || hasUsage) {
+    } else if (currentContextSnapshot || hasUsage) {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
       next.totalTokensVersion = undefined;

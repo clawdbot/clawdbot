@@ -18,9 +18,9 @@ export type EmbeddedContextAccountingEvent = Readonly<
   | { kind: "model"; contextTokens: number | undefined }
 >;
 
-/** Each fact carries the latest context (undefined means unknown), never authority to resume. */
+/** Writer custody is independent of telemetry; an absent snapshot is not observed unknown context. */
 export type CompactionAccountingFact = Readonly<
-  { count: number; currentContextTokens?: number } & (
+  { count: number; currentContextSnapshot?: { tokens: number | undefined } } & (
     | { kind: "durable"; target: CompactionAccountingTarget }
     | { kind: "presentation-only" }
   )

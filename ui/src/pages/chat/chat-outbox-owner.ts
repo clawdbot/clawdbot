@@ -86,9 +86,12 @@ class ChatOutboxGatewayOwner {
     }
     return projected;
   }
-  snapshot(host: Host, scope: Scope): ChatQueueItem[] {
+  snapshot(
+    host: Host,
+    scope: Scope,
+    durable = this.outbox(host, scope)?.queue ?? [],
+  ): ChatQueueItem[] {
     const key = storedChatOutboxScopeKey(scope);
-    const durable = this.outbox(host, scope)?.queue ?? [];
     const state = this.state(host);
     const local = state.byScope.get(key) ?? [];
     const localById = new Map(local.map((item) => [item.id, item]));
@@ -139,14 +142,14 @@ class ChatOutboxGatewayOwner {
             return;
           }
           if (result.status === "ready") {
-            if (result.item.attachmentPayload?.key !== key) {
+            if (result.update.attachmentPayload?.key !== key) {
               // Copy adoption must not overwrite a retry that replaced the captured row.
               if (
                 !updateStoredChatComposerQueueItem(
                   host,
                   outbox.sessionKey,
                   item,
-                  result.item,
+                  { ...item, ...result.update },
                   outbox.agentId,
                 )
               ) {
@@ -155,12 +158,12 @@ class ChatOutboxGatewayOwner {
             }
             this.keep(host, outbox, {
               ...current,
-              attachments: result.item.attachments,
-              ...(result.item.attachmentPayload?.key !== key
+              attachments: result.update.attachments,
+              ...(result.update.attachmentPayload?.key !== key
                 ? {
-                    attachmentPayload: result.item.attachmentPayload,
-                    sendState: result.item.sendState,
-                    sendError: result.item.sendError,
+                    attachmentPayload: result.update.attachmentPayload,
+                    sendState: result.update.sendState,
+                    sendError: result.update.sendError,
                   }
                 : {}),
             });
@@ -378,7 +381,9 @@ class ChatOutboxGatewayOwner {
     this.prune(host);
   }
   allItems(host: Host): ChatQueueItem[] {
-    const durable = listStoredChatOutboxes(host).flatMap((outbox) => this.snapshot(host, outbox));
+    const durable = listStoredChatOutboxes(host).flatMap((outbox) =>
+      this.snapshot(host, outbox, outbox.queue),
+    );
     const local = [...this.state(host).byScope.values()].flat();
     // The snapshot already merges durable and live state. A stale pane-local
     // copy must not hide its sending overlay during connection retirement.

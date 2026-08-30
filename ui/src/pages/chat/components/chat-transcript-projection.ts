@@ -5,7 +5,6 @@ import { i18n, t } from "../../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
-import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
   isUiGlobalScopeConfigured,
   parseAgentSessionKey,
@@ -31,23 +30,24 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
+import { assistantGroupIsForwardedBoundary } from "../chat-turn-boundary.ts";
 import { getToolTitlesVersion, scheduleToolTitlesForTranscript } from "../tool-titles.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
-import { resolveMessageDisplayMarkdown, resolveMessageReplyText } from "./chat-message-markdown.ts";
+import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import {
   getChatMediaRenderVersion,
   renderActivityGroup,
   renderMessageGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
-  type MessageReplyTarget,
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
+import { createReplyPreviewResolver, type LoadedReplySource } from "./chat-reply-preview.ts";
 import {
   closeTranscriptSearch,
   getTranscriptState,
@@ -74,41 +74,6 @@ type ChatTranscriptProjection = {
 };
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
-
-type LoadedReplySource = {
-  message: unknown;
-  messageId: string;
-  senderLabel: string;
-};
-
-function projectResolvedReplyPreview(
-  message: unknown,
-  replyToId: string,
-  props: Pick<ChatThreadProps, "assistantName" | "userAvatar" | "userId" | "userName">,
-): (MessageReplyTarget & { sourceMessageId: string }) | undefined {
-  const normalized = normalizeMessage(message);
-  const text = resolveMessageDisplayMarkdown(message, normalized);
-  if (!text) {
-    return undefined;
-  }
-  const group: MessageGroup = {
-    kind: "group",
-    key: replyToId,
-    role: normalized.role,
-    senderLabel: normalized.senderLabel,
-    ...(normalized.sender ? { sender: normalized.sender } : {}),
-    messages: [{ key: replyToId, message }],
-    timestamp: normalized.timestamp,
-    isStreaming: false,
-  };
-  const sourceMessageId = persistedMessageEntryId(message) ?? replyToId;
-  return {
-    messageId: sourceMessageId,
-    sourceMessageId,
-    senderLabel: resolveMessageGroupSenderLabel(group, props),
-    text,
-  };
-}
 
 export function projectChatTranscript(
   props: ChatThreadProps,
@@ -261,9 +226,17 @@ export function projectChatTranscript(
   // keeps avatars like "group" and "unknown" do. An identity-resolving gateway
   // (multi-user trusted proxy) also keeps them: several people share these
   // sessions, so the author marker is signal, not decoration.
+  // A forwarded cross-session message is another voice in the room: the thread
+  // stops rendering as a compact direct exchange and identity chrome returns.
+  const hasForwardedGroups = chatItems.some(
+    (item) =>
+      item.kind === "group" &&
+      (Boolean(item.senderSession) || assistantGroupIsForwardedBoundary(item)),
+  );
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
-    !props.userId;
+    !props.userId &&
+    !hasForwardedGroups;
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -274,31 +247,7 @@ export function projectChatTranscript(
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const loadedReplySources = new Map<string, LoadedReplySource>();
   const messageRowKeysById = new Map<string, string>();
-  const resolvedReplyPreviews = new Map<
-    string,
-    (MessageReplyTarget & { sourceMessageId: string }) | undefined
-  >();
-  const resolveReplyPreview = (replyToId: string) => {
-    if (resolvedReplyPreviews.has(replyToId)) {
-      return resolvedReplyPreviews.get(replyToId);
-    }
-    const loaded = loadedReplySources.get(replyToId);
-    const loadedText = loaded ? resolveMessageReplyText(loaded.message) : undefined;
-    if (loaded && loadedText) {
-      const preview = {
-        messageId: loaded.messageId,
-        sourceMessageId: replyToId,
-        senderLabel: loaded.senderLabel,
-        text: loadedText,
-      };
-      resolvedReplyPreviews.set(replyToId, preview);
-      return preview;
-    }
-    const message = props.replyMessageAccess?.read(replyToId);
-    const preview = message ? projectResolvedReplyPreview(message, replyToId, props) : undefined;
-    resolvedReplyPreviews.set(replyToId, preview);
-    return preview;
-  };
+  const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
@@ -357,10 +306,15 @@ export function projectChatTranscript(
       onToggleToolExpanded: toggleToolCardExpanded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
+      agentId: props.currentAgentId ?? props.fullMessageAgentId,
+      agents: props.agents,
+      senderAgentAvatars: props.senderAgentAvatars,
+      mainKey: props.mainKey,
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
       onRetryQueuedMessage: props.onRetryQueuedMessage,
+      onDiscardQueuedMessage: props.onDiscardQueuedMessage,
       queuedMessageAction: props.queuedMessageAction,
       personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
@@ -671,6 +625,10 @@ export function projectChatTranscript(
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
+    props.currentAgentId,
+    props.agents,
+    props.senderAgentAvatars,
+    props.mainKey,
     props.userId,
     props.userName,
     props.userAvatar,
@@ -684,6 +642,7 @@ export function projectChatTranscript(
     threadContextWindow,
     Boolean(props.onSetReply),
     Boolean(props.onRetryQueuedMessage),
+    Boolean(props.onDiscardQueuedMessage),
     props.queuedMessageAction?.id,
     props.queuedMessageAction?.label,
     props.queuedMessageAction?.onAction,

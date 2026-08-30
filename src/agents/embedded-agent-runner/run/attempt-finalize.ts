@@ -474,6 +474,7 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     isPendingOrRetrying: () => boolean;
   }) => void;
   setRunAbort: (abort: RunAbort) => void;
+  throwIfFired: () => void;
   throwIfFiredAfterPrepCleanup: () => Promise<void>;
 } {
   let abortActiveSession: ActiveSessionAbort | undefined;
@@ -481,12 +482,16 @@ export function createEmbeddedAttemptExternalAbortController(input: {
   let isCompactionPendingOrRetrying: (() => boolean) | undefined;
   let isCompactionInFlight: (() => boolean) | undefined;
   let removeListener: (() => void) | undefined;
+  let abortHandled = false;
 
   const onAbort = () => {
     const signal = input.abortSignal;
-    if (!signal) {
+    if (!signal || abortHandled) {
       return;
     }
+    // Preparation checkpoints and the listener share classification and side effects.
+    // Mark before handoff because aborting live work can synchronously re-enter.
+    abortHandled = true;
     input.state.markExternalAbort();
     const reason = getAbortReason(signal);
     const isTimeout = reason ? isSignalTimeoutReason(reason) : false;
@@ -520,6 +525,15 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     void abortActiveSession?.(input.runAbortController.signal.reason);
   };
 
+  const readFiredAbortError = () => {
+    const signal = input.abortSignal;
+    if (!signal?.aborted) {
+      return undefined;
+    }
+    onAbort();
+    return createAttemptAbortError(signal);
+  };
+
   return {
     arm: () => {
       const signal = input.abortSignal;
@@ -549,15 +563,17 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     setRunAbort: (abort) => {
       abortRun = abort;
     },
+    throwIfFired: () => {
+      const abortError = readFiredAbortError();
+      if (abortError) {
+        throw abortError;
+      }
+    },
     throwIfFiredAfterPrepCleanup: async () => {
-      const signal = input.abortSignal;
-      if (!signal?.aborted) {
+      const abortError = readFiredAbortError();
+      if (!abortError) {
         return;
       }
-      const abortError = createAttemptAbortError(signal);
-      input.state.markAborted();
-      input.state.markExternalAbort();
-      input.state.setPromptError(abortError);
       await input.cleanupAfterEarlyAbort();
       throw abortError;
     },

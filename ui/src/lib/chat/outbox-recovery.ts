@@ -5,11 +5,7 @@ import {
   outboxPayloadMatchesOwner,
 } from "./outbox-payload-store.runtime.ts";
 import { normalizeStoredSession } from "./outbox-store-codec.ts";
-import {
-  nextDraftRevision,
-  rememberedDraftAttempt,
-  rememberedDraftRevision,
-} from "./outbox-store-draft-state.ts";
+import { nextDraftRevision, readDraftRevisionState } from "./outbox-store-draft-state.ts";
 import {
   notifyStoredChatOutboxChanges,
   readStoredOutboxStore,
@@ -70,11 +66,8 @@ export function captureChatOutboxRecoveryDestination(
     gatewayOwner: target.gatewayOwner,
     recoveryScope: observeOutboxRecoveryOwner(state),
     session: JSON.stringify(session),
-    revision: Math.max(
-      session?.draftRevision ?? 0,
-      rememberedDraftRevision(storage, target.key, storeSessionKey),
-      rememberedDraftAttempt(storage, target.key, storeSessionKey),
-    ),
+    revision: readDraftRevisionState(storage, target.key, storeSessionKey, session?.draftRevision)
+      .latestAttempt,
   };
 }
 

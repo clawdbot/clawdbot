@@ -1,5 +1,6 @@
 // Covers plugin config state normalization and reset behavior.
 import { describe, expect, it, vi } from "vitest";
+import * as bundledChannelCatalog from "../channels/bundled-channel-catalog-read.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -386,6 +387,7 @@ describe("resolveEffectivePluginActivationState", () => {
     {
       name: "marks bundled default-enabled plugins as default activation",
       params: { id: "openai", origin: "bundled", enabledByDefault: true },
+      rawConfig: {},
       expected: {
         enabled: true,
         activated: true,
@@ -498,16 +500,24 @@ describe("resolveEffectivePluginActivationState", () => {
       },
     },
   ])("$name", ({ params, rawConfig, effectiveConfig = rawConfig, expected }) => {
-    expect(
-      resolveEffectivePluginActivationState({
-        ...params,
-        config: normalizePluginsConfig(effectiveConfig ? effectiveConfig.plugins : {}),
-        ...(effectiveConfig ? { rootConfig: effectiveConfig } : {}),
-        ...(rawConfig
-          ? { activationSource: createPluginActivationSource({ config: rawConfig }) }
-          : {}),
-      }),
-    ).toEqual(expected);
+    const catalog = vi.spyOn(bundledChannelCatalog, "listBundledChannelCatalogEntries");
+    try {
+      expect(
+        resolveEffectivePluginActivationState({
+          ...params,
+          config: normalizePluginsConfig(effectiveConfig ? effectiveConfig.plugins : {}),
+          ...(effectiveConfig ? { rootConfig: effectiveConfig } : {}),
+          ...(rawConfig
+            ? { activationSource: createPluginActivationSource({ config: rawConfig }) }
+            : {}),
+        }),
+      ).toEqual(expected);
+      if (!rawConfig?.channels && !effectiveConfig?.channels) {
+        expect(catalog).not.toHaveBeenCalled();
+      }
+    } finally {
+      catalog.mockRestore();
+    }
   });
 });
 

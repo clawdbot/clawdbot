@@ -20,14 +20,12 @@ export type DurableChatComposerSnapshot = {
   revision: number;
   text: string;
   goalMode?: ChatGoalDraftMode;
-  attachments: ChatAttachment[];
   storedAttachments: DurableComposerDraftAttachment[] | null;
   writeId: string;
 };
 
 type RestoreBaseline = {
   scope: DurableComposerDraftScope;
-  committedRevision: number;
   latestRevision: number;
   signature: string;
 };
@@ -189,17 +187,7 @@ export async function hydrateDurableComposerAttachments(
   }
 }
 
-export async function writeDurableComposerSnapshot(snapshot: {
-  scope: DurableComposerDraftScope;
-  expectedRevision: number;
-  expectedWriteId?: string;
-  expectedWriteIds?: readonly string[];
-  revision: number;
-  text: string;
-  goalMode?: ChatGoalDraftMode;
-  storedAttachments: DurableComposerDraftAttachment[] | null;
-  writeId: string;
-}) {
+export async function writeDurableComposerSnapshot(snapshot: DurableChatComposerSnapshot) {
   const { writeDurableComposerDraft } = await loadDurableComposerStore();
   const payloadUnavailable = snapshot.storedAttachments === null;
   const result = await writeDurableComposerDraft(

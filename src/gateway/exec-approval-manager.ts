@@ -1043,9 +1043,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   /**
    * One-shot ask-fallback re-admission for a timed-out approval. This is
    * pre-gate policy on the process-local record only: the durable row stays
-   * `expired` and no execution authority is minted here. The strict exec
-   * timeout cutover is deferred (docs/refactor/operator-approvals.md); until
-   * then system.run replay uses this flag to keep re-admission single-use.
+   * `expired` and no execution authority is minted here. The shipped askFallback
+   * policy (docs/tools/exec-approvals.md) still applies; system.run replay
+   * uses this flag to keep re-admission single-use.
    */
   consumeAskFallback(recordId: string): boolean {
     const entry = this.pending.get(recordId);

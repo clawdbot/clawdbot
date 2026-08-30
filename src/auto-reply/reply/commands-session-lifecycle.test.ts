@@ -497,6 +497,7 @@ describe("/session conversation bindings", () => {
     expect(result?.reply?.text).toBe("✅ Conversation unbound.");
     expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledExactlyOnceWith({
       bindingId: binding.bindingId,
+      scope: binding.conversation,
       reason: "manual",
     });
   });
@@ -520,6 +521,7 @@ describe("/session conversation bindings", () => {
     expect(result?.reply?.text).toBe("✅ Conversation unbound.");
     expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledExactlyOnceWith({
       bindingId: binding.bindingId,
+      scope: binding.conversation,
       reason: "manual",
     });
   });

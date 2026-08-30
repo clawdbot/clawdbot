@@ -199,6 +199,9 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     sendShortcut?: ChatSendShortcut;
     followUpMode?: ControlUiFollowUpMode;
     assistantAvatar: string | null;
+    senderAgentAvatars?: ReadonlyMap<string, string | null>;
+    /** Configured main-session key; an agent's main source labels as the agent. */
+    mainKey?: string;
     userId?: string | null;
     userName?: string | null;
     userAvatar?: string | null;
@@ -371,6 +374,10 @@ export function renderChat(props: ChatProps) {
       boardProvider: props.boardProvider,
       assistantName: props.assistantName,
       assistantAvatar: props.assistantAvatar,
+      senderAgentAvatars: props.senderAgentAvatars,
+      agents: props.agentsList?.agents,
+      mainKey: props.mainKey,
+      currentAgentId: props.currentAgentId,
       assistantAvatarUrl: props.assistantAvatarUrl,
       userId: props.userId,
       userName: props.userName,
@@ -414,6 +421,7 @@ export function renderChat(props: ChatProps) {
           }
         : undefined,
       onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
+      onDiscardQueuedMessage: props.onQueueRemove,
       onSetReply: props.onSetReply,
       replyMessageAccess: props.replyMessageAccess,
       onRewindMessage: props.onRewindMessage,

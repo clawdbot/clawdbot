@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
+import { prepareRealtimeTalkTestInput } from "./realtime-talk-input.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -121,8 +122,9 @@ function createClient(): RealtimeTalkTransportContext["client"] {
   } as unknown as RealtimeTalkTransportContext["client"];
 }
 
-function createTransport(overrides: Partial<RealtimeTalkTransportContext> = {}) {
+async function createTransport(overrides: Partial<RealtimeTalkTransportContext> = {}) {
   return new GatewayRelayRealtimeTalkTransport(createSession(), {
+    input: await prepareRealtimeTalkTestInput(),
     callbacks: {},
     client: createClient(),
     sessionKey: "main",
@@ -203,34 +205,13 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     createdSources.length = 0;
   });
 
-  it("preserves audio processing while selecting the exact microphone", async () => {
-    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
-      callbacks: {},
-      client: createClient(),
-      sessionKey: "main",
-      inputDeviceId: "usb-mic",
-    });
-
-    await startTransport(transport);
-
-    expect(getUserMedia).toHaveBeenCalledWith({
-      audio: {
-        autoGainControl: true,
-        echoCancellation: true,
-        noiseSuppression: true,
-        deviceId: { exact: "usb-mic" },
-      },
-    });
-    transport.stop();
-  });
-
   it("closes relay resources on microphone loss even when status delivery throws", async () => {
     const track = Object.assign(new EventTarget(), { stop: vi.fn() });
     const addListener = vi.spyOn(track, "addEventListener");
     getUserMedia.mockResolvedValueOnce({ getTracks: () => [track] });
     const client = createClient();
     const onStatus = vi.fn();
-    const transport = createTransport({ client, callbacks: { onStatus } });
+    const transport = await createTransport({ client, callbacks: { onStatus } });
     await startTransport(transport);
     onStatus.mockImplementation(() => {
       throw new Error("status failed");
@@ -253,6 +234,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("keeps the microphone processor inaudible locally", async () => {
     const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      input: await prepareRealtimeTalkTestInput(),
       callbacks: {},
       client: createClient(),
       sessionKey: "main",
@@ -273,48 +255,16 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(sink.disconnect).toHaveBeenCalledOnce();
   });
 
-  it("releases microphone access that resolves after stop", async () => {
-    let resolveMedia: (media: MediaStream) => void = () => undefined;
-    const pendingMedia = new Promise<MediaStream>((resolve) => {
-      resolveMedia = resolve;
-    });
-    getUserMedia.mockReturnValue(pendingMedia);
-    const stopTrack = vi.fn();
-    const onInputLevel = vi.fn();
-    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
-      callbacks: { onInputLevel },
-      client: createClient(),
-      sessionKey: "main",
-    });
-
-    const start = transport.start();
-    transport.stop();
-    resolveMedia({
-      getTracks: () => [Object.assign(new EventTarget(), { stop: stopTrack })],
-    } as unknown as MediaStream);
-    await expect(start).resolves.toBe("cancelled");
-
-    expect(stopTrack).toHaveBeenCalledOnce();
-    expect(processors).toHaveLength(0);
-    expect(onInputLevel).not.toHaveBeenCalled();
-  });
-
   it("defers relay effects until the transport is committed", async () => {
-    let resolveMedia: (media: MediaStream) => void = () => undefined;
-    getUserMedia.mockReturnValue(
-      new Promise<MediaStream>((resolve) => {
-        resolveMedia = resolve;
-      }),
-    );
     const client = createClient();
     const onStatus = vi.fn();
     const onTranscript = vi.fn();
-    const transport = createTransport({
+    const transport = await createTransport({
       client,
       callbacks: { onStatus, onTranscript },
     });
 
-    const start = transport.start();
+    await expect(transport.start()).resolves.toBe("ready");
     onStatus.mockClear();
     emitTalkEvent({ relaySessionId: "relay-1", type: "ready" });
     emitTalkEvent({
@@ -336,14 +286,6 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(onTranscript).not.toHaveBeenCalled();
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
 
-    resolveMedia({
-      getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
-    } as unknown as MediaStream);
-    await expect(start).resolves.toBe("ready");
-    expect(onStatus).toHaveBeenCalledExactlyOnceWith("connecting", undefined);
-    onStatus.mockClear();
-    expect(onTranscript).not.toHaveBeenCalled();
-
     transport.activate();
 
     expect(onStatus).toHaveBeenCalledWith("listening");
@@ -359,43 +301,28 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   });
 
   it("fails a provisional relay whose bounded event buffer overflows", async () => {
-    let resolveMedia: (media: MediaStream) => void = () => undefined;
-    getUserMedia.mockReturnValue(
-      new Promise<MediaStream>((resolve) => {
-        resolveMedia = resolve;
-      }),
-    );
     const onStatus = vi.fn();
     const client = createClient();
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
 
-    const start = transport.start();
+    await expect(transport.start()).resolves.toBe("ready");
     onStatus.mockClear();
     for (let index = 0; index < 33; index += 1) {
       emitTalkEvent({ relaySessionId: "relay-1", type: "ready" });
     }
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
-    resolveMedia({
-      getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
-    } as unknown as MediaStream);
 
-    await expect(start).rejects.toThrow(
+    expect(() => transport.activate()).toThrow(
       "Realtime relay emitted too much data before browser setup completed",
     );
     expect(onStatus).not.toHaveBeenCalled();
   });
 
   it("enforces the provisional relay byte bound", async () => {
-    let resolveMedia: (media: MediaStream) => void = () => undefined;
-    getUserMedia.mockReturnValue(
-      new Promise<MediaStream>((resolve) => {
-        resolveMedia = resolve;
-      }),
-    );
     const client = createClient();
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
-    const start = transport.start();
+    await expect(transport.start()).resolves.toBe("ready");
     emitTalkEvent({
       relaySessionId: "relay-1",
       type: "transcript",
@@ -405,26 +332,17 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
-    resolveMedia({
-      getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
-    } as unknown as MediaStream);
-    await expect(start).rejects.toThrow(
+    expect(() => transport.activate()).toThrow(
       "Realtime relay emitted too much data before browser setup completed",
     );
   });
 
   it("rejects a relay that closes before browser setup commits", async () => {
-    let resolveMedia: (media: MediaStream) => void = () => undefined;
-    getUserMedia.mockReturnValue(
-      new Promise<MediaStream>((resolve) => {
-        resolveMedia = resolve;
-      }),
-    );
     const client = createClient();
     const onStatus = vi.fn();
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
 
-    const start = transport.start();
+    await expect(transport.start()).resolves.toBe("ready");
     onStatus.mockClear();
     emitTalkEvent({
       relaySessionId: "relay-1",
@@ -436,11 +354,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       type: "close",
       reason: "error",
     });
-    resolveMedia({
-      getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
-    } as unknown as MediaStream);
 
-    await expect(start).rejects.toThrow("provider rejected setup");
+    expect(() => transport.activate()).toThrow("provider rejected setup");
     expect(onStatus).not.toHaveBeenCalled();
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(0);
   });
@@ -448,7 +363,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   it("closes the relay when a provisional callback throws during activation", async () => {
     const client = createClient();
     const onStatus = vi.fn();
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
 
     const start = transport.start();
     emitTalkEvent({ relaySessionId: "relay-1", type: "ready" });
@@ -464,6 +379,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   it("forwards common Talk events from Gateway relay frames", async () => {
     const onTalkEvent = vi.fn();
     const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      input: await prepareRealtimeTalkTestInput(),
       callbacks: { onTalkEvent },
       client: createClient(),
       sessionKey: "main",
@@ -493,7 +409,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("does not forward Talk events for another relay session", async () => {
     const onTalkEvent = vi.fn();
-    const transport = createTransport({ callbacks: { onTalkEvent } });
+    const transport = await createTransport({ callbacks: { onTalkEvent } });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -518,7 +434,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("keeps assistant playback alive while relay input is silence", async () => {
     const client = createClient();
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -538,7 +454,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("cancels overflowing playback and ignores late audio until provider clear", async () => {
     const client = createClient();
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     for (let index = 0; index < 321; index += 1) {
@@ -585,7 +501,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("cancels provider output when the first audio chunk exceeds the time budget", async () => {
     const client = createClient();
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -614,7 +530,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   it("acknowledges provider marks only after the local playback queue drains", async () => {
     vi.useFakeTimers();
     const client = createClient();
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -637,7 +553,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   it("clears pending provider mark timers when stopped", async () => {
     vi.useFakeTimers();
     const client = createClient();
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -655,7 +571,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("reports microphone activity and resets it when stopped", async () => {
     const onInputLevel = vi.fn();
-    const transport = createTransport({ callbacks: { onInputLevel } });
+    const transport = await createTransport({ callbacks: { onInputLevel } });
 
     await startTransport(transport);
     pumpMicrophone(new Float32Array(4096));
@@ -674,7 +590,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         transport.stop();
       }
     });
-    const transport = createTransport({ client, callbacks: { onInputLevel } });
+    const transport = await createTransport({ client, callbacks: { onInputLevel } });
 
     await expect(transport.start()).resolves.toBe("ready");
     transport.stop();
@@ -713,7 +629,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         );
       });
     });
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
 
     await startTransport(transport);
     const samples = new Float32Array(4096);
@@ -744,7 +660,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("preserves accepted microphone frame order", async () => {
     const client = createClient();
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     for (const timestamp of [10, 20, 30, 40]) {
@@ -772,7 +688,10 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         rejectOldAppend = reject;
       });
     });
-    const oldTransport = createTransport({ callbacks: { onStatus: oldStatus }, client: oldClient });
+    const oldTransport = await createTransport({
+      callbacks: { onStatus: oldStatus },
+      client: oldClient,
+    });
 
     await oldTransport.start();
     oldStatus.mockClear();
@@ -781,7 +700,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     const replacementStatus = vi.fn();
     const replacementClient = createClient();
-    const replacement = createTransport({
+    const replacement = await createTransport({
       callbacks: { onStatus: replacementStatus },
       client: replacementClient,
     });
@@ -806,7 +725,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
 
     await startTransport(transport);
     pumpMicrophone(new Float32Array(4096));
@@ -830,7 +749,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   it("treats relay close events as local shutdown", async () => {
     const onStatus = vi.fn();
     const client = createClient();
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
 
     await startTransport(transport);
     pumpMicrophone(new Float32Array(4096));
@@ -862,7 +781,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       } as unknown as MediaStream);
       const throwingCallback = vi.fn();
       const client = createClient();
-      const transport = createTransport({
+      const transport = await createTransport({
         client,
         callbacks:
           callbackKind === "talk event"
@@ -909,7 +828,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   it("preserves relay error details across close events", async () => {
     const onStatus = vi.fn();
     const client = createClient();
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -929,7 +848,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
   it("cancels relay playback after sustained input speech", async () => {
     const client = createClient();
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
     const speech = new Float32Array(4096).fill(0.25);
 
     await startTransport(transport);
@@ -969,7 +888,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1024,7 +943,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1073,7 +992,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1112,7 +1031,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1149,7 +1068,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1194,7 +1113,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1246,7 +1165,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1281,7 +1200,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
     const speech = new Float32Array(4096).fill(0.25);
 
     await startTransport(transport);
@@ -1400,7 +1319,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         return {};
       });
       const onStatus = vi.fn();
-      const transport = createTransport({ callbacks: { onStatus }, client });
+      const transport = await createTransport({ callbacks: { onStatus }, client });
       const speech = new Float32Array(4096).fill(0.25);
 
       await startTransport(transport);
@@ -1460,7 +1379,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         return {};
       });
       const onStatus = vi.fn();
-      const transport = createTransport({ callbacks: { onStatus }, client });
+      const transport = await createTransport({ callbacks: { onStatus }, client });
       const speech = new Float32Array(4096).fill(0.25);
 
       await startTransport(transport);
@@ -1515,7 +1434,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       return {};
     });
     const onStatus = vi.fn();
-    const transport = createTransport({ callbacks: { onStatus }, client });
+    const transport = await createTransport({ callbacks: { onStatus }, client });
     const speech = new Float32Array(4096).fill(0.25);
 
     await startTransport(transport);
@@ -1560,7 +1479,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1624,7 +1543,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1672,7 +1591,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       expect(options).toBeUndefined();
       return await pendingSteer;
     });
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1712,7 +1631,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
@@ -1759,7 +1678,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       }
       return {};
     });
-    const transport = createTransport({ client });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
     emitTalkEvent({
