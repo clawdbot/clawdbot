@@ -22,7 +22,7 @@ describe("message-normalizer", () => {
       },
     );
 
-    it.each([undefined, null, "raw string", 42, true])(
+    it.each([undefined, null, "raw string", 42, true, []])(
       "tool-message predicates return false for %o without throwing",
       (input) => {
         expect(() => isToolResultMessage(input)).not.toThrow();
@@ -31,6 +31,30 @@ describe("message-normalizer", () => {
         expect(isStandaloneToolMessageForDisplay(input)).toBe(false);
       },
     );
+
+    it.each(["toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "toolName", "tool_name"])(
+      "classifies only string-valued %s as a standalone tool message",
+      (field) => {
+        for (const value of ["call-1", "", null, 7, false]) {
+          const message = { role: "assistant", [field]: value, content: [null, { text: 7 }] };
+          expect(isStandaloneToolMessageForDisplay(message)).toBe(typeof value === "string");
+          expect(isToolResultMessage(message)).toBe(false);
+        }
+      },
+    );
+
+    it.each([
+      ["toolResult", true, true],
+      ["TOOL_RESULT", true, true],
+      ["function", false, true],
+      ["tool", false, true],
+      [" toolResult ", false, false],
+      [7, false, false],
+    ])("classifies tool role %j independently of content", (role, result, standalone) => {
+      const message = { role, content: [null, { text: 7 }] };
+      expect(isToolResultMessage(message)).toBe(result);
+      expect(isStandaloneToolMessageForDisplay(message)).toBe(standalone);
+    });
 
     it.each([undefined, null, "malformed block", 42, true, []])(
       "preserves valid assistant text after the malformed content block %o",
