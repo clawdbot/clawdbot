@@ -82,7 +82,6 @@ const SESSIONS_LIST_YIELD_BATCH_SIZE = 10;
 
 const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
-const SESSIONS_LIST_TRANSCRIPT_USAGE_MAX_BYTES = 64 * 1024;
 
 type ListSessionsFromStoreParams = {
   cfg: OpenClawConfig;
@@ -91,7 +90,6 @@ type ListSessionsFromStoreParams = {
   storePath: string;
   store: Record<string, SessionEntry>;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
-  lightweightListRows?: boolean;
   opts: SessionsListParams;
   involvingActorId?: string;
   ownerFirstActorId?: string;
@@ -535,7 +533,7 @@ function buildSessionsListResult(params: {
   const { list, sessions } = params;
   // The defaults projection uses the same agent identity as getSessionDefaults:
   // the requested agent when scoped, otherwise the legacy compatibility agent.
-  // Legacy plain-array catalogs (direct listSessionsFromStore callers) pass through
+  // Legacy plain-array catalogs (direct list callers) pass through
   // unchanged; per-agent maps resolve by the same identity.
   const preparedDefaultsCatalog =
     params.modelCatalog instanceof Map
@@ -578,69 +576,17 @@ function buildSessionsListResult(params: {
 
 export function filterAndSortSessionEntries(params: {
   cfg: OpenClawConfig;
+  entryFilter?: (key: string, entry: SessionEntry) => boolean;
   store: Record<string, SessionEntry>;
   opts: SessionsListParams;
   now: number;
+  getRowContext?: SessionListRowContextProvider;
   involvingActorId?: string;
 }): [string, SessionEntry][] {
   return selectSessionEntries(params).entries;
 }
 
-export function listSessionsFromStore(params: ListSessionsFromStoreParams): SessionsListResult {
-  const { cfg, store, opts } = params;
-  const list = prepareSessionList(params);
-  const sessions = list.entries.map(([key, entry], index) => {
-    const includeTranscriptFields = index < list.transcriptFieldRows;
-    const rowAgentId =
-      !parseAgentSessionKey(key) && typeof opts.agentId === "string"
-        ? normalizeAgentId(opts.agentId)
-        : undefined;
-    const storeChildSessionsByKey =
-      list.storeChildSessionsByKey ??
-      buildSingleRowStoreChildSessionsByKey({
-        store,
-        storePath: list.storePath,
-        key,
-        now: list.now,
-      });
-    return buildGatewaySessionRow({
-      cfg,
-      storePath: list.storePath,
-      store,
-      key,
-      entry,
-      agentId: rowAgentId,
-      modelCatalog: params.modelCatalog,
-      now: list.now,
-      includeDerivedTitles: includeTranscriptFields && list.includeDerivedTitles,
-      includeLastMessage: includeTranscriptFields && list.includeLastMessage,
-      transcriptUsageMaxBytes: SESSIONS_LIST_TRANSCRIPT_USAGE_MAX_BYTES,
-      storeChildSessionsByKey,
-      rowContext: list.rowContext,
-      configuredAgentIds: list.configuredAgentIds,
-      skipTranscriptUsageFallback: params.lightweightListRows === true,
-      lightweightListRow: params.lightweightListRows === true,
-    });
-  });
-  return buildSessionsListResult({
-    cfg,
-    list,
-    modelCatalog: params.modelCatalog,
-    sessions,
-    agentId: opts.agentId,
-  });
-}
-
-/**
- * Async version of listSessionsFromStore that yields to the event loop between
- * batches of session row builds. This prevents large session stores from
- * blocking the event loop during sessions.list requests.
- *
- * The synchronous file I/O in readSessionTitleFieldsFromTranscript (head/tail
- * reads for derived titles and last-message previews) is the dominant blocker.
- * By yielding every SESSIONS_LIST_YIELD_BATCH_SIZE rows, we keep the event
- * loop responsive for WebSocket heartbeats, channel I/O, and concurrent RPC.
- */
+/** Build rows in batches so session lists do not starve other Gateway work. */
 export async function listSessionsFromStoreAsync(
   params: ListSessionsFromStoreParams,
 ): Promise<SessionsListResult> {
@@ -701,9 +647,9 @@ export async function listSessionsFromStoreAsync(
         now: list.now,
         includeDerivedTitles: false,
         includeLastMessage: false,
-        transcriptUsageMaxBytes: SESSIONS_LIST_TRANSCRIPT_USAGE_MAX_BYTES,
         storeChildSessionsByKey,
         rowContext: list.rowContext,
+        configuredAgentIds: list.configuredAgentIds,
         skipTranscriptUsageFallback: true,
         lightweightListRow: true,
       });
