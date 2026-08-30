@@ -1,12 +1,10 @@
 // Slack tests cover message handler plugin behavior.
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type InboundDebounceFlush = { admission: Promise<void>; completion: Promise<void> };
@@ -22,7 +20,7 @@ const onFlushCallbacks: Array<
 const prepareSlackMessageMock = vi.fn(
   async (_params?: {
     ctx: Parameters<typeof createSlackMessageHandler>[0]["ctx"];
-    opts: { onVisibleDrop?: () => void; onDrop?: (reason: string) => void };
+    opts: { onVisibleDrop?: () => void };
   }): Promise<{
     ctxPayload: Record<string, unknown>;
     route?: { sessionKey: string };
@@ -67,8 +65,8 @@ vi.mock("./thread-resolution.js", () => ({
   }),
 }));
 
-function runOnFlush(entries: Array<Record<string, unknown>>, callbackIndex = 0): Promise<void> {
-  const flush = onFlushCallbacks[callbackIndex]?.(entries, createTestInboundDebounceFlush);
+function runOnFlush(entries: Array<Record<string, unknown>>): Promise<void> {
+  const flush = onFlushCallbacks[0]?.(entries, createTestInboundDebounceFlush);
   if (!flush) {
     throw new Error("Slack inbound debounce callback missing");
   }
@@ -82,7 +80,6 @@ vi.mock("./message-handler/pipeline.runtime.js", () => ({
 
 function createContext(overrides?: {
   cfg?: OpenClawConfig;
-  logger?: { info: ReturnType<typeof vi.fn> };
   rememberSlackChannelType?: (
     channel: string | null | undefined,
     channelType: string | null | undefined,
@@ -95,12 +92,11 @@ function createContext(overrides?: {
       client: {},
     },
     runtime: {},
-    logger: overrides?.logger ?? { info: vi.fn() },
     rememberSlackChannelType: (
       channel: string | null | undefined,
       channelType: string | null | undefined,
     ) => overrides?.rememberSlackChannelType?.(channel, channelType),
-  } as unknown as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
+  } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
 }
 
 function createHandlerWithTracker(overrides?: {
@@ -812,64 +808,6 @@ describe("createSlackMessageHandler", () => {
       }),
     );
     expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("records one operator receipt when a dropped logical message replays after restart", async () => {
-    await withStateDirEnv("openclaw-slack-drop-receipt-", async () => {
-      const rejectForAuthorization = async (
-        params?: Parameters<typeof prepareSlackMessageMock>[0],
-      ) => {
-        params?.opts.onDrop?.("authorization");
-        return null;
-      };
-      prepareSlackMessageMock
-        .mockImplementationOnce(rejectForAuthorization)
-        .mockImplementationOnce(rejectForAuthorization);
-      const logger = { info: vi.fn() };
-      const message = {
-        type: "message" as const,
-        channel: "D111",
-        user: "U111",
-        ts: "1709000000.001883",
-        text: "hello",
-      };
-      const handleWithFreshMonitor = async (source: "message" | "app_mention") => {
-        const callbackIndex = onFlushCallbacks.length;
-        const handler = createSlackMessageHandler({
-          ctx: createContext({ logger }),
-          account: { accountId: "default" } as Parameters<
-            typeof createSlackMessageHandler
-          >[0]["account"],
-        });
-        const handled = handler(message as never, { source, awaitDispatch: true });
-        await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(callbackIndex + 1));
-        const entry = enqueueMock.mock.calls[callbackIndex]?.[0] as Record<string, unknown>;
-        await runOnFlush([entry], callbackIndex);
-        await handled;
-      };
-
-      try {
-        await handleWithFreshMonitor("message");
-        resetPluginStateStoreForTests();
-        await handleWithFreshMonitor("app_mention");
-
-        expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
-        expect(logger.info).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            provider: "slack",
-            accountId: "default",
-            channelId: message.channel,
-            messageTs: message.ts,
-            source: "message",
-            reason: "authorization",
-          }),
-          "Slack inbound message dropped before dispatch",
-        );
-        expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
-      } finally {
-        resetPluginStateStoreForTests();
-      }
-    });
   });
 
   it("does not repeat a visible denial for a later message/app_mention twin", async () => {

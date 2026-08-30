@@ -383,17 +383,29 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   }
 
-  it("reports a bounded reason when message preparation has no content", async () => {
-    const onDrop = vi.fn();
+  it("records a bounded receipt when message preparation has no content", async () => {
+    const ctx = createDefaultSlackCtx();
+    const info = vi.spyOn(ctx.logger, "info").mockImplementation(() => undefined);
     const prepared = await prepareSlackMessage({
-      ctx: createDefaultSlackCtx(),
+      ctx,
       account: defaultAccount,
       message: createSlackMessage({ text: "", files: [], attachments: [] }),
-      opts: { source: "message", onDrop },
+      opts: { source: "message" },
     });
 
     expect(prepared).toBeNull();
-    expect(onDrop).toHaveBeenCalledExactlyOnceWith("empty-content");
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      {
+        provider: "slack",
+        accountId: "default",
+        teamId: "T1",
+        channelId: "D123",
+        messageTs: "1.000",
+        source: "message",
+        reason: "empty-content",
+      },
+      "Slack inbound event rejected during preparation",
+    );
   });
 
   it("queues inbound message system events without duplicating body text", async () => {
@@ -4434,9 +4446,22 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     const slackCtx = createUnavailableMentionCtx(
       params.mentionPatterns ? { mentionPatterns: params.mentionPatterns } : {},
     );
+    const info = vi.spyOn(slackCtx.logger, "info").mockImplementation(() => undefined);
     slackCtx.historyLimit = 5;
     const message = createUnavailableMentionMessage("<@B1> trying again");
     expect(await prepareMessageWith(slackCtx, createSlackAccount(), message)).toBeNull();
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      {
+        provider: "slack",
+        accountId: "default",
+        teamId: "T1",
+        channelId: "C0AGENTS",
+        messageTs: "1.000",
+        source: "message",
+        reason: "mention-detection-unavailable",
+      },
+      "Slack inbound event rejected during preparation",
+    );
     expect(Array.from(slackCtx.channelHistories.values()).flat()).toHaveLength(1);
     const prepared = await prepareSlackMessage({
       ctx: slackCtx,
@@ -4446,6 +4471,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     });
 
     assertPrepared(prepared);
+    expect(info).toHaveBeenCalledTimes(1);
     expect(prepared.ctxPayload.MentionSource).toBe("explicit_bot");
     expect(prepared.ctxPayload.InboundHistory).toEqual([]);
     expect(Array.from(slackCtx.channelHistories.values()).flat()).toEqual([]);

@@ -380,7 +380,7 @@ type SlackAuthorizationContext = {
 };
 
 /** Stable, non-sensitive reasons for an inbound event that never reaches dispatch. */
-export type SlackInboundDropReason =
+type SlackInboundDropReason =
   | "self-message"
   | "bot-disabled"
   | "missing-user"
@@ -600,15 +600,12 @@ async function authorizeSlackInboundMessage(params: {
   explicitBotMention: boolean;
   eventScope?: SlackEventScope;
   onVisibleDrop?: () => void;
-  onDrop?: (reason: SlackInboundDropReason) => void;
+  drop: (reason: SlackInboundDropReason) => null;
 }): Promise<SlackAuthorizationContext | null> {
   const { ctx, account, message, conversation } = params;
   const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBotsMode } =
     conversation;
-  const drop = (reason: SlackInboundDropReason): null => {
-    params.onDrop?.(reason);
-    return null;
-  };
+  const { drop } = params;
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
@@ -740,13 +737,25 @@ export async function prepareSlackMessage(params: {
     shouldRecordDroppedHistory?: () => boolean;
     /** Handler-owned signal that a gate produced a user-visible terminal outcome. */
     onVisibleDrop?: () => void;
-    /** Handler-owned receipt for every pre-dispatch drop. */
-    onDrop?: (reason: SlackInboundDropReason) => void;
   };
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
-  const drop = (reason: SlackInboundDropReason): null => {
-    opts.onDrop?.(reason);
+  const drop = (reason: SlackInboundDropReason, details: { parentUserId?: string } = {}): null => {
+    // This is an event-attempt fact, not a terminal logical-message outcome: Slack may
+    // later deliver a message/app_mention twin that prepares and dispatches successfully.
+    ctx.logger.info(
+      {
+        provider: "slack",
+        accountId: account.accountId,
+        teamId: opts.eventScope?.teamId ?? ctx.teamId,
+        channelId: message.channel,
+        messageTs: message.ts,
+        source: opts.source,
+        reason,
+        ...details,
+      },
+      "Slack inbound event rejected during preparation",
+    );
     return null;
   };
   const slackClient = opts.eventScope?.client ?? ctx.app.client;
@@ -786,7 +795,7 @@ export async function prepareSlackMessage(params: {
     explicitBotMention,
     eventScope: opts.eventScope,
     onVisibleDrop: opts.onVisibleDrop,
-    onDrop: opts.onDrop,
+    drop,
   });
   if (!authorization) {
     return null;
@@ -1157,15 +1166,7 @@ export async function prepareSlackMessage(params: {
     accountId: account.accountId,
   });
   if (message["_ambiguousThreadReply"]) {
-    ctx.logger.info(
-      {
-        channel: message.channel,
-        ts: message.ts,
-        parentUserId: message.parent_user_id,
-      },
-      "skipping ambiguous slack thread reply",
-    );
-    return drop("ambiguous-thread");
+    return drop("ambiguous-thread", { parentUserId: message.parent_user_id });
   }
   let canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
   // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
@@ -1405,10 +1406,6 @@ export async function prepareSlackMessage(params: {
   }
 
   if (isRoom && shouldRequireMention && !canDetectMention && !effectiveWasMentioned) {
-    ctx.logger.info(
-      { channel: message.channel, reason: "mention-detection-unavailable" },
-      "skipping channel message",
-    );
     await recordDroppedHistory("slack-mention-detection-unavailable");
     return drop("mention-detection-unavailable");
   }
@@ -1428,7 +1425,6 @@ export async function prepareSlackMessage(params: {
   }
 
   if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {
-    ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     await recordDroppedHistory("slack-no-mention");
     return drop("missing-mention");
   }
