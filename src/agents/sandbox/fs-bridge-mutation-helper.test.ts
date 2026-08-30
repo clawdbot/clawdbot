@@ -843,3 +843,88 @@ describe("sandbox pinned mutation helper", () => {
     },
   );
 });
+
+describe("sandbox pinned mutation helper append_atomic separator", () => {
+  it.runIf(process.platform !== "win32")(
+    "appends to empty file without prepending a separator",
+    async () => {
+      await withTestDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        await fs.mkdir(workspace, { recursive: true });
+
+        const result = runMutation(["append", workspace, "", "note.txt", "0"], "hello");
+
+        expect(result.status).toBe(0);
+        await expect(fs.readFile(path.join(workspace, "note.txt"), "utf8")).resolves.toBe("hello");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "appends to file ending with newline without prepending a separator",
+    async () => {
+      await withTestDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const filePath = path.join(workspace, "note.txt");
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(filePath, "first\n", "utf8");
+
+        const result = runMutation(["append", workspace, "", "note.txt", "0"], "second");
+
+        expect(result.status).toBe(0);
+        await expect(fs.readFile(filePath, "utf8")).resolves.toBe("first\nsecond");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "appends to file not ending with newline and prepends exactly one separator",
+    async () => {
+      await withTestDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const filePath = path.join(workspace, "note.txt");
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(filePath, "first", "utf8");
+
+        const result = runMutation(["append", workspace, "", "note.txt", "0"], "second");
+
+        expect(result.status).toBe(0);
+        await expect(fs.readFile(filePath, "utf8")).resolves.toBe("first\nsecond");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "multiple sequential appends produce correct note boundaries",
+    async () => {
+      await withTestDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const filePath = path.join(workspace, "note.txt");
+        await fs.mkdir(workspace, { recursive: true });
+
+        runMutation(["append", workspace, "", "note.txt", "0"], "note1");
+        runMutation(["append", workspace, "", "note.txt", "0"], "note2");
+        runMutation(["append", workspace, "", "note.txt", "0"], "note3");
+
+        await expect(fs.readFile(filePath, "utf8")).resolves.toBe("note1\nnote2\nnote3");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "creates nested directories when mkdir flag is set",
+    async () => {
+      await withTestDir({ prefix: "openclaw-mutation-helper-append-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        await fs.mkdir(workspace, { recursive: true });
+
+        const result = runMutation(["append", workspace, "nested/deeper", "note.txt", "1"], "hello");
+
+        expect(result.status).toBe(0);
+        await expect(
+          fs.readFile(path.join(workspace, "nested", "deeper", "note.txt"), "utf8"),
+        ).resolves.toBe("hello");
+      });
+    },
+  );
+});

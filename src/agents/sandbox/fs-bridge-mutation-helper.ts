@@ -421,7 +421,24 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            except FileNotFoundError:",
   "                pass",
   "        os.close(src_fd)",
-  "",
+  "def append_atomic(parent_fd, basename, stdin_buffer):",
+  "    fd = None",
+  "    try:",
+  "        append_flags = os.O_RDWR | os.O_APPEND | os.O_CREAT",
+  "        if hasattr(os, 'O_NOFOLLOW'):",
+  "            append_flags |= os.O_NOFOLLOW",
+  "        fd = os.open(basename, append_flags, 0o600, dir_fd=parent_fd)",
+  "        fd_stat = os.fstat(fd)",
+  "        if not stat.S_ISREG(fd_stat.st_mode) or fd_stat.st_nlink > 1:",
+  "            raise OSError(errno.EPERM, 'append target is not a regular file or has multiple hardlinks', basename)",
+  "        payload = stdin_buffer.read()",
+  "        if fd_stat.st_size > 0 and os.pread(fd, 1, fd_stat.st_size - 1) != b'\\n':",
+  "            payload = b'\\n' + payload",
+  "        write_all(fd, payload)",
+  "        os.fdatasync(fd)",
+  "    finally:",
+  "        if fd is not None: os.close(fd)",
+  "    os.fsync(parent_fd)",
   "if operation == 'copy':",
   "    src_root_fd = open_dir(sys.argv[2])",
   "    dst_root_fd = open_dir(sys.argv[5])",
@@ -522,8 +539,16 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            os.close(dst_parent_fd)",
   "        os.close(src_root_fd)",
   "        os.close(dst_root_fd)",
-  "else:",
-  "    raise RuntimeError('unknown sandbox mutation operation: ' + operation)",
+  "elif operation == 'append':",
+  "    root_fd = open_dir(sys.argv[2])",
+  "    parent_fd = None",
+  "    try:",
+  "        parent_fd = walk_dir(root_fd, sys.argv[3], sys.argv[5] == '1')",
+  "        append_atomic(parent_fd, sys.argv[4], sys.stdin.buffer)",
+  "    finally:",
+  "        if parent_fd is not None: os.close(parent_fd)",
+  "        os.close(root_fd)",
+  "else: raise RuntimeError('unknown sandbox mutation operation: ' + operation)",
 ].join("\n");
 
 const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${SANDBOX_PINNED_MUTATION_PYTHON.replaceAll("'", `'\\''`)}'`;
@@ -674,6 +699,23 @@ export function buildPinnedRenamePlan(params: {
       params.to.relativeParentPath,
       params.to.basename,
       "1",
+    ],
+  });
+}
+
+export function buildPinnedAppendPlan(params: {
+  check: PathSafetyCheck;
+  pinned: PinnedSandboxEntry;
+  mkdir: boolean;
+}): SandboxFsCommandPlan {
+  return buildPinnedMutationPlan({
+    checks: [params.check],
+    args: [
+      "append",
+      params.pinned.mountRootPath,
+      params.pinned.relativeParentPath,
+      params.pinned.basename,
+      params.mkdir ? "1" : "0",
     ],
   });
 }

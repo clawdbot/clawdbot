@@ -45,6 +45,23 @@ export type SandboxFsBridge = {
     signal?: AbortSignal;
   }): Promise<void>;
   /**
+   * Atomically appends data to a regular file, creating it if it does not yet exist.
+   *
+   * Backends without this capability must omit it rather than emulate it with
+   * a read followed by a full-file writeFile. Concurrent callers holding the same
+   * pinned mount root each open the file separately with O_APPEND, so each call's
+   * bytes land on disk in invocation order without inspecting or replacing existing
+   * content.
+   */
+  appendFile?(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void>;
+  /**
    * Atomically creates a file only when no entry already exists at the path.
    * Backends without this capability must omit it rather than emulate it with
    * a check followed by writeFile.

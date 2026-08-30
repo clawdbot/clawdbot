@@ -111,6 +111,17 @@ export function createSandboxFsBridgeFromResolver(
         throw error;
       }
     },
+    appendFile: async ({ filePath, cwd, data, mkdir = true }) => {
+      const target = resolvePath(filePath, cwd);
+      if (!target.hostPath) {
+        throw new Error(`Expected hostPath for ${target.containerPath}`);
+      }
+      if (mkdir) {
+        await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
+      }
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      await fs.appendFile(target.hostPath, buffer);
+    },
   };
 }
 
