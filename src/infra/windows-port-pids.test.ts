@@ -34,6 +34,45 @@ describe("readWindowsProcessStartTimeSync", () => {
     expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsWmicExePath());
   });
 
+  it("does not start WMIC once PowerShell has spent the whole budget", () => {
+    vi.useFakeTimers();
+    try {
+      spawnSyncMock.mockImplementationOnce(() => {
+        vi.advanceTimersByTime(1000);
+        return { status: 1, stdout: "" };
+      });
+
+      expect(readWindowsProcessStartTimeSync(321, 1000)).toBeNull();
+      // A second full-budget probe here would block a synchronous caller for
+      // twice the timeout it asked for before returning this same null.
+      expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives WMIC only the time left on the caller's budget", () => {
+    vi.useFakeTimers();
+    try {
+      spawnSyncMock
+        .mockImplementationOnce(() => {
+          vi.advanceTimersByTime(600);
+          return { status: 1, stdout: "" };
+        })
+        .mockReturnValueOnce({
+          status: 0,
+          stdout: Buffer.from("CreationDate=20260713092049.123456+120\r\n"),
+        } as never);
+
+      expect(readWindowsProcessStartTimeSync(654, 1000)).toBe(
+        Date.parse("2026-07-13T07:20:49.123Z"),
+      );
+      expect(spawnSyncMock.mock.calls[1]?.[2]).toMatchObject({ timeout: 400 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns null when process creation time is unavailable", () => {
     spawnSyncMock
       .mockReturnValueOnce({ status: 1, stdout: "" } as never)

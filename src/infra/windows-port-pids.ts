@@ -144,6 +144,11 @@ export function readWindowsProcessStartTimeSync(
   if (!Number.isInteger(pid) || pid <= 0) {
     return null;
   }
+  // `timeoutMs` is one end-to-end budget, not a per-probe one. Synchronous
+  // callers block the event loop for however long this takes, so giving the
+  // WMIC fallback its own full timeout would let a single lookup stall for
+  // twice the caller's budget before returning the same null.
+  const deadline = Date.now() + timeoutMs;
   const powershell = spawnSync(
     getWindowsPowerShellExePath(),
     [
@@ -164,11 +169,15 @@ export function readWindowsProcessStartTimeSync(
       return startTime;
     }
   }
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    return null;
+  }
   const wmic = spawnSync(
     getWindowsWmicExePath(),
     ["process", "where", `ProcessId=${pid}`, "get", "CreationDate", "/value"],
     {
-      timeout: timeoutMs,
+      timeout: remainingMs,
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],
     },
