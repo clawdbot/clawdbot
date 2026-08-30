@@ -3251,6 +3251,7 @@ describe("grouped chat rendering", () => {
 
   it("keeps top-level tool-name results collapsed", () => {
     const container = document.createElement("div");
+    markdownRenderMock.mockClear();
     renderAssistantMessage(
       container,
       createAssistantMessage("A long tool result that should stay behind the disclosure.", {
@@ -3263,6 +3264,21 @@ describe("grouped chat rendering", () => {
     expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
     expect(container.querySelector(".chat-text")).toBeNull();
+    expect(markdownRenderMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["user", "assistant"])("preserves a %s JSON disclosure across rerenders", (role) => {
+    const container = document.createElement("div");
+    const message = { role, content: '{"ok":true}', timestamp: 1 };
+    renderGroupedMessage(container, message, role, { autoExpandToolCalls: true });
+    const disclosure = expectElement(container, ".chat-json-collapse", HTMLDetailsElement);
+    expect(disclosure.open).toBe(false);
+    disclosure.open = true;
+
+    renderGroupedMessage(container, message, role, { autoExpandToolCalls: false });
+
+    expect(container.querySelector(".chat-json-collapse")).toBe(disclosure);
+    expect(disclosure.open).toBe(true);
   });
 
   it("omits normalized duplicate names from standalone tool results", () => {
