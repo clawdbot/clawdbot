@@ -316,9 +316,9 @@ describe("title fetch batching", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
 
-    for (let sessionIndex = 0; sessionIndex < 3; sessionIndex++) {
+    for (let sessionIndex = 0; sessionIndex < 2; sessionIndex++) {
       configureToolTitleFetcher({ client, sessionKey: `session-${sessionIndex}` });
-      for (let itemIndex = 0; itemIndex < 32; itemIndex++) {
+      for (let itemIndex = 0; itemIndex < 48; itemIndex++) {
         getToolCallTitle("bash", {
           command: `printf 'global-title-${sessionIndex}-${itemIndex}'`,
         });
