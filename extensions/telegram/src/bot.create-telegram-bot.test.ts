@@ -34,6 +34,10 @@ import {
 } from "./bot.test-helpers.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramGetChat } from "./bot/types.js";
+import {
+  recordTelegramCallbackQueryAdmissionAnswer,
+  takeTelegramCallbackQueryAdmissionAnswer,
+} from "./callback-query-answer-state.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import type { TelegramPollRegistryEntry } from "./poll-registry.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -816,6 +820,41 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses the callback answer started at durable admission", async () => {
+    const bot = createTelegramBot({ token: "tok" });
+    const callbackId = "cbq-durable-admission-1";
+    recordTelegramCallbackQueryAdmissionAnswer(bot, callbackId, Promise.resolve(true));
+    answerCallbackQuerySpy.mockClear();
+
+    await runTelegramMiddlewareChain({
+      ctx: makeGenericCallbackContext({ id: callbackId, updateId: 403 }),
+      finalHandler: async () => {},
+    });
+
+    expect(answerCallbackQuerySpy).not.toHaveBeenCalled();
+    expect(takeTelegramCallbackQueryAdmissionAnswer(bot, callbackId)).toBeUndefined();
+  });
+
+  it("re-answers a durable callback after bot restart loses admission state", async () => {
+    const callbackId = "cbq-restart-replay-1";
+    const stoppedBot = createTelegramBot({ token: "tok" });
+    recordTelegramCallbackQueryAdmissionAnswer(stoppedBot, callbackId, Promise.resolve(true));
+    middlewareUseSpy.mockClear();
+    createTelegramBot({ token: "tok" });
+    answerCallbackQuerySpy.mockClear();
+    const ctx = makeGenericCallbackContext({ id: callbackId, updateId: 404 });
+
+    await withTelegramSpooledReplayUpdate(
+      requireRecord(ctx.update, "callback update"),
+      async () => {
+        await runTelegramMiddlewareChain({ ctx, finalHandler: async () => {} });
+      },
+    );
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledOnce();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith(callbackId);
   });
 
   it("acknowledges question callbacks before their handler completes", async () => {

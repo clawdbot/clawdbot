@@ -28,6 +28,7 @@ const { createTelegramTransportIngressMonitor } =
   await import("./telegram-ingress-drain-factory.js");
 
 type CapturedMonitor = {
+  onDurableAdmission: (update: unknown, context: { isNew: boolean }) => void | Promise<void>;
   dispatch: (
     update: unknown,
     lifecycle: TelegramIngressDrainLifecycle,
@@ -37,6 +38,28 @@ type CapturedMonitor = {
 describe("Telegram transport ingress outcome handoff", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("reuses an in-flight callback answer for duplicate durable admission", async () => {
+    const answerCallbackQuery = vi.fn(() => new Promise<true>(() => {}));
+    const bot = {
+      handleUpdate: vi.fn(async () => {}),
+      api: { answerCallbackQuery },
+    };
+    createTelegramTransportIngressMonitor({
+      spoolDir: "/tmp/telegram-ingress-proof",
+      bot,
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+    });
+    const monitor = mocks.createTelegramIngressMonitor.mock.calls[0]?.[0] as CapturedMonitor;
+    const update = { update_id: 122, callback_query: { id: "callback-122" } };
+
+    await monitor.onDurableAdmission(update, { isNew: true });
+    await monitor.onDurableAdmission(update, { isNew: false });
+
+    expect(answerCallbackQuery).toHaveBeenCalledOnce();
+    expect(answerCallbackQuery).toHaveBeenCalledWith("callback-122");
   });
 
   it.each([
@@ -52,6 +75,7 @@ describe("Telegram transport ingress outcome handoff", () => {
             recordTelegramMessageProcessingResult(outcome);
           });
         }),
+        api: { answerCallbackQuery: vi.fn(async () => true) },
       };
       createTelegramTransportIngressMonitor({
         spoolDir: "/tmp/telegram-ingress-proof",
@@ -74,6 +98,7 @@ describe("Telegram transport ingress outcome handoff", () => {
       handleUpdate: vi.fn(async () => {
         await runWithTelegramUpdateProcessingFrame(async () => {});
       }),
+      api: { answerCallbackQuery: vi.fn(async () => true) },
     };
     createTelegramTransportIngressMonitor({
       spoolDir: "/tmp/telegram-ingress-proof",
@@ -96,6 +121,7 @@ describe("Telegram transport ingress outcome handoff", () => {
           ensureTelegramMessageProcessingResult({ kind: "completed" });
         });
       }),
+      api: { answerCallbackQuery: vi.fn(async () => true) },
     };
     createTelegramTransportIngressMonitor({
       spoolDir: "/tmp/telegram-ingress-proof",
