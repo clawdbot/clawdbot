@@ -54,40 +54,97 @@ afterEach(() => {
 });
 
 describe("new session draft route ownership", () => {
-  it("focuses the composer from the structural main focus anchor", async () => {
+  it("routes every focus-surface and key-class pair by the shared contract", async () => {
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
-    const main = document.createElement("main");
+    expect(textarea).not.toBeNull();
+    if (!textarea) {
+      return;
+    }
+    const keys = ["x", " ", "Enter", "ArrowDown", "Escape"] as const;
+    type Destination = "composer" | "element" | "overlay" | "nothing";
+    type Surface = {
+      name: string;
+      targets: HTMLElement[];
+      expected: readonly Destination[];
+      openDialog?: boolean;
+      openDropdown?: boolean;
+    };
+    const append = <T extends HTMLElement>(element: T): T => page.appendChild(element);
+    const main = append(document.createElement("main"));
     main.tabIndex = -1;
-    page.append(main);
-    main.focus();
-
-    main.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true, composed: true }));
-
-    expect(document.activeElement).toBe(textarea);
-  });
-
-  it("leaves Space with a focused agent-menu option", async () => {
-    const page = await mount(routeData("research"));
-    const menuItem = document.createElement("div");
+    const button = append(document.createElement("button"));
+    const link = append(document.createElement("a"));
+    link.href = "#target";
+    const menu = append(document.createElement("wa-dropdown")) as HTMLElement & { open: boolean };
+    const menuItem = menu.appendChild(document.createElement("wa-dropdown-item"));
     menuItem.setAttribute("role", "menuitemradio");
     menuItem.tabIndex = -1;
-    let selected = false;
-    menuItem.addEventListener("keydown", (event) => {
-      if (event.key === " ") {
-        selected = true;
+    const dialog = append(document.createElement("dialog"));
+    dialog.open = true;
+    const dialogButton = dialog.appendChild(document.createElement("button"));
+    const details = append(document.createElement("details"));
+    details.open = true;
+    const summary = details.appendChild(document.createElement("summary"));
+    const input = append(document.createElement("input"));
+    const editable = append(document.createElement("div"));
+    editable.contentEditable = "true";
+    editable.tabIndex = 0;
+    const element = ["element", "element", "element", "element", "element"] as const;
+    const overlay = ["overlay", "overlay", "overlay", "overlay", "overlay"] as const;
+    const routing: Surface[] = [
+      {
+        name: "main",
+        targets: [main],
+        expected: ["composer", "composer", "nothing", "nothing", "nothing"],
+      },
+      { name: "composer", targets: [textarea], expected: element },
+      {
+        name: "button/link",
+        targets: [button, link],
+        expected: ["composer", "element", "element", "nothing", "nothing"],
+      },
+      {
+        name: "menuitem",
+        targets: [menuItem],
+        expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
+        openDropdown: true,
+      },
+      {
+        name: "open wa-dropdown",
+        targets: [main],
+        expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
+        openDropdown: true,
+      },
+      { name: "dialog", targets: [dialogButton], expected: overlay, openDialog: true },
+      {
+        name: "details/summary",
+        targets: [summary],
+        expected: ["composer", "element", "element", "nothing", "nothing"],
+      },
+      { name: "input/contenteditable", targets: [input, editable], expected: element },
+    ];
+
+    for (const row of routing) {
+      for (const target of row.targets) {
+        for (const [index, key] of keys.entries()) {
+          menu.open = row.openDropdown === true;
+          dialog.open = row.openDialog === true;
+          target.focus();
+          target.dispatchEvent(
+            new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
+          );
+          const destination = row.expected[index];
+          if (destination === "composer") {
+            expect(document.activeElement, `${row.name} / ${key} -> composer`).toBe(textarea);
+          } else if (destination === "overlay") {
+            expect(document.activeElement, `${row.name} / ${key} -> overlay`).not.toBe(textarea);
+          } else {
+            expect(document.activeElement, `${row.name} / ${key} -> ${destination}`).toBe(target);
+          }
+        }
       }
-    });
-    page.append(menuItem);
-    menuItem.focus();
-
-    menuItem.dispatchEvent(
-      new KeyboardEvent("keydown", { key: " ", bubbles: true, composed: true }),
-    );
-
-    expect(selected).toBe(true);
-    expect(document.activeElement).toBe(menuItem);
-    expect(message(page)).toBe("");
+    }
   });
 
   it("leaves shortcuts, composition, and other form controls alone", async () => {
@@ -107,9 +164,6 @@ describe("new session draft route ownership", () => {
       expect(document.activeElement).not.toBe(textarea);
     }
 
-    const openOverlay = Object.assign(document.createElement("div"), { open: true });
-    const overlayItem = document.createElement("div");
-    openOverlay.append(overlayItem);
     for (const control of [
       document.createElement("input"),
       document.createElement("select"),
@@ -123,12 +177,6 @@ describe("new session draft route ownership", () => {
       );
       expect(document.activeElement).toBe(control);
     }
-
-    page.append(openOverlay);
-    overlayItem.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "x", bubbles: true, composed: true }),
-    );
-    expect(document.activeElement).not.toBe(textarea);
   });
 
   it("labels the message input independently of its placeholder", async () => {

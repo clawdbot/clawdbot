@@ -251,10 +251,21 @@ export type ChatPaneConnectionScope = {
 export const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
-const CHAT_AUTOTYPE_EXEMPT_SELECTOR =
-  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='menu'], [role='menuitem'], [role='menuitemcheckbox'], [role='menuitemradio'], [role='option'], [role='radio'], [role='textbox'], [data-chat-autotype-exempt]";
+// Menus without typeahead own activation/navigation, not printable input.
+// Keeping those key classes separate prevents an open menu from silently dropping a letter.
+const CHAT_PRINTABLE_KEY_TARGET_SELECTOR =
+  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='textbox'], [data-chat-autotype-exempt]";
 const CHAT_SPACE_ACTIVATION_SELECTOR =
-  "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
+  "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='listbox'], [role='menu'], [role='menuitem'], [role='menuitemcheckbox'], [role='menuitemradio'], [role='option'], [role='radio'], [role='switch']";
+const CHAT_DROPDOWN_KEYS = new Set([
+  " ",
+  "Enter",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "Escape",
+]);
 
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -269,11 +280,15 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
     .some(
       (target) =>
         target instanceof HTMLElement &&
-        (target.matches(CHAT_AUTOTYPE_EXEMPT_SELECTOR) ||
-          (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR)) ||
-          target.matches("dialog[open], wa-popover[open]") ||
-          (target.hasAttribute("popover") && target.matches(":popover-open"))),
+        (target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
+          (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR))),
     );
+}
+
+function hasOpenDropdown(): boolean {
+  return [...document.querySelectorAll<HTMLElement & { open?: boolean }>("wa-dropdown")].some(
+    (dropdown) => dropdown.open === true,
+  );
 }
 
 export function focusChatComposerFromPrintableKeydown(
@@ -286,10 +301,11 @@ export function focusChatComposerFromPrintableKeydown(
     event.metaKey ||
     event.ctrlKey ||
     event.altKey ||
+    (CHAT_DROPDOWN_KEYS.has(event.key) && hasOpenDropdown()) ||
     event.key.length !== 1 ||
     keyboardEventPathHasInteractiveTarget(event) ||
     document.openClawModalLayers?.size ||
-    document.querySelector("[aria-modal='true']")
+    document.querySelector("dialog[open], [aria-modal='true']")
   ) {
     return;
   }
