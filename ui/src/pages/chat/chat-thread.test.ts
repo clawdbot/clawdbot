@@ -2474,6 +2474,76 @@ describe("buildCachedChatItems", () => {
       },
     );
 
+    it.each([false, true])(
+      "keeps one invocation before an optimistic steer (completed=%s)",
+      (completed) => {
+        const history = [
+          userMessage("Original request", 1, {
+            __openclaw: { id: "user-entry", seq: 1 },
+          }),
+          call("exec-1"),
+          ...(completed ? [result("exec-1")] : []),
+          userMessage("Follow up after the command", 15, {
+            __openclaw: { idempotencyKey: "steer-send:user" },
+          }),
+        ];
+        const before = structuredClone(history);
+        const groups = messageGroups({
+          runId: "run-a",
+          messages: history,
+          toolMessages: [snapshot("exec-1", completed)],
+        });
+        const visible = groups.flatMap((group) =>
+          group.messages.flatMap((entry) => {
+            const cards = extractToolCards(entry.message, entry.key);
+            return cards.length ? cards : [requireRecord(entry.message).content];
+          }),
+        );
+
+        expect(visible).toEqual([
+          "Original request",
+          expect.objectContaining({
+            callId: "exec-1",
+            completed,
+            outputText: completed ? "ready" : "working",
+          }),
+          "Follow up after the command",
+        ]);
+        expect(history).toEqual(before);
+      },
+    );
+
+    it.each(["different run", "unknown history run", "unknown live run", "reset", "reused"])(
+      "does not relocate a live invocation across a boundary with %s ownership",
+      (ownership) => {
+        const persisted = call("exec-1");
+        const live = snapshot("exec-1", false);
+        if (ownership === "different run") {
+          persisted.runId = "run-b";
+        } else if (ownership === "unknown history run") {
+          persisted.runId = undefined;
+        } else if (ownership === "unknown live run") {
+          live.runId = undefined;
+        }
+        const groups = messageGroups({
+          runId: "run-a",
+          messages: [
+            userMessage("Original request", 1),
+            persisted,
+            ...(ownership === "reset" ? [resetMessage("reset-invocation")] : []),
+            userMessage("Next request", 15),
+            ...(ownership === "reused" ? [call("exec-1")] : []),
+          ],
+          toolMessages: [live],
+        });
+        const cards = groups.flatMap((group) =>
+          group.messages.flatMap((entry) => extractToolCards(entry.message, entry.key)),
+        );
+        expect(cards).toHaveLength(2);
+        expect(cards.filter((card) => card.outputText === "working")).toHaveLength(1);
+      },
+    );
+
     it("keeps run ownership, conflicting names, anonymous calls, and nested identities distinct", () => {
       const nested = ["nested:exec-1:read:1", "nested:exec-1:read:2", "nested:exec-1:read:3"];
       const cards = cardsFor([

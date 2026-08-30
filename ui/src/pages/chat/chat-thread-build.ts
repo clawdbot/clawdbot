@@ -63,6 +63,7 @@ import {
   userTurnSendIdentity,
 } from "./chat-thread-items.ts";
 import {
+  applyPersistedToolInvocationBounds,
   findCurrentTurnBounds,
   findRunTurnBounds,
   isKeyedAssistantStreamFallbackMessage,
@@ -606,9 +607,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
-  // Merge timestamped transient projections into the stable transcript order.
-  // The latest user row is a causal floor: current-run items must not jump
-  // above it under clock skew, then jump back when history materializes them.
+  // Unowned projections keep their user-turn floor despite clock skew;
+  // identified live tools stay in the canonical invocation's interval.
+  applyPersistedToolInvocationBounds(items, toolItems, projectionInsertionBounds);
   insertChatItemsByTimestamp(
     items,
     timestampedProjectionItems,
