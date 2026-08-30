@@ -93,6 +93,7 @@ export function applySelectedChatAgent(
     return;
   }
   applyChatAgentOwnerTransition(host, selectedAgentId);
+  void refreshCurrentChatSessionList(host);
 }
 
 export function applyChatAgentOwnerTransition(

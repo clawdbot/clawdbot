@@ -83,6 +83,7 @@ describe("chat pane assistant identity snapshots", () => {
         groupSettings: [],
         sectionOrder: [],
       },
+      refresh: vi.fn().mockResolvedValue(undefined),
       subscribe: () => () => undefined,
       subscribeMessages,
       unsubscribeMessages,
