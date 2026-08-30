@@ -12,6 +12,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.agents-other.json",
   },
   {
+    name: "agents-tools",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-tools.json",
+  },
+  {
     name: "gateway-root",
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.gateway-root.json",
