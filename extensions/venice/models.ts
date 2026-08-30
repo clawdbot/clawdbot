@@ -61,10 +61,10 @@ interface VeniceModel {
 }
 
 function normalizePositiveInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     return undefined;
   }
-  return Math.floor(value);
+  return value;
 }
 
 function resolveApiMaxCompletionTokens(params: {

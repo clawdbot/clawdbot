@@ -368,6 +368,7 @@ describe("venice-models", () => {
     ["omits", undefined],
     ["returns zero for", 0],
     ["returns a negative value for", -1],
+    ["returns a fractional value for", 0.5],
   ] as const)(
     "retains static limits when the API %s availableContextTokens",
     async (_caseName, availableContextTokens) => {
