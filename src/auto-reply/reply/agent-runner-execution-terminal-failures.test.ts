@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
+  formatBillingErrorMessage,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../../agents/failover/user-copy.js";
 import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
@@ -67,7 +67,7 @@ describe("executeAgentTurn: terminal failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
+      expect(result.payload.text).toBe(formatBillingErrorMessage());
       expect(result.payload.text).not.toContain("All models failed");
       expect(result.payload.text).not.toContain("402 (billing)");
       expect(result.payload.text).not.toContain("Rate-limited");
@@ -219,7 +219,7 @@ describe("executeAgentTurn: terminal failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
+      expect(result.payload.text).toBe(formatBillingErrorMessage());
     }
   });
 
