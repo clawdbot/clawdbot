@@ -2,6 +2,7 @@
 import net from "node:net";
 import { describe, expect, it } from "vitest";
 import { connectIrcClient } from "./client.js";
+import { sendMessageIrc } from "./send.js";
 
 type LoopbackIrcServer = {
   port: number;
@@ -294,6 +295,56 @@ describe("irc client fallback nick", () => {
     const nick = await connectAfterNickCollision(longNick);
     expect(nick.length).toBeLessThanOrEqual(30);
     expect(nick).toMatch(/^a+_\d*$/);
+  });
+});
+
+describe("irc client outbound delivery outcomes", () => {
+  it.each([String.raw`\n`, String.raw`\t`, String.raw`\u0001`])(
+    "rejects a message that becomes empty after transport sanitization: %s",
+    async (text) => {
+      const server = await startLoopbackIrcServer();
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+      });
+      try {
+        expect(() => client.sendPrivmsg("#general", text)).toThrow(
+          "Message must be non-empty for IRC sends",
+        );
+        expect(server.lines.some((line) => line.startsWith("PRIVMSG "))).toBe(false);
+      } finally {
+        client.close();
+        await server.close();
+      }
+    },
+  );
+
+  it("does not fabricate a delivery receipt when the wire payload sanitizes empty", async () => {
+    const server = await startLoopbackIrcServer();
+    const client = await connectIrcClient({
+      host: "127.0.0.1",
+      port: server.port,
+      tls: false,
+      nick: "bot",
+      username: "bot",
+      realname: "OpenClaw Bot",
+    });
+    try {
+      await expect(
+        sendMessageIrc("#general", String.raw`\n`, {
+          cfg: { channels: { irc: { host: "127.0.0.1", nick: "bot" } } },
+          client,
+        }),
+      ).rejects.toThrow("Message must be non-empty for IRC sends");
+      expect(server.lines.some((line) => line.startsWith("PRIVMSG "))).toBe(false);
+    } finally {
+      client.close();
+      await server.close();
+    }
   });
 });
 

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -22,6 +23,7 @@ type DisconnectingIrcServer = {
 
 type InboundIrcServer = {
   port: number;
+  lines: string[];
   close(): Promise<void>;
 };
 
@@ -161,6 +163,7 @@ async function startInboundIrcServer(
   senderNick = "alice",
 ): Promise<InboundIrcServer> {
   const sockets = new Set<net.Socket>();
+  const lines: string[] = [];
   const server = net.createServer((socket) => {
     sockets.add(socket);
     socket.setEncoding("utf8");
@@ -172,6 +175,7 @@ async function startInboundIrcServer(
         const line = buffer.slice(0, idx).replace(/\r$/, "");
         buffer = buffer.slice(idx + 1);
         idx = buffer.indexOf("\n");
+        lines.push(line);
         if (line.startsWith("USER ")) {
           socket.write(`:server 001 ${welcomeNick} :welcome\r\n`);
           if (target) {
@@ -201,6 +205,7 @@ async function startInboundIrcServer(
   }
   return {
     port: address.port,
+    lines,
     close: async () => {
       for (const socket of sockets) {
         socket.destroy();
@@ -367,6 +372,67 @@ describe("IRC configured-unavailable credential connection boundaries", () => {
 });
 
 describe("irc monitor reconnect", () => {
+  it("reports sanitized-empty automatic replies without recording false delivery", async () => {
+    await withIngressQueue(async (ingressQueue) => {
+      const core = createPluginRuntimeMock();
+      const dispatch = vi.mocked(core.channel.reply.dispatchReplyWithBufferedBlockDispatcher);
+      dispatch.mockImplementation(async ({ dispatcherOptions }) => {
+        try {
+          await dispatcherOptions.deliver({ text: String.raw`\n` }, { kind: "final" });
+        } catch (error) {
+          await dispatcherOptions.onError?.(error, { kind: "final" });
+        }
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      });
+      setIrcRuntime(core as never);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const statusSink = vi.fn();
+      const server = await startInboundIrcServer("bot");
+      let monitor: { stop: () => Promise<void> } | undefined;
+      try {
+        monitor = await monitorIrcProvider({
+          config: {
+            channels: {
+              irc: {
+                host: "127.0.0.1",
+                port: server.port,
+                tls: false,
+                nick: "bot",
+                username: "bot",
+                realname: "OpenClaw",
+                dmPolicy: "open",
+                allowFrom: ["*"],
+              },
+            },
+          } as CoreConfig,
+          ingressQueue,
+          runtime,
+          statusSink,
+        });
+        await waitForIrcAsyncCondition(
+          async () =>
+            dispatch.mock.calls.length > 0 &&
+            (await ingressQueue.listPending({ limit: "all" })).length === 0,
+          "expected the automatic IRC reply to settle",
+        );
+
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Message must be non-empty for IRC sends"),
+        );
+        expect(server.lines.some((line) => line.startsWith("PRIVMSG "))).toBe(false);
+        expect(statusSink.mock.calls.some(([patch]) => patch.lastOutboundAt)).toBe(false);
+        expect(core.channel.activity.record).not.toHaveBeenCalledWith(
+          expect.objectContaining({ direction: "outbound" }),
+        );
+      } finally {
+        if (monitor) {
+          await monitor.stop();
+        }
+        await server.close();
+      }
+    });
+  });
+
   it("reconnects when an established IRC socket closes", async () => {
     await withIngressQueue(async (ingressQueue) => {
       installMonitorRuntime();
