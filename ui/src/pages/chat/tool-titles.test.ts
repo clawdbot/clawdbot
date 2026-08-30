@@ -6,6 +6,7 @@ import {
   configureToolTitleFetcher,
   getToolCallTitle,
   getToolTitlesVersion,
+  releaseToolTitleRenderSource,
   subscribeToolTitleChanges,
 } from "./tool-titles.ts";
 
@@ -206,7 +207,12 @@ describe("title fetch batching", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(requestedIds.size).toBe(48);
 
-    renderTranscript(retainedCommands, firstPane);
+    releaseToolTitleRenderSource(firstPane);
+    renderTranscript(retainedCommands, secondPane);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requestedIds.size).toBe(48);
+
+    renderTranscript(retainedCommands, secondPane);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(requestedIds.size).toBe(96);
   });

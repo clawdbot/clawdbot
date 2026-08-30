@@ -87,7 +87,7 @@ import {
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
 import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
-import { subscribeToolTitleChanges } from "./tool-titles.ts";
+import { releaseToolTitleRenderSource, subscribeToolTitleChanges } from "./tool-titles.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
@@ -698,6 +698,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   override disconnectedCallback() {
+    releaseToolTitleRenderSource(this);
     if (this.state) {
       retireChatMetadataRequests(this.state);
       if (this.suppressStagedAttachmentHandoffOnDisconnect) {

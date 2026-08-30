@@ -35,6 +35,20 @@ export function subscribeToolTitleChanges(listener: () => void): () => void {
   return () => globalThis.removeEventListener(TOOL_TITLES_CHANGED_EVENT, listener);
 }
 
+export function releaseToolTitleRenderSource(renderSource: object): void {
+  renderEpochs.delete(renderSource);
+  if (activeRenderSource === renderSource) {
+    activeRenderSource = DEFAULT_RENDER_SOURCE;
+    activeRenderEpoch = renderEpochs.get(DEFAULT_RENDER_SOURCE) ?? 0;
+  }
+  for (const saturation of saturatedSessions.values()) {
+    if (saturation.searchRenderSource === renderSource) {
+      saturation.searchRenderSource = null;
+      saturation.searchRenderEpoch = null;
+    }
+  }
+}
+
 const titlesByKey = new Map<string, string>();
 const pendingKeys = new Map<string, PendingItem>();
 const failedKeys = new Map<string, number>();

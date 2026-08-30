@@ -456,6 +456,11 @@ suite.define(() => {
       await expect.poll(() => rows.count()).toBe(119);
       await expectRequestCountStable(gateway, "chat.toolTitles", 2, 500);
 
+      await panes.nth(0).locator(".chat-pane__close-pane").click();
+      const survivingPane = page.locator("openclaw-chat-pane");
+      await expect.poll(() => survivingPane.count()).toBe(1);
+      await expectRequestCountStable(gateway, "chat.toolTitles", 2, 500);
+
       const secondHistoryCount = (await gateway.getRequests("chat.history")).length;
       await gateway.emitGatewayEvent("sessions.changed", {
         key: sessionKey,
@@ -464,10 +469,11 @@ suite.define(() => {
         updatedAt: initialTime.getTime() + 5 * 60_000 + 2,
       });
       await gateway.waitForRequest("chat.history", { after: secondHistoryCount });
-      if ((await allRows.count()) === 0) {
-        await summaries.nth(0).click();
+      const survivingRows = survivingPane.locator(".chat-tool-row");
+      if ((await survivingRows.count()) === 0) {
+        await survivingPane.locator(".chat-activity-group__summary").click();
       }
-      await expect.poll(() => allRows.count()).toBe(238);
+      await expect.poll(() => survivingRows.count()).toBe(119);
       await waitForRequests(gateway, "chat.toolTitles", 4);
       await expectRequestCountStable(gateway, "chat.toolTitles", 4, 500);
     } finally {
