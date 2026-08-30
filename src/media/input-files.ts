@@ -1,4 +1,5 @@
 // Input file helpers normalize inline, fetched, and local media inputs.
+import { MIMEType } from "node:util";
 import {
   classifyAttachmentBytes,
   type AttachmentClassification,
@@ -7,10 +8,7 @@ import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { detectMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
@@ -166,12 +164,13 @@ function parseContentType(value: string | undefined): {
   if (!value) {
     return {};
   }
-  const parts = value.split(";").map((part) => part.trim());
-  const mimeType = normalizeMimeType(parts[0]);
-  const charset = parts
-    .map((part) => normalizeOptionalString(part.match(/^charset=(.+)$/i)?.[1]))
-    .find((part) => part && part.length > 0);
-  return { mimeType, charset };
+  const mimeType = normalizeMimeType(value);
+  try {
+    return { mimeType, charset: new MIMEType(value).params.get("charset") ?? undefined };
+  } catch {
+    // Invalid metadata still goes through byte classification and MIME allowlists.
+    return { mimeType };
+  }
 }
 
 /** Converts configured MIME lists into a normalized allowlist, using fallback defaults when empty. */
