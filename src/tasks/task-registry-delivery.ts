@@ -373,10 +373,23 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
         return beforeFallback ? cloneTaskRecord(beforeFallback) : null;
       }
       try {
-        queueTaskSystemEvent(beforeFallback, sessionEventText);
-        if (beforeFallback.terminalOutcome === "blocked") {
+        const queuedTerminalEvent = queueTaskSystemEvent(beforeFallback, sessionEventText);
+        const queuedBlockedFollowup =
+          beforeFallback.terminalOutcome === "blocked" &&
           queueBlockedTaskFollowup(beforeFallback);
-        }
+        const deliveryStatus =
+          beforeFallback.runtime === "subagent" &&
+          beforeFallback.status === "succeeded" &&
+          beforeFallback.deliveryStatus === "failed" &&
+          beforeFallback.terminalOutcome === "blocked" &&
+          queuedTerminalEvent &&
+          queuedBlockedFollowup
+            ? "session_queued"
+            : "failed";
+        return updateTask(taskId, {
+          deliveryStatus,
+          lastEventAt: Date.now(),
+        });
       } catch (fallbackError) {
         taskRegistryLog.warn("Failed to queue background task fallback event", {
           taskId,

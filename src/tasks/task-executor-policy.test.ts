@@ -294,4 +294,63 @@ describe("task-executor-policy", () => {
       ),
     ).toBe(false);
   });
+
+  it.each([
+    {
+      name: "when blocked completion is still pending delivery",
+      task: createTask({
+        runtime: "subagent",
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        deliveryStatus: "pending",
+      }),
+    },
+    {
+      name: "when blocked completion is already session queued",
+      task: createTask({
+        runtime: "subagent",
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        deliveryStatus: "session_queued",
+      }),
+    },
+    {
+      name: "when completion delivery failed without a blocked outcome",
+      task: createTask({
+        runtime: "subagent",
+        status: "succeeded",
+        terminalOutcome: "succeeded",
+        deliveryStatus: "failed",
+      }),
+    },
+    {
+      name: "for failed subagent tasks",
+      task: createTask({
+        runtime: "subagent",
+        status: "failed",
+        terminalOutcome: "blocked",
+        deliveryStatus: "failed",
+      }),
+    },
+    {
+      name: "for timed out subagent tasks",
+      task: createTask({
+        runtime: "subagent",
+        status: "timed_out",
+        terminalOutcome: "blocked",
+        deliveryStatus: "failed",
+      }),
+    },
+    {
+      name: "for lost subagent tasks",
+      task: createTask({
+        runtime: "subagent",
+        status: "lost",
+        terminalOutcome: "blocked",
+        deliveryStatus: "failed",
+      }),
+    },
+  ])("does not auto-deliver $name", ({ task }) => {
+    expect(shouldAutoDeliverTaskTerminalUpdate(task)).toBe(false);
+  });
 });
