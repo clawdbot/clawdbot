@@ -621,7 +621,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             );
           if (pendingReclaimResult && pendingReclaimResult.workspaceAcceptedAtMs !== null) {
             placements.handoffWorkspaceResultRecovery(reclaimClaim);
-            await recovery.reconcileActive(current.environmentId).catch(() => undefined);
+            // The tracked sweep retries cleanup after this lifecycle/placement fence releases.
+            // Awaiting it here can join provisioning recovery queued behind our own fence.
           }
           throw error;
         }

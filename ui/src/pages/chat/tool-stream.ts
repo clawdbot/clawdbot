@@ -24,7 +24,10 @@ import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import {
+  uiSessionEventMatches,
+  type UiSessionDefaultsHost,
+} from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
@@ -78,7 +81,7 @@ export type ToolStreamEntry = {
 export type ToolStreamHost = {
   sessionKey: string;
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null } | null;
+  agentsList?: UiSessionDefaultsHost["agentsList"];
   hello?: { snapshot?: unknown } | null;
   chatRunId: string | null;
   chatMessages?: unknown[];

@@ -266,8 +266,8 @@ describe("memory index generation lease", () => {
       expect(events).toEqual([]);
 
       await stopChild(firstReader);
+      // Publication releases its lease before resolving, so the reader may already be done.
       await publication;
-      expect(events).toEqual(["published"]);
       await nextReaderAcquired;
       expect(events).toEqual(["published", "next-reader"]);
     } finally {

@@ -19,12 +19,12 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  agentExecCommand,
   buildExecRunConfig,
-  classifyAgentExecResult,
   resolveAgentExecPrompt,
   resolveExecBaseConfig,
-} from "./agent-exec.js";
+} from "./agent-exec-input.js";
+import { classifyAgentExecResult } from "./agent-exec-result.js";
+import { agentExecCommand } from "./agent-exec.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const externalTempDirs: string[] = [];

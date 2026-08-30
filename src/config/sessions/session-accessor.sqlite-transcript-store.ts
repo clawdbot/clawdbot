@@ -35,8 +35,8 @@ import {
   upsertTranscriptSessionWindowInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
+  createTranscriptIndexAppenderInTransaction,
   deleteSessionTranscriptIndexInTransaction,
-  indexAppendedTranscriptEventInTransaction,
   markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
   shouldRebuildSessionTranscriptIndexSynchronously,
@@ -51,13 +51,17 @@ import { resolveVisibleTranscriptAppendParentId } from "./transcript-visible-eve
 
 type TranscriptAppendOptions = {
   allowStoredAlias?: boolean;
-  dedupeByMessageIdempotency?: boolean;
+  idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner";
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
   touchMutation?: boolean;
 };
 
-type TranscriptAppendCursor = { initialized: boolean; nextSeq?: number };
+type TranscriptAppendCursor = {
+  initialized?: boolean;
+  nextSeq?: number;
+  appendToIndex?: ReturnType<typeof createTranscriptIndexAppenderInTransaction>;
+};
 
 export function appendTranscriptEventInTransaction(
   database: OpenClawAgentDatabase,
@@ -73,12 +77,12 @@ function appendTranscriptEvent(
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   options: TranscriptAppendOptions,
-  cursor?: TranscriptAppendCursor,
+  cursor: TranscriptAppendCursor = {},
 ): boolean {
   const persistedEvent = canonicalizeTranscriptEventMedia(event);
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
-  if (cursor?.initialized) {
+  if (cursor.initialized) {
     // Even rejected identities update window recency. Only root/generation setup
     // is shared by the synchronous batch; per-attempt writes stay in order.
     upsertTranscriptSessionWindowInTransaction(database, scope, createdAt);
@@ -87,26 +91,19 @@ function appendTranscriptEvent(
       allowStoredAlias: options.allowStoredAlias === true,
     });
     ensureTranscriptGenerationInTransaction(database, scope.sessionId);
-    if (cursor) {
-      cursor.initialized = true;
-    }
+    cursor.initialized = true;
   }
   const identity = readTranscriptEventIdentity(persistedEvent);
   if (identity && readTranscriptIdentityByEventId(database, scope.sessionId, identity.eventId)) {
     return false;
   }
-  if (
-    identity?.messageIdempotencyKey &&
-    options.dedupeByMessageIdempotency &&
-    readTranscriptIdentityByMessageIdempotencyKey(
-      database,
-      scope.sessionId,
-      identity.messageIdempotencyKey,
-    )
-  ) {
+  const idempotencyKeyOwner = identity?.messageIdempotencyKey
+    ? readIdempotencyKeyOwner(database, scope.sessionId, identity.messageIdempotencyKey)
+    : undefined;
+  if (idempotencyKeyOwner && options.idempotencyKeyMode === "dedupe") {
     return false;
   }
-  const seq = cursor?.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
+  const seq = cursor.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
   executeSqliteQuerySync(
     database.db,
     db.insertInto("transcript_events").values({
@@ -116,14 +113,12 @@ function appendTranscriptEvent(
       created_at: createdAt,
     }),
   );
-  if (cursor) {
-    cursor.nextSeq = seq + 1;
-  }
+  cursor.nextSeq = seq + 1;
   if (options.touchMutation !== false) {
     touchTranscriptMutationInTransaction(database, scope.sessionId);
   }
-  const projectionNeedsRebuild = indexAppendedTranscriptEventInTransaction(database.db, {
-    sessionId: scope.sessionId,
+  cursor.appendToIndex ??= createTranscriptIndexAppenderInTransaction(database.db, scope.sessionId);
+  const projectionNeedsRebuild = cursor.appendToIndex({
     seq,
     event: persistedEvent,
     eventId: identity?.eventId ?? null,
@@ -133,16 +128,20 @@ function appendTranscriptEvent(
     options.onProjectionReconcileNeeded?.();
   }
   if (identity) {
-    // Caller-checked appends may retain a duplicate key in the payload, but the
-    // identity index can point at only one row.
+    // Replayed copies take ownership so later retries resolve on the active branch.
+    // scan-assistant preserves a colliding user's ownership instead.
+    if (idempotencyKeyOwner && options.idempotencyKeyMode === "relocate-owner") {
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("transcript_event_identities")
+          .set({ message_idempotency_key: null })
+          .where("session_id", "=", scope.sessionId)
+          .where("event_id", "=", idempotencyKeyOwner.eventId),
+      );
+    }
     const indexedMessageIdempotencyKey =
-      identity.messageIdempotencyKey &&
-      !options.dedupeByMessageIdempotency &&
-      readTranscriptIdentityByMessageIdempotencyKey(
-        database,
-        scope.sessionId,
-        identity.messageIdempotencyKey,
-      )
+      idempotencyKeyOwner && options.idempotencyKeyMode !== "relocate-owner"
         ? undefined
         : identity.messageIdempotencyKey;
     executeSqliteQuerySync(
@@ -192,7 +191,9 @@ export function appendTranscriptEventsInTransaction(
 ): number {
   let appended = 0;
   let projectionNeedsRebuild = false;
-  const cursor: TranscriptAppendCursor = { initialized: false };
+  // Prepared arrays and the import spool cannot mutate the destination between
+  // rows. Sequence and projection facts belong only to this synchronous batch.
+  const cursor: TranscriptAppendCursor = {};
   const iterator = events[Symbol.iterator]();
   const appendOptions = {
     ...options,
@@ -259,8 +260,8 @@ function appendTranscriptEventRowInTransaction(
       created_at: createdAt,
     }),
   );
-  indexAppendedTranscriptEventInTransaction(database.db, {
-    sessionId: scope.sessionId,
+  const appendToIndex = createTranscriptIndexAppenderInTransaction(database.db, scope.sessionId);
+  appendToIndex({
     seq,
     event: persistedEvent,
     eventId: identity?.eventId ?? null,
@@ -578,7 +579,7 @@ export function readTranscriptIdentityByEventId(
   return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
 }
 
-function readTranscriptIdentityByMessageIdempotencyKey(
+function readIdempotencyKeyOwner(
   database: OpenClawAgentDatabase,
   sessionId: string,
   idempotencyKey: string,
@@ -602,11 +603,7 @@ function readTranscriptMessageByIdempotencyKey(
   scope: ResolvedTranscriptScope,
   idempotencyKey: string,
 ): { messageId: string; message: unknown } | undefined {
-  const identity = readTranscriptIdentityByMessageIdempotencyKey(
-    database,
-    scope.sessionId,
-    idempotencyKey,
-  );
+  const identity = readIdempotencyKeyOwner(database, scope.sessionId, idempotencyKey);
   return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
 }
 

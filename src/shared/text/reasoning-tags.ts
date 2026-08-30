@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   scanReasoningTags,
   stripReasoningTagsFromMarkdown,
@@ -52,23 +51,16 @@ export function stripReasoningTagsFromText(
     return text;
   }
   if (matches.length > 0) {
-    const finalMatches: Array<{ start: number; length: number; inCode: boolean }> = [];
     const preCodeRegions = findCodeRegions(cleaned);
+    let visible = "";
+    let lastIndex = 0;
     for (const match of matches) {
-      const start = match.index;
-      finalMatches.push({
-        start,
-        length: match.text.length,
-        inCode: isInsideCode(start, preCodeRegions),
-      });
-    }
-
-    for (let i = finalMatches.length - 1; i >= 0; i--) {
-      const m = expectDefined(finalMatches[i], "final matches capture group i");
-      if (!m.inCode) {
-        cleaned = cleaned.slice(0, m.start) + cleaned.slice(m.start + m.length);
+      if (!isInsideCode(match.index, preCodeRegions)) {
+        visible += cleaned.slice(lastIndex, match.index);
+        lastIndex = match.index + match.text.length;
       }
     }
+    cleaned = visible + cleaned.slice(lastIndex);
   }
 
   return applyTrim(stripReasoningTagsFromMarkdown(cleaned, { mode, scope }), trimMode);

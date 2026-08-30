@@ -588,6 +588,10 @@ export function resolveGatewaySessionStoreTarget(params: {
   clone?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTarget {
-  const { store: _store, ...target } = resolveGatewaySessionStoreTargetWithStore(params);
+  // Only keys and store metadata escape; omit large prompt snapshots without changing read mode.
+  const { store: _store, ...target } = resolveGatewaySessionStoreTargetWithStore({
+    ...params,
+    projection: "list",
+  });
   return target;
 }

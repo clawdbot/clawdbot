@@ -10,6 +10,7 @@ export {
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
+export * from "./schema/worker-computer.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
 export * from "./schema/board.js";

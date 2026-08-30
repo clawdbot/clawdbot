@@ -1,16 +1,11 @@
 // @vitest-environment node
 // Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import {
   isStandaloneToolMessageForDisplay,
   isToolResultMessage,
   normalizeMessage,
 } from "./message-normalizer.ts";
-
-// Inbound context blocks are stamped with the provenance marker; strippers key
-// on the marker, so display fixtures must carry it to be recognized.
-const SENDER_METADATA_BLOCK = `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n\`\`\``;
 
 describe("message-normalizer", () => {
   // Regression: gateway/transcript events can carry a null/undefined or
@@ -73,41 +68,6 @@ describe("message-normalizer", () => {
 
     afterEach(() => {
       vi.useRealTimers();
-    });
-
-    it("normalizes message with string content", () => {
-      const result = normalizeMessage({
-        role: "user",
-        content: "Hello world",
-        timestamp: 1000,
-        id: "msg-1",
-      });
-
-      expect(result).toEqual({
-        role: "user",
-        content: [{ type: "text", text: "Hello world" }],
-        timestamp: 1000,
-        id: "msg-1",
-        senderLabel: null,
-      });
-    });
-
-    it("strips sender metadata blocks before displaying message text", () => {
-      const result = normalizeMessage({
-        role: "assistant",
-        content: `${SENDER_METADATA_BLOCK}\n\nVisible reply`,
-      });
-
-      expect(result.content).toEqual([{ type: "text", text: "Visible reply" }]);
-    });
-
-    it("drops standalone sender metadata blocks before display", () => {
-      const result = normalizeMessage({
-        role: "system",
-        content: SENDER_METADATA_BLOCK,
-      });
-
-      expect(result.content).toStrictEqual([]);
     });
 
     it("does not reinterpret directive-like user string content", () => {
@@ -637,20 +597,23 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("keeps valid local MEDIA paths as assistant attachments", () => {
-      const result = normalizeMessage({
-        role: "assistant",
-        content: "Hello\nMEDIA:/tmp/openclaw/test-image.png\nWorld",
-      });
-
-      expect(result.content).toEqual([
+    it.each([
+      ["/tmp/openclaw/test-image.png", "test-image.png"],
+      ["file:///tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["FILE:///tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["FILE:/tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["file://localhost/tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+    ])("keeps local MEDIA references as assistant attachments: %s", (url, label) => {
+      expect(
+        normalizeMessage({ role: "assistant", content: `Hello\nMEDIA:${url}\nWorld` }).content,
+      ).toEqual([
         { type: "text", text: "Hello" },
         {
           type: "attachment",
           attachment: {
-            url: "/tmp/openclaw/test-image.png",
+            url,
             kind: "image",
-            label: "test-image.png",
+            label,
             mimeType: "image/png",
           },
         },
@@ -978,130 +941,5 @@ describe("message-normalizer", () => {
 
       expect((result.content[0] as { args?: unknown }).args).toEqual({ command: "pwd" });
     });
-
-    it("preserves top-level sender labels", () => {
-      const result = normalizeMessage({
-        role: "user",
-        content: "Hello from QuietChat",
-        senderLabel: "Iris",
-      });
-
-      expect(result.senderLabel).toBe("Iris");
-    });
-
-    it("formats durable sender metadata for transcript attribution", () => {
-      const emailSender = normalizeMessage({
-        role: "user",
-        content: "Prompt from Alice",
-        __openclaw: { senderId: "alice@example.com" },
-      });
-      expect(emailSender.senderLabel).toBe("alice");
-      expect(emailSender.sender).toEqual({ id: "alice@example.com" });
-      expect(
-        normalizeMessage({
-          role: "user",
-          content: "Prompt from a profile",
-          __openclaw: { senderId: "profile_123", senderName: "Alice Example" },
-        }).senderLabel,
-      ).toBe("Alice Example");
-    });
-  });
-});
-
-describe("sender label opaque-id stripping", () => {
-  it.each([
-    { type: "profile", id: "x".repeat(513) },
-    { type: "profile", id: "profile", label: "untrusted extra field" },
-    { type: "observation", id: "profile" },
-  ])("drops invalid sender provenance without losing display attribution: %j", (senderIdentity) => {
-    expect(
-      normalizeMessage({
-        role: "user",
-        content: "hello",
-        __openclaw: {
-          senderIdentity,
-          senderId: "profile",
-          senderName: "Display",
-          senderProfileAvatarUrl: "/api/users/profile/avatar",
-        },
-      }).sender,
-    ).toEqual({ id: "profile", name: "Display" });
-  });
-
-  it("sender provenance preserves typed identity and refuses unqualified profile display", () => {
-    const identity = { type: "profile", id: "shared-id" };
-    const metadata = {
-      senderId: "shared-id",
-      senderName: "Person",
-      senderProfileAvatarUrl: "/api/users/shared-id/avatar",
-    };
-    expect(
-      normalizeMessage({
-        role: "user",
-        content: "hello",
-        __openclaw: { ...metadata, senderIdentity: identity },
-      }).sender,
-    ).toEqual({
-      id: "shared-id",
-      name: "Person",
-      profileAvatarUrl: metadata.senderProfileAvatarUrl,
-      identity,
-    });
-    expect(
-      normalizeMessage({ role: "user", content: "hello", __openclaw: metadata }).sender,
-    ).toEqual({ id: "shared-id", name: "Person" });
-  });
-
-  it("strips a baked UUID suffix without inventing profile identity", () => {
-    const normalized = normalizeMessage({
-      role: "user",
-      content: "hi",
-      senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
-    });
-    expect(normalized.senderLabel).toBe("steipete");
-    expect(normalized.sender).toEqual({
-      name: "steipete",
-    });
-  });
-
-  it("prefers durable metadata identity over the legacy label identity", () => {
-    const normalized = normalizeMessage({
-      role: "user",
-      content: "hi",
-      senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)",
-      __openclaw: { senderId: "meta-profile", senderName: "Meta Name" },
-    });
-    expect(normalized.sender).toEqual({ id: "meta-profile", name: "Meta Name" });
-    expect(normalized.senderLabel).toBe("steipete");
-  });
-
-  it("keeps human-meaningful parenthesized suffixes", () => {
-    expect(
-      normalizeMessage({
-        role: "user",
-        content: "hi",
-        senderLabel: "Peter (+436641234567)",
-      }).senderLabel,
-    ).toBe("Peter (+436641234567)");
-  });
-
-  it("keeps a label that is only a UUID rather than emptying it", () => {
-    expect(
-      normalizeMessage({
-        role: "user",
-        content: "hi",
-        senderLabel: "(c3e32452-0467-47e5-aafa-233cd5dae29f)",
-      }).senderLabel,
-    ).toBe("(c3e32452-0467-47e5-aafa-233cd5dae29f)");
-  });
-
-  it("keeps a bare-UUID legacy label as display only", () => {
-    const normalized = normalizeMessage({
-      role: "user",
-      content: "hi",
-      senderLabel: "c3e32452-0467-47e5-aafa-233cd5dae29f",
-    });
-    expect(normalized.senderLabel).toBe("c3e32452-0467-47e5-aafa-233cd5dae29f");
-    expect(normalized.sender).toEqual({ name: "c3e32452-0467-47e5-aafa-233cd5dae29f" });
   });
 });

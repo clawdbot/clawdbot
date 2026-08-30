@@ -70,7 +70,8 @@ vi.mock("../../global-state.js", () => ({
   setVerbose: mocks.setVerboseMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 

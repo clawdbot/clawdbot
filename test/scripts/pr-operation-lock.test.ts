@@ -30,6 +30,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const freshMainTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
 const escapedPipeHolderPidFiles = new Set<string>();
 afterEach(async () => {
   const failures: unknown[] = [];
@@ -55,6 +56,7 @@ const lockRef = "refs/openclaw/pr-operation-locks/42";
 const detachedChildren = new WeakSet<ChildProcess>();
 const goneProcessGroups = new Set<number>();
 let templateRepo = "";
+let freshMainTemplate: ReturnType<typeof createFreshMainTemplate> | undefined;
 
 // Direct preload affects only the supervisor; operation fixtures keep real clocks.
 // The source assertions below pin the production safety durations being accelerated.
@@ -276,6 +278,67 @@ function installPrCliFixture(repoDir: string, env?: NodeJS.ProcessEnv) {
     symlinkSync(resolved, join(binDir, command));
   }
   return { binDir, cli };
+}
+
+function createFreshMainTemplate() {
+  // Freeze only the committed wrapper/tool prefix. Origins, FETCH_HEAD,
+  // linked worktrees, and failure proxies are created in each private copy.
+  const repoDir = freshMainTemplateDirs.make("openclaw-pr-fresh-main-template-");
+  cpSync(templateRepo, repoDir, { recursive: true });
+  const stateDir = join(repoDir, "fixture-state");
+  const homeDir = join(stateDir, "home");
+  const tmpDir = join(stateDir, "tmp");
+  mkdirSync(homeDir, { recursive: true });
+  mkdirSync(tmpDir, { recursive: true });
+  const setupEnv = createPrFixtureEnv(homeDir, process.env.PATH ?? "");
+  const { binDir } = installPrCliFixture(repoDir, setupEnv);
+  const realGit = realpathSync(join(binDir, "git"));
+  // Only these real tools are reachable. rg/pnpm are required by the CLI
+  // preflight; these cases must stop before invoking either of them.
+  for (const command of [
+    "awk",
+    "cat",
+    "date",
+    "env",
+    "jq",
+    "mkdir",
+    "mktemp",
+    "mv",
+    "ps",
+    "rm",
+    "seq",
+    "sh",
+    "sleep",
+  ]) {
+    symlinkSync(
+      execFileSync("which", [command], { encoding: "utf8", env: setupEnv }).trim(),
+      join(binDir, command),
+    );
+  }
+  symlinkSync(process.execPath, join(binDir, "node"));
+  for (const command of ["rg", "pnpm"]) {
+    const stub = writeFixtureFile(binDir, command, [
+      "#!/bin/sh",
+      "echo 'unexpected command in review-init fixture' >&2",
+      "exit 99",
+    ]);
+    chmodSync(stub, 0o755);
+  }
+  const env: NodeJS.ProcessEnv = {
+    ...createPrFixtureEnv(homeDir, binDir),
+    TMPDIR: tmpDir,
+  };
+  const git = (...args: string[]) =>
+    execFileSync(realGit, args, { cwd: repoDir, env, encoding: "utf8", timeout: 5000 }).trim();
+  writeFileSync(
+    join(repoDir, ".git/info/exclude"),
+    "/.local/\n/.worktrees/\n/isolated-bin/\n/fixture-state/\n",
+  );
+  git("add", "scripts", ".github");
+  git("commit", "-qm", "test: unmodified public PR wrapper fixture");
+  const cachedMain = git("rev-parse", "HEAD");
+  const canonicalTree = git("rev-parse", "HEAD^{tree}");
+  return { repoDir, cachedMain, canonicalTree };
 }
 
 function installRequiredPrCommandStubs(binDir: string) {
@@ -738,60 +801,22 @@ describePosix("scripts/pr per-PR operation lock", () => {
   ])(
     "$command requires fresh main before replacing PR artifacts ($failure, existing=$existing)",
     async ({ command, failure, existing }) => {
-      const repoDir = createRepo();
+      const template = (freshMainTemplate ??= createFreshMainTemplate());
+      const repoDir = tempDirs.make("openclaw-pr-fresh-main-");
+      cpSync(template.repoDir, repoDir, { recursive: true });
+      const { cachedMain, canonicalTree } = template;
       const stateDir = join(repoDir, "fixture-state");
       const homeDir = join(stateDir, "home");
       const tmpDir = join(stateDir, "tmp");
-      mkdirSync(homeDir, { recursive: true });
-      mkdirSync(tmpDir, { recursive: true });
-      const setupEnv = createPrFixtureEnv(homeDir, process.env.PATH ?? "");
-      const { binDir, cli } = installPrCliFixture(repoDir, setupEnv);
+      const binDir = join(repoDir, "isolated-bin");
+      const cli = join(repoDir, "scripts/pr");
       const realGit = realpathSync(join(binDir, "git"));
-      // Only these real tools are reachable. rg/pnpm are required by the CLI
-      // preflight; these cases must stop before invoking either of them.
-      for (const command of [
-        "awk",
-        "cat",
-        "date",
-        "env",
-        "jq",
-        "mkdir",
-        "mktemp",
-        "mv",
-        "ps",
-        "rm",
-        "seq",
-        "sh",
-        "sleep",
-      ]) {
-        symlinkSync(
-          execFileSync("which", [command], { encoding: "utf8", env: setupEnv }).trim(),
-          join(binDir, command),
-        );
-      }
-      symlinkSync(process.execPath, join(binDir, "node"));
-      for (const command of ["rg", "pnpm"]) {
-        const stub = writeFixtureFile(binDir, command, [
-          "#!/bin/sh",
-          "echo 'unexpected command in review-init fixture' >&2",
-          "exit 99",
-        ]);
-        chmodSync(stub, 0o755);
-      }
       const env: NodeJS.ProcessEnv = {
         ...createPrFixtureEnv(homeDir, binDir),
         TMPDIR: tmpDir,
       };
       const git = (...args: string[]) =>
         execFileSync(realGit, args, { cwd: repoDir, env, encoding: "utf8", timeout: 5000 }).trim();
-      writeFileSync(
-        join(repoDir, ".git/info/exclude"),
-        "/.local/\n/.worktrees/\n/isolated-bin/\n/fixture-state/\n",
-      );
-      git("add", "scripts", ".github");
-      git("commit", "-qm", "test: unmodified public PR wrapper fixture");
-      const cachedMain = git("rev-parse", "HEAD");
-      const canonicalTree = git("rev-parse", "HEAD^{tree}");
       const newCommit = (message: string) =>
         execFileSync(realGit, ["commit-tree", canonicalTree, "-p", cachedMain], {
           cwd: repoDir,

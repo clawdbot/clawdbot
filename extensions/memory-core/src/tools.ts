@@ -11,7 +11,6 @@ import {
   readPositiveIntegerParam,
   readStringParam,
   resolveMemoryDreamingPluginConfig,
-  resolveMemorySearchConfig,
   type MemoryCorpusSearchResult,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -66,7 +65,6 @@ type MemorySearchToolQueryDebug = NonNullable<
 >;
 type PrimaryMemorySearchValue = {
   results: Array<MemorySearchResult & { corpus: MemorySource }>;
-  rawResults: MemorySearchResult[];
   provider?: string;
   model?: string;
   fallback?: unknown;
@@ -200,8 +198,7 @@ function mergeMemorySearchCorpusResults(params: {
   maxResults: number;
   balanceCorpora: boolean;
 }): MemorySearchToolResult[] {
-  const memoryResults = params.memoryResults;
-  const supplementResults = params.supplementResults;
+  const { memoryResults, supplementResults } = params;
   if (!params.balanceCorpora || memoryResults.length === 0 || supplementResults.length === 0) {
     return mergeRankedMemorySearchToolStreams(memoryResults, supplementResults).slice(
       0,
@@ -278,7 +275,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
     options,
     contract: MEMORY_SEARCH_TOOL_CONTRACT,
     execute:
-      ({ cfg, agentId }) =>
+      ({ cfg, agentId, settings }) =>
       async (_toolCallId, params, callerSignal) => {
         const rawParams = asToolParamsRecord(params);
         if (callerSignal?.aborted) {
@@ -299,7 +296,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         if (
           requestedCorpus === "sessions" &&
           !options.conversationRecall &&
-          !resolveMemorySearchConfig(cfg, agentId)?.searchSources.includes("sessions")
+          !settings.searchSources.includes("sessions")
         ) {
           return jsonResult(
             buildMemorySearchUnavailableResult("Session transcript search is not enabled.", {
@@ -355,11 +352,9 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               if ("error" in memory) {
                 throw new Error(memory.error ?? "memory search unavailable");
               }
-              const settings = resolveMemorySearchConfig(cfg, agentId);
-              const defaultSources = settings?.searchSources;
               const explicitSources: MemorySource[] | undefined =
                 requestedCorpus === "sessions" &&
-                (options.conversationRecall || defaultSources?.includes("sessions"))
+                (options.conversationRecall || settings.searchSources.includes("sessions"))
                   ? ["sessions"]
                   : requestedCorpus === "memory"
                     ? ["memory"]
@@ -381,11 +376,11 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 },
                 query: {
                   text: query,
-                  resultLimit: maxResults ?? settings?.query.maxResults ?? 10,
+                  resultLimit: maxResults ?? settings.query.maxResults,
                   minScore,
                   explicitSources,
-                  defaultSources,
-                  indexedSources: settings?.sources,
+                  defaultSources: settings.searchSources,
+                  indexedSources: settings.sources,
                   requestedCorpus,
                   sessionKey: options.agentSessionKey,
                   activeProjectKeys: options.activeProjectKeys,
@@ -418,7 +413,6 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               "memory",
               {
                 results: [],
-                rawResults: [],
                 unavailableResult: buildPausedMemoryIndexUnavailableResult(reason),
               },
               reason,
@@ -462,7 +456,6 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               results: memoryResults.map((result) =>
                 Object.assign(result, { corpus: result.source }),
               ),
-              rawResults,
               provider: status.provider,
               model: status.model,
               fallback: status.fallback,
@@ -502,12 +495,15 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 );
               }
               const wikiResults = wiki?.outcome === "not-registered" ? [] : (wiki?.value ?? []);
-              const results = mergeMemorySearchCorpusResults({
-                memoryResults: memoryValue?.results ?? [],
-                supplementResults: wikiResults,
-                maxResults: Math.max(1, maxResults ?? 10),
-                balanceCorpora: requestedCorpus === "all",
-              });
+              // Primary results already own their configured limit; only wiki/all need aggregation.
+              const results = searchesWiki
+                ? mergeMemorySearchCorpusResults({
+                    memoryResults: memoryValue?.results ?? [],
+                    supplementResults: wikiResults,
+                    maxResults: maxResults ?? 10,
+                    balanceCorpora: requestedCorpus === "all",
+                  })
+                : (memoryValue?.results ?? []);
               const attempts = [
                 ...(requestedCorpus === "all" && memory ? [memory] : []),
                 ...(wiki ? [wiki] : []),

@@ -27,10 +27,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
-import {
-  readOnlySqliteTranscriptSessionIds,
-  readOnlySqliteHeaderlessTranscriptSnapshot,
-} from "./doctor-session-sqlite-transcript-readers.js";
+import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript headers";
 
@@ -217,8 +214,9 @@ export async function noteSessionTranscriptHeaderHealth(params: {
       // Each snapshot exhausts or closes its iterators before repair, so this read-only
       // connection holds no read transaction across a guarded writer transaction.
       readDatabase = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-      for (const sessionId of readOnlySqliteTranscriptSessionIds(readDatabase)) {
-        const snapshot = readOnlySqliteHeaderlessTranscriptSnapshot(readDatabase, sessionId);
+      const reader = new ReadOnlySqliteTranscriptReader(readDatabase);
+      for (const sessionId of reader.sessionIds()) {
+        const snapshot = reader.headerlessSnapshot(sessionId);
         if (!snapshot.ok) {
           const detail = formatErrorMessage(snapshot.error).replace(/\s+/g, " ").trim();
           note(

@@ -7,7 +7,6 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import type { ModelSetupDetectionConnection } from "./detect-cache.ts";
 import {
   clearFirstRunActivationReceipt,
   persistFirstRunActivationReceipt,
@@ -29,11 +28,14 @@ import {
   type ModelSetupVerifyState,
 } from "./state.ts";
 
-export type ModelSetupRouteData = {
-  state: ModelSetupPageState;
-  connection: ModelSetupDetectionConnection;
-  firstRun: boolean;
+export type ModelSetupConnection = Pick<
+  ApplicationContext["gateway"]["snapshot"],
+  "client" | "hello"
+> & {
+  agentId: string | null;
 };
+
+export type ModelSetupRouteData = { firstRun: boolean };
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type SetupOutcome<T> = ModelSetupTaskResult<T> | undefined;
@@ -41,8 +43,8 @@ type SetupOutcome<T> = ModelSetupTaskResult<T> | undefined;
 type FirstRunOwner = {
   generation: number;
   connectionRevision: number;
-  routeData: ModelSetupRouteData;
-  connection: ModelSetupDetectionConnection;
+  firstRun: boolean;
+  connection: ModelSetupConnection;
 };
 
 type FirstRunActivation = {
@@ -75,7 +77,7 @@ export class FirstRunSetup {
   private generation = 0;
   private started = false;
   private readonly attempts = new Set<string>();
-  private readyConnection: ModelSetupDetectionConnection | null = null;
+  private readyConnection: ModelSetupConnection | null = null;
   private pending: FirstRunActivation | null = null;
 
   constructor(private readonly host: FirstRunSetupHost) {}
@@ -95,7 +97,7 @@ export class FirstRunSetup {
     });
   }
 
-  setReadyConnection(connection: ModelSetupDetectionConnection | null): void {
+  setReadyConnection(connection: ModelSetupConnection | null): void {
     this.readyConnection = connection;
   }
 
@@ -108,7 +110,7 @@ export class FirstRunSetup {
     }
   }
 
-  connectionChanged(connection: ModelSetupDetectionConnection): void {
+  connectionChanged(connection: ModelSetupConnection): void {
     this.reset();
     this.readyConnection = null;
     if (
@@ -189,7 +191,7 @@ export class FirstRunSetup {
     if (restored) {
       // Reconnection creates a new owner without reviving old response handles.
       this.pending = {
-        owner: this.owner(routeData),
+        owner: this.owner(routeData.firstRun),
         modelRef: restored.modelRef,
         kind: restored.kind,
         deadlineMs: restored.deadlineMs,
@@ -216,7 +218,7 @@ export class FirstRunSetup {
       return;
     }
     this.started = true;
-    void this.run(this.owner(routeData), pageState.result);
+    void this.run(this.owner(routeData.firstRun), pageState.result);
   }
 
   beginActivation(intent: { kind: string; modelRef?: string }): FirstRunActivation | null {
@@ -224,7 +226,7 @@ export class FirstRunSetup {
     if (!routeData?.firstRun) {
       return null;
     }
-    const owner = this.owner(routeData);
+    const owner = this.owner(routeData.firstRun);
     const receipt = persistFirstRunActivationReceipt(this.host.context(), intent);
     this.pending = {
       owner,
@@ -300,7 +302,7 @@ export class FirstRunSetup {
     // The operator explicitly selects this exact model; do not turn a failed
     // or late verification into permission to adopt whichever model appears next.
     const modelRef = page.result.configuredModel;
-    const owner = this.owner(pending.owner.routeData);
+    const owner = this.owner(pending.owner.firstRun);
     const outcome = await this.verify();
     if (!this.owns(owner) || this.pending !== pending || !outcome || "error" in outcome) {
       return;
@@ -312,11 +314,13 @@ export class FirstRunSetup {
     }
   }
 
-  private owner(routeData: ModelSetupRouteData): FirstRunOwner {
+  // Equivalent router data can be republished mid-activation. The mounted
+  // lifecycle and mode/connection changes, not that object, own this generation.
+  private owner(firstRun: boolean): FirstRunOwner {
     const context = this.host.context();
     return {
       generation: this.generation,
-      routeData,
+      firstRun,
       connectionRevision: context.gateway.connectionRevision,
       connection: {
         client: context.gateway.snapshot.client,
@@ -356,7 +360,7 @@ export class FirstRunSetup {
     if (!routeData) {
       return undefined;
     }
-    const owner = this.owner(routeData);
+    const owner = this.owner(routeData.firstRun);
     const pending = this.pending;
     const outcome = await this.host.verify();
     if (!this.owns(owner) || !outcome) {
@@ -409,7 +413,7 @@ export class FirstRunSetup {
     return (
       owner.generation === this.generation &&
       owner.connectionRevision === context.gateway.connectionRevision &&
-      owner.routeData === this.host.routeData() &&
+      owner.firstRun === this.host.routeData()?.firstRun &&
       snapshot.phase === "connected" &&
       snapshot.client === owner.connection.client &&
       snapshot.hello === owner.connection.hello &&

@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type { EventFrame } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayBoardProvider } from "./gateway-provider.ts";
@@ -83,7 +84,17 @@ describe("gateway board provider lifecycle", () => {
     await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(newSnapshot));
   });
 
-  it("retries a transient activation failure", async () => {
+  it.each([
+    { failure: "transport", error: new Error("temporarily unavailable") },
+    {
+      failure: "retryable unavailable",
+      error: new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "Starting",
+        retryable: true,
+      }),
+    },
+  ])("retries a transient activation failure ($failure)", async ({ error }) => {
     vi.useFakeTimers();
     const snapshot = {
       sessionKey: "agent:main:retry",
@@ -91,10 +102,7 @@ describe("gateway board provider lifecycle", () => {
       tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
       widgets: [],
     };
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("temporarily unavailable"))
-      .mockResolvedValue(snapshot);
+    const request = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(snapshot);
     const provider = new GatewayBoardProvider("agent:main:retry", {
       request: request as never,
       addEventListener: () => () => {},
@@ -107,6 +115,66 @@ describe("gateway board provider lifecycle", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(provider.snapshot$.value).toEqual(snapshot);
   });
+
+  it.each(["manual refresh", "reconnect", "board change"] as const)(
+    "stops definitive unavailable polling until %s without discarding its snapshot",
+    async (resume) => {
+      vi.useFakeTimers();
+      const initial = {
+        sessionKey: "agent:main:unavailable",
+        revision: 1,
+        tabs: [],
+        widgets: [],
+      };
+      const recovered = { ...initial, revision: 2 };
+      const unavailable = new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "Session dashboard unavailable",
+        retryable: false,
+      });
+      const request = vi.fn().mockResolvedValueOnce(initial).mockRejectedValue(unavailable);
+      let emit: ((event: EventFrame) => void) | undefined;
+      const client = {
+        request: request as never,
+        addEventListener: (listener: (event: EventFrame) => void) => {
+          emit = listener;
+          return () => {};
+        },
+      };
+      const provider = new GatewayBoardProvider(initial.sessionKey, client);
+      const changed = () =>
+        emit?.({
+          type: "event",
+          event: "board.changed",
+          payload: { sessionKey: initial.sessionKey, revision: recovered.revision },
+        });
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        changed();
+        await vi.advanceTimersByTimeAsync(61_000);
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount()).toBe(0);
+        expect(provider.snapshot$.value).toEqual(initial);
+        expect(provider.loadError$.value).toBe(unavailable.message);
+
+        request.mockResolvedValue(recovered);
+        if (resume === "manual refresh") {
+          await provider.refreshWidgetFrame("status");
+        } else if (resume === "reconnect") {
+          provider.attachClient(client, false);
+          provider.attachClient(client, true);
+        } else {
+          changed();
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(request).toHaveBeenCalledTimes(3);
+        expect(provider.snapshot$.value).toEqual(recovered);
+        expect(provider.loadError$.value).toBeNull();
+      } finally {
+        provider.dispose();
+      }
+    },
+  );
 
   it("reactivates the same gateway client after reconnect", async () => {
     const snapshot = {

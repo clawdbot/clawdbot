@@ -234,6 +234,7 @@ function executeReleaseGroupCapture(
         RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
         RELEASE_RUN_RELEASE_SOAK_INPUT: String(runReleaseSoak),
         RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
+        TELEGRAM_WAIVER: "",
       },
     });
     const outputText = readFileSync(output, "utf8").trim();

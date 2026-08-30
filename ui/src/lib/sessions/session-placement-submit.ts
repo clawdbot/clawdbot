@@ -29,7 +29,7 @@ export async function advanceSessionPlacementDraft(params: {
   client: Pick<GatewayBrowserClient, "request">;
   recovery: SessionPlacementRecovery;
   persistRecovery?: boolean;
-  cleanupOnCancellation: boolean;
+  cleanupOnCancellation: () => boolean;
   recovering: boolean;
   isLifecycleCurrent: () => boolean;
   ownsRecovery: () => boolean;
@@ -99,7 +99,7 @@ export async function advanceSessionPlacementDraft(params: {
         )
       : null;
   if (!isCurrentOwner()) {
-    if (!params.cleanupOnCancellation) {
+    if (!params.cleanupOnCancellation()) {
       return { status: "interrupted" };
     }
     const recoveryPersisted = persistRecovery
@@ -129,7 +129,7 @@ export async function advanceSessionPlacementDraft(params: {
       : writeSessionPlacementRecoveryIfAvailable(recovery)
     : true;
   if (!isCurrentOwner() || !recoveryPersisted) {
-    if (!params.cleanupOnCancellation && !isCurrentOwner()) {
+    if (!params.cleanupOnCancellation() && !isCurrentOwner()) {
       return { status: "interrupted" };
     }
     if (params.recovering && !recoveryPersisted) {
@@ -187,7 +187,7 @@ export async function advanceSessionPlacementDraft(params: {
       return persisted;
     },
   );
-  if (!params.cleanupOnCancellation && !isCurrentOwner()) {
+  if (!params.cleanupOnCancellation() && !isCurrentOwner()) {
     return { status: "interrupted" };
   }
   if (placementStart.status === "interrupted") {

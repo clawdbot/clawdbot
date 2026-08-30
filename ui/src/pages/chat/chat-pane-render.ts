@@ -29,7 +29,7 @@ import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
-import { clearChatHistory } from "./chat-history.ts";
+import { clearChatHistory, getChatHistoryVersion } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
@@ -152,7 +152,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       client: state.connected ? state.client : null,
       sessionKey: catalogKey ? null : state.sessionKey || null,
       agentId: currentAgentId || null,
-      onTitlesChanged: () => state.requestUpdate?.(),
+      schedulingEnabled: this.active && this.presented,
+      historyOwner: state,
+      historyVersion: getChatHistoryVersion(state),
     });
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
@@ -437,6 +439,7 @@ export class ChatPane extends ChatPaneLayoutRender {
             }
           : undefined,
       sessions: state.sessionsResult,
+      selectedSession: catalogKey ? undefined : selectedSession,
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined
@@ -610,6 +613,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       queuedEdit: {
         editingId: activeQueuedMessageEdit(state)?.id ?? null,
         editingText: activeQueuedMessageEdit(state)?.draftText,
+        source: activeQueuedMessageEdit(state)?.source,
         onEdit: sessionParticipationBlocked ? undefined : state.editQueuedChatMessage,
         onEditChange: sessionParticipationBlocked ? undefined : state.updateQueuedChatMessageEdit,
         onEditSubmit: sessionParticipationBlocked ? undefined : state.submitQueuedChatMessageEdit,

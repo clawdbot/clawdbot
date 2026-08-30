@@ -1,13 +1,14 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { generateSecureToken } from "../infra/secure-random.js";
-import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { getBeforeToolCallDiagnosticOptions } from "./before-tool-call-metadata.js";
 import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
@@ -197,9 +198,10 @@ export function prepareToolSearchCatalogExecutionTool(
   if (!isToolWrappedWithBeforeToolCallHook(tool)) {
     return wrapToolWithBeforeToolCallHook(tool, undefined, wrapperOptions);
   }
-  return wrapperOptions
-    ? rewrapToolWithBeforeToolCallHook(tool, undefined, wrapperOptions)
-    : entry.tool;
+  if (!wrapperOptions || getBeforeToolCallDiagnosticOptions(tool)?.protectNetworkErrors === false) {
+    return entry.tool;
+  }
+  return rewrapToolWithBeforeToolCallHook(tool, undefined, wrapperOptions);
 }
 
 function toCatalogEntry(

@@ -7,6 +7,95 @@ import { spawnNodeEvalSync } from "../../../test-utils/node-process.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 
 describe("OutputAccumulator", () => {
+  it.each([
+    {
+      name: "terminated final line",
+      chunks: ["a".repeat(40), Buffer.from([0xe7, 0x95]), Buffer.from([0x8c]), "\n"],
+      maxBytes: 8,
+      expected: "aaaaa界",
+      lastLineBytes: 43,
+      totalLines: 1,
+      partial: true,
+    },
+    {
+      name: "open final line",
+      chunks: ["a".repeat(40), "界"],
+      maxBytes: 8,
+      expected: "aaaaa界",
+      lastLineBytes: 43,
+      totalLines: 1,
+      partial: true,
+    },
+    {
+      name: "complete following line",
+      chunks: ["a".repeat(40) + "\n", "short\n"],
+      maxBytes: 8,
+      expected: "short",
+      lastLineBytes: 5,
+      totalLines: 2,
+      partial: false,
+    },
+    {
+      name: "small UTF-8 boundary",
+      chunks: ["A".repeat(20) + "😀ab\nc\n"],
+      maxBytes: 4,
+      expected: "c",
+      lastLineBytes: 1,
+      totalLines: 2,
+      partial: false,
+    },
+  ])(
+    "retains the canonical tail after rolling compaction: $name",
+    async ({ chunks, maxBytes, expected, lastLineBytes, totalLines, partial }) => {
+      const accumulator = new OutputAccumulator({
+        maxBytes,
+        tempFilePrefix: "openclaw-output-test",
+      });
+      const buffers = chunks.map((chunk) =>
+        typeof chunk === "string" ? Buffer.from(chunk) : chunk,
+      );
+      const fullOutput = Buffer.concat(buffers).toString("utf8");
+      for (const data of buffers) {
+        accumulator.append(data, "stdout");
+      }
+      accumulator.finish();
+      const snapshot = accumulator.snapshot({ persistIfTruncated: true });
+      await accumulator.closeTempFile();
+      try {
+        expect(snapshot.content).toBe(expected);
+        expect(snapshot.truncation).toMatchObject({
+          truncated: true,
+          truncatedBy: "bytes",
+          totalBytes: Buffer.byteLength(fullOutput),
+          totalLines,
+          outputBytes: Buffer.byteLength(expected),
+          outputLines: 1,
+          lastLinePartial: partial,
+        });
+        expect(accumulator.getLastLineBytes()).toBe(lastLineBytes);
+        expect(await readFile(snapshot.fullOutputPath!, "utf8")).toBe(fullOutput);
+      } finally {
+        await rm(snapshot.fullOutputPath!, { force: true });
+      }
+    },
+  );
+
+  it("counts completed line bytes until the next line starts", () => {
+    const accumulator = new OutputAccumulator();
+    for (const [text, lastLineBytes, totalLines] of [
+      ["ab界", 5, 1],
+      ["\n", 5, 1],
+      ["xy\n", 2, 2],
+      ["\n", 0, 3],
+      ["z", 1, 4],
+    ] as const) {
+      accumulator.append(Buffer.from(text), "stdout");
+      expect(accumulator.getLastLineBytes()).toBe(lastLineBytes);
+      expect(accumulator.snapshot().truncation.totalLines).toBe(totalLines);
+    }
+    accumulator.finish();
+  });
+
   it("stores spilled full output in an owner-only temp file", async () => {
     const accumulator = new OutputAccumulator({
       maxBytes: 8,

@@ -154,7 +154,9 @@ function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap:
   const prlctlPath = join(tempDir, "prlctl");
   writeFileSync(prlctlPath, posixScript);
   chmodSync(prlctlPath, 0o755);
-  copyFileSync(process.execPath, join(tempDir, "prlctl.exe"));
+  if (process.platform === "win32") {
+    copyFileSync(process.execPath, join(tempDir, "prlctl.exe"));
+  }
   writeFileSync(join(tempDir, "prlctl-bootstrap.mjs"), windowsBootstrap);
 }
 

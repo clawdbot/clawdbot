@@ -37,6 +37,11 @@ export type RenderMarkdownIRChunksWithinLimitOptions<TRendered> = {
   assistantTranscriptRoleMessageBoundaries?: boolean;
 };
 
+type RenderedCandidate<TRendered> = {
+  rawSource: MarkdownIR;
+  output: RenderedMarkdownChunk<TRendered>;
+};
+
 type RenderResolver<TRendered> = Pick<
   RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
   "measureRendered" | "renderChunk"
@@ -49,6 +54,14 @@ function prepareChunkForMessageBoundary<TRendered>(
   return options.assistantTranscriptRoleMessageBoundaries === true
     ? annotateAssistantTranscriptRoleMessageBoundary(chunk)
     : chunk;
+}
+
+function renderCandidate<TRendered>(
+  options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
+  rawSource: MarkdownIR,
+): RenderedCandidate<TRendered> {
+  const source = prepareChunkForMessageBoundary(options, rawSource);
+  return { rawSource, output: { source, rendered: options.renderChunk(source) } };
 }
 
 /** Chunks Markdown IR by rendered size while preserving styles, links, and whitespace. */
@@ -76,7 +89,7 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   // The initial reverse keeps the final order stable while avoiding shift/unshift
   // moving every remaining chunk for long messages.
   const pending = splitMarkdownIRPreserveWhitespace(options.ir, normalizedLimit).toReversed();
-  const finalized: MarkdownIR[] = [];
+  const finalized: RenderedCandidate<TRendered>[] = [];
 
   while (pending.length > 0) {
     const chunk = pending.pop();
@@ -84,16 +97,19 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
       continue;
     }
 
-    const rendered = renderResolver.renderChunk(chunk);
-    if (renderResolver.measureRendered(rendered) <= normalizedLimit || chunk.text.length <= 1) {
-      finalized.push(chunk);
+    const candidate = renderCandidate(options, chunk);
+    if (
+      options.measureRendered(candidate.output.rendered) <= normalizedLimit ||
+      chunk.text.length <= 1
+    ) {
+      finalized.push(candidate);
       continue;
     }
 
     const split = splitMarkdownIRByRenderedLimit(chunk, normalizedLimit, renderResolver);
     if (split.length <= 1) {
       // Worst-case safety: avoid retry loops and keep the original chunk.
-      finalized.push(chunk);
+      finalized.push(candidate);
       continue;
     }
     for (let index = split.length - 1; index >= 0; index -= 1) {
@@ -104,11 +120,8 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
     }
   }
 
-  return coalesceWhitespaceOnlyMarkdownIRChunks(finalized, normalizedLimit, renderResolver).map(
-    (chunk) => {
-      const source = prepareChunkForMessageBoundary(options, chunk);
-      return { source, rendered: options.renderChunk(source) };
-    },
+  return coalesceWhitespaceOnlyMarkdownIRChunks(finalized, normalizedLimit, options).map(
+    (chunk) => chunk.output,
   );
 }
 
@@ -337,11 +350,11 @@ function mergeMarkdownIRChunks(left: MarkdownIR, right: MarkdownIR): MarkdownIR 
 }
 
 function coalesceWhitespaceOnlyMarkdownIRChunks<TRendered>(
-  chunks: MarkdownIR[],
+  chunks: RenderedCandidate<TRendered>[],
   renderedLimit: number,
-  options: RenderResolver<TRendered>,
-): MarkdownIR[] {
-  const coalesced: MarkdownIR[] = [];
+  options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
+): RenderedCandidate<TRendered>[] {
+  const coalesced: RenderedCandidate<TRendered>[] = [];
   let index = 0;
 
   while (index < chunks.length) {
@@ -350,7 +363,7 @@ function coalesceWhitespaceOnlyMarkdownIRChunks<TRendered>(
       index += 1;
       continue;
     }
-    if (chunk.text.trim().length > 0) {
+    if (chunk.rawSource.text.trim().length > 0) {
       coalesced.push(chunk);
       index += 1;
       continue;
@@ -358,14 +371,20 @@ function coalesceWhitespaceOnlyMarkdownIRChunks<TRendered>(
 
     const prev = coalesced.at(-1);
     const next = chunks[index + 1];
-    const chunkLength = chunk.text.length;
+    const chunkLength = chunk.rawSource.text.length;
 
-    const canMerge = (candidate: MarkdownIR) =>
-      options.measureRendered(options.renderChunk(candidate)) <= renderedLimit;
+    // Keep raw IR for merges: a new boundary annotation may no longer apply
+    // after whitespace joins neighbors. Retain the exact measured output pair.
+    const renderIfFits = (source: MarkdownIR) => {
+      const candidate = renderCandidate(options, source);
+      return options.measureRendered(candidate.output.rendered) <= renderedLimit
+        ? candidate
+        : undefined;
+    };
 
     if (prev) {
-      const mergedPrev = mergeMarkdownIRChunks(prev, chunk);
-      if (canMerge(mergedPrev)) {
+      const mergedPrev = renderIfFits(mergeMarkdownIRChunks(prev.rawSource, chunk.rawSource));
+      if (mergedPrev) {
         coalesced[coalesced.length - 1] = mergedPrev;
         index += 1;
         continue;
@@ -373,8 +392,8 @@ function coalesceWhitespaceOnlyMarkdownIRChunks<TRendered>(
     }
 
     if (next) {
-      const mergedNext = mergeMarkdownIRChunks(chunk, next);
-      if (canMerge(mergedNext)) {
+      const mergedNext = renderIfFits(mergeMarkdownIRChunks(chunk.rawSource, next.rawSource));
+      if (mergedNext) {
         chunks[index + 1] = mergedNext;
         index += 1;
         continue;
@@ -385,11 +404,12 @@ function coalesceWhitespaceOnlyMarkdownIRChunks<TRendered>(
       // Split pure whitespace between neighbors before dropping it so list,
       // paragraph, and quote spacing survives when both sides still fit.
       for (let prefixLength = chunkLength - 1; prefixLength >= 1; prefixLength -= 1) {
-        const prefix = sliceMarkdownIR(chunk, 0, prefixLength);
-        const suffix = sliceMarkdownIR(chunk, prefixLength, chunkLength);
-        const mergedPrev = mergeMarkdownIRChunks(prev, prefix);
-        const mergedNext = mergeMarkdownIRChunks(suffix, next);
-        if (canMerge(mergedPrev) && canMerge(mergedNext)) {
+        const prefix = sliceMarkdownIR(chunk.rawSource, 0, prefixLength);
+        const suffix = sliceMarkdownIR(chunk.rawSource, prefixLength, chunkLength);
+        const mergedPrev = renderIfFits(mergeMarkdownIRChunks(prev.rawSource, prefix));
+        const mergedNext =
+          mergedPrev && renderIfFits(mergeMarkdownIRChunks(suffix, next.rawSource));
+        if (mergedPrev && mergedNext) {
           coalesced[coalesced.length - 1] = mergedPrev;
           chunks[index + 1] = mergedNext;
           break;

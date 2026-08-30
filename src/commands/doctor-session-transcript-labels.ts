@@ -17,10 +17,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
-import {
-  readOnlySqliteTranscriptSessionIds,
-  readOnlySqliteTranscriptRepairSnapshot,
-} from "./doctor-session-sqlite-transcript-readers.js";
+import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript labels";
 
@@ -53,6 +50,12 @@ const LEGACY_LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{
 // CHAT WINDOW: `${label} (untrusted, <order>, <relation>):` (338-360).
 
 function applyLegacyInboundLabelRewrites(text: string): string {
+  // Every legacy rule contains one of these spellings. Check decoded content so
+  // Unicode-escaped labels still reach their rewrite.
+  if (!text.includes("untrusted") && !text.includes("Untrusted")) {
+    return text;
+  }
+
   // Peel the timestamp envelope so the anchored (`^`) rules see the first header at column 0, exactly
   // as the runtime stripper does. Without this, "[Wed …] Conversation info (…):" stays unmarked and the
   // marker-only strippers expose its JSON. Reattached verbatim below.
@@ -208,17 +211,13 @@ export async function noteSessionTranscriptLabelHealth(params: {
     let readDatabase: DatabaseSync | undefined;
     try {
       readDatabase = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+      const reader = new ReadOnlySqliteTranscriptReader(readDatabase);
       // Detect read-only, then repair each session in its own transaction as it is found, so a large
       // store never buffers every plan at once. Enumerate from transcript_events, not sessions: the
       // latter gained its columns post-ship and is not safe to assume on old databases.
-      const sessionIds = readOnlySqliteTranscriptSessionIds(readDatabase);
-      for (const sessionId of sessionIds) {
+      for (const sessionId of reader.sessionIds()) {
         // Read transcript in read-only mode (detection phase).
-        const readResult = readOnlySqliteTranscriptRepairSnapshot(
-          readDatabase,
-          sessionId,
-          normalizeLegacyInboundContextLabels,
-        );
+        const readResult = reader.repairSnapshot(sessionId, normalizeLegacyInboundContextLabels);
         if (!readResult.ok) {
           const detail = formatErrorMessage(readResult.error).replace(/\s+/g, " ").trim();
           note(

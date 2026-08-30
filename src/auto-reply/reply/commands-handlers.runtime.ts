@@ -10,7 +10,6 @@ import { handleContextCommand } from "./commands-context-command.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
 import { handleDockCommand } from "./commands-dock.js";
 import { handleGoalCommand } from "./commands-goal.js";
-import { commandHandlerOrder, type CommandHandlerId } from "./commands-handlers.order.js";
 import {
   handleCommandsListCommand,
   handleExportTrajectoryCommand,
@@ -46,50 +45,50 @@ import { handleTtsCommands } from "./commands-tts.js";
 import type { CommandHandler } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
-const commandHandlersById = {
-  acp: handleAcpCommand,
-  activation: handleActivationCommand,
-  allowlist: handleAllowlistCommand,
-  approve: handleApproveCommand,
-  "abort-trigger": handleAbortTrigger,
-  bash: handleBashCommand,
-  btw: handleBtwCommand,
-  "commands-list": handleCommandsListCommand,
-  compact: handleCompactCommand,
-  config: handleConfigCommand,
-  context: handleContextCommand,
-  debug: handleDebugCommand,
-  diagnostics: handleDiagnosticsCommand,
-  dock: handleDockCommand,
-  "export-session": handleExportSessionCommand,
-  "export-trajectory": handleExportTrajectoryCommand,
-  fast: handleFastCommand,
-  goal: handleGoalCommand,
-  help: handleHelpCommand,
-  learn: handleLearnCommand,
-  loop: handleLoopCommand,
-  login: handleLoginCommand,
-  mcp: handleMcpCommand,
-  models: handleModelsCommand,
-  name: handleNameCommand,
-  plugin: handlePluginCommand,
-  plugins: handlePluginsCommand,
-  restart: handleRestartCommand,
-  "send-policy": handleSendPolicyCommand,
-  session: handleSessionCommand,
-  "skill-usage": handleSkillCommandUsage,
-  status: handleStatusCommand,
-  steer: handleSteerCommand,
-  stop: handleStopCommand,
-  subagents: handleSubagentsCommand,
-  "system-agent": handleSystemAgentCommand,
-  tasks: handleTasksCommand,
-  tools: handleToolsCommand,
-  tts: handleTtsCommands,
-  usage: handleUsageCommand,
-  whoami: handleWhoamiCommand,
-} satisfies Record<CommandHandlerId, CommandHandler>;
-
 export function loadCommandHandlers(): CommandHandler[] {
-  return commandHandlerOrder.map((id) => commandHandlersById[id]);
+  return [
+    // Plugin text commands must win before built-in auth routing handles /login.
+    handlePluginCommand,
+    handleLoginCommand,
+    handleDockCommand,
+    handleBtwCommand,
+    handleBashCommand,
+    handleActivationCommand,
+    handleSendPolicyCommand,
+    handleFastCommand,
+    handleUsageCommand,
+    handleSessionCommand,
+    handleRestartCommand,
+    handleTtsCommands,
+    handleHelpCommand,
+    handleCommandsListCommand,
+    // Keep deterministic /skill usage before broader tool/status fallthrough.
+    handleSkillCommandUsage,
+    handleToolsCommand,
+    handleStatusCommand,
+    handleGoalCommand,
+    handleLearnCommand,
+    handleLoopCommand,
+    handleNameCommand,
+    handleDiagnosticsCommand,
+    handleTasksCommand,
+    handleSteerCommand,
+    handleAllowlistCommand,
+    handleApproveCommand,
+    handleContextCommand,
+    handleExportSessionCommand,
+    handleExportTrajectoryCommand,
+    handleWhoamiCommand,
+    handleSystemAgentCommand,
+    handleSubagentsCommand,
+    handleAcpCommand,
+    handleMcpCommand,
+    handlePluginsCommand,
+    handleConfigCommand,
+    handleDebugCommand,
+    handleModelsCommand,
+    handleStopCommand,
+    handleCompactCommand,
+    handleAbortTrigger,
+  ];
 }

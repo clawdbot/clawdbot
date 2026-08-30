@@ -2294,7 +2294,7 @@ jobs:
           verify_published_release() {
             local release_version evidence_path skip_clawhub clawhub_runtime_state_path bootstrap_run_arg_present
             local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
-            local validation_file workflow_ref
+            local validation_file workflow_ref telegram_waiver
             local -a verify_args
 
             skip_clawhub="${1:-false}"
@@ -2378,8 +2378,13 @@ jobs:
               echo "Release validation evidence changed after prepublish validation." >&2
               exit 1
             fi
+            telegram_waiver=""
+            if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" ]]; then
+              telegram_waiver="$(jq -r '.validationInputs.telegramWaiver // ""' "${validation_file}")"
+            fi
             run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             jq \
+              --arg telegram_waiver "${telegram_waiver}" \
               --arg release_publish_run_id "$GITHUB_RUN_ID" \
               --arg validation_label "${run_label}" \
               --arg validation_run_id "${run_id}" \
@@ -2387,6 +2392,7 @@ jobs:
               --arg validation_target_sha "${target_sha}" \
               --arg validation_url "${run_url}" \
               --arg validation_workflow_ref "${workflow_ref}" '
+                (if $telegram_waiver == "" then . else .telegramWaiver = $telegram_waiver end) |
                 .releasePublishRunId = $release_publish_run_id |
                 .workflowRuns += [{
                   id: $validation_run_id,
@@ -2416,7 +2422,9 @@ jobs:
             tarball="$(jq -er '.openclawNpmTarball | select(type == "string" and length > 0)' "${evidence_path}")"
             integrity="$(jq -er '.openclawNpmIntegrity | select(type == "string" and length > 0)' "${evidence_path}")"
 
-            if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
+            if [[ "$(jq -r '.telegramWaiver // ""' "${evidence_path}")" == "2026.8.1-owner-approved" ]]; then
+              telegram_line="- Telegram integration checks: waived by the release owner for 2026.8.1 (source QA, Package Acceptance, published-package E2E); not run."
+            elif [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
               telegram_line="- npm Telegram beta E2E: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${NPM_TELEGRAM_RUN_ID}"
             else
               telegram_line="- npm Telegram beta E2E: not supplied"

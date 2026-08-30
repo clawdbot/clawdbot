@@ -95,7 +95,7 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     /** Per-DM configuration for Telegram DM topics (key is chat ID). */
     direct?: Record<string, TelegramDirectConfig>;
     /**
-     * Use Telegram Bot API 10.2 rich messages for text sends and edits.
+     * Use Telegram Bot API 10.3 rich messages for text sends and edits.
      * When false (default), falls back to HTML/plain text formatting via sendMessage.
      * Set to true to enable native tables, details, and rich media via sendRichMessage.
      * Note: Some Telegram clients (Web, Desktop, older mobile) do NOT support

@@ -166,7 +166,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       expect(terminalizeRestartSafeAdmission).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
-      registration.cleanup({ force: true });
+      registration.cleanup();
     }
   });
 
@@ -377,7 +377,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       expect(cleanupAdmittedRun).not.toHaveBeenCalled();
       releasePersistence.resolve();
       await finalization;
-      expect(activeRunCleanup).toHaveBeenCalledWith({ force: true });
+      expect(activeRunCleanup).toHaveBeenCalledExactlyOnceWith();
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
     } finally {
       releasePersistence.resolve();

@@ -272,6 +272,54 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 - `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`
 - `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache pnpm test:changed`
 
+## JSON reports across native processes
+
+For a multi-project or chunked run, explicitly request native JSON with an output
+file, for example:
+
+```bash
+pnpm test test/vitest/vitest.unit-fast-isolated.config.ts test/vitest/vitest.agents-embedded-agent.config.ts --reporter=verbose --reporter=json --outputFile=.artifacts/test-results.json
+```
+
+The project runner and plugin batch runner give each attempt separate native JSON
+and blob files, then publish the requested JSON from Vitest's native report merge.
+They print a companion `<output>.reports-<unique>` directory. Keep that directory:
+it contains original reports, per-attempt coverage files when coverage is enabled,
+and an `index.json` with child exit codes, signals, timeouts and unstarted work.
+Only the accepted retry attempt contributes to the aggregate.
+
+The aggregate preserves the accepted case inventory, but is not a lossless
+replacement for the originals. Native merging does not restore snapshot summaries
+or JSON `coverageMap`, and its `startTime` is the merge time. Passing snapshot tests
+still succeed. Read native originals for those details and the index for process
+outcomes: JSON `success` does not encode every wrapper or unhandled-error failure.
+Separate built-in coverage reports remain per attempt in the companion directory.
+Custom coverage providers/reporters and coverage reporter tuple options require
+separate invocations with unique destinations.
+
+A complete failed-test aggregate is retained with a failing command exit. Missing
+or invalid evidence, cancellation, unstarted required work, or publication failure
+does not publish a complete aggregate; an existing output file is not proof of the
+new run. The diagnostic prints the retained report-set location. Report sets are
+not automatically swept.
+
+Overlapping selections can share native task IDs, so merging them can replace
+independent failure details even when case counts match. Such report sets retain
+their originals and fail publication. Select each configuration once, or run
+overlapping selections separately with distinct output files.
+
+This ownership applies to explicit CLI JSON file requests with named, file-based
+Node projects and native console reporters. Scalar `--outputFile` and
+`--outputFile.json` both work. Config-owned reporter options, other file formats,
+custom reporters and inline/browser project composition require separate native
+invocations with unique output destinations. Do not assume those outputs are
+aggregated. Single-process and console-only runs keep their existing native behavior.
+Native help and other non-test controls stay with the child CLI and do not allocate
+report sets. `run --version` still runs tests, as it does in native Vitest.
+Config-only reporters are not intercepted: multiple children can still overwrite
+the same configured file. Run those configurations separately with distinct paths;
+adding `--reporter=json` alone does not override a reporter tuple's own `outputFile`.
+
 ## Test performance tooling
 
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets. `pnpm test:perf:imports:changed` scopes the same profiling to files changed since `origin/main`.

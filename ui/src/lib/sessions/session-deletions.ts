@@ -14,11 +14,8 @@ import type {
   SessionState,
 } from "./session-capability.ts";
 import {
-  isUiGlobalScopeConfigured,
   normalizeAgentId,
-  parseAgentSessionKey,
-  prepareUiSessionKeyNormalizer,
-  resolveUiGlobalAliasAgentId,
+  resolveUiConversationIdentity,
   resolveUiSelectedGlobalAgentId,
 } from "./session-key.ts";
 import { requestSessionDelete } from "./session-requests.ts";
@@ -64,13 +61,10 @@ export function createSessionDeletions(host: DeletionHost) {
   const deletions = new Map<string, DeletionOwner>();
   const prepareIdentity = () => {
     const snapshot = host.snapshot();
-    const normalize = prepareUiSessionKeyNormalizer(snapshot);
-    const globalScope = isUiGlobalScopeConfigured(snapshot);
     const selectedAgentId = resolveUiSelectedGlobalAgentId(snapshot);
     return (key: string, agentId?: string | null) => {
-      const canonical =
-        globalScope && resolveUiGlobalAliasAgentId(snapshot, key) ? "global" : normalize(key);
-      return `${canonical}\0${normalizeAgentId(parseAgentSessionKey(key)?.agentId ?? parseAgentSessionKey(canonical)?.agentId ?? agentId ?? selectedAgentId)}`;
+      const canonical = resolveUiConversationIdentity(snapshot, key, agentId ?? undefined);
+      return `${canonical.sessionKey}\0${canonical.agentId ?? normalizeAgentId(agentId ?? selectedAgentId)}`;
     };
   };
   const identity = (key: string, agentId?: string | null) => prepareIdentity()(key, agentId);

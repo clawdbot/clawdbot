@@ -129,7 +129,7 @@ async function resolveActivePlacement(
     key: string;
     agentId: string;
     initial?: SessionPlacement;
-    cleanupOnCancellation: boolean;
+    cleanupOnCancellation: () => boolean;
   },
   isCurrent: () => boolean,
 ): Promise<PlacementResolution> {
@@ -149,7 +149,7 @@ async function resolveActivePlacement(
       lookupFailures += 1;
       const submissionCancelled = !isCurrent();
       if (submissionCancelled || lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
-        if (!params.cleanupOnCancellation && submissionCancelled) {
+        if (!params.cleanupOnCancellation() && submissionCancelled) {
           return { status: "interrupted" };
         }
         const cleanupError = await reclaimSessionPlacement(client, {
@@ -190,7 +190,7 @@ async function resolveActivePlacement(
         emptyPlacements = 0;
       }
       if (!isCurrent()) {
-        if (!params.cleanupOnCancellation) {
+        if (!params.cleanupOnCancellation()) {
           return { status: "interrupted" };
         }
         const cleanupError = await reclaimSessionPlacement(client, {
@@ -221,7 +221,7 @@ async function resolveActivePlacement(
       globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS);
     });
   }
-  if (!params.cleanupOnCancellation && !isCurrent()) {
+  if (!params.cleanupOnCancellation() && !isCurrent()) {
     return { status: "interrupted" };
   }
   if (!isCurrent()) {
@@ -356,12 +356,12 @@ export async function startSessionPlacementInitialTurn(
     attachments?: unknown[];
     messageId?: string;
     recovering?: boolean;
-    cleanupOnCancellation?: boolean;
+    cleanupOnCancellation?: () => boolean;
   },
   isCurrent: () => boolean,
   beforeSend: () => boolean = () => true,
 ): Promise<SessionPlacementStartOutcome> {
-  const cleanupOnCancellation = params.cleanupOnCancellation !== false;
+  const cleanupOnCancellation = params.cleanupOnCancellation ?? (() => true);
   let resolution: PlacementResolution | undefined;
   let dispatchError = "";
   if (params.recovering) {
@@ -405,7 +405,7 @@ export async function startSessionPlacementInitialTurn(
       );
     } catch (error) {
       dispatchError = formatUiError(error);
-      if (!cleanupOnCancellation && !isCurrent()) {
+      if (!cleanupOnCancellation() && !isCurrent()) {
         return { status: "interrupted" };
       }
       if (!isAmbiguousDispatchError(error)) {
@@ -418,7 +418,7 @@ export async function startSessionPlacementInitialTurn(
       );
     }
   }
-  if (!cleanupOnCancellation && !isCurrent()) {
+  if (!cleanupOnCancellation() && !isCurrent()) {
     return { status: "interrupted" };
   }
   if (
@@ -439,7 +439,7 @@ export async function startSessionPlacementInitialTurn(
     };
   }
   if (!isCurrent()) {
-    if (!cleanupOnCancellation) {
+    if (!cleanupOnCancellation()) {
       return { status: "interrupted" };
     }
     const cleanupError = await reclaimSessionPlacement(client, {
@@ -480,7 +480,7 @@ export async function startSessionPlacementInitialTurn(
       idempotencyKey: messageId,
     });
     if (!isCurrent()) {
-      if (!cleanupOnCancellation) {
+      if (!cleanupOnCancellation()) {
         return { status: "interrupted" };
       }
       const cleanupError = await reclaimSessionPlacement(client, {
@@ -509,7 +509,7 @@ export async function startSessionPlacementInitialTurn(
     };
   } catch (error) {
     if (!isCurrent()) {
-      if (!cleanupOnCancellation) {
+      if (!cleanupOnCancellation()) {
         return { status: "interrupted" };
       }
       const cleanupError = await reclaimSessionPlacement(client, {

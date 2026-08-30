@@ -6,6 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-vitest.mts";
+import { withEnv } from "../test-utils/env.js";
 
 const {
   applyParallelVitestCachePaths,
@@ -410,60 +411,26 @@ describe("test-projects args", () => {
   });
 
   it("keeps conservative local full-suite runs on leaf project configs", () => {
-    const originalVitestMaxWorkers = process.env.OPENCLAW_VITEST_MAX_WORKERS;
-    const originalTestWorkers = process.env.OPENCLAW_TEST_WORKERS;
-    const originalProjectParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-    const originalLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-    const originalCi = process.env.CI;
-    const originalActions = process.env.GITHUB_ACTIONS;
-    try {
-      process.env.OPENCLAW_VITEST_MAX_WORKERS = "1";
-      delete process.env.OPENCLAW_TEST_WORKERS;
-      delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-      delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-      delete process.env.CI;
-      delete process.env.GITHUB_ACTIONS;
+    withEnv(
+      {
+        OPENCLAW_VITEST_MAX_WORKERS: "1",
+        OPENCLAW_TEST_WORKERS: undefined,
+        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
+        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
+        CI: undefined,
+        GITHUB_ACTIONS: undefined,
+      },
+      () => {
+        const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
 
-      const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
-
-      expect(configs).toContain("test/vitest/vitest.unit-fast.config.ts");
-      expect(configs).toContain("test/vitest/vitest.boundary.config.ts");
-      expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
-      expect(configs).toContain("test/vitest/vitest.plugins.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
-    } finally {
-      if (originalVitestMaxWorkers === undefined) {
-        delete process.env.OPENCLAW_VITEST_MAX_WORKERS;
-      } else {
-        process.env.OPENCLAW_VITEST_MAX_WORKERS = originalVitestMaxWorkers;
-      }
-      if (originalTestWorkers === undefined) {
-        delete process.env.OPENCLAW_TEST_WORKERS;
-      } else {
-        process.env.OPENCLAW_TEST_WORKERS = originalTestWorkers;
-      }
-      if (originalProjectParallel === undefined) {
-        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-      } else {
-        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = originalProjectParallel;
-      }
-      if (originalLeafShards === undefined) {
-        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-      } else {
-        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = originalLeafShards;
-      }
-      if (originalCi === undefined) {
-        delete process.env.CI;
-      } else {
-        process.env.CI = originalCi;
-      }
-      if (originalActions === undefined) {
-        delete process.env.GITHUB_ACTIONS;
-      } else {
-        process.env.GITHUB_ACTIONS = originalActions;
-      }
-    }
+        expect(configs).toContain("test/vitest/vitest.unit-fast.config.ts");
+        expect(configs).toContain("test/vitest/vitest.boundary.config.ts");
+        expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
+        expect(configs).toContain("test/vitest/vitest.plugins.config.ts");
+        expect(configs).not.toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
+        expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
+      },
+    );
   });
 
   it("keeps explicit project-level parallelism authoritative", () => {

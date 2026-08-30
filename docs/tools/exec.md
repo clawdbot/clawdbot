@@ -46,10 +46,6 @@ Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, a
 Where to execute. Omit `host` or use `auto` to inherit the configured exec host, including agent and session overrides. When that configured host is also `auto`, it resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise. A session that requires a sandbox stays sandboxed regardless of the configured host.
 </ParamField>
 
-<ParamField path="security" type="'deny' | 'allowlist' | 'full'">
-Ignored for normal tool calls. `gateway`/`node` security is derived from `tools.exec.mode` and the host approvals file; elevated mode can force full access only when the operator explicitly grants elevated access.
-</ParamField>
-
 <ParamField path="ask" type="'off' | 'on-miss' | 'always'">
 The baseline ask mode is derived from `tools.exec.mode` and host approvals. For channel-origin model calls, per-call `ask` is ignored when the effective host ask is `off`; otherwise it can only harden to a stricter mode.
 </ParamField>
@@ -59,7 +55,7 @@ Node id/name when `host=node`.
 </ParamField>
 
 <ParamField path="elevated" type="boolean" default="false">
-Request elevated mode: escape the sandbox onto the configured host path. `security=full` is forced only when elevated resolves to `full`.
+Request elevated mode: escape the sandbox onto the configured host path when the operator permits it. Elevated `full` skips approvals only when the effective security and ask policy already allow `full` and `off`.
 </ParamField>
 
 Notes:

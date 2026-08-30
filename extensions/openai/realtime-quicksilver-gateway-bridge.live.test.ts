@@ -88,7 +88,7 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
       const bridge = new OpenAIQuicksilverGatewayBridge({
         providerConfig: {},
         model: "gpt-live-1-codex",
-        voice: "marin",
+        voice: "spruce",
         instructions:
           "This is a live transport check. Immediately say: OpenClaw gateway relay test OK.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
@@ -164,7 +164,7 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
       const bridge = new OpenAIQuicksilverGatewayBridge({
         providerConfig: {},
         model: "gpt-live-1-boulder-alpha",
-        voice: "marin",
+        voice: "spruce",
         instructions: "Listen to the user. Do not speak or delegate.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
         onAudio: (audio) => {

@@ -26,6 +26,9 @@ export type ToolCallRecord = {
   runId?: string;
   outcomeKind?: "tool-loop-veto" | "terminal-exec-failure";
   resultHash?: string;
+  // Keep the raw result identity while this bounded identity survives alias
+  // merges and lets the no-progress owner ignore diagnostic drift.
+  failureIdentityHash?: string;
   noProgress?: true;
   unknownToolName?: string;
   timestamp: number;

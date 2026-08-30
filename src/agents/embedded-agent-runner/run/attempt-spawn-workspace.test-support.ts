@@ -28,6 +28,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
+import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import type { CreateAgentSessionOptions } from "../../sessions/index.js";
@@ -66,6 +67,7 @@ function normalizeMockProviderId(providerId?: string): string {
 }
 
 type SessionManagerMocks = {
+  getSessionTarget: Mock<() => undefined>;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
   getBoundaryCount: UnknownMock;
@@ -133,10 +135,43 @@ function createSubscriptionMock(): SubscriptionMock {
     getLastAssistantTextMessageIndex: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
     getLatestMcpConnectAction: () => undefined,
-    toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
+    toolMetas: [] as SubscriptionMock["toolMetas"],
     runToolLifecycle: async <T>(toolParams: {
+      args: unknown;
+      replaySafe?: boolean;
       execute: (onImplementationStart: () => void) => Promise<T>;
-    }) => await toolParams.execute(() => undefined),
+      onTerminal?: (terminal: {
+        result: unknown;
+        isError: boolean;
+        executedArguments: unknown;
+        effectReceipt: {
+          state: "read_completed" | "failed_no_effect" | "mutation_committed" | "uncertain";
+        };
+      }) => void | Promise<void>;
+    }) => {
+      try {
+        const result = await toolParams.execute(() => undefined);
+        await toolParams.onTerminal?.({
+          result,
+          isError: false,
+          executedArguments: structuredClone(toolParams.args),
+          effectReceipt: {
+            state: toolParams.replaySafe ? "read_completed" : "mutation_committed",
+          },
+        });
+        return result;
+      } catch (error) {
+        await toolParams.onTerminal?.({
+          result: buildToolLifecycleErrorResult(error),
+          isError: true,
+          executedArguments: structuredClone(toolParams.args),
+          effectReceipt: {
+            state: toolParams.replaySafe ? "failed_no_effect" : "uncertain",
+          },
+        });
+        throw error;
+      }
+    },
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
@@ -237,6 +272,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const embeddedSystemPromptInputs: unknown[] = [];
   const trajectoryEvents: CapturedTrajectoryEvent[] = [];
   const sessionManager = {
+    getSessionTarget: vi.fn(() => undefined),
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
     getBoundaryCount: vi.fn(() => 0),
@@ -974,7 +1010,9 @@ type MutableSession = {
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
-  [agentSessionSetContextReplacementHook]: (callback: (() => void) | undefined) => void;
+  [agentSessionSetContextReplacementHook]: (
+    callback: ((tokensAfter: number) => void) | undefined,
+  ) => void;
 };
 
 type SessionPromptOverride = (
@@ -1100,6 +1138,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
+  hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);

@@ -643,7 +643,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       );
       const fullMessageRequest = await gateway.waitForRequest("chat.message.get");
       expect(fullMessageRequest.params).toMatchObject({
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         messageId: "assistant-full-message",
         maxChars: 500_000,
       });

@@ -116,6 +116,7 @@ async function withRecoveryRuntime(
     const warn = vi.fn();
     const listPlacements = vi.fn(() => [...placements.values()]);
     const runtime = createGatewayWorkerPlacementRuntime({
+      cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
         get: (sessionId: string) => placements.get(sessionId),

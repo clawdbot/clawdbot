@@ -1,7 +1,11 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  createChatFlowE2eSuite,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const dynamicCatalogProofDir =
@@ -67,6 +71,7 @@ suite.define(() => {
         {
           contextTokens,
           key: sessionKey,
+          sessionId: "control-ui-dynamic-catalog-convergence",
           kind: "direct",
           label: "Dynamic catalog",
           model: "deepseekv4flash-equivalent",
@@ -94,7 +99,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const main = page.getByRole("main");
       const modelSelect = main.locator('[data-chat-model-select="true"]');
       const effortSelect = main.locator('[data-chat-thinking-select="true"]');

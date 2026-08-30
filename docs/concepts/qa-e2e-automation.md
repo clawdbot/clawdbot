@@ -536,7 +536,9 @@ pnpm openclaw qa telegram
 Targets one shared private group on Telegram's Test Server. One Convex lease
 contains the SUT bot plus one independent TDLib authorization for the QA user.
 That user sends test messages and observes SUT messages and edits through one
-long-lived TDLib process.
+long-lived TDLib process. The shared live group requires a mention of the leased
+bot or a reply to that bot; scenarios use `@openclaw`, which the adapter replaces
+with the leased bot username. Native commands are addressed to that same bot.
 
 Required env:
 

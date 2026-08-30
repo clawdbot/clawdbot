@@ -161,7 +161,7 @@ async function runGatewayHealthCheck(params: {
   try {
     const gatewayProbe = await waitForGatewayReachable({
       url: wsUrl,
-      ...(probeMode === "remote" ? { config: params.cfg } : {}),
+      ...(probeMode === "remote" ? { config: params.cfg, originScopedDeviceAuth: true } : {}),
       token,
       password,
       ...(params.daemonSetupOutcome === "succeeded"
@@ -520,6 +520,7 @@ export async function runConfigureWizard(
             return probeGatewayReachable({
               url: remoteUrl,
               config: baseConfig,
+              originScopedDeviceAuth: true,
               token: remoteProbeAuth.auth.token,
               ...(remoteProbeAuth.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
               timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,

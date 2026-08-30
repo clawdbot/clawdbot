@@ -7,7 +7,7 @@ import {
 } from "./config-activation-shared.js";
 import {
   identityNormalizePluginId,
-  isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
+  isBundledChannelEnabledByChannelConfig,
   normalizePluginsConfigWithResolverCore as normalizePluginsConfigWithResolverShared,
   type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
@@ -25,30 +25,6 @@ export function normalizePluginsConfigWithResolver(
   return normalizePluginsConfigWithResolverShared(config, normalizePluginId);
 }
 
-function resolvePluginActivationState(params: {
-  id: string;
-  origin: PluginOrigin;
-  config: NormalizedPluginsConfig;
-  rootConfig?: OpenClawConfig;
-  enabledByDefault?: boolean;
-  sourceConfig?: NormalizedPluginsConfig;
-  sourceRootConfig?: OpenClawConfig;
-  autoEnabledReason?: string;
-}): PluginActivationState {
-  return toPluginActivationState(
-    resolvePluginActivationDecisionShared({
-      ...params,
-      activationSource: {
-        plugins: params.sourceConfig ?? params.config,
-        rootConfig: params.sourceRootConfig ?? params.rootConfig,
-      },
-      isBundledChannelEnabledByChannelConfig,
-    }),
-  );
-}
-
-const isBundledChannelEnabledByChannelConfig = isBundledChannelEnabledByChannelConfigShared;
-
 type PolicyEffectiveActivationParams = {
   id: string;
   origin: PluginOrigin;
@@ -63,5 +39,14 @@ type PolicyEffectiveActivationParams = {
 export function resolvePolicyPluginActivationState(
   params: PolicyEffectiveActivationParams,
 ): PluginActivationState {
-  return resolvePluginActivationState(params);
+  return toPluginActivationState(
+    resolvePluginActivationDecisionShared({
+      ...params,
+      activationSource: {
+        plugins: params.sourceConfig ?? params.config,
+        rootConfig: params.sourceRootConfig ?? params.rootConfig,
+      },
+      isBundledChannelEnabledByChannelConfig,
+    }),
+  );
 }

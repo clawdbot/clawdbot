@@ -4,12 +4,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
 import { spawnOwnedVitestProcess } from "./vitest-process.mts";
+import type { VitestReportOutcome } from "./vitest-report-owner.mts";
 
 export type VitestBatchRunParams = {
   args: string[];
   config: string;
   env?: NodeJS.ProcessEnv;
   targets: string[];
+  onComplete?: (outcome: VitestReportOutcome) => void;
 };
 
 const scriptFile = fileURLToPath(import.meta.url);
@@ -40,6 +42,12 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     });
     completion.finally(teardownChildCleanup).then((result) => {
       const { code, signal } = result;
+      if (params.onComplete) {
+        const outcome = { code: code ?? 1, signal: forwardedSignal ?? signal };
+        params.onComplete(outcome);
+        resolve(outcome.code);
+        return;
+      }
       if (forwardedSignal) {
         process.kill(process.pid, forwardedSignal);
         return;

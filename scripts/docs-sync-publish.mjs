@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { renderDocsHeadingMap } from "./docs-list.js";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
@@ -28,6 +29,10 @@ const SYNC_SUPPORT_FILES = [
   {
     source: path.join(ROOT, "scripts", "check-docs-mdx.mts"),
     target: path.join(".openclaw-sync", "check-docs-mdx.mts"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "lib", "arg-utils.runtime.mjs"),
+    target: path.join(".openclaw-sync", "lib", "arg-utils.runtime.mjs"),
   },
   {
     source: path.join(ROOT, "scripts", "lib", "tsx-cli-shim.mjs"),
@@ -201,14 +206,6 @@ const GENERATED_LOCALES = [
   },
 ];
 
-function readOptionValue(argv, index, optionName) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv) {
   const args = {
     target: "",
@@ -224,27 +221,27 @@ export function parseArgs(argv) {
     const part = argv[index];
     switch (part) {
       case "--target":
-        args.target = readOptionValue(argv, index, part);
+        args.target = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--source-repo":
-        args.sourceRepo = readOptionValue(argv, index, part);
+        args.sourceRepo = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--source-sha":
-        args.sourceSha = readOptionValue(argv, index, part);
+        args.sourceSha = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--clawhub-repo":
-        args.clawhubRepo = readOptionValue(argv, index, part);
+        args.clawhubRepo = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-repo":
-        args.clawhubSourceRepo = readOptionValue(argv, index, part);
+        args.clawhubSourceRepo = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-sha":
-        args.clawhubSourceSha = readOptionValue(argv, index, part);
+        args.clawhubSourceSha = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       default:

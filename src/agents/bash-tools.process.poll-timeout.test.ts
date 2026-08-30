@@ -456,15 +456,15 @@ test("terminal polls compact tiny stream chunks and never reopen frozen output",
   const terminal = await pollSession(processTool, "compact-first", sessionId);
   expect(terminal.content[0]).toMatchObject({
     text:
+      "[earlier output was discarded at the retention cap and cannot be recovered]\n\n" +
+      "[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]\n\n" +
       "oe".repeat(1_000) +
-      "\n\n[earlier output was discarded at the retention cap and cannot be recovered]" +
-      "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]" +
       "\n\nProcess exited with code 0.",
   });
   appendOutput(session, "stderr", "late".repeat(1_000));
   const repeated = await pollSession(processTool, "compact-second", sessionId);
   expect(repeated.content[0]).toMatchObject({
-    text: "(no new output)\n\n[earlier output was discarded at the retention cap and cannot be recovered]\n\nProcess exited with code 0.",
+    text: "[earlier output was discarded at the retention cap and cannot be recovered]\n\n(no new output)\n\nProcess exited with code 0.",
   });
   expect(session.totalOutputChars).toBe(4_000);
   expect(session.pendingOutput).toBe("");
@@ -472,8 +472,8 @@ test("terminal polls compact tiny stream chunks and never reopen frozen output",
   const log = await processTool.execute("compact-log", { action: "log", sessionId });
   expect(log.content[0]).toMatchObject({
     text:
-      "oe".repeat(1_500) +
-      "\n\n[earlier output was discarded at the retention cap and cannot be recovered]",
+      "[earlier output was discarded at the retention cap and cannot be recovered]\n\n" +
+      "oe".repeat(1_500),
   });
 });
 
@@ -753,6 +753,11 @@ test.each([
     expect(runningLogText).toContain("discarded at the retention cap and cannot be recovered");
     expect(runningPollText).toContain("discarded at the retention cap and cannot be recovered");
     expect(finishedLogText).toContain("discarded at the retention cap and cannot be recovered");
+    for (const resultText of [text, runningLogText, runningPollText, finishedLogText]) {
+      expect(resultText).toMatch(
+        /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
+      );
+    }
     expect(text).not.toContain("action=log with offset and limit");
   },
 );

@@ -24,6 +24,11 @@ import {
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
 import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalScopeConfigured,
+  uiSessionRowMatchesSelectedChat,
+} from "../../lib/sessions/session-key.ts";
+import {
   createModelCatalog,
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
@@ -556,6 +561,9 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     modelsLoading: state.chatModelsLoading,
     sending: state.chatSending,
     sessionKey: state.sessionKey,
+    selectedSession: state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    ),
     sessionsResult: state.sessionsResult,
     stream: state.chatStream,
     onFastModeSelect: (value, targetSessionKey) =>
@@ -649,10 +657,23 @@ function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
 
 function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
   const transcript = createTestTranscript();
+  const sessionKey = overrides.sessionKey ?? "main";
+  const sessionHost = overrides.sessionHost;
+  const exactSelectedSession = overrides.sessions?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, sessionKey),
+  );
+  const selectedSession = Object.hasOwn(overrides, "selectedSession")
+    ? overrides.selectedSession
+    : (exactSelectedSession ??
+      (sessionHost && isUiGlobalScopeConfigured(sessionHost)
+        ? overrides.sessions?.sessions.find((row) =>
+            uiSessionRowMatchesSelectedChat(sessionHost, row.key, sessionKey),
+          )
+        : undefined));
   return {
     transcript,
     paneId: "single",
-    sessionKey: "main",
+    sessionKey,
     onSessionKeyChange: () => undefined,
     thinkingLevel: null,
     showThinking: false,
@@ -681,6 +702,7 @@ function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     runError: null,
     approvalCanGrant: false,
     sessions: null,
+    selectedSession,
     canvasPluginSurfaceUrl: null,
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
@@ -2064,31 +2086,31 @@ describe("chat transcript rendering", () => {
 });
 
 describe("chat goal status", () => {
-  function goalSessions(goal: Partial<NonNullable<GatewaySessionRow["goal"]>> = {}) {
-    return createSessionsResultFromRows([
-      {
-        key: "main",
-        kind: "direct",
+  function goalSession(
+    goal: Partial<NonNullable<GatewaySessionRow["goal"]>> = {},
+  ): GatewaySessionRow {
+    return {
+      key: "main",
+      kind: "direct",
+      updatedAt: 2,
+      goal: {
+        schemaVersion: 1,
+        id: "goal-1",
+        objective: "Land the web goal UI",
+        status: "active",
+        createdAt: Date.now() - 15_000,
         updatedAt: 2,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "Land the web goal UI",
-          status: "active",
-          createdAt: Date.now() - 15_000,
-          updatedAt: 2,
-          tokenStart: 100,
-          tokensUsed: 12_400,
-          tokenBudget: 50_000,
-          continuationTurns: 0,
-          ...goal,
-        },
+        tokenStart: 100,
+        tokensUsed: 12_400,
+        tokenBudget: 50_000,
+        continuationTurns: 0,
+        ...goal,
       },
-    ]);
+    };
   }
 
   it("renders the goal pill with status, objective, and elapsed time", () => {
-    const container = renderChatView({ sessions: goalSessions() });
+    const container = renderChatView({ selectedSession: goalSession() });
 
     const goal = container.querySelector(".agent-chat__goal");
     expect(goal?.querySelector(".agent-chat__goal-label")?.textContent).toBe("Pursuing goal");
@@ -2103,7 +2125,7 @@ describe("chat goal status", () => {
 
   it("dispatches typed goal actions from the pill controls", () => {
     const onGoalAction = vi.fn();
-    const container = renderChatView({ sessions: goalSessions(), onGoalAction });
+    const container = renderChatView({ selectedSession: goalSession(), onGoalAction });
 
     container.querySelector<HTMLButtonElement>('button[aria-label="Pause goal"]')?.click();
     container.querySelector<HTMLButtonElement>('button[aria-label="Clear goal"]')?.click();
@@ -2116,7 +2138,7 @@ describe("chat goal status", () => {
   it("offers resume instead of pause for paused goals", () => {
     const onGoalAction = vi.fn();
     const container = renderChatView({
-      sessions: goalSessions({ status: "paused", pausedAt: Date.now() }),
+      selectedSession: goalSession({ status: "paused", pausedAt: Date.now() }),
       onGoalAction,
     });
 
@@ -2133,7 +2155,7 @@ describe("chat goal status", () => {
     });
     const draw = () =>
       renderChatInto(container, {
-        sessions: goalSessions(),
+        selectedSession: goalSession(),
         draft,
         getDraft: () => draft,
         onGoalAction: vi.fn(),
@@ -2154,7 +2176,7 @@ describe("chat goal status", () => {
 
   it("expands goal details on demand", () => {
     const props = createChatProps({
-      sessions: goalSessions({ lastStatusNote: "Waiting for CI" }),
+      selectedSession: goalSession({ lastStatusNote: "Waiting for CI" }),
       onGoalAction: vi.fn(),
     });
     const container = document.createElement("div");
@@ -2192,7 +2214,7 @@ describe("chat goal status", () => {
 
   it("hides goal action buttons when the composer cannot send", () => {
     const container = renderChatView({
-      sessions: goalSessions(),
+      selectedSession: goalSession(),
       onGoalAction: vi.fn(),
       connected: false,
     });
@@ -3260,7 +3282,7 @@ describe("chat loading skeleton", () => {
         Model
       </button>`,
       queue: [createPendingSend()],
-      sessions: createContextUsageSessions(),
+      selectedSession: createContextUsageSessions().sessions[0],
     });
 
     // The composer shows no working chrome; the thread spark is the visible
@@ -3300,7 +3322,7 @@ describe("chat loading skeleton", () => {
           cost: { input: 0.001, output: 0.002 },
         },
       ],
-      sessions: createContextUsageSessions(),
+      selectedSession: createContextUsageSessions().sessions[0],
     });
 
     const context = container.querySelector(".context-ring");
@@ -5342,34 +5364,45 @@ describe("chat slash menu accessibility", () => {
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
   });
 
-  it("opens model-supported thinking arguments after tab-completing /think", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "off", label: "off" },
-      { id: "minimal", label: "minimal" },
-      { id: "low", label: "low" },
-      { id: "medium", label: "medium" },
-      { id: "high", label: "high" },
-      { id: "xhigh", label: "xhigh" },
-      { id: "max", label: "max" },
-      { id: "ultra", label: "ultra" },
-    ];
-    const { container } = createReactiveDraftHarness({ sessions });
+  it.each([
+    { name: "direct", sessionKey: "main", rowKey: "main" },
+    { name: "global alias", sessionKey: "agent:work:main", rowKey: "global" },
+  ])(
+    "opens model-supported thinking arguments after tab-completing /think ($name)",
+    ({ sessionKey, rowKey }) => {
+      const sessions = createSessionsListResult({
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+      });
+      const session = expectDefined(sessions.sessions[0], "active session");
+      session.key = rowKey;
+      session.thinkingLevels = [
+        { id: "off", label: "off" },
+        { id: "minimal", label: "minimal" },
+        { id: "low", label: "low" },
+        { id: "medium", label: "medium" },
+        { id: "high", label: "high" },
+        { id: "xhigh", label: "xhigh" },
+        { id: "max", label: "max" },
+        { id: "ultra", label: "ultra" },
+      ];
+      const { container } = createReactiveDraftHarness({
+        sessions,
+        sessionKey,
+        selectedSession: session,
+      });
 
-    inputDraft(container, "/think");
-    keydownComposer(container, "Tab");
+      inputDraft(container, "/think");
+      keydownComposer(container, "Tab");
 
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-    expect(
-      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-      ),
-    ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
-  });
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
+      expect(
+        Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
+          (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
+        ),
+      ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+    },
+  );
 
   it("suppresses thinking arguments while the active model is switching", () => {
     const sessions = createSessionsListResult({
@@ -5381,7 +5414,11 @@ describe("chat slash menu accessibility", () => {
       { id: "low", label: "low" },
       { id: "high", label: "high" },
     ];
-    const { container } = createReactiveDraftHarness({ modelSwitching: true, sessions });
+    const { container } = createReactiveDraftHarness({
+      modelSwitching: true,
+      sessions,
+      selectedSession: session,
+    });
 
     inputDraft(container, "/think");
     keydownComposer(container, "Tab");
@@ -5400,7 +5437,10 @@ describe("chat slash menu accessibility", () => {
       { id: "low", label: "low" },
       { id: "high", label: "high" },
     ];
-    const { container, renderCurrent } = createReactiveDraftHarness({ sessions });
+    const { container, renderCurrent } = createReactiveDraftHarness({
+      sessions,
+      selectedSession: session,
+    });
 
     inputDraft(container, "/think");
     keydownComposer(container, "Tab");
@@ -7738,6 +7778,42 @@ describe("chat model controls", () => {
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="openrouter"]')
         ?.textContent,
     ).toContain("272k active · 1M max");
+  });
+
+  it("uses selected global session model and speed instead of agent defaults", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-default",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-default", name: "Default GPT", provider: "openai" },
+        { id: "gpt-session", name: "Session GPT", provider: "openai" },
+      ],
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-default",
+      defaultsProvider: "openai",
+      model: "gpt-session",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+    });
+    const selectedSession = expectDefined(state.sessionsResult.sessions[0], "selected session");
+    selectedSession.key = "global";
+    selectedSession.kind = "global";
+    selectedSession.fastMode = true;
+    selectedSession.effectiveFastMode = true;
+
+    const container = renderModelControls(state, {
+      agentDefaultModel: "openai/gpt-default",
+      sessionKey: "agent:work:main",
+      selectedSession,
+    });
+
+    expect(getChatModelSelect(container).dataset.chatSelectValue).toBe("openai/gpt-session");
+    expect(
+      container
+        .querySelector('[data-chat-thinking-select="true"]')
+        ?.getAttribute("data-chat-fast-mode"),
+    ).toBe("true");
   });
 
   it("uses a unique catalog provider before an unrelated stale session hint", () => {

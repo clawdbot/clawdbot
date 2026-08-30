@@ -188,7 +188,7 @@ Default is `full` for gateway/node hosts; a `sandbox` host defaults to
 
 <ParamField path="ask" type='"off" | "on-miss" | "always"'>
   Configured ask policy for host exec. Controls the baseline approval
-  prompt behavior from `tools.exec.ask` and host approvals defaults.
+  prompt behavior from `tools.exec.mode` and host approvals defaults.
   Default is `off`. The per-call `ask` tool parameter (see
   [Exec tool](/tools/exec#parameters)) can only harden that baseline, and
   channel-origin model calls ignore it when the effective host ask is `off`.
@@ -347,9 +347,9 @@ EOF
 
 </Note>
 
-### Session-only shortcut
+### Session and turn shortcuts
 
-- `/exec security=full ask=off` changes only the current session.
+- `/exec security=full ask=off <task>` requests that policy for the current message only. Include the task in the same message; a standalone directive does not affect the next message. Session permission modes and host policy can still restrict the request.
 - `/elevated full` is a break-glass shortcut that skips exec approvals only
   when both the requested policy and the host approvals document resolve to
   `security: "full"` and `ask: "off"`. A stricter host file, such as `ask:
@@ -610,7 +610,7 @@ id=...)` / `Exec denied (gateway id=...)`).
 - **`ask`** keeps you in the loop while still allowing fast approvals.
 - Per-agent allowlists prevent one agent's approvals from leaking into others.
 - Approvals only apply to host exec requests from **authorized senders**. Unauthorized senders cannot issue `/exec`.
-- `/exec security=full` is a session-level convenience for authorized operators and skips approvals by design. To hard-block host exec, set approvals security to `deny` or deny the `exec` tool via tool policy.
+- `/exec security=full <task>` is a current-turn request by an authorized operator, subject to effective session and host policy. To hard-block exec, deny the `exec` tool via tool policy. See [session overrides](/tools/exec#session-overrides-%2Fexec) for the full-access session exception to host approval floors.
 
 ## Related
 

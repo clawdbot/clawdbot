@@ -51,7 +51,7 @@ it("projects admitted work as queued until execution starts", () => {
   expect(registration.markExecutionStarted()).toBe(true);
   expect(state()).toEqual({ active: true, runIds: [runId] });
   expect(registration.markExecutionStarted()).toBe(false);
-  registration.cleanup({ force: true });
+  registration.cleanup();
 });
 
 it("keeps terminal persistence visible only to chat history", () => {

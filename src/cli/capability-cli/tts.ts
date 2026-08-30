@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { callGateway } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeSpeechProviderId } from "../../tts/provider-registry.js";
@@ -163,7 +163,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
     tts
       .command("set-persona")
       .description("Set the active TTS persona")
-      .option("--persona <id>", "TTS persona id")
+      .addOption(new Option("--persona <id>", "TTS persona id").conflicts("off"))
       .option("--off", "Disable the active TTS persona", false),
     "gateway",
     (opts, transport) => {

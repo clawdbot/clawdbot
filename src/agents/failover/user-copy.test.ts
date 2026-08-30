@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  BILLING_ERROR_USER_MESSAGE,
   renderFormatErrorCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
@@ -83,7 +82,9 @@ describe("failover user copy", () => {
     ).toBe(
       "⚠️ Anthropic (claude) returned a billing error — check your account for subscription or usage limits, then try again.",
     );
-    expect(renderBillingReplyCopy({})).toBe(BILLING_ERROR_USER_MESSAGE);
+    expect(renderBillingReplyCopy({})).toBe(
+      "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.",
+    );
   });
 
   it("renders provider-safe missing-key guidance", () => {

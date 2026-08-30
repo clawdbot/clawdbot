@@ -59,7 +59,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Tap to talk" }).click();
 
       const createRequest = await gateway.waitForRequest("talk.client.create");
-      expect(createRequest.params).toMatchObject({ sessionKey: "main" });
+      expect(createRequest.params).toMatchObject({ sessionKey: "agent:main:main" });
       await expect
         .poll(() =>
           page.evaluate(
@@ -422,7 +422,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Start voice input" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
       expect(request.params).toMatchObject({
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       console.info("[video-talk-e2e] session=provider:openai,transport:webrtc");
       await expect
@@ -619,7 +619,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Start voice input" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
       expect(request.params).toMatchObject({
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
       await expect.poll(() => turnCameraOn.isEnabled()).toBe(true);

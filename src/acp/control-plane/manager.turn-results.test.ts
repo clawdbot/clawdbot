@@ -385,7 +385,7 @@ describe("AcpSessionManager turn results", () => {
           status: "failed" as const,
           error: {
             code: "ACP_TURN_FAILED",
-            message: "Codex ACP adapter exited before final output.",
+            message: "Codex ACP adapter timed out before final output.",
           },
         }),
         cancel: vi.fn(async () => {}),
@@ -439,7 +439,7 @@ describe("AcpSessionManager turn results", () => {
         }),
       ).rejects.toMatchObject({
         code: "ACP_TURN_FAILED",
-        message: "Codex ACP adapter exited before final output.",
+        message: "Codex ACP adapter timed out before final output.",
       });
 
       expect(runtimeState.runTurn).not.toHaveBeenCalled();
@@ -454,7 +454,9 @@ describe("AcpSessionManager turn results", () => {
         task: "Investigate and report back",
         status: "failed",
         progressSummary: "Vou mapear o fluxo real primeiro...",
-        error: "AcpRuntimeError [ACP_TURN_FAILED]: Codex ACP adapter exited before final output.",
+        terminalSummary: undefined,
+        error:
+          "AcpRuntimeError [ACP_TURN_FAILED]: Codex ACP adapter timed out before final output.",
       });
     });
   });

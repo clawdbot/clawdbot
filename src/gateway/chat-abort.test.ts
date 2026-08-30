@@ -378,7 +378,7 @@ describe("registerChatAbortController", () => {
     expect(registration.entry?.registrationCleanupRequested).toBe(true);
   });
 
-  it("force-cleans registrations when dispatch fails before lifecycle starts", () => {
+  it("cleans registrations when dispatch fails before lifecycle starts", () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const registration = registerChatAbortController({
       chatAbortControllers,
@@ -388,7 +388,7 @@ describe("registerChatAbortController", () => {
       timeoutMs: 60_000,
     });
 
-    registration.cleanup({ force: true });
+    registration.cleanup();
 
     expect(chatAbortControllers.has("run-before-dispatch")).toBe(false);
   });

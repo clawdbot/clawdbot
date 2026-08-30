@@ -110,6 +110,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       connectionGeneration: scope.generation,
       gatewaySnapshot: scope.context.gateway.snapshot,
       reclaimingKey: this.headerPlacementReclaimingKey,
+      placementStartup: scope.context.placementStartup,
       row,
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       onReclaimingChange,
@@ -133,8 +134,14 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     for (const { key, agentId } of stateValue.deletedSessions) {
       clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
     }
-    state.sessionsResult = stateValue.result;
-    state.sessionsResultAgentId = stateValue.agentId;
+    // A list for another agent must not overwrite this pane's global history.
+    if (
+      !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      stateValue.agentId === resolveChatAgentId(state)
+    ) {
+      state.sessionsResult = stateValue.result;
+      state.sessionsResultAgentId = stateValue.agentId;
+    }
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     this.refreshSwarmRoster();

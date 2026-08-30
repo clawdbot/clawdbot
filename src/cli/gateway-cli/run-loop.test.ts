@@ -727,6 +727,33 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("exits instead of starting a new lifecycle when restart close fails", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const close = vi.fn<GatewayCloseFn>(async () => {
+        throw new TypeError("close owner failed");
+      });
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      await runLoopWithStart({ start, runtime });
+      await waitForStart(started);
+
+      captureSignal("SIGUSR1")();
+
+      await waitForLoopCondition(
+        () => runtime.exit.mock.calls.length > 0 || start.mock.calls.length > 1,
+        "expected restart close failure to exit or start a new lifecycle",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      await expect(exited).resolves.toBe(1);
+      expect(start).toHaveBeenCalledOnce();
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "shutdown step failed (gateway server close): close owner failed",
+      );
+    });
+  });
+
   it("completes SIGTERM shutdown while sidecar startup remains unresolved", async () => {
     vi.clearAllMocks();
 

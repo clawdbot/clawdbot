@@ -128,10 +128,11 @@ describe("Google Live setup timeout", () => {
     stopInputTrack = vi.fn();
     vi.stubGlobal("WebSocket", FakeGoogleLiveWebSocket);
     vi.stubGlobal("AudioContext", FakeAudioContext);
+    const inputTrack = Object.assign(new EventTarget(), { stop: stopInputTrack });
     vi.stubGlobal("navigator", {
       mediaDevices: {
         getUserMedia: vi.fn(async () => ({
-          getTracks: () => [{ stop: stopInputTrack }],
+          getTracks: () => [inputTrack],
         })),
       },
     });

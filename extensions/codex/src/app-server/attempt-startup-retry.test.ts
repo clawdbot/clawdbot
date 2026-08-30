@@ -250,7 +250,7 @@ describe("Codex app-server startup retry", () => {
           expect(exited).toBe(true);
           expect(exitDelivered).toBe(false);
           expect(firstChild.exitCode).toBeNull();
-          return undefined;
+          throw new processSnapshot.ProcessInspectionError("unavailable");
         });
       try {
         const result = await startFixtureAttempt(fixture, factory);
@@ -402,7 +402,7 @@ describe("Codex app-server startup retry", () => {
           expect(error).toBeInstanceOf(Error);
           expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
           expect((error as Error).message).toContain(
-            failure === "commit" ? "512-row limit" : "Cannot register the Codex child process",
+            failure === "commit" ? "512-row limit" : "Process inspection exceeded its deadline",
           );
           expect((error as Error).message).toContain("startup diagnostic: inspection probe");
           expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");

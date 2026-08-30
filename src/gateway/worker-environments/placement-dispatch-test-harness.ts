@@ -33,6 +33,9 @@ export function createHarness(
     runReclaimBarrier?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["runReclaimBarrier"];
+    runFailedReclaimBarrier?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["runFailedReclaimBarrier"];
     failAt?: DispatchStage;
     destroyFails?: boolean;
     destroyFailureCount?: number;
@@ -472,15 +475,17 @@ export function createHarness(
               : await reclaim(options.workspacePath ?? "/gateway/workspace", placement, authorize);
           },
         })),
-    runFailedReclaimBarrier: async ({ sessionId, sessionKey, authorize, reclaim }) =>
-      await runExclusiveSessionLifecycleMutation({
-        scope: options.workspacePath ?? "/gateway/workspace",
-        identities: [sessionId, sessionKey],
-        run: async () => {
-          authorize?.();
-          return await reclaim(authorize);
-        },
-      }),
+    runFailedReclaimBarrier:
+      options.runFailedReclaimBarrier ??
+      (async ({ sessionId, sessionKey, authorize, reclaim }) =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: options.workspacePath ?? "/gateway/workspace",
+          identities: [sessionId, sessionKey],
+          run: async () => {
+            authorize?.();
+            return await reclaim(authorize);
+          },
+        })),
     resolveWorkspacePath: async () => {
       fail("workspace");
       return options.workspacePath ?? "/gateway/workspace";

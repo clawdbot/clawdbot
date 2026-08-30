@@ -12,7 +12,7 @@ export function buildRestartLifecycleReplyText(): string {
   return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 }
 
-export function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
+function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
   if (
     replyOperation?.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
@@ -27,7 +27,7 @@ export function isReplyOperationUserAbort(replyOperation?: ReplyOperation): bool
   );
 }
 
-export function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
+function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
   if (
     replyOperation?.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_for_restart"
@@ -60,6 +60,18 @@ export function isReplyOperationSuperseded(replyOperation?: ReplyOperation): boo
   }
   const abortSignal = replyOperation?.abortSignal;
   return abortSignal?.aborted === true && isAgentRunSupersededAbortReason(abortSignal.reason);
+}
+
+export function resolveReplyOperationAbortReason(
+  replyOperation?: ReplyOperation,
+): "user" | "restart" | "superseded" | undefined {
+  return isReplyOperationRestartAbort(replyOperation)
+    ? "restart"
+    : isReplyOperationSuperseded(replyOperation)
+      ? "superseded"
+      : isReplyOperationUserAbort(replyOperation)
+        ? "user"
+        : undefined;
 }
 
 export function resolveRestartLifecycleError(

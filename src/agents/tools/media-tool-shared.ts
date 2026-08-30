@@ -594,6 +594,22 @@ export async function resolveMediaToolReferenceAccess(params: {
 
 type LoadedToolReferenceMedia = WebMediaResult | ReturnType<typeof decodeDataUrl>;
 
+export type MediaToolSandbox = Pick<
+  SandboxedBridgeMediaPathConfig,
+  "root" | "bridge" | "stagedMediaPaths"
+>;
+
+export function resolveMediaToolSandboxConfig(
+  sandbox: MediaToolSandbox | null | undefined,
+  workspaceOnly: boolean | undefined,
+): SandboxedBridgeMediaPathConfig | null {
+  if (!sandbox) {
+    return null;
+  }
+  const root = sandbox.root.trim();
+  return root ? { ...sandbox, root, workspaceOnly: workspaceOnly === true } : null;
+}
+
 /** Loads generation references while retaining each tool's distinct transport and sandbox policy. */
 export async function loadMediaToolReferences<T>(params: {
   inputs: string[];

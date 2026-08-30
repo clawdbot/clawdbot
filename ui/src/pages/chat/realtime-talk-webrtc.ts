@@ -4,7 +4,7 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/des
 import { formatUiError } from "../../lib/format-error.ts";
 import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
 import { RealtimeTalkCameraController } from "./realtime-talk-camera-controller.ts";
-import { openRealtimeTalkCamera, openRealtimeTalkInput } from "./realtime-talk-input.ts";
+import { openRealtimeTalkCamera, RealtimeTalkInputController } from "./realtime-talk-input.ts";
 import {
   type RealtimeTalkWebRtcSdpSessionResult,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -44,7 +44,7 @@ const cancelledSetup = Symbol("cancelledSetup");
 export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
-  private media: MediaStream | null = null;
+  private readonly input = new RealtimeTalkInputController((detail) => this.failConnection(detail));
   private audio: HTMLAudioElement | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private closed = false;
@@ -56,7 +56,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   );
   private readonly completedToolCallIds = new Set<string>();
   private readonly offerExchange = new RealtimeTalkWebRtcOfferExchange();
-  private mediaSetupController: AbortController | null = null;
   private readonly camera: RealtimeTalkCameraController;
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
@@ -84,7 +83,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.closed = false;
     this.starting = true;
     this.startupError = null;
-    this.mediaSetupController?.abort();
     const peer = new RTCPeerConnection();
     this.peer = peer;
     this.audio = document.createElement("audio");
@@ -117,29 +115,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         event.track.addEventListener("unmute", () => play(true), { once: true });
       }
     });
-    const mediaSetupController = new AbortController();
-    this.mediaSetupController = mediaSetupController;
-    let media: MediaStream | typeof cancelledSetup;
-    try {
-      media = await this.awaitSetupStep(
-        peer,
-        openRealtimeTalkInput(this.ctx.inputDeviceId, {
-          signal: mediaSetupController.signal,
-        }),
-      );
-    } finally {
-      if (this.mediaSetupController === mediaSetupController) {
-        this.mediaSetupController = null;
-      }
-    }
-    if (media === cancelledSetup) {
+    const media = await this.awaitSetupStep(peer, this.input.open(this.ctx.inputDeviceId));
+    if (media === cancelledSetup || !this.isCurrentPeer(peer)) {
       return this.cancelledStart();
     }
-    if (!this.isCurrentPeer(peer)) {
-      media.getTracks().forEach((track) => track.stop());
-      return this.cancelledStart();
-    }
-    this.media = media;
     if (this.ctx.callbacks.onInputLevel) {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
       this.inputMeter.start(media);
@@ -261,15 +240,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
 
   private releaseResources(): void {
     this.starting = false;
-    this.mediaSetupController?.abort();
-    this.mediaSetupController = null;
+    this.input.stop();
     this.offerExchange.abort();
     this.channel?.close();
     this.channel = null;
     this.peer?.close();
     this.peer = null;
-    this.media?.getTracks().forEach((track) => track.stop());
-    this.media = null;
     this.camera.release();
     this.inputMeter?.stop();
     this.inputMeter = null;

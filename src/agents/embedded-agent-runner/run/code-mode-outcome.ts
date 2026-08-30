@@ -9,7 +9,7 @@ import { readToolResultDetails } from "../../tool-result-error.js";
 /** Preserve the model's ordinary error recovery without replaying uncertain mutations. */
 export function installCodeModeOutcomeHook(params: {
   agent: Agent;
-  onReconciliationCandidate?: () => void;
+  onReconciliationCandidate?: (parentToolCallId: string) => void;
 }): void {
   const previousAfterToolOutcome = params.agent.afterToolOutcome?.bind(params.agent);
 
@@ -64,7 +64,7 @@ export function installCodeModeOutcomeHook(params: {
       isCodeModeExec &&
       context.assistantMessage.content.filter((entry) => entry.type === "toolCall").length === 1
     ) {
-      params.onReconciliationCandidate?.();
+      params.onReconciliationCandidate?.(context.toolCall.id);
     }
 
     // Agent core owns ordinary continuation; only uncertain side effects need a restricted retry.

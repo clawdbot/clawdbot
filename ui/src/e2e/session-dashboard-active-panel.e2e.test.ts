@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -63,7 +64,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}dashboard`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       await page.locator(".board-session-surface").waitFor();
       const terminal = page.getByRole("tab", { name: "Terminal", exact: true });
       const chat = page.getByRole("tab", { name: "Board chat", exact: true });

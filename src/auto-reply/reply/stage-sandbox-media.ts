@@ -170,6 +170,7 @@ export async function stageSandboxMedia(params: {
         path: stagedPath,
         ...(stagedUrlAliases.has(index) ? { url: stagedPath } : {}),
         workspaceDir: effectiveWorkspaceDir,
+        staged: true,
       };
     }
   }

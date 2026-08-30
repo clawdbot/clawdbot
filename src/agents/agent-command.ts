@@ -59,14 +59,10 @@ import type {
   AgentCommandIngressOpts,
   AgentCommandOpts,
 } from "./command/types.js";
-import {
-  removeInternalSessionEffectsSession,
-  resolveInternalSessionEffectsTarget,
-} from "./internal-session-effects.js";
+import { createInternalSessionEffectsCleanup } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery/main-session-recovery-clear.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
-import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { measureAgentStartup } from "./startup-timing.js";
@@ -169,21 +165,16 @@ async function agentCommandInternal(
     | RestartRecoveryTerminalDeliveryEvidenceResult
     | undefined;
   const preparedSessionId = sessionEntry?.sessionId;
-  const internalModelRunTargets =
-    initialOpts.modelRun === true && suppressVisibleSessionEffects
-      ? new Map<string, AgentRunSessionTarget>()
-      : undefined;
-  const trackInternalModelRunTarget = (target: AgentRunSessionTarget | undefined) => {
-    if (!internalModelRunTargets || !target?.sessionKey || !target.storePath) {
-      return;
-    }
-    internalModelRunTargets.set(`${target.storePath}\n${target.sessionKey}`, target);
-  };
-  if (internalModelRunTargets && storePath) {
-    trackInternalModelRunTarget(
-      resolveInternalSessionEffectsTarget({ agentId: sessionAgentId, runId, storePath }),
-    );
-  }
+  const { track: trackInternalModelRunTarget, cleanup: cleanupInternalModelRunTargets } =
+    createInternalSessionEffectsCleanup({
+      enabled: initialOpts.modelRun === true && suppressVisibleSessionEffects,
+      agentId: sessionAgentId,
+      runId,
+      storePath,
+      onError: (error) => {
+        log.warn(`failed to remove model-run SQLite session: ${coerceErrorMessage(error)}`);
+      },
+    });
 
   let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
@@ -506,6 +497,11 @@ async function agentCommandInternal(
         onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
           lifecycleGeneration = nextLifecycleGeneration;
         },
+        onCompactionAccounting: (fact) => {
+          if (fact.kind === "durable") {
+            runOwnedSessionId = fact.target.sessionId;
+          }
+        },
         suppressVisibleSessionEffects,
         preserveUserFacingSessionModelState,
         modelSelection,
@@ -547,19 +543,7 @@ async function agentCommandInternal(
   } finally {
     await preparedRunAdmission?.finish();
     sessionWorkAdmission?.release();
-    if (internalModelRunTargets) {
-      // Compaction may rotate a private session identity. Remove every owned
-      // SQLite row only after delivery; transcript and trajectory rows cascade.
-      for (const target of internalModelRunTargets.values()) {
-        try {
-          await removeInternalSessionEffectsSession(target);
-        } catch (error) {
-          // Cleanup remains best-effort so a terminal SQLite write failure does
-          // not replace the completed model-run result; the DB layer warns too.
-          log.warn(`failed to remove model-run SQLite session: ${coerceErrorMessage(error)}`);
-        }
-      }
-    }
+    await cleanupInternalModelRunTargets();
     if (
       !sessionReboundDuringRun &&
       trackedRestartRecoveryDeliveryClaim &&

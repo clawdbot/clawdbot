@@ -62,7 +62,8 @@ const exitMock = vi.fn((_code: number): never => {
 });
 const errorMock = vi.fn();
 const runtimeMock = { log: vi.fn(), error: errorMock, exit: exitMock };
-vi.mock("../../../runtime.js", () => ({
+vi.mock("../../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../runtime.js")>()),
   defaultRuntime: runtimeMock,
 }));
 

@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createAssistantMessageEventStream,
@@ -33,6 +34,7 @@ import {
   createResourceLoader,
 } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
+import { clearExtensionCache, loadExtensionsCached } from "./extensions/loader.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -575,6 +577,79 @@ describe("AgentSession loop correctness", () => {
 
     expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
     expect(compactionEvents).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "stops after a plugin terminates a normal result",
+      toolTerminate: undefined,
+      pluginTerminate: true,
+      expectedModelTurns: 1,
+    },
+    {
+      label: "continues after a plugin clears terminal state",
+      toolTerminate: true,
+      pluginTerminate: false,
+      expectedModelTurns: 2,
+    },
+  ])("$label", async ({ toolTerminate, pluginTerminate, expectedModelTurns }) => {
+    const passthroughTool: ToolDefinition = {
+      name: "finish_via_middleware",
+      label: "Finish via middleware",
+      description: "returns a tool result that middleware can update",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text", text: "raw tool result" }],
+        details: {},
+        ...(toolTerminate === undefined ? {} : { terminate: toolTerminate }),
+      }),
+    };
+    const pluginDir = tempDirs.make("openclaw-terminate-plugin-");
+    const pluginPath = path.join(pluginDir, "extension.mjs");
+    await writeFile(
+      pluginPath,
+      `export default async function(api) {
+  api.on("tool_result", async event => ({ ...event, terminate: ${pluginTerminate} }));
+}
+`,
+    );
+    clearExtensionCache();
+    const loaded = await loadExtensionsCached([pluginPath], pluginDir);
+    expect(loaded.errors).toEqual([]);
+    expect(loaded.extensions).toHaveLength(1);
+    expect(loaded.extensions[0]?.handlers.get("tool_result")).toHaveLength(1);
+    const resourceLoader = {
+      ...createResourceLoader(),
+      getExtensions: () => loaded,
+    };
+    let modelTurns = 0;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
+      modelTurns += 1;
+      return createAssistantResultStream(
+        createAssistant(
+          activeModel,
+          modelTurns === 1
+            ? [
+                {
+                  type: "toolCall",
+                  id: "call-finish-via-middleware",
+                  name: "finish_via_middleware",
+                  arguments: {},
+                },
+              ]
+            : [{ type: "text", text: "continued" }],
+          modelTurns === 1 ? "toolUse" : "stop",
+        ),
+      );
+    });
+    const { session } = await createTestSession({
+      resourceLoader,
+      customTools: [passthroughTool],
+    });
+
+    await session.prompt("finish through loaded middleware");
+
+    expect(modelTurns).toBe(expectedModelTurns);
   });
 
   it("does not retry a high-usage turn terminated by a tool result", async () => {

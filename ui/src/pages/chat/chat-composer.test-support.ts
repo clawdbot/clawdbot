@@ -21,6 +21,9 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
     modelCatalog: [],
     modelSwitching: false,
     sessions: null,
+    selectedSession: overrides.sessions?.sessions.find(
+      (row) => row.key === (overrides.sessionKey ?? "main"),
+    ),
     assistantName: "OpenClaw",
     onDraftChange: vi.fn(),
     onSend: vi.fn(),

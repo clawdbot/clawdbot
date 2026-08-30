@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { BILLING_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -105,7 +105,7 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
   it("renders post-compaction context after dispatcher normalization", async () => {
     const dispatchParams = createVisibleDispatchParams(async () =>
       setReplyPayloadMetadata(
-        { text: BILLING_ERROR_USER_MESSAGE, isError: true },
+        { text: formatBillingErrorMessage(), isError: true },
         { postCompactionModelFailure: true },
       ),
     );
@@ -113,7 +113,7 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
     await dispatchReplyFromConfig(dispatchParams);
 
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: `⚠️ Context compaction succeeded, but the later model request still failed. ${BILLING_ERROR_USER_MESSAGE.replace(/^⚠️\s*/u, "")}`,
+      text: `⚠️ Context compaction succeeded, but the later model request still failed. ${formatBillingErrorMessage().replace(/^⚠️\s*/u, "")}`,
       isError: true,
     });
   });

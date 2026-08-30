@@ -87,6 +87,7 @@ import {
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
 import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
+import { subscribeToolTitleChanges } from "./tool-titles.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
@@ -297,14 +298,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     });
   }
 
-  protected readonly handlePaneFocus = () => {
-    this.onFocusPane?.(this.paneId);
-  };
+  protected readonly handlePaneFocus = () => this.onFocusPane?.(this.paneId);
 
   /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
-    const accepted = admitBrowserAnnotation(this.state, this.active && this.presented, event);
-    if (!accepted) {
+    if (!admitBrowserAnnotation(this.state, this.active && this.presented, event)) {
       return;
     }
     // A null mount binds only when its first annotation ownership begins.
@@ -437,6 +435,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
     document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
     const chatState = this.chatState;
+    chatState.addCleanup(subscribeToolTitleChanges(() => this.state?.requestUpdate?.()));
     chatState.addCleanup(() => {
       document.removeEventListener("keydown", this.handleDocumentKeydown, true);
       document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);

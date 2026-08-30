@@ -15,10 +15,9 @@ import { summarizeToolDescriptionText } from "../../agents/tool-description-summ
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { buildPluginToolMetadataKey, getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
-  buildPluginToolMetadataKey,
   ensureStandalonePluginToolRegistryLoaded,
-  getPluginToolMeta,
   resolvePluginTools,
 } from "../../plugins/tools.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";

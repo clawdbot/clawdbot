@@ -588,10 +588,15 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
   it.each([
     { label: "visible catalog ID", id: "gpt-5.6-sol", hidden: false, requested: "gpt-5.6-sol" },
-    { label: "hidden catalog ID", id: "umbreon-latest", hidden: true, requested: "umbreon-latest" },
+    {
+      label: "hidden catalog ID",
+      id: "test-hidden-catalog",
+      hidden: true,
+      requested: "test-hidden-catalog",
+    },
     {
       label: "hidden execution ID",
-      id: "umbreon-latest",
+      id: "test-hidden-catalog",
       hidden: true,
       requested: "codex-execution-model",
     },
@@ -625,7 +630,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   it("keeps hidden models out of live-default selection", async () => {
     const fake = createClientFactory({
       models: [
-        { ...codexModel("umbreon-latest"), hidden: true, isDefault: false },
+        { ...codexModel("test-hidden-catalog"), hidden: true, isDefault: false },
         { ...codexModel("image-only-default"), inputModalities: ["image"] },
         { ...codexModel("visible-execution-model", "visible-model"), isDefault: false },
       ],

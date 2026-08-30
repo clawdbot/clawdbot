@@ -114,7 +114,7 @@ export function startAgentRunExecution(params: {
   let preparedModelRuntimeLease: typeof prepared.preparedModelRuntimeLease | undefined =
     prepared.preparedModelRuntimeLease;
   let releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
-  const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = (options) => {
+  const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = () => {
     const refsToDiscard = unpersistedOffloadedRefs;
     unpersistedOffloadedRefs = [];
     try {
@@ -130,7 +130,7 @@ export function startAgentRunExecution(params: {
         `failed to settle pending agent input: ${formatForLog(error)}`,
       );
     }
-    prepared.activeRunAbort.cleanup(options);
+    prepared.activeRunAbort.cleanup();
     prepared.activeGatewayWorkAdmission.release();
     const runtimeLease = preparedModelRuntimeLease;
     preparedModelRuntimeLease = undefined;
@@ -540,7 +540,7 @@ export function startAgentRunExecution(params: {
               );
             } finally {
               try {
-                cleanupAdmittedRun({ force: true });
+                cleanupAdmittedRun();
               } finally {
                 scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
               }

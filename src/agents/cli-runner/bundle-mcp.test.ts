@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveBundlePluginRoot,
   writeBundleTextFiles,
@@ -12,9 +13,11 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
+  cliNativeMcpPolicyContext,
   prepareBundleProbeCliConfig,
   requireMcpConfigPath,
   setupCliBundleMcpTestHarness,
+  writeCliMcpPolicyProbeServer,
 } from "./bundle-mcp.test-support.js";
 
 setupCliBundleMcpTestHarness();
@@ -207,6 +210,211 @@ describe("prepareCliBundleMcpConfig", () => {
     });
 
     expect(prepared.backend.args).toContain("Bash(rm *),WebSearch,mcp__docs__delete_docs");
+    await prepared.cleanup?.();
+  });
+
+  it("matches Claude's normalized MCP permission identifiers", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-normalized-deny-",
+    );
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir,
+      config: { plugins: { enabled: false } },
+      exclusiveConfig: { mcpServers: { "docs.prod": { command: "node" } } },
+      toolOverrides: { mcpToolsDeny: { "docs.prod": ["read.value", "read:value"] } },
+    });
+
+    const args = prepared.backend.args?.join(",") ?? "";
+    expect(args.match(/mcp__docs_prod__read_value/g) ?? []).toHaveLength(1);
+    await prepared.cleanup?.();
+  });
+
+  it("projects durable policy into the first Claude process config and argv", async () => {
+    const serverPath = await writeCliMcpPolicyProbeServer();
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      tools: { allow: ["docs__*"], deny: ["docs__delete_docs"] },
+      mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
+    };
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      config,
+      additionalConfig: {
+        mcpServers: { openclaw: { url: "http://127.0.0.1:31783/mcp" } },
+      },
+      toolOverrides: { mcpToolsDeny: { openclaw: ["message"] } },
+      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "claude-policy"),
+    });
+
+    const args = prepared.backend.args?.join(",") ?? "";
+    expect(args).toContain("mcp__docs__delete_docs");
+    expect(args).toContain("mcp__docs__task_docs");
+    expect(args).toContain("mcp__docs__app_docs");
+    expect(args).toContain("mcp__openclaw__message");
+    const raw = JSON.parse(
+      await fs.readFile(requireMcpConfigPath(prepared.backend.args), "utf-8"),
+    ) as { mcpServers?: Record<string, { toolFilter?: unknown }> };
+    expect(Object.keys(raw.mcpServers ?? {})).toEqual(["docs", "openclaw"]);
+    expect(raw.mcpServers?.docs?.toolFilter).toBeUndefined();
+    await prepared.cleanup?.();
+  });
+
+  it("hides non-model MCP tools from Claude without an explicit policy", async () => {
+    const serverPath = await writeCliMcpPolicyProbeServer();
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
+    };
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      config,
+      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "claude-default-hidden"),
+    });
+
+    const args = prepared.backend.args?.join(",") ?? "";
+    expect(args).toContain("mcp__docs__app_docs");
+    expect(args).toContain("mcp__docs__task_docs");
+    expect(args).not.toContain("mcp__docs__read_docs");
+    expect(args).not.toContain("mcp__docs__delete_docs");
+    await prepared.cleanup?.();
+  });
+
+  it("projects configured MCP filters into Claude denials without a global tool policy", async () => {
+    const serverPath = await writeCliMcpPolicyProbeServer();
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      mcp: {
+        servers: {
+          docs: {
+            command: process.execPath,
+            args: [serverPath],
+            toolFilter: { include: ["read_*"] },
+          },
+        },
+      },
+    };
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      config,
+      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "claude-configured-filter"),
+    });
+
+    const args = prepared.backend.args?.join(",") ?? "";
+    expect(args).toContain("mcp__docs__delete_docs");
+    expect(args).toContain("mcp__docs__task_docs");
+    expect(args).toContain("mcp__docs__app_docs");
+    expect(args).not.toContain("mcp__docs__read_docs");
+    await prepared.cleanup?.();
+  });
+
+  it("projects an exact runtime cap into Claude before spawn", async () => {
+    const serverPath = await writeCliMcpPolicyProbeServer();
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
+    };
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      config,
+      nativeMcpPolicy: {
+        ...cliNativeMcpPolicyContext(config, "claude-runtime-cap"),
+        runtimeToolsAllow: ["docs__read_docs"],
+      },
+    });
+
+    const args = prepared.backend.args?.join(",") ?? "";
+    expect(args).toContain("mcp__docs__delete_docs");
+    expect(args).toContain("mcp__docs__task_docs");
+    expect(args).toContain("mcp__docs__app_docs");
+    expect(args).not.toContain("mcp__docs__read_docs");
+    await prepared.cleanup?.();
+  });
+
+  it("omits a fully excluded server while retaining an allowed sibling server", async () => {
+    const serverPath = await writeCliMcpPolicyProbeServer();
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      tools: { allow: ["docs__read_docs"] },
+      mcp: {
+        servers: {
+          docs: { command: process.execPath, args: [serverPath] },
+          admin: { command: process.execPath, args: [serverPath] },
+        },
+      },
+    };
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      config,
+      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "claude-server-omission"),
+    });
+    const raw = JSON.parse(
+      await fs.readFile(requireMcpConfigPath(prepared.backend.args), "utf-8"),
+    ) as { mcpServers?: Record<string, unknown> };
+
+    expect(Object.keys(raw.mcpServers ?? {})).toEqual(["docs"]);
+    await prepared.cleanup?.();
+  });
+
+  it("omits every configured MCP server removed by durable policy", async () => {
+    const serverPath = await writeCliMcpPolicyProbeServer();
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      tools: { allow: ["missing__tool"] },
+      mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
+    };
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      config,
+      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "claude-policy-empty"),
+    });
+    const raw = JSON.parse(
+      await fs.readFile(requireMcpConfigPath(prepared.backend.args), "utf-8"),
+    ) as { mcpServers?: Record<string, unknown> };
+    expect(raw.mcpServers).toEqual({});
+    await prepared.cleanup?.();
+  });
+
+  it("omits a server whose restrictive policy catalog cannot be established", async () => {
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      tools: { deny: ["docs__delete_docs"] },
+      mcp: {
+        servers: { docs: { command: process.execPath, args: ["-e", "process.exit(1)"] } },
+      },
+    };
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      config,
+      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "claude-policy-catalog-failure"),
+    });
+    const raw = JSON.parse(
+      await fs.readFile(requireMcpConfigPath(prepared.backend.args), "utf-8"),
+    ) as { mcpServers?: Record<string, unknown> };
+    expect(raw.mcpServers).toEqual({});
     await prepared.cleanup?.();
   });
 

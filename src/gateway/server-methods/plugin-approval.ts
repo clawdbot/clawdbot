@@ -89,13 +89,13 @@ export function createPluginApprovalHandlers(
         description: string;
         detail?: string | null;
         severity?: string | null;
-        scope?: ApprovalScope;
+        scope?: ApprovalScope | null;
         toolName?: string | null;
         toolCallId?: string | null;
         allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
-        approvalReviewerDeviceIds?: string[];
+        approvalReviewerDeviceIds?: string[] | null;
         turnSourceChannel?: string | null;
         turnSourceTo?: string | null;
         turnSourceAccountId?: string | null;

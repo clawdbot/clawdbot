@@ -187,6 +187,7 @@ export function createService(
       | "bootstrapCallTimeoutMs"
       | "executeInference"
       | "executeSessionTool"
+      | "executeComputer"
       | "providerCallTimeoutMs"
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"

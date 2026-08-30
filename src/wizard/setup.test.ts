@@ -1047,6 +1047,7 @@ describe("runSetupWizard", () => {
       }
 
       expect(probeGatewayReachable).toHaveBeenCalledWith({
+        originScopedDeviceAuth: true,
         url: "wss://flag.example.com:18789",
         config: expect.any(Object),
         token: remoteKey === "token" ? remoteCredential : undefined,
@@ -1096,6 +1097,7 @@ describe("runSetupWizard", () => {
     );
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
+      originScopedDeviceAuth: true,
       url: "wss://gateway.example.test",
       config: expect.any(Object),
       token: undefined,
@@ -1124,6 +1126,7 @@ describe("runSetupWizard", () => {
       );
 
       expect(probeGatewayReachable).toHaveBeenCalledWith({
+        originScopedDeviceAuth: true,
         url: "wss://gateway.example.test",
         config: expect.objectContaining({
           gateway: config.gateway,
@@ -1160,6 +1163,7 @@ describe("runSetupWizard", () => {
     }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
+      originScopedDeviceAuth: true,
       url: "wss://gateway.example.test",
       config: expect.any(Object),
       token: "resolved-remote-token",
@@ -1195,6 +1199,7 @@ describe("runSetupWizard", () => {
     }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
+      originScopedDeviceAuth: true,
       url: "wss://gateway.example.test",
       config: expect.any(Object),
       token: "ambient-token",
@@ -1243,6 +1248,7 @@ describe("runSetupWizard", () => {
     }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
+      originScopedDeviceAuth: true,
       url: "wss://flag.example.com:18789",
       config: expect.objectContaining({
         gateway: expect.objectContaining({

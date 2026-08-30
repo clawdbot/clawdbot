@@ -22,7 +22,10 @@ import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approv
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
-import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
+import type {
+  EmbeddedRunAttemptInternalParams,
+  RunEmbeddedAgentInternalParams,
+} from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
@@ -30,6 +33,7 @@ import {
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
+import type { CodeModeRecoveryState } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
 type InternalRunParams = RunEmbeddedAgentInternalParams & {
@@ -117,6 +121,7 @@ type AttemptControl = {
 
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
+  codeModeRecovery?: Exclude<CodeModeRecoveryState, { kind: "idle" }>;
   /** Run-owned start timestamp captured before admission; projected on recovery. */
   runStartedAtMs: number;
   runtime: AttemptRuntime;
@@ -270,7 +275,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     sessionKey: params.sessionKey,
     toolsAllow: params.toolsAllow,
   });
-  const attemptParams: EmbeddedRunAttemptParams = {
+  const attemptParams: EmbeddedRunAttemptInternalParams = {
     admittedRunContext: params.admittedRunContext,
     startedAtMs: input.runStartedAtMs,
     contextEngineAgentId: runtime.contextEngineAgentId,
@@ -495,13 +500,16 @@ export async function dispatchEmbeddedRunAttempt(input: {
     // Authorized prompt enrichment needs the exact prepared turn policy identity.
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     sessionPersistence: params.sessionPersistence,
+    // The host loop settles all completed counts, including default/SDK runs.
+    compactionCountOwner: "caller",
+    onContextAccountingEvent: params.onContextAccountingEvent,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
+    codeModeRecovery: input.codeModeRecovery,
     forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeReconciliationTools: params.forceCodeModeReconciliationTools,
     forceCodeModeTools: params.forceCodeModeTools,
     codeModeOverride: params.codeModeOverride,
     forceMessageTool: params.forceMessageTool,

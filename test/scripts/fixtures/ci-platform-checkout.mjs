@@ -33,9 +33,25 @@ function saveRef(cwd, ref, revision) {
 }
 
 function recordCommand(tool, cwd, commandArgs, configuration) {
+  const envProbe = options.performance
+    ? JSON.stringify({
+        token: Boolean(process.env.CLAWGRIT_REPORTS_APP_TOKEN),
+        auth: Boolean(process.env.GIT_CONFIG_VALUE_1),
+        hooks: process.env.GIT_CONFIG_VALUE_0 ?? null,
+        prompt: process.env.GIT_TERMINAL_PROMPT ?? null,
+        count: process.env.GIT_CONFIG_COUNT ?? null,
+      })
+    : process.env.CI_OWNER_PROBE;
+  if (
+    commandArgs[0] === "config" &&
+    commandArgs.includes("http.https://github.com/.extraheader") &&
+    commandArgs.at(-1).startsWith("AUTHORIZATION:")
+  ) {
+    commandArgs = [...commandArgs.slice(0, -1), "[redacted]"];
+  }
   fs.appendFileSync(
     commandsFile,
-    `${JSON.stringify({ tool, cwd, args: commandArgs, configuration, envProbe: process.env.CI_OWNER_PROBE })}\n`,
+    `${JSON.stringify({ tool, cwd, args: commandArgs, configuration, envProbe })}\n`,
   );
 }
 
@@ -110,7 +126,9 @@ function liveRecords() {
       if (result.status === 1 && result.stdout === "") {
         continue;
       }
-      const row = /^(\d+)\s+([RSDTtXZxKWPIU][<+NLlsEVWX]*)$/u.exec(result.stdout.trim());
+      // Darwin can expose ?E during exit. Count it as live until a later census
+      // proves termination; never turn that transient state into a dead receipt.
+      const row = /^(\d+)\s+([RSDTtXZxKWPIU?][<+NLlsEVWX]*)$/u.exec(result.stdout.trim());
       if (result.status !== 0 || !row || Number(row[1]) !== pid) {
         throw new Error(
           `Fixture process census returned an invalid row (exit ${result.status}, pid ${pid}, stdout ${JSON.stringify(result.stdout)})`,
@@ -130,6 +148,30 @@ function liveRecords() {
     fs.writeFileSync(path.join(recordsDir, `${entry.instance}.dead`), "");
     return false;
   });
+}
+
+function isWorkflowDescendant(pid, shellPid) {
+  const deadline = Date.now() + 1_000;
+  const visited = new Set();
+  while (pid > 1 && !visited.has(pid)) {
+    if (pid === shellPid) return true;
+    visited.add(pid);
+    const result = spawnSync("/bin/ps", ["-o", "ppid=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: Math.max(1, deadline - Date.now()),
+    });
+    if (
+      result.error ||
+      result.status !== 0 ||
+      result.stderr ||
+      Date.now() > deadline ||
+      !/^\d+$/u.test(result.stdout.trim())
+    ) {
+      throw new Error("Fixture owner ancestry census failed");
+    }
+    pid = Number(result.stdout.trim());
+  }
+  return false;
 }
 
 function boundary(name) {
@@ -215,9 +257,26 @@ function writeConsumer(target, tool) {
 
 async function command() {
   holdLease();
-  record(process.pid, mode);
+  if (!options.performance || mode !== "observe") record(process.pid, mode);
   if (mode === "sentinel") {
     return;
+  }
+  if (mode === "observe") {
+    boundary(args[0]);
+    process.exit(0);
+  }
+  if (options.performance && ["curl", "tar", "sha256sum", "npm"].includes(mode)) {
+    boundary(`consumer:${mode}`);
+    recordCommand(mode, process.cwd(), args);
+    if (mode === "tar") {
+      const directory = insideOwnedPath(args[args.indexOf("-C") + 1]);
+      fs.writeFileSync(path.join(directory, "ocm"), "fixture\n");
+    }
+    process.exit(0);
+  }
+  if (mode === "date") {
+    fs.writeSync(1, "2026-08-28T22:30:00Z\n");
+    process.exit(0);
   }
   if (mode === "find") {
     insideOwnedPath(args[0]);
@@ -226,10 +285,23 @@ async function command() {
     const result = spawnSync("/usr/bin/find", args, { stdio: "inherit" });
     process.exit(result.status ?? 1);
   }
+  if (mode === "rm") {
+    const target = insideOwnedPath(args.at(-1));
+    if (target === path.join(workspace, "publish")) {
+      boundary("delete");
+    }
+    recordCommand(mode, process.cwd(), args);
+    const result = spawnSync("/bin/rm", args, { stdio: "inherit" });
+    process.exit(result.status ?? 1);
+  }
   if (mode === "child" || mode === "grandchild") {
     const attempt = Number(args[0]);
     process.on("SIGTERM", () => {
-      if (options.cancelDuringCleanup) {
+      if (
+        options.cancelDuringCleanup &&
+        (!options.cleanupCancelMatch ||
+          fs.existsSync(path.join(root, `cleanup-target-${attempt}.json`)))
+      ) {
         publish("cleanup-started.json", attempt);
       }
       if (options.cooperativeTrees) {
@@ -252,7 +324,25 @@ async function command() {
   if (["gh", "node", "pnpm", "go", "crabbox"].includes(mode)) {
     const cwd = insideOwnedPath(process.cwd());
     recordCommand(mode, cwd, args);
+    if (options.performance && mode === "node") {
+      boundary("consumer:node");
+      const allowed = [
+        options.env.PERFORMANCE_REPORT_SELECTOR,
+        options.env.PERFORMANCE_PUBLISHER_HELPER,
+      ];
+      if (allowed.includes(args[0]) || args[0] === "-e") {
+        const result = spawnSync(process.execPath, args, { stdio: "inherit" });
+        process.exit(result.status ?? 1);
+      }
+      if (args[0] === "-") process.exit(0); // OCM dependency check, no install in this fixture.
+      throw new Error("Unexpected performance Node command");
+    }
     if (mode === "node" && args[0] === "-e") {
+      if (options.docsPublish) {
+        // Execute only the workflow's trusted JSON reader for pre-fix RED proof.
+        const result = spawnSync(process.execPath, args, { stdio: "inherit" });
+        process.exit(result.status ?? 1);
+      }
       // The workflow's package-script capability probe; never evaluate candidate code.
       process.exit(0);
     }
@@ -282,18 +372,24 @@ async function command() {
         throw new Error("Unexpected fixture Crabbox probe");
       }
     }
+    if (mode === "gh" && options.publisher) {
+      const result = spawnSync("bash", [options.publisher.gh, ...args], { stdio: "inherit" });
+      process.exit(result.status ?? 1);
+    }
     if (mode === "gh") {
       fs.writeSync(
         1,
-        options.lsRemoteResults
-          ? args.includes(".status")
-            ? "ahead\n"
-            : `${"c".repeat(40)}\n`
-          : JSON.stringify({
-              state: "open",
-              head: { sha: "a".repeat(40) },
-              base: { repo: { full_name: "fixture/checkout" } },
-            }),
+        options.docsAgent
+          ? JSON.stringify({ workflow_runs: options.workflowRuns ?? [] })
+          : options.lsRemoteResults
+            ? args.includes(".status")
+              ? "ahead\n"
+              : `${"c".repeat(40)}\n`
+            : JSON.stringify({
+                state: "open",
+                head: { sha: "a".repeat(40) },
+                base: { repo: { full_name: "fixture/checkout" } },
+              }),
       );
     }
     process.exit(0);
@@ -313,8 +409,16 @@ async function command() {
     }
   }
   recordCommand("git", cwd, args, configuration);
+  let commandResult = options.commandResults?.[args.join(" ")];
+  for (const [index, fault] of [options.gitFault, ...(options.gitFaults ?? [])].entries()) {
+    if (!fault || !new RegExp(fault.match).test(args.join(" "))) continue;
+    const countFile = path.join(root, `fault-count-${index}.json`);
+    const count = fs.existsSync(countFile) ? JSON.parse(fs.readFileSync(countFile, "utf8")) + 1 : 1;
+    publish(`fault-count-${index}.json`, count);
+    if (count === (fault.occurrence ?? 1)) commandResult = fault;
+  }
   const operation = args.shift();
-  if (operation === "init") {
+  if (operation === "init" && !options.performance) {
     boundary("init");
     const config = path.join(root, "fixture-config.json");
     if (fs.existsSync(config)) {
@@ -347,23 +451,48 @@ async function command() {
       fs.symlinkSync(sharedCache, path.join(gitDir, "shared-cache"), "junction");
     }
   } else if (
+    options.publisher ||
+    options.performance ||
+    options.releaseAdmission ||
+    commandResult ||
     ["fetch", "ls-remote", "clone"].includes(operation) ||
-    (operation === "worktree" && args[0] === "add")
+    (operation === "worktree" && args[0] === "add") ||
+    (operation === "rebase" && args[0] === "-X") ||
+    operation === "push" ||
+    (operation === "rev-parse" && options.revParseResult !== undefined)
   ) {
-    const counter = path.join(root, "attempt.json");
-    const attempt = fs.existsSync(counter) ? JSON.parse(fs.readFileSync(counter, "utf8")) + 1 : 1;
-    boundary(`${operation}:${attempt}`);
-    publish("attempt.json", attempt);
+    // Keep the existing transport-result indexing; rebase/push/read faults have
+    // independent results but share unique tree identities with those transports.
+    const counterName =
+      commandResult ||
+      ((options.performance || options.releaseAdmission) && operation !== "fetch") ||
+      ["rebase", "push", "rev-parse"].includes(operation)
+        ? `${operation}-attempt.json`
+        : "attempt.json";
+    const counter = path.join(root, counterName);
+    const resultAttempt = fs.existsSync(counter)
+      ? JSON.parse(fs.readFileSync(counter, "utf8")) + 1
+      : 1;
+    publish(counterName, resultAttempt);
+    const treeCounter = path.join(root, "tree-attempt.json");
+    const attempt = fs.existsSync(treeCounter)
+      ? JSON.parse(fs.readFileSync(treeCounter, "utf8")) + 1
+      : 1;
+    boundary(`${operation}:${resultAttempt}`);
+    publish("tree-attempt.json", attempt);
     record(process.pid, "parent", attempt);
     if (operation === "clone" || operation === "worktree") {
       const directory = insideOwnedPath(operation === "clone" ? args.at(-1) : args.at(-2));
+      if (operation === "clone" && options.docsPublish && fs.existsSync(directory)) {
+        throw new Error("Previous publish path survived deletion");
+      }
       fs.mkdirSync(path.join(directory, ".git"), { recursive: true });
       fs.writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n", {
         flag: "wx",
       });
     }
-    if (operation === "fetch") {
-      const lock = path.join(cwd, ".git/shallow.lock");
+    if (["fetch", "rebase", "push"].includes(operation) && !options.performance) {
+      const lock = path.join(cwd, operation === "fetch" ? ".git/shallow.lock" : ".git/index.lock");
       fs.mkdirSync(path.dirname(lock), { recursive: true });
       try {
         fs.writeFileSync(lock, "fetch-owned\n", { flag: "wx" });
@@ -388,6 +517,12 @@ async function command() {
       const pid = process.ppid;
       publish("owner.json", { pid, startTime: getFileLockProcessStartTime(pid) });
       record(pid, "owner");
+      if (
+        options.cleanupCancelMatch &&
+        new RegExp(options.cleanupCancelMatch).test([operation, ...args].join(" "))
+      ) {
+        publish(`cleanup-target-${attempt}.json`, attempt);
+      }
     }
     const child = launch("child", attempt);
     if (
@@ -397,7 +532,7 @@ async function command() {
         `Git fixture child exited before readiness (${child.exitCode ?? child.signalCode})`,
       );
     }
-    if (scenario.startsWith("cancel-")) {
+    if (scenario.startsWith("cancel-") || commandResult?.code === "cancel") {
       const owned = liveRecords();
       const alive = owned.filter((entry) => entry.attempt === attempt);
       if (
@@ -407,13 +542,33 @@ async function command() {
       ) {
         throw new Error("Cancellation tree is no longer alive");
       }
-      const owner = owned.find((entry) => entry.role === "shell");
-      // Both shells exec their replacements. Validate the current Python parent,
-      // never an orphan's new parent or the Git group, before sending cancellation.
-      if (!owner || owner.pid <= 1 || process.ppid !== owner.pid) {
+      const shell = owned.find((entry) => entry.role === "shell");
+      const owner =
+        (options.docsAgent || options.performance || options.releaseAdmission) &&
+        process.ppid !== shell?.pid
+          ? { pid: process.ppid }
+          : shell;
+      const parent =
+        (options.docsAgent || options.performance || options.releaseAdmission) &&
+        owner?.pid !== shell?.pid
+          ? spawnSync("/bin/ps", ["-o", "ppid=", "-p", String(owner?.pid)], { encoding: "utf8" })
+          : undefined;
+      // Gate policies retain a shell for the cadence block. Validate that direct
+      // owner placement too, never signaling an orphan's parent or the Git group.
+      if (
+        !owner ||
+        owner.pid <= 1 ||
+        process.ppid !== owner.pid ||
+        (parent &&
+          (parent.status !== 0 ||
+            (options.performance
+              ? !isWorkflowDescendant(owner.pid, shell?.pid)
+              : Number(parent.stdout.trim()) !== shell?.pid)))
+      ) {
         throw new Error("Cancellation owner is no longer the registered workflow parent");
       }
-      const signal = scenario.slice("cancel-".length);
+      const signal =
+        commandResult?.code === "cancel" ? "SIGTERM" : scenario.slice("cancel-".length);
       fs.writeSync(1, `cancellation: ${JSON.stringify({ signal, owner: owner.pid, alive })}\n`);
       process.kill(owner.pid, signal);
     }
@@ -424,29 +579,117 @@ async function command() {
       options.worktreeResults
     ) {
       const remoteResult =
-        operation === "ls-remote" ? options.lsRemoteResults?.[attempt - 1] : undefined;
+        operation === "ls-remote" ? options.lsRemoteResults?.[resultAttempt - 1] : undefined;
       const operationResults =
         operation === "clone"
           ? options.cloneResults
           : operation === "worktree"
             ? options.worktreeResults
-            : options.fetchResults;
-      const result = remoteResult?.code ?? operationResults?.[attempt - 1] ?? 0;
+            : operation === "rebase"
+              ? options.rebaseResults
+              : operation === "push"
+                ? options.pushResults
+                : operation === "rev-parse" && options.revParseResult !== undefined
+                  ? [options.revParseResult]
+                  : (options.performance || options.releaseAdmission) && operation !== "fetch"
+                    ? undefined
+                    : options.fetchResults;
+      const result =
+        commandResult?.code ?? remoteResult?.code ?? operationResults?.[resultAttempt - 1] ?? 0;
+      if (commandResult?.output !== undefined) {
+        fs.writeSync(1, commandResult.output);
+      }
       if (remoteResult) {
         fs.writeSync(1, remoteResult.output);
+      }
+      if (options.performance && ["fetch", "push"].includes(operation) && result !== 0) {
+        const lock = path.join(cwd, ".git/shallow.lock");
+        fs.writeFileSync(lock, "owned fixture lock\n", { flag: "wx" });
+        process.on("SIGTERM", () => {});
+        process.once("exit", () => fs.unlinkSync(lock));
+      }
+      if (options.performance?.remoteDuplicateAttempt === resultAttempt && operation === "push") {
+        const pushed = spawnSync(
+          options.performance.git,
+          ["-C", cwd, "push", options.performance.remote, "HEAD:main"],
+          { stdio: "inherit" },
+        );
+        if (pushed.status !== 0)
+          throw new Error("Fixture ambiguous push did not reach local remote");
       }
       if (result === "cleanup-failure") {
         fs.writeFileSync(path.join(root, "bin/ps"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
         process.exit(0);
       }
+      if (result === "cancel") return;
       if (result === "hang") {
         stall(attempt);
         return;
       }
+      if (result === 0 && options.performance && commandResult?.output === undefined) {
+        const commandArgs = [...args];
+        if (["fetch", "push"].includes(operation)) {
+          const index = commandArgs.indexOf("origin");
+          if (index < 0) throw new Error("Unexpected performance transport remote");
+          commandArgs[index] = options.performance.remote;
+        }
+        // Only local file transport is allowed; never fall through to a live URL.
+        const result = spawnSync(
+          options.performance.git,
+          [
+            "-C",
+            cwd,
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            "protocol.file.allow=always",
+            ...configuration.flatMap((value) => ["-c", value]),
+            operation,
+            ...commandArgs,
+          ],
+          { stdio: "inherit" },
+        );
+        if (operation === "init" && result.status === 0) {
+          const directory = args.at(-1) === "main" ? cwd : insideOwnedPath(args.at(-1));
+          fs.writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
+        }
+        process.exit(result.status ?? 1);
+      }
+      if (result === 0 && options.publisher) {
+        const result = spawnSync(
+          options.publisher.git,
+          ["-C", cwd, ...configuration.flatMap((value) => ["-c", value]), operation, ...args],
+          { stdio: "inherit" },
+        );
+        if (
+          result.status === 0 &&
+          operation === "fetch" &&
+          options.env.FAKE_RACE === "recreate" &&
+          fs.existsSync(`${options.env.FAKE_PR_STATE}.raced`)
+        ) {
+          const update = spawnSync(
+            options.publisher.git,
+            [
+              "--git-dir",
+              options.env.FAKE_ORIGIN,
+              "update-ref",
+              "refs/heads/automation/locale",
+              options.env.FAKE_INITIAL_MAIN,
+            ],
+            { stdio: "inherit" },
+          );
+          if (update.status !== 0) process.exit(update.status ?? 1);
+        }
+        process.exit(result.status ?? 1);
+      }
+      if (result === 0 && operation === "rev-parse" && commandResult?.output === undefined) {
+        fs.writeSync(1, `${resolveRef(cwd, args[0])}\n`);
+      }
       if (result === 0 && operation === "fetch") {
         for (const refspec of args.slice(args.indexOf("origin") + 1)) {
           const [source, target] = refspec.replace(/^\+/u, "").split(":");
-          const revision = options.mergeSnapshots?.[attempt - 1]?.sha ?? resolveRef(cwd, source);
+          const revision =
+            options.mergeSnapshots?.[resultAttempt - 1]?.sha ?? resolveRef(cwd, source);
           saveRef(cwd, target ?? "FETCH_HEAD", revision);
         }
       }
@@ -498,6 +741,24 @@ async function command() {
       fs.mkdirSync(path.dirname(gradlew), { recursive: true });
       fs.writeFileSync(gradlew, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     }
+  } else if (
+    operation === "diff" &&
+    (args.join(" ") === "--quiet -- docs .openclaw-sync" ||
+      (options.docsAgent && args.join(" ") === "--quiet") ||
+      options.maturity)
+  ) {
+    boundary("diff");
+    process.exit(options.diffResult ?? (options.maturity ? 0 : 1));
+  } else if (
+    ["add", "commit"].includes(operation) ||
+    (operation === "config" && (options.docsPublish || options.docsAgent)) ||
+    (operation === "rebase" && args[0] === "--abort")
+  ) {
+    boundary(operation === "rebase" ? "rebase-abort" : operation);
+    // An abort without an active rebase is an ordinary ignored Git failure.
+    process.exit(operation === "rebase" ? 128 : 0);
+  } else if (options.docsAgent && ["ls-files", "diff"].includes(operation)) {
+    boundary(operation);
   } else if (operation === "cat-file" || (operation === "show" && options.objects)) {
     boundary(`${operation}:${args.at(-1)}`);
     const spec = args.at(-1);
@@ -573,10 +834,23 @@ async function supervise() {
   }
   const extraTools = [
     ...(linux ? ["find"] : []),
+    ...(options.docsPublish ? ["rm"] : []),
+    ...(options.performance ? ["curl", "tar", "sha256sum", "npm"] : []),
+    ...(options.docsAgent ? ["date"] : []),
     ...(options.consumers ? ["gh", "node", "pnpm", "go"] : []),
   ];
   for (const tool of extraTools) {
     writeConsumer(path.join(bin, tool), tool);
+  }
+  if (options.performance || options.releaseAdmission) {
+    fs.writeFileSync(
+      path.join(bin, "timeout"),
+      '#!/bin/bash\nwhile [[ "$1" == --* ]]; do shift; done\nshift\nexec "$@"\n',
+      { mode: 0o755 },
+    );
+  }
+  if (options.publisher) {
+    fs.copyFileSync(path.join(root, "publisher-bin/sleep"), path.join(bin, "sleep"));
   }
   if (scenario === "cleanup-failure") {
     // Fail the real POSIX inspection boundary, without a production injection hook.
@@ -680,6 +954,18 @@ async function supervise() {
         .filter(Boolean)
         .map(JSON.parse);
       report.output = fs.readFileSync(path.join(root, "workflow.log"), "utf8");
+      if (options.publisher || options.performance) {
+        // Model Actions masking, including the mask-registration line itself.
+        const masks = [...report.output.matchAll(/^::add-mask::(.+)$/gm)].map((match) => match[1]);
+        for (const value of [
+          ...masks,
+          options.env.CONTENTS_TOKEN,
+          options.env.GH_TOKEN,
+          options.env.CLAWGRIT_REPORTS_APP_TOKEN,
+        ]) {
+          if (value) report.output = report.output.replaceAll(value, "[redacted]");
+        }
+      }
       publish("report.json", report);
       fs.closeSync(output);
       process.exit(report.error ? 1 : 0);
@@ -801,9 +1087,13 @@ async function supervise() {
       // Revalidate the observed birth and exact placement after awaited readiness.
       if (
         (owner.pid !== shell.pid &&
-          Number(
-            fs.readFileSync(`/proc/${owner.pid}/status`, "utf8").match(/^PPid:\s+(\d+)$/mu)?.[1],
-          ) !== shell.pid) ||
+          (options.performance
+            ? !isWorkflowDescendant(owner.pid, shell.pid)
+            : Number(
+                fs
+                  .readFileSync(`/proc/${owner.pid}/status`, "utf8")
+                  .match(/^PPid:\s+(\d+)$/mu)?.[1],
+              ) !== shell.pid)) ||
         owner.startTime === null ||
         getFileLockProcessStartTime(owner.pid) !== owner.startTime ||
         stopping ||
@@ -818,7 +1108,10 @@ async function supervise() {
     if (
       options.cancelDuringBackoff &&
       (await waitForReady(
-        () => fs.readFileSync(path.join(root, "workflow.log"), "utf8").includes("; retrying"),
+        () =>
+          options.performance
+            ? fs.readFileSync(eventsFile, "utf8").includes('"name":"backoff"')
+            : fs.readFileSync(path.join(root, "workflow.log"), "utf8").includes("; retrying"),
         shell,
         () => Boolean(stopping),
       ))
@@ -831,12 +1124,24 @@ async function supervise() {
       return;
     }
     report.code = code;
+    if (options.docsAgent && fs.readFileSync(path.join(root, "github-output"), "utf8")) {
+      boundary("output");
+    }
     if (
       options.objects &&
       fs.existsSync(path.join(root, "github-env")) &&
       fs.readFileSync(path.join(root, "github-env"), "utf8").includes("PRE_COMMIT_CONFIG_PATH=")
     ) {
       boundary("config-publication");
+    }
+    for (const [name, file] of options.publisher || options.maturity || options.performance
+      ? [
+          ["output", "github-output"],
+          ["summary", "github-summary"],
+        ]
+      : []) {
+      if (fs.existsSync(path.join(root, file)) && fs.readFileSync(path.join(root, file), "utf8"))
+        boundary(name);
     }
     boundary("exit");
     await stop();
