@@ -98,6 +98,138 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     );
   });
 
+  it("caps the status headline with the configured budget", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        explanation:
+          "Implementing the change across every subsystem before validating the result end to end",
+        steps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+        ],
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { label: false, maxLineChars: 24 } },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview(
+        "Implementing the change across every subsystem before validating the result end to end\n\n✅ Inspect\n▸ Patch",
+        "<b>Implementing the…</b>\n✅ Inspect\n▸ Patch",
+      ),
+    );
+  });
+
+  it("caps the status headline with the configured budget in rich-message mode", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        explanation:
+          "Implementing the change across every subsystem before validating the result end to end",
+        steps: [{ step: "Inspect", status: "completed" }],
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        richMessages: true,
+        streaming: { mode: "progress", progress: { label: false, maxLineChars: 24 } },
+      },
+    });
+
+    const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(preview?.text).toContain("Implementing the…");
+    expect(preview?.text).not.toContain("subsystem");
+    expect(JSON.stringify(preview?.richMessage)).toContain("Implementing the…");
+    expect(JSON.stringify(preview?.richMessage)).not.toContain("subsystem");
+  });
+
+  it("keeps a short configured budget on structured tool lines", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onToolStart?.({
+        name: "Bash",
+        phase: "start",
+        toolCallId: "bash-1",
+        args: { command: `cat path/to/${"nested/".repeat(20)}file.ts` },
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, maxLineChars: 12, commandText: "raw" },
+        },
+      },
+    });
+
+    const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    const toolLine = (preview?.text ?? "").replace(/<[^>]+>/gu, "");
+    expect(Array.from(toolLine).length).toBeLessThanOrEqual(12);
+    expect(toolLine).toContain("Bash");
+    expect(toolLine).toContain("…");
+  });
+
+  it("caps arbitrary structured item statuses within the configured budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const draftStream = createSequencedDraftStream(2001);
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        // Named item events may carry an independent arbitrary status string;
+        // the rendered line must stay inside the configured whole-line budget.
+        await replyOptions?.onItemEvent?.({
+          kind: "deploy-check",
+          itemId: "item-1",
+          title: "Deploy check",
+          status: `retrying endpoint ${"x".repeat(200)} after timeout`,
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: { mode: "progress", progress: { label: false, maxLineChars: 40 } },
+        },
+      });
+
+      const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+      const statusLine = (preview?.text ?? "")
+        .split("<br>")
+        .find((part) => part.includes("Deploy check"));
+      const plain = (statusLine ?? "").replace(/<[^>]+>/gu, "");
+      expect(Array.from(plain).length).toBeLessThanOrEqual(40);
+      expect(plain).toContain("Deploy check");
+      expect(plain).toContain("…");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders the headline immediately when the preamble arrives after tool progress", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

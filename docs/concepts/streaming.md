@@ -367,7 +367,8 @@ channel:
 | `streaming.progress.labels`       | built-in pool | Candidate labels used when `label: "auto"`                     |
 
 Slack always renders progress mode as its fixed session-card layout; these
-limits still bound the activity rows and plan text inside that card.
+limits still bound the activity rows and plan text inside that card. Telegram
+keeps its historical 300-char default when `maxLineChars` is unset.
 
 ### Commentary progress lane
 

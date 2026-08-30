@@ -159,7 +159,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1: shared ingress error factory projected through the deprecated message barrel.
   // +1: shared ingress retention defaults projected through the deprecated message barrel.
   // +1: WhatsApp ack-policy bridge counted via channel-message's wildcard re-export.
-  "channel-message": 132,
+  // +1: canonical progress-line compaction projected via channel-outbound's wildcard re-export.
+  "channel-message": 133,
   // +2: Slack progress-draft render bridge (function + mode type).
   "channel-outbound": 2,
   // +2: WhatsApp ack-policy bridge (function + mode type).
@@ -331,7 +332,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      4355,
+      // +2: canonical boundary-aware progress-line compaction via channel-outbound
+      //     and channel-message's wildcard re-export.
+      4357,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -438,7 +441,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      2592,
+      // +2: canonical boundary-aware progress-line compaction via channel-outbound
+      //     and channel-message's wildcard re-export.
+      2594,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -457,7 +462,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
-      1134,
+      // +1: canonical progress-line compaction projected through the deprecated channel-message barrel.
+      1135,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

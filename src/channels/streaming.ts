@@ -1017,7 +1017,12 @@ function compactPlainProgressLine(line: string, maxChars: number): string {
   return `${head}…`;
 }
 
-function compactChannelProgressDraftLine(line: string, maxChars: number): string {
+/**
+ * Canonical boundary-aware compaction for one channel progress line:
+ * prose cuts at word boundaries, while command/path detail keeps its
+ * useful prefix and suffix around a middle ellipsis.
+ */
+export function compactChannelProgressDraftLine(line: string, maxChars: number): string {
   const normalized = line.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return "";

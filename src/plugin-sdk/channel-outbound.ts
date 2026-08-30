@@ -93,6 +93,7 @@ export { logTypingFailure } from "../channels/logging.js";
 export {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
+  compactChannelProgressDraftLine,
   createChannelProgressDraftGate,
   formatChannelProgressDraftLine,
   formatChannelProgressDraftLineForEntry,

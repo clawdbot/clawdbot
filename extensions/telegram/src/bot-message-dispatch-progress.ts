@@ -1,5 +1,6 @@
 import {
   createChannelProgressDraftCompositor,
+  resolveChannelProgressDraftMaxLineChars,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -14,6 +15,7 @@ import {
   formatTelegramProgressLine,
   renderTelegramProgressDraftPreview,
 } from "./progress-draft-preview.js";
+import { TELEGRAM_PROGRESS_MAX_CHARS } from "./truncate.js";
 
 type BufferedDispatchParams = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -59,6 +61,13 @@ export function createProgressState(
     finalAnswerDelivered: false,
     verboseProgressActive: () => false,
   };
+  // Telegram keeps its historical 300-char budget unless
+  // channels.telegram.streaming.progress.maxLineChars overrides it; the shared
+  // resolver rejects non-positive values, so unset config stays on 300.
+  const progressMaxLineChars = resolveChannelProgressDraftMaxLineChars(
+    config.telegramCfg,
+    TELEGRAM_PROGRESS_MAX_CHARS,
+  );
   const progressCompositor = createChannelProgressDraftCompositor({
     entry: config.telegramCfg,
     mode: config.streamMode,
@@ -67,7 +76,7 @@ export function createProgressState(
     formatLine: (text) =>
       progressCompositor.hasStatusHeadline || progressCompositor.hasPlanProgress
         ? text
-        : formatTelegramProgressLine(text),
+        : formatTelegramProgressLine(text, progressMaxLineChars),
     reasoningGate: draftState.streamReasoningInProgressDraft,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
@@ -88,6 +97,7 @@ export function createProgressState(
           options?.lines ?? [],
           config.telegramCfg.richMessages === true,
           progressCompositor.hasStatusHeadline || progressCompositor.hasPlanProgress,
+          progressMaxLineChars,
         ),
       );
       if (options?.flush) {

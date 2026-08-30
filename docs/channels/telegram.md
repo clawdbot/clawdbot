@@ -354,6 +354,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those lines: `status` (default, tool label only) or `raw` (explicit command text)
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
+    - `streaming.progress.maxLineChars` bounds each compact progress line (default: `300` on Telegram, keeping its historical clip; the shared default is `120`): prose cuts at word boundaries, and command/path detail keeps its useful prefix and suffix
     - legacy `channels.telegram.streamMode`, boolean `streaming` values, and retired native draft preview keys are detected; run `openclaw doctor --fix` to migrate them
 
     Tool-progress lines are the short status updates shown while tools run (command execution, file reads, planning updates, patch summaries, Codex preamble/commentary in app-server mode). Telegram keeps these on by default (matches released behavior from `v2026.4.22`+).

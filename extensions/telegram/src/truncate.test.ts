@@ -1,50 +1,85 @@
 // Telegram tests cover progress text clipping behavior.
 import { describe, expect, it } from "vitest";
-import { clipTelegramProgressText } from "./truncate.js";
+import { clipTelegramProgressText, TELEGRAM_PROGRESS_MAX_CHARS } from "./truncate.js";
 
-const TELEGRAM_PROGRESS_LIMIT = 300;
+const TELEGRAM_PROGRESS_LIMIT = TELEGRAM_PROGRESS_MAX_CHARS;
+
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+}
 
 describe("clipTelegramProgressText", () => {
-  it("drops a surrogate-pair emoji whole when it straddles the limit", () => {
-    // 😀 is U+1F600, encoded as two UTF-16 code units (high \uD83D + low \uDE00).
-    // Placing the emoji at positions [MAX-2, MAX-1] (0-indexed) puts its high
-    // surrogate right on the .slice(0, MAX-1) cut edge. A raw .slice keeps only
-    // \uD83D — an unpaired high surrogate — which is invalid in a Telegram payload.
-    const base = "a".repeat(TELEGRAM_PROGRESS_LIMIT - 2); // 298 'a's
-    const out = clipTelegramProgressText(`${base}😀tail`);
+  it("returns text unchanged when it is within the default limit", () => {
+    const short = "hello 😀 world";
+    expect(clipTelegramProgressText(short)).toBe(short);
+    const exact = "x".repeat(TELEGRAM_PROGRESS_LIMIT);
+    expect(clipTelegramProgressText(exact)).toBe(exact);
+  });
+
+  it("keeps the historical 300 budget when no budget is passed", () => {
+    const oneOver = `${"x".repeat(TELEGRAM_PROGRESS_LIMIT)}y`;
+    const out = clipTelegramProgressText(oneOver);
+    expect(codePointLength(out)).toBeLessThanOrEqual(TELEGRAM_PROGRESS_LIMIT);
+    expect(out.endsWith("…")).toBe(true);
+    expect(hasLoneSurrogate(out)).toBe(false);
+  });
+
+  it("honors a configured budget", () => {
+    const out = clipTelegramProgressText("hello wonderful world of telegram", 20);
+    expect(out).toBe("hello wonderful…");
+    expect(codePointLength(out)).toBeLessThanOrEqual(20);
+  });
+
+  it("cuts prose on word boundaries", () => {
+    const sentence =
+      "I'm checking whether the generated video exists or if the generator bailed while writing output.";
+    expect(clipTelegramProgressText(sentence, 64)).toBe(
+      "I'm checking whether the generated video exists or if the…",
+    );
+  });
+
+  it("keeps command prefixes and useful path suffixes", () => {
+    const path = `path/to/${"nested/".repeat(20)}file.ts`;
+    const detail = `Ran command: cat ${path}`;
+    const out = clipTelegramProgressText(detail, 60);
+    expect(out.startsWith("Ran command: cat")).toBe(true);
+    expect(out.endsWith("file.ts")).toBe(true);
+    expect(out).toContain("…");
+    expect(codePointLength(out)).toBeLessThanOrEqual(60);
+    expect(hasLoneSurrogate(out)).toBe(false);
+  });
+
+  it("drops a surrogate-pair emoji whole when it straddles the cut", () => {
+    // 😀 is U+1F600, encoded as two UTF-16 code units. With a 299-code-point
+    // budget the head keeps 298 code points, so the emoji at positions
+    // [298, 299] is dropped whole instead of leaving a lone \uD83D-style high
+    // surrogate before the ellipsis, which serializes to an invalid character
+    // in the Telegram Bot API payload.
+    const base = "a".repeat(298);
+    const out = clipTelegramProgressText(`${base}😀tail`, 299);
     expect(out).toBe(`${base}…`);
-    // No dangling high surrogate (high not followed by a low surrogate).
-    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out)).toBe(false);
+    expect(hasLoneSurrogate(out)).toBe(false);
   });
 
   it("keeps an emoji that fits entirely before the cut", () => {
-    // 296 'a's + '😀' (2 units) + 'xyz' (3 units) = 301 total > 300.
-    // The emoji sits at [296, 297] — entirely before the cut at 299 — so it stays.
-    const base = "a".repeat(TELEGRAM_PROGRESS_LIMIT - 4); // 296 'a's
-    const out = clipTelegramProgressText(`${base}😀xyz`);
-    expect(out).toBe(`${base}😀x…`);
-    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out)).toBe(false);
+    // 297 'a's + '😀' (1 code point) + 'xyz' = 301 code points > 299.
+    // The emoji sits at code point 297 — entirely before the 298-code-point
+    // head — so it stays.
+    const base = "a".repeat(297);
+    const out = clipTelegramProgressText(`${base}😀xyz`, 299);
+    expect(out).toBe(`${base}😀…`);
+    expect(hasLoneSurrogate(out)).toBe(false);
   });
 
-  it("returns text unchanged when it is within the limit", () => {
-    const short = "hello 😀 world";
-    expect(clipTelegramProgressText(short)).toBe(short);
-  });
-
-  it("trims trailing whitespace before the ellipsis", () => {
-    // The sliced portion may end in spaces when trailing spaces straddle the cut.
+  it("never leaves trailing whitespace before the ellipsis", () => {
+    // Collapsed trailing spaces can straddle the cut.
     const text = `${"a".repeat(TELEGRAM_PROGRESS_LIMIT - 2)}  rest`;
     const out = clipTelegramProgressText(text);
-    expect(out).not.toContain("  …");
-    expect(out.endsWith("…")).toBe(true);
-  });
-
-  it("handles plain ASCII that fills exactly to the limit", () => {
-    const exact = "x".repeat(TELEGRAM_PROGRESS_LIMIT);
-    expect(clipTelegramProgressText(exact)).toBe(exact);
-    const oneOver = `${"x".repeat(TELEGRAM_PROGRESS_LIMIT)}y`;
-    const out = clipTelegramProgressText(oneOver);
-    expect(out.length).toBeLessThanOrEqual(TELEGRAM_PROGRESS_LIMIT);
+    expect(out).not.toMatch(/\s…$/u);
     expect(out.endsWith("…")).toBe(true);
   });
 });

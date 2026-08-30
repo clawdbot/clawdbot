@@ -1,20 +1,24 @@
 // Telegram tests cover progress text clipping behavior.
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-
-const TELEGRAM_PROGRESS_MAX_CHARS = 300;
+import { compactChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
 
 /**
- * Clips Telegram progress text to at most {@link TELEGRAM_PROGRESS_MAX_CHARS} UTF-16 code units,
- * slicing on a code-point boundary so a surrogate pair straddling the limit is
- * dropped whole rather than leaving a lone high surrogate in the payload.
+ * Default per-line budget for Telegram progress text, counted in UTF-16 code
+ * units. Telegram historically clipped at 300; keep that budget when
+ * `channels.telegram.streaming.progress.maxLineChars` is unset.
  */
-export function clipTelegramProgressText(text: string): string {
-  if (text.length <= TELEGRAM_PROGRESS_MAX_CHARS) {
-    return text;
-  }
-  // Slice on a code-point boundary so an emoji (or any astral character) that
-  // straddles the limit is dropped whole instead of leaving a lone \uD83D-style
-  // high surrogate before the ellipsis, which serializes to an invalid character
-  // in the Telegram Bot API payload.
-  return `${sliceUtf16Safe(text, 0, TELEGRAM_PROGRESS_MAX_CHARS - 1).trimEnd()}…`;
+export const TELEGRAM_PROGRESS_MAX_CHARS = 300;
+
+/**
+ * Clips Telegram progress text to at most {@link maxLineChars} characters using
+ * the shared channel progress compaction: prose cuts at word boundaries, while
+ * command/path detail keeps its useful prefix and suffix around a middle
+ * ellipsis. Code-point-based cutting never leaves a lone surrogate before the
+ * ellipsis, which would serialize to an invalid character in the Telegram Bot
+ * API payload.
+ */
+export function clipTelegramProgressText(
+  text: string,
+  maxLineChars: number = TELEGRAM_PROGRESS_MAX_CHARS,
+): string {
+  return compactChannelProgressDraftLine(text, maxLineChars);
 }
