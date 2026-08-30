@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Image analysis startup:** prepare selected model providers and keep configuration reads independent of full runtime loading, avoiding unrelated discovery and redundant model resolution while preserving credentials and runtime cleanup.
 - **Browser extension relay:** route Runtime binding callbacks only to registered clients and preserve shared bindings during client cleanup, preventing raw callback payloads from reaching unrelated Playwright sessions.
 - **Control UI media playback:** restore inline audio and video rendition loading so readiness checks reach the Gateway instead of silently falling back to download cards. (#132832)
 - **Gateway cancellation:** route the first `chat.abort` directly to its cancellation handler without loading unrelated chat history and send workflows.
