@@ -398,7 +398,7 @@ export async function deliverOutboundPayloadsCore(
         }
       } else if (!deliveryHandler.supportsMedia) {
         log.warn(
-          "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+          "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia; media URLs will be dropped and text fallback will be used",
           {
             channel,
             to,
@@ -408,7 +408,7 @@ export async function deliverOutboundPayloadsCore(
         const fallbackText = payloadSummary.text.trim();
         if (!fallbackText) {
           throw new Error(
-            "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
+            "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia and no text fallback is available for media payload",
           );
         }
         await sendTextChunks(deliveryHandler, fallbackText, sendOverrides);

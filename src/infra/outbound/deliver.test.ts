@@ -3795,6 +3795,38 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMedia).not.toHaveBeenCalled();
   });
 
+  it("keeps media delivery when the adapter implements only sendFormattedMedia", async () => {
+    const sendText = vi.fn(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: `fallback:${text}`,
+    }));
+    const sendFormattedMedia = vi.fn(
+      async ({ text, mediaUrl }: { text: string; mediaUrl: string }) => ({
+        channel: "matrix" as const,
+        messageId: `fmt-media:${mediaUrl}:${text}`,
+      }),
+    );
+    setTestOutbound({ sendText, sendFormattedMedia });
+
+    const results = await deliverMatrix({
+      payloads: [{ text: "caption", mediaUrl: "https://example.com/file.png" }],
+    });
+
+    expect(sendFormattedMedia).toHaveBeenCalledTimes(1);
+    const mediaCall = requireMockCallArg(sendFormattedMedia, "sendFormattedMedia") as {
+      text?: unknown;
+      mediaUrl?: unknown;
+      to?: unknown;
+    };
+    expect(mediaCall.text).toBe("caption");
+    expect(mediaCall.mediaUrl).toBe("https://example.com/file.png");
+    expect(mediaCall.to).toBe("!room:example");
+    expect(sendText).not.toHaveBeenCalled();
+    expect(results.map((entry) => entry.messageId)).toEqual([
+      "fmt-media:https://example.com/file.png:caption",
+    ]);
+  });
+
   it("persists formatted sub-send results before a later adapter chunk fails", async () => {
     const firstResult = { channel: "line" as const, messageId: "fmt-1" };
     const sendFormattedText = vi.fn(
@@ -6046,7 +6078,7 @@ describe("deliverOutboundPayloads", () => {
     });
     const warnCall = requireMockCall(logMocks.warn, "warn");
     expect(warnCall[0]).toBe(
-      "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+      "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia; media URLs will be dropped and text fallback will be used",
     );
     const warnContext = warnCall[1] as { channel?: unknown; mediaCount?: unknown } | undefined;
     expect(warnContext?.channel).toBe("matrix");
@@ -6071,7 +6103,7 @@ describe("deliverOutboundPayloads", () => {
     expect(requireMockCallArg(sendText, "sendText").text).toBe("caption");
     const warnCall = requireMockCall(logMocks.warn, "warn");
     expect(warnCall[0]).toBe(
-      "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+      "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia; media URLs will be dropped and text fallback will be used",
     );
     const warnContext = warnCall[1] as { channel?: unknown; mediaCount?: unknown } | undefined;
     expect(warnContext?.channel).toBe("matrix");
@@ -6091,13 +6123,13 @@ describe("deliverOutboundPayloads", () => {
         payloads: [{ text: "   ", mediaUrl: "https://example.com/file.png" }],
       }),
     ).rejects.toThrow(
-      "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
+      "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia and no text fallback is available for media payload",
     );
 
     expect(sendText).not.toHaveBeenCalled();
     const warnCall = requireMockCall(logMocks.warn, "warn");
     expect(warnCall[0]).toBe(
-      "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+      "Plugin outbound adapter does not implement sendMedia or sendFormattedMedia; media URLs will be dropped and text fallback will be used",
     );
     const warnContext = warnCall[1] as { channel?: unknown; mediaCount?: unknown } | undefined;
     expect(warnContext?.channel).toBe("matrix");
