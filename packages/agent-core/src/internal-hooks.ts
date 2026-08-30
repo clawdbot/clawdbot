@@ -62,6 +62,7 @@ const toolExecutionPreparerByTool = new WeakMap<object, InternalToolExecutionPre
 
 type InternalToolResultAcknowledgement = () => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
+const toolResultProvenanceByValue = new WeakMap<object, object>();
 
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
 export function setInternalBeforeToolBatch(
@@ -152,6 +153,31 @@ export function copyInternalToolResultAcknowledgement<T extends object>(
   const acknowledge = toolResultAcknowledgementByValue.get(source);
   if (acknowledge) {
     toolResultAcknowledgementByValue.set(target, acknowledge);
+  }
+  return target;
+}
+
+export function attachInternalToolResultProvenance<T extends object>(
+  value: T,
+  provenance: object,
+): T {
+  toolResultProvenanceByValue.set(value, provenance);
+  return value;
+}
+
+export function hasInternalToolResultProvenance(value: object, provenance: object): boolean {
+  return toolResultProvenanceByValue.get(value) === provenance;
+}
+
+export function getInternalToolResultProvenance(value: object): object | undefined {
+  return toolResultProvenanceByValue.get(value);
+}
+
+export function copyInternalToolResultState<T extends object>(source: object, target: T): T {
+  copyInternalToolResultAcknowledgement(source, target);
+  const provenance = toolResultProvenanceByValue.get(source);
+  if (provenance) {
+    toolResultProvenanceByValue.set(target, provenance);
   }
   return target;
 }

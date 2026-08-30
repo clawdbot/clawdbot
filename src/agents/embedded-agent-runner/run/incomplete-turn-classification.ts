@@ -19,6 +19,7 @@ export type IncompleteTurnAttempt = Pick<
   | "didSendDeterministicApprovalPrompt"
   | "heartbeatToolResponse"
   | "toolMediaUrls"
+  | "toolAutoDeliveryMediaUrls"
   | "toolAudioAsVoice"
   | "toolTrustedLocalMedia"
   | "hasToolMediaBlockReply"

@@ -48,6 +48,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "heartbeatToolResponse"
     | "lastToolError"
     | "toolMediaUrls"
+    | "toolAutoDeliveryMediaUrls"
     | "toolAudioAsVoice"
     | "toolTrustedLocalMedia"
     | "didDeliverSourceReplyViaMessageTool"

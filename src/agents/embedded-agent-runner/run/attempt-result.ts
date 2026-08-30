@@ -233,6 +233,7 @@ export function completeEmbeddedAttemptResult(
     getMessagingToolSentTexts,
     getMessagingToolSourceReplyPayloads,
     getPendingToolMediaReply,
+    getToolAutoDeliveryMediaUrls,
     getReplayState,
     getSuccessfulCronAdds,
     getVisibleBlockReplyCount,
@@ -344,13 +345,18 @@ export function completeEmbeddedAttemptResult(
   }
 
   const acceptedSessionSpawns = getAcceptedSessionSpawns();
+  const messagingToolSentMediaUrls = getMessagingToolSentMediaUrls();
+  const sentMediaUrls = new Set(messagingToolSentMediaUrls.map((url) => url.trim()));
+  const toolAutoDeliveryMediaUrls = getToolAutoDeliveryMediaUrls().filter(
+    (url) => !sentMediaUrls.has(url.trim()),
+  );
   const observedReplayMetadata = buildAttemptReplayMetadata({
     // Structured start arguments already updated replayState for mutations and async work.
     // Reclassifying by tool name would incorrectly mark read-only cron actions as unsafe.
     toolMetas: [],
     didSendViaMessagingTool: didSendViaMessagingTool(),
     messagingToolSentTexts: getMessagingToolSentTexts(),
-    messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+    messagingToolSentMediaUrls,
     acceptedSessionSpawns,
     successfulCronAdds: getSuccessfulCronAdds(),
   });
@@ -362,7 +368,7 @@ export function completeEmbeddedAttemptResult(
     toolMetas: toolMetasNormalized,
     didSendViaMessagingTool: didSendViaMessagingTool(),
     messagingToolSentTexts: getMessagingToolSentTexts(),
-    messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+    messagingToolSentMediaUrls,
     acceptedSessionSpawns,
     successfulCronAdds: getSuccessfulCronAdds(),
   });
@@ -387,7 +393,7 @@ export function completeEmbeddedAttemptResult(
     didDeliverSourceReplyViaMessageTool: state.didDeliverSourceReplyViaMessageTool,
     messagingToolSourceReplyPayloads,
     messagingToolSentTexts: getMessagingToolSentTexts(),
-    messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+    messagingToolSentMediaUrls,
     messagingToolSentTargets: getMessagingToolSentTargets(),
     acceptedSessionSpawns,
     successfulCronAdds: getSuccessfulCronAdds(),
@@ -430,7 +436,7 @@ export function completeEmbeddedAttemptResult(
       didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
       didSendViaMessagingTool: didSendViaMessagingTool(),
       messagingToolSentTexts: getMessagingToolSentTexts(),
-      messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+      messagingToolSentMediaUrls,
       messagingToolSentTargets: getMessagingToolSentTargets(),
       acceptedSessionSpawns,
       lastToolError,
@@ -469,11 +475,13 @@ export function completeEmbeddedAttemptResult(
     didSendViaMessagingTool: didSendViaMessagingTool(),
     didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
     messagingToolSentTexts: getMessagingToolSentTexts(),
-    messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+    messagingToolSentMediaUrls,
     messagingToolSentTargets: getMessagingToolSentTargets(),
     messagingToolSourceReplyPayloads,
     heartbeatToolResponse,
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
+    toolAutoDeliveryMediaUrls:
+      toolAutoDeliveryMediaUrls.length > 0 ? toolAutoDeliveryMediaUrls : undefined,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
     hasToolMediaBlockReply: hasToolMediaBlockReplyNow,

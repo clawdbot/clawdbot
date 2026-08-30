@@ -54,6 +54,7 @@ type TerminalAttemptState = Pick<
   | "heartbeatToolResponse"
   | "lastToolError"
   | "toolMediaUrls"
+  | "toolAutoDeliveryMediaUrls"
   | "toolAudioAsVoice"
   | "toolTrustedLocalMedia"
   | "hasToolMediaBlockReply"
@@ -85,6 +86,7 @@ export function hasNonToolTerminalState(attempt: TerminalAttemptState): boolean 
     attempt.didSendDeterministicApprovalPrompt ||
     attempt.heartbeatToolResponse ||
     attempt.toolMediaUrls?.some((url) => url.trim().length > 0) ||
+    attempt.toolAutoDeliveryMediaUrls?.some((url) => url.trim().length > 0) ||
     attempt.toolAudioAsVoice ||
     attempt.toolTrustedLocalMedia ||
     attempt.hasToolMediaBlockReply ||

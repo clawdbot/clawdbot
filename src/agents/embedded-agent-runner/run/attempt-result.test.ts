@@ -15,6 +15,8 @@ function completeResult(params?: {
     completed: boolean;
   }>;
   pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
+  toolAutoDeliveryMediaUrls?: string[];
+  messagingToolSentMediaUrls?: string[];
   yieldDetected?: boolean;
   yieldAcknowledgment?: string;
   toolMetas?: Array<{
@@ -52,11 +54,12 @@ function completeResult(params?: {
       getLastToolError: () => undefined,
       getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
       getLatestMcpConnectAction: () => undefined,
-      getMessagingToolSentMediaUrls: () => [],
+      getMessagingToolSentMediaUrls: () => params?.messagingToolSentMediaUrls ?? [],
       getMessagingToolSentTargets: () => [],
       getMessagingToolSentTexts: () => [],
       getMessagingToolSourceReplyPayloads: () => [],
       getPendingToolMediaReply: () => params?.pendingToolMediaReply,
+      getToolAutoDeliveryMediaUrls: () => params?.toolAutoDeliveryMediaUrls ?? [],
       getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: false }),
       getSuccessfulCronAdds: () => [],
       getVisibleBlockReplyCount: () => 0,
@@ -327,6 +330,15 @@ describe("attempt result projection", () => {
     expect(completeResult({ pendingToolMediaReply: { audioAsVoice: true } }).toolAudioAsVoice).toBe(
       true,
     );
+    expect(
+      completeResult({ toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"] }).toolAutoDeliveryMediaUrls,
+    ).toEqual(["/tmp/reply.opus"]);
+    expect(
+      completeResult({
+        toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+        messagingToolSentMediaUrls: ["/tmp/reply.opus"],
+      }).toolAutoDeliveryMediaUrls,
+    ).toBeUndefined();
   });
 
   it("projects the latest MCP App channel view without result data", () => {

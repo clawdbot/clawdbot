@@ -12,6 +12,8 @@ import {
   attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
   attachInternalToolResultAcknowledgement,
+  attachInternalToolResultProvenance,
+  hasInternalToolResultProvenance,
   setInternalBeforeToolBatch,
   takeInternalToolBatchLifecycle,
 } from "./internal-hooks.js";
@@ -2599,12 +2601,16 @@ describe("agentLoop tool termination", () => {
     { name: "dropped", failAttachment: true, expectedAcknowledgements: 0 },
   ])("acknowledges an internal tool result only after it is $name", async (testCase) => {
     const acknowledge = vi.fn();
+    const provenance = { source: "test-tool-result-provenance" };
     const tool: AgentTool = {
       ...makeTool("commit_probe", []),
       execute: async () =>
-        attachInternalToolResultAcknowledgement(
-          { content: [{ type: "text", text: "committed" }], details: { phase: "execute" } },
-          acknowledge,
+        attachInternalToolResultProvenance(
+          attachInternalToolResultAcknowledgement(
+            { content: [{ type: "text", text: "committed" }], details: { phase: "execute" } },
+            acknowledge,
+          ),
+          provenance,
         ),
     };
     const streamFn = createTurnSequenceStream([
@@ -2620,11 +2626,15 @@ describe("agentLoop tool termination", () => {
         afterToolOutcome: async () => ({ details: { phase: "after-outcome" } }),
       },
       async (event) => {
+        if (event.type === "tool_execution_end") {
+          expect(hasInternalToolResultProvenance(event.result, provenance)).toBe(true);
+        }
         if (
           !testCase.failAttachment &&
           event.type === "message_end" &&
           event.message.role === "toolResult"
         ) {
+          expect(hasInternalToolResultProvenance(event.message, provenance)).toBe(true);
           acknowledgeInternalToolResult(event.message);
         }
         if (

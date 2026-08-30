@@ -29,6 +29,7 @@ export type CodexAppServerToolTelemetry = {
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
+  toolAutoDeliveryMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
 } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
@@ -181,6 +182,12 @@ export function buildCodexAttemptResult(
     ) ||
     input.generatedMediaProjection.hasGeneratedMedia() ||
     input.toolProgressProjection.hasPotentialSideEffects;
+  const sentMediaUrls = new Set(
+    input.toolTelemetry.messagingToolSentMediaUrls.map((url) => url.trim()),
+  );
+  const toolAutoDeliveryMediaUrls = input.toolTelemetry.toolAutoDeliveryMediaUrls?.filter(
+    (url) => !sentMediaUrls.has(url.trim()),
+  );
   return {
     terminal: attemptTerminal.normalize({
       aborted: input.aborted,
@@ -215,6 +222,10 @@ export function buildCodexAttemptResult(
     hostOwnedToolMediaUrls: input.generatedMediaProjection.buildHostOwnedMediaUrls(
       input.toolTelemetry,
     ),
+    toolAutoDeliveryMediaUrls:
+      toolAutoDeliveryMediaUrls && toolAutoDeliveryMediaUrls.length > 0
+        ? toolAutoDeliveryMediaUrls
+        : undefined,
     toolAudioAsVoice: input.toolTelemetry.toolAudioAsVoice,
     successfulCronAdds: input.toolTelemetry.successfulCronAdds,
     acceptedSessionSpawns: input.toolTelemetry.acceptedSessionSpawns,

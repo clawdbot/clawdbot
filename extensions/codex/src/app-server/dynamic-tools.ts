@@ -24,6 +24,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  getCoreTtsToolResultMediaUrls,
   isReplaySafeToolCall,
   isToolWrappedWithBeforeToolCallHook,
   isToolResultError,
@@ -435,6 +436,7 @@ export type CodexDynamicToolBridge = {
     messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
     heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
+    toolAutoDeliveryMediaUrls: string[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
     acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
@@ -561,6 +563,7 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSentTargets: [],
     messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
+    toolAutoDeliveryMediaUrls: [],
     toolAudioAsVoice: false,
     acceptedSessionSpawns: [],
     quarantinedTools,
@@ -878,6 +881,7 @@ export function createCodexDynamicToolBridge(params: {
           mediaTrustResult: telemetryRawResult,
           telemetry,
           isError: resultIsError,
+          autoDeliveryTtsMediaUrls: getCoreTtsToolResultMediaUrls(rawResult),
           messagingTarget: confirmedMessagingTarget,
           sourceReplyFinal,
         });
@@ -1390,6 +1394,7 @@ function collectToolTelemetry(params: {
   mediaTrustResult?: unknown;
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
+  autoDeliveryTtsMediaUrls?: readonly string[];
   messagingTarget?: MessagingToolSend;
   sourceReplyFinal?: boolean;
 }): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
@@ -1414,12 +1419,20 @@ function collectToolTelemetry(params: {
         params.mediaTrustResult ?? params.result,
       );
       const seen = new Set(params.telemetry.toolMediaUrls);
+      const autoDeliveryMediaUrls = new Set(params.telemetry.toolAutoDeliveryMediaUrls);
+      const rawAutoDeliveryMediaUrls = new Set(params.autoDeliveryTtsMediaUrls);
       for (const mediaUrl of mediaUrls) {
         if (!seen.has(mediaUrl)) {
           seen.add(mediaUrl);
           params.telemetry.toolMediaUrls.push(mediaUrl);
         }
+        if (rawAutoDeliveryMediaUrls.has(mediaUrl)) {
+          autoDeliveryMediaUrls.add(mediaUrl);
+        } else {
+          autoDeliveryMediaUrls.delete(mediaUrl);
+        }
       }
+      params.telemetry.toolAutoDeliveryMediaUrls = [...autoDeliveryMediaUrls];
       if (media.audioAsVoice) {
         params.telemetry.toolAudioAsVoice = true;
       }
