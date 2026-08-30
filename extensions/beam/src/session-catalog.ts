@@ -131,11 +131,10 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             type: item.type,
             text: item.text,
             timestamp: session.updatedAt,
-            ...(item.type === "userMessage" && session.uploaderProfileId
-              ? {
-                  sender: { identity: { type: "profile" as const, id: session.uploaderProfileId } },
-                }
-              : {}),
+            sender:
+              item.type === "userMessage" && session.uploaderProfileId
+                ? { identity: { type: "profile" as const, id: session.uploaderProfileId } }
+                : undefined,
           }))
           .toReversed(),
         ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),

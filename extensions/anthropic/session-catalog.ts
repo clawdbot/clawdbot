@@ -213,7 +213,7 @@ export function createClaudeSessionCatalogRuntime(
         if (offset && offset >= blocks.length) {
           throw new ClaudeCatalogParamsError("transcript cursor is invalid");
         }
-        return blocks.slice(offset).map((item, index) => ({ item, row, skip: offset + index }));
+        return blocks.slice(offset).map((item, block) => ({ item, row, skip: offset + block }));
       });
       const { items } = sessionCatalogPaging.boundTranscriptPage(
         projected.map(({ item }) => item).toReversed(),
