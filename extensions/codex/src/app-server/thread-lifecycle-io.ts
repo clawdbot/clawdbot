@@ -30,18 +30,17 @@ import {
 } from "./protocol-validators.js";
 import type { CodexThread } from "./protocol.js";
 import { isCodexThreadReadMissingError } from "./rpc-error.js";
-import {
-  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
-  type CodexAppServerThreadBinding,
-} from "./session-binding.js";
+import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
   fingerprintCodexThreadConfig,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
 import {
+  assertCodexProjectInstructionColdResumeAllowed,
   CodexThreadBindingConflictError,
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
+import { captureAgentInstructions } from "./thread-lifecycle-instructions.js";
 import { resolveCodexThreadAgentDir } from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
@@ -68,29 +67,11 @@ function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined 
   return rolloutPath;
 }
 
-/** Persists one snapshot for eligible turns while leaving isolated runs eligible to upgrade. */
-function captureAgentInstructions(
-  params: Pick<
-    CodexStartOrResumeThreadParams,
-    "params" | "agentWorkspaceDeveloperInstructions" | "agentWorkspaceDeveloperInstructionsAllowed"
-  >,
-  fallbackInstructions?: string | null,
-) {
-  return params.agentWorkspaceDeveloperInstructionsAllowed === false ||
-    params.params.bootstrapContextMode === "lightweight"
-    ? {}
-    : {
-        agentWorkspaceDeveloperInstructions:
-          params.agentWorkspaceDeveloperInstructions !== undefined
-            ? params.agentWorkspaceDeveloperInstructions
-            : (fallbackInstructions ?? CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY),
-      };
-}
-
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
   context: CodexResumeThreadContext,
 ): Promise<CodexAppServerThreadLifecycleBinding | undefined> {
+  assertCodexProjectInstructionColdResumeAllowed(context.binding);
   const {
     binding: resumeBinding,
     bindingIdentity,
@@ -600,7 +581,11 @@ export async function startFreshCodexThread(
     cwd: params.cwd,
     ...(rolloutPath ? { rolloutPath } : {}),
     authProfileId: params.params.authProfileId,
-    ...captureAgentInstructions(params, capturedAgentWorkspaceDeveloperInstructions),
+    ...captureAgentInstructions(
+      params,
+      capturedAgentWorkspaceDeveloperInstructions,
+      response.instructionSources,
+    ),
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider: bindingModelProvider,
     dynamicToolsFingerprint,

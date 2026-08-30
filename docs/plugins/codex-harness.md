@@ -491,6 +491,14 @@ Retained warm threads keep Codex's already-loaded authority. If an established
 thread must be loaded into a new process, OpenClaw disables fresh native
 discovery and replays the complete frozen hierarchy instead.
 
+The experimental sandbox exec-server is a stricter boundary. Codex reads that
+hierarchy inside the selected execution environment, while app-server reports
+only its source paths, so the Gateway cannot freeze the authoritative bytes.
+OpenClaw records that the environment owns the project instructions and permits
+warm reuse only while the same environment-backed thread remains live. It
+rejects a physical cold resume or cross-environment replacement before provider
+I/O; continue the live sandbox thread or start a new session.
+
 Ordinary conversation tool-policy restrictions preserve the native project-
 document budget because project instructions are context, not tool authority.
 Their isolated native environment cannot read workspace files, so OpenClaw

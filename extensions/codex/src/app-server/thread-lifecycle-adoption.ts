@@ -21,6 +21,7 @@ import { shouldRotateCodexGpt56MultiAgentBinding } from "./thread-binding-policy
 import { isContextEngineBindingCompatible } from "./thread-context-engine.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
+  assertCodexProjectInstructionColdResumeAllowed,
   CodexAdoptedThreadActiveError,
   CodexThreadBindingConflictError,
 } from "./thread-lifecycle-errors.js";
@@ -136,6 +137,7 @@ export async function resumePendingCodexThread(
   context: PendingResumeContext,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const { binding, contextEngineBinding, lifecycleTiming, restrictedToolSurface } = context;
+  assertCodexProjectInstructionColdResumeAllowed(binding);
   if (
     isIncognitoSessionKey(params.params.sessionKey) ||
     context.transientRestriction ||

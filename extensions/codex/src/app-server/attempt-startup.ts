@@ -37,7 +37,6 @@ import {
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
-  hasCodexMcpToolApprovalOverrides,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
@@ -164,14 +163,18 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
+  /** Developer instructions used only when a physical start or cold resume needs frozen replay. */
+  coldDeveloperInstructions: string | undefined;
   agentWorkspaceDeveloperInstructions?: string;
+  agentWorkspaceDeveloperInstructionsAllowed: boolean;
+  captureNativeProjectInstructions?: boolean;
+  projectInstructionsUnavailableToGateway?: boolean;
+  nativeProjectDocsDisabledOnResume?: boolean;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
   nativeHookRelayRequired?: boolean;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
-  /** Static configured MCP is present on the dynamic surface, so native MCP stays absent. */
-  configuredMcpDynamicSurface?: boolean;
   /** OpenClaw owns configured MCP dynamically for this scheduled turn. */
   configuredMcpOwnershipVersion?: 1;
   nativeToolSurfaceEnabled: boolean;
@@ -213,7 +216,7 @@ export async function startCodexAttemptThread(params: {
       },
       operation: async () => {
         const threadConfig = mergeCodexThreadConfigs(
-          params.configuredMcpDynamicSurface
+          params.configuredMcpOwnershipVersion === 1
             ? undefined
             : (params.bundleMcpThreadConfig?.configPatch as JsonObject | undefined),
         );
@@ -228,16 +231,9 @@ export async function startCodexAttemptThread(params: {
           resolvedPluginPolicy,
           enabledPluginConfigKeys,
         } = pluginStartupPolicy;
+        const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true ||
-          params.computerUseConfig.enabled ||
-          (params.nativeToolSurfaceEnabled &&
-            params.configuredMcpOwnershipVersion !== 1 &&
-            hasCodexMcpToolApprovalOverrides(
-              params.config?.mcp?.servers,
-              params.bundleMcpThreadConfig.userStaticServerNames,
-              params.bundleMcpThreadConfig.configPatch?.mcp_servers,
-            ));
+          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
         pluginAppServer = mcpElicitationDelegationRequired
           ? {
               ...params.appServer,
@@ -485,7 +481,15 @@ export async function startCodexAttemptThread(params: {
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
+                coldDeveloperInstructions: params.coldDeveloperInstructions,
                 agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
+                agentWorkspaceDeveloperInstructionsAllowed:
+                  params.agentWorkspaceDeveloperInstructionsAllowed,
+                captureNativeProjectInstructions: params.captureNativeProjectInstructions,
+                projectInstructionsUnavailableToGateway:
+                  params.projectInstructionsUnavailableToGateway === true &&
+                  Boolean(startupEnvironmentSelection?.length),
+                nativeProjectDocsDisabledOnResume: params.nativeProjectDocsDisabledOnResume,
                 config: threadConfig,
                 shellEnvironment: params.shellEnvironment,
                 disableLoginShell: params.disableLoginShell,
@@ -496,14 +500,17 @@ export async function startCodexAttemptThread(params: {
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-                userMcpServersEnabled: params.configuredMcpDynamicSurface
-                  ? false
-                  : params.nativeToolSurfaceEnabled,
-                mcpServersFingerprint: params.configuredMcpDynamicSurface
-                  ? undefined
-                  : params.bundleMcpThreadConfig.fingerprint,
+                userMcpServersEnabled:
+                  params.configuredMcpOwnershipVersion === 1
+                    ? false
+                    : params.nativeToolSurfaceEnabled,
+                mcpServersFingerprint:
+                  params.configuredMcpOwnershipVersion === 1
+                    ? undefined
+                    : params.bundleMcpThreadConfig.fingerprint,
                 mcpServersFingerprintEvaluated:
-                  params.configuredMcpDynamicSurface || params.bundleMcpThreadConfig.evaluated,
+                  params.configuredMcpOwnershipVersion === 1 ||
+                  params.bundleMcpThreadConfig.evaluated,
                 configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
                 environmentSelection: startupEnvironmentSelection,
                 appServerRuntimeFingerprint,
@@ -703,7 +710,6 @@ export async function startCodexAttemptThread(params: {
     params.signal.removeEventListener("abort", abandonStartupAcquire);
   }
 }
-
 function shouldRetireCodexStartupClient(
   error: unknown,
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"],

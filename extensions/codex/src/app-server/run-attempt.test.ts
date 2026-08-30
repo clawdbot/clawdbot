@@ -4921,6 +4921,163 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequest?.developerInstructions).not.toContain(lateGuidance);
   });
 
+  it("rejects a cold host resume when project instructions belong to a sandbox environment", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const sandbox = {
+      ...createSandboxContext({}),
+      sessionKey: "agent:main:sandbox-authority",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      runtimeId: `sandbox-authority-${path.basename(tempDir)}`,
+      runtimeLabel: "Sandbox instruction authority",
+      containerName: "sandbox-instruction-authority",
+    };
+    const pluginConfig = {
+      appServer: {
+        mode: "yolo" as const,
+        experimental: { sandboxExecServer: true },
+      },
+    };
+    const sandboxParams = createParams(sessionFile, workspaceDir);
+    sandboxParams.disableTools = false;
+    sandboxParams.runtimePlan = createCodexRuntimePlanFixture();
+    sandboxParams.sandbox = sandbox as never;
+    setCodexTestModelSupportsTools(sandboxParams, true);
+    setAgentWorkspaceForTest(sandboxParams, workspaceDir);
+    const sandboxHarness = createStartedThreadHarness(async (method) =>
+      method === "thread/start"
+        ? threadStartResult("thread-sandbox", {
+            cwd: "/workspace",
+            instructionSources: ["/workspace/AGENTS.md"],
+          })
+        : undefined,
+    );
+
+    const sandboxRun = runCodexAppServerAttempt(sandboxParams, { pluginConfig });
+    await sandboxHarness.waitForMethod("turn/start");
+    await sandboxHarness.completeTurn({ threadId: "thread-sandbox", turnId: "turn-1" });
+    await sandboxRun;
+    const initialTurnStartIndex = sandboxHarness.requests.findIndex(
+      (request) => request.method === "turn/start",
+    );
+    expect(initialTurnStartIndex).toBeGreaterThanOrEqual(0);
+    sandboxHarness.requests.splice(initialTurnStartIndex, 1);
+    const warmSandboxParams = createParams(sessionFile, workspaceDir);
+    warmSandboxParams.disableTools = false;
+    warmSandboxParams.runtimePlan = createCodexRuntimePlanFixture();
+    warmSandboxParams.sandbox = sandbox as never;
+    setCodexTestModelSupportsTools(warmSandboxParams, true);
+    setAgentWorkspaceForTest(warmSandboxParams, workspaceDir);
+    const warmSandboxRun = runCodexAppServerAttempt(warmSandboxParams, { pluginConfig });
+    await sandboxHarness.waitForMethod("turn/start");
+    await sandboxHarness.completeTurn({ threadId: "thread-sandbox", turnId: "turn-1" });
+    const warmSandboxResult = await warmSandboxRun;
+    expect(readAttemptTerminal(warmSandboxResult)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+    });
+    expect(
+      sandboxHarness.requests.filter((request) => request.method === "thread/start"),
+    ).toHaveLength(1);
+    expect(sandboxHarness.requests.map((request) => request.method)).not.toContain("thread/resume");
+    sandboxHarness.close(new Error("sandbox app-server process exited"));
+
+    const hostHarness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/resume") {
+        throw new Error("unsafe thread/resume reached");
+      }
+      return undefined;
+    });
+    const hostParams = createParams(sessionFile, workspaceDir);
+    setAgentWorkspaceForTest(hostParams, workspaceDir);
+
+    await expect(runCodexAppServerAttempt(hostParams, { pluginConfig })).rejects.toThrow(
+      "original project instructions belong to an unavailable environment",
+    );
+    expect(hostHarness.requests.map((request) => request.method)).not.toContain("thread/resume");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-sandbox",
+      projectInstructionsUnavailableToGateway: true,
+    });
+  });
+
+  it("keeps an empty sandbox instruction selection resumable on the host", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const sandbox = {
+      ...createSandboxContext({}),
+      sessionKey: "agent:main:sandbox-empty-authority",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      runtimeId: `sandbox-empty-authority-${path.basename(tempDir)}`,
+      runtimeLabel: "Sandbox empty instruction authority",
+      containerName: "sandbox-empty-instruction-authority",
+    };
+    const pluginConfig = {
+      codexDynamicToolsExclude: ["exec", "process"],
+      appServer: {
+        mode: "yolo" as const,
+        experimental: { sandboxExecServer: true },
+      },
+    };
+    const sandboxParams = createParams(sessionFile, workspaceDir);
+    sandboxParams.disableTools = false;
+    sandboxParams.runtimePlan = createCodexRuntimePlanFixture();
+    sandboxParams.sandbox = sandbox as never;
+    setCodexTestModelSupportsTools(sandboxParams, true);
+    setAgentWorkspaceForTest(sandboxParams, workspaceDir);
+    const sandboxHarness = createStartedThreadHarness(async (method) =>
+      method === "thread/start"
+        ? threadStartResult("thread-sandbox-empty", {
+            cwd: "/workspace",
+            instructionSources: [],
+          })
+        : undefined,
+    );
+
+    const sandboxRun = runCodexAppServerAttempt(sandboxParams, { pluginConfig });
+    await sandboxHarness.waitForMethod("turn/start");
+    await sandboxHarness.completeTurn({ threadId: "thread-sandbox-empty", turnId: "turn-1" });
+    await sandboxRun;
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-sandbox-empty",
+      agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.not.toHaveProperty(
+      "projectInstructionsUnavailableToGateway",
+    );
+    sandboxHarness.close(new Error("sandbox app-server process exited"));
+
+    const hostHarness = createResumeHarness({ instructionSources: [] });
+    const hostParams = createParams(sessionFile, workspaceDir);
+    hostParams.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(hostParams, true);
+    setAgentWorkspaceForTest(hostParams, workspaceDir);
+    const hostRun = runCodexAppServerAttempt(hostParams, { pluginConfig });
+    await hostHarness.waitForMethod("turn/start");
+    await hostHarness.completeTurn({ threadId: "thread-sandbox-empty", turnId: "turn-2" });
+    await hostRun;
+
+    expect(hostHarness.requests.map((request) => request.method)).toContain("thread/resume");
+    const threadResume = hostHarness.requests.find((request) => request.method === "thread/resume");
+    const resumeRequest = threadResume?.params as
+      | { config?: { project_doc_max_bytes?: number }; developerInstructions?: string }
+      | undefined;
+    expect(resumeRequest?.config?.project_doc_max_bytes).toBe(0);
+    expect(resumeRequest?.developerInstructions).toContain("Frozen Codex Project Instructions");
+  });
+
   it("keeps a nonempty same-workspace snapshot frozen after AGENTS.md changes", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsPath = path.join(workspaceDir, "AGENTS.md");

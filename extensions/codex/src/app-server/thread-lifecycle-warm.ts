@@ -27,7 +27,10 @@ import {
   retainSharedCodexAppServerClientByInstanceId,
 } from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
-import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
+import {
+  assertCodexProjectInstructionEnvironmentAvailable,
+  CodexThreadBindingConflictError,
+} from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
@@ -201,6 +204,12 @@ export async function tryReuseCodexLiveThread(
     }
     return { kind: "rotate" };
   }
+
+  assertCodexProjectInstructionEnvironmentAvailable(
+    binding,
+    environmentSelectionFingerprint,
+    "reuse",
+  );
 
   if (
     !binding.clientId ||

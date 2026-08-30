@@ -38,6 +38,8 @@ import {
   type StoredCodexAppServerBinding,
 } from "./session-binding-record.js";
 export {
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+  CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
   bindingStoreKey,
   readCodexAppServerThreadBinding,
   readStoredCodexAppServerBinding,
@@ -55,12 +57,6 @@ const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 const BINDING_LEASE_RETRY_INTERVAL_MS = 1_000;
 const BOUNDED_BINDING_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/i;
-
-export const CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY = [
-  "## Frozen Codex Project Instructions",
-  "",
-  "The original root-to-working-directory Codex project-document hierarchy was empty when this thread started. Project-instruction files created later do not apply to this existing thread.",
-].join("\n");
 
 export {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
