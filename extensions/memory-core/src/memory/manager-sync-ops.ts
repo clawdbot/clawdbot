@@ -304,6 +304,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       });
       if (targetedSessionSync.handled) {
         this.sessionsDirty = targetedSessionSync.sessionsDirty;
+        if (targetedSessionSync.fallbackActivated) {
+          await this.recoverFallbackProviderIdentity(params?.reason, progress ?? undefined);
+        }
         return;
       }
     }
@@ -365,14 +368,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       }
       const activated = shouldFallback && (await this.activateFallbackProvider(reason));
       if (activated) {
-        if (needsFullReindex && !hasTargetArchiveFiles) {
-          this.beginSyncProviderGeneration();
-          await this.runInPlaceReindex({
-            reason: params?.reason ?? "fallback",
-            force: true,
-            progress: progress ?? undefined,
-          });
-        }
+        await this.recoverFallbackProviderIdentity(params?.reason, progress ?? undefined);
         return;
       }
       if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
@@ -410,6 +406,21 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       pollIntervalMs: batch?.pollIntervalMs ?? 2000,
       timeoutMs: resolveTimerTimeoutMs((batch?.timeoutMinutes ?? 60) * 60 * 1000, 60 * 60_000),
     };
+  }
+
+  /**
+   * Activating a fallback changes the index identity, so whatever is on disk
+   * now belongs to a provider that is no longer in use. Rebuild in place from
+   * every owner that can activate one — source-wide and targeted alike, and
+   * whether or not that sync had already asked for a full reindex. An index
+   * left under the dead provider makes every later search report itself paused.
+   */
+  private async recoverFallbackProviderIdentity(
+    reason: string | undefined,
+    progress: MemorySyncProgressState | undefined,
+  ): Promise<void> {
+    this.beginSyncProviderGeneration();
+    await this.runInPlaceReindex({ reason: reason ?? "fallback", force: true, progress });
   }
 
   protected async activateFallbackProvider(reason: string): Promise<boolean> {

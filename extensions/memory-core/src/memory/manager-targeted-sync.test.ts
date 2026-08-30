@@ -46,7 +46,9 @@ describe("memory targeted session sync", () => {
       targetArchiveFiles: ["/tmp/targeted-fallback.jsonl"],
       progress: undefined,
     });
-    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    // The activated fallback is reported so the sync owner can rebuild the
+    // index under the new provider; this path returns before its handler.
+    expect(result).toEqual({ handled: true, sessionsDirty: true, fallbackActivated: true });
     expect(sessionsDirtyFiles.has("/tmp/targeted-fallback.jsonl")).toBe(true);
     expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
   });
@@ -67,7 +69,7 @@ describe("memory targeted session sync", () => {
       activateFallbackProvider: async () => false,
     });
 
-    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(result).toEqual({ handled: true, sessionsDirty: true, fallbackActivated: false });
     expect(sessionsDirtyFiles.size).toBe(0);
   });
 
@@ -85,7 +87,7 @@ describe("memory targeted session sync", () => {
       activateFallbackProvider: async () => false,
     });
 
-    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(result).toEqual({ handled: true, sessionsDirty: true, fallbackActivated: false });
     expect(sessionsDirtyFiles.size).toBe(0);
   });
 });

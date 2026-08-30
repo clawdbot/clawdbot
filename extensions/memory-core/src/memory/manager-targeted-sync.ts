@@ -50,13 +50,14 @@ export async function runMemoryTargetedSessionSync(params: {
   }) => Promise<void>;
   shouldFallbackOnError: (err: unknown) => boolean;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
-}): Promise<{ handled: boolean; sessionsDirty: boolean }> {
+}): Promise<{ handled: boolean; sessionsDirty: boolean; fallbackActivated: boolean }> {
   const hasPendingSessionWork = (hasDirtyFiles = params.sessionsDirtyFiles.size > 0) =>
     params.sessionsFullRetryDirty || params.sessionsReconcileDirty || hasDirtyFiles;
   if (!params.hasSessionSource || !params.targetArchiveFiles) {
     return {
       handled: false,
       sessionsDirty: hasPendingSessionWork(),
+      fallbackActivated: false,
     };
   }
 
@@ -73,6 +74,7 @@ export async function runMemoryTargetedSessionSync(params: {
     return {
       handled: true,
       sessionsDirty: hasPendingSessionWork(remainingSessionsDirty),
+      fallbackActivated: false,
     };
   } catch (err) {
     const reason = formatErrorMessage(err);
@@ -85,9 +87,12 @@ export async function runMemoryTargetedSessionSync(params: {
       sessionsDirtyFiles: params.sessionsDirtyFiles,
       targetArchiveFiles: params.targetArchiveFiles,
     });
+    // The caller owns identity recovery: activating a fallback changes the
+    // index identity, and this path returns before the source-wide handler.
     return {
       handled: true,
       sessionsDirty: hasPendingSessionWork(remainingSessionsDirty),
+      fallbackActivated: true,
     };
   }
 }
