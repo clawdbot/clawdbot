@@ -73,7 +73,7 @@ export async function createTelegramQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const skillRuntime = await loadTelegramUserbotSkillRuntime();
+  const skillRuntime = await loadTelegramUserbotSkillRuntime({ repoRoot: options.repoRoot });
   const credentialLease = await acquireQaCredentialLease<TelegramTestCredential>({
     kind: "telegram-test-userbot",
     source: options.credentialSource || "convex",

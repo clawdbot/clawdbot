@@ -59,18 +59,17 @@ describe("Telegram userbot driver runtime", () => {
     await driver.close();
   });
 
-  it("loads the repository skill as the runtime source of truth", async () => {
-    const runtime = await loadTelegramUserbotSkillRuntime({ repoRoot: process.cwd(), env: {} });
+  it("loads the selected repository skill from a different working directory", async () => {
+    const repoRoot = tempRoot();
+    const skillPath = path.join(repoRoot, ".agents", "skills", "telegram-e2e-userbot");
+    fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+    fs.cpSync(path.join(process.cwd(), ".agents", "skills", "telegram-e2e-userbot"), skillPath, {
+      recursive: true,
+    });
+    const runtime = await loadTelegramUserbotSkillRuntime({ repoRoot, env: {} });
 
     expect(runtime.userDriverPath).toBe(
-      path.join(
-        process.cwd(),
-        ".agents",
-        "skills",
-        "telegram-e2e-userbot",
-        "scripts",
-        "user-driver.py",
-      ),
+      path.join(repoRoot, ".agents", "skills", "telegram-e2e-userbot", "scripts", "user-driver.py"),
     );
     expect(() => runtime.parseCredential({})).toThrow("unsupported schema or environment");
     const stateRoot = runtime.createStateRoot();

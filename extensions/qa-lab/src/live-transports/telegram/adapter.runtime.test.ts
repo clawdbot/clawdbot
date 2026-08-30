@@ -103,6 +103,7 @@ describe("Telegram QA transport adapter", () => {
       adapterOptions: {
         credentialSource: "convex",
         credentialRole: "ci",
+        repoRoot: "/checkout",
         transportPolicy: { requireGroupMention: true },
       },
       messages: {},
@@ -111,6 +112,9 @@ describe("Telegram QA transport adapter", () => {
     expect(mocks.acquireQaCredentialLease).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "telegram-test-userbot", source: "convex", role: "ci" }),
     );
+    expect(mocks.loadTelegramUserbotSkillRuntime).toHaveBeenCalledWith({
+      repoRoot: "/checkout",
+    });
     expect(mocks.proxyDrainUpdates).toHaveBeenCalledWith("sut-token");
     expect(mocks.startApiProxy).toHaveBeenCalledWith({
       assertHealthy: expect.any(Function),
