@@ -1050,7 +1050,9 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 320, height: 720 });
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      await page.getByRole("button", { name: "Refresh: Microphone input" }).click();
+      const microphonePicker = page.getByRole("combobox", { name: "Microphone input" });
+      await microphonePicker.press("ArrowDown");
+      await microphonePicker.press("Escape");
 
       const permissionAlert = page.getByRole("alert");
       await expect.poll(() => permissionAlert.isVisible()).toBe(true);
