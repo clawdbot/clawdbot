@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   createSandboxedReadTool,
   wrapToolWorkspaceRootGuardWithOptions,
@@ -13,6 +14,8 @@ import type {
   SandboxBackendCommandResult,
   SandboxBackendHandle,
 } from "./backend-handle.types.js";
+import { registerSandboxBackend } from "./backend.js";
+import { resolveSandboxContext } from "./context.js";
 
 function mapRootMountedArgs(args: readonly string[], hostRoot: string): string[] {
   return args.map((arg) =>
@@ -93,26 +96,40 @@ describe("sandbox fs bridge slash-root backend", () => {
         }),
         runShellCommand: (params) => runRootMountedShellCommand(params, workspaceDir),
       };
+      const restore = registerSandboxBackend("local-test", {
+        factory: async () => backend,
+        resolveWorkdir: () => backend.workdir,
+      });
 
       try {
-        const [{ createSandboxFsBridge }, { createSandboxTestContext }] = await Promise.all([
-          import("./fs-bridge.js"),
-          import("./test-fixtures.js"),
-        ]);
-        const sandbox = createSandboxTestContext({
-          overrides: {
-            workspaceDir,
-            agentWorkspaceDir: workspaceDir,
-            containerWorkdir: "/",
-            containerName: "local-backend-fsbridge-root",
-            backend,
+        const config: OpenClawConfig = {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                backend: "local-test",
+                scope: "session",
+                workspaceAccess: "rw",
+                prune: { idleHours: 0, maxAgeDays: 0 },
+              },
+            },
           },
-        });
-        const bridge = createSandboxFsBridge({ sandbox });
-        const readTool = wrapToolWorkspaceRootGuardWithOptions(
-          createSandboxedReadTool({ root: workspaceDir, bridge }),
+        };
+        const sandbox = await resolveSandboxContext({
+          config,
+          execOverrides: { host: "node", node: "build-node", security: "allowlist" },
+          sessionKey: "agent:main:root-workdir",
           workspaceDir,
-          { containerWorkdir: "/" },
+        });
+        if (!sandbox?.fsBridge) {
+          throw new Error("Sandbox context did not create an fs bridge");
+        }
+        expect(sandbox.containerWorkdir).toBe(backend.workdir);
+        const bridge = sandbox.fsBridge;
+        const readTool = wrapToolWorkspaceRootGuardWithOptions(
+          createSandboxedReadTool({ root: sandbox.workspaceDir, bridge }),
+          sandbox.workspaceDir,
+          { containerWorkdir: sandbox.containerWorkdir },
         );
         const mapped = bridge.resolvePath({ filePath: "/docs/readme.md", cwd: workspaceDir });
         const result = await readTool.execute("tc-root-workdir", { path: "/docs/readme.md" });
@@ -134,6 +151,7 @@ describe("sandbox fs bridge slash-root backend", () => {
           "REAL_SANDBOX_ROOT_PROOF path=/docs/readme.md mapped=/docs/readme.md content=from-real-bridge outside=REJECTED",
         );
       } finally {
+        restore();
         await fs.rm(stateDir, { recursive: true, force: true });
       }
     },
