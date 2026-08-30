@@ -39,7 +39,7 @@ import {
   type SessionCapabilityStore,
   type SubagentSessionRole,
 } from "./subagents/spawn/subagent-capabilities.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { createToolPolicyMatcher } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
@@ -138,17 +138,6 @@ export function resolveInheritedToolPolicyForSession(
     ...(inheritedToolAllow.length > 0 ? { allow: inheritedToolAllow } : {}),
     ...(inheritedToolDeny.length > 0 ? { deny: inheritedToolDeny } : {}),
   };
-}
-
-/** Filter runtime tools by sandbox allow/deny policy. */
-export function filterToolsByPolicy<TTool extends { name: string }>(
-  tools: TTool[],
-  policy?: SandboxToolPolicy,
-): TTool[] {
-  if (!policy) {
-    return tools;
-  }
-  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
 /** Resolve the shared profile, scope, extra, and sandbox policy layers. */
@@ -440,12 +429,11 @@ export function resolveEffectiveToolPolicy(params: {
         resolveToolProfilePolicy(profile),
         explicitProfileAlsoAllow,
       );
+      const matchesProfile = createToolPolicyMatcher(profilePolicy);
       const uncoveredEntries = implicitGrants.entries
         .map((entry) => ({
           section: entry.section,
-          grants: entry.grants.filter(
-            (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
-          ),
+          grants: entry.grants.filter((toolName) => !matchesProfile(toolName)),
         }))
         .filter((entry) => entry.grants.length > 0);
       const uncovered = uncoveredEntries.flatMap((entry) => entry.grants);

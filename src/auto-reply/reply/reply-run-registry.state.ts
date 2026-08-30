@@ -1,5 +1,6 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveActiveEmbeddedRunRecoveryBlocker } from "../../agents/embedded-agent-runner/run-state.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -442,7 +443,17 @@ export function markReplyRunDiagnosticProgress(params: {
   });
 }
 
+export function isReplyRunWaitingForHumanInput(operation: ReplyOperation): boolean {
+  const backend = getAttachedBackend(operation);
+  return (
+    Boolean(backend) &&
+    resolveActiveEmbeddedRunRecoveryBlocker(operation.sessionId, backend) === "human_input_wait"
+  );
+}
+
 export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
+  // Reading the wait may expire it and record the owner's resumed activity.
+  const waitingForHumanInput = isReplyRunWaitingForHumanInput(operation);
   const activity = getDiagnosticSessionActivitySnapshot({
     sessionId: operation.sessionId,
     sessionKey: operation.key,
@@ -451,6 +462,7 @@ export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
     !operation.result &&
     operation.phase !== "waiting_for_global_lane" &&
     Date.now() - operation.lastActivityAtMs >
-      resolveRunStaleThresholdMs(activity, Date.now() - operation.lastActivityAtMs)
+      resolveRunStaleThresholdMs(activity, Date.now() - operation.lastActivityAtMs) &&
+    !waitingForHumanInput
   );
 }

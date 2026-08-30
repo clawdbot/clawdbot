@@ -46,43 +46,46 @@ describe("provider-catalog-live-runtime", () => {
     vi.restoreAllMocks();
   });
 
-  it("fetches and dedupes OpenAI-style live model ids with resolved discovery auth", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const { fetchGuard, fetchGuardMock, release } = buildFetchGuard({
-      data: [
-        { id: "model-a", object: "model" },
-        { id: "model-b", object: "model" },
-        { id: "embedding-a", object: "embedding" },
-        { id: "model-a", object: "model" },
-      ],
-    });
-    const controller = new AbortController();
+  it.each(["resolved-provider-key", "ollama-local", "OLLAMA_API_KEY", NON_ENV_SECRETREF_MARKER])(
+    "fetches and dedupes live model ids with opaque resolved auth %s",
+    async (discoveryApiKey) => {
+      vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const { fetchGuard, fetchGuardMock, release } = buildFetchGuard({
+        data: [
+          { id: "model-a", object: "model" },
+          { id: "model-b", object: "model" },
+          { id: "embedding-a", object: "embedding" },
+          { id: "model-a", object: "model" },
+        ],
+      });
+      const controller = new AbortController();
 
-    await expect(
-      fetchLiveProviderModelIds({
-        providerId: "provider",
-        endpoint: "https://provider.example.test/v1/models",
-        apiKey: "PROVIDER_API_KEY",
-        discoveryApiKey: "resolved-provider-key",
-        fetchGuard,
-        signal: controller.signal,
+      await expect(
+        fetchLiveProviderModelIds({
+          providerId: "provider",
+          endpoint: "https://provider.example.test/v1/models",
+          apiKey: NON_ENV_SECRETREF_MARKER,
+          discoveryApiKey,
+          fetchGuard,
+          signal: controller.signal,
+          timeoutMs: 1234,
+        }),
+      ).resolves.toEqual(["model-a", "model-b"]);
+
+      expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+      const request = fetchGuardMock.mock.calls[0]?.[0];
+      expect(request).toMatchObject({
+        url: "https://provider.example.test/v1/models",
+        auditContext: "provider-model-discovery",
         timeoutMs: 1234,
-      }),
-    ).resolves.toEqual(["model-a", "model-b"]);
-
-    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
-    const request = fetchGuardMock.mock.calls[0]?.[0];
-    expect(request).toMatchObject({
-      url: "https://provider.example.test/v1/models",
-      auditContext: "provider-model-discovery",
-      timeoutMs: 1234,
-      signal: controller.signal,
-    });
-    const headers = request?.init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    expect((headers as Headers).get("authorization")).toBe("Bearer resolved-provider-key");
-    expect(release).toHaveBeenCalledTimes(1);
-  });
+        signal: controller.signal,
+      });
+      const headers = request?.init?.headers;
+      expect(headers).toBeInstanceOf(Headers);
+      expect((headers as Headers).get("authorization")).toBe(`Bearer ${discoveryApiKey}`);
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not send non-secret SecretRef markers as live catalog bearer tokens", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard({ data: [] });

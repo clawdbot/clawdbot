@@ -885,6 +885,64 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     },
   );
 
+  it.each(
+    [
+      { scope: "selected", expectedFullIds: ["broken", "healthy"] },
+      { scope: "unscoped", expectedFullIds: ["healthy"] },
+      { scope: "entries-only", expectedFullIds: [] },
+    ].flatMap(({ scope, expectedFullIds }) =>
+      ["first", "last"].map((failurePosition) => ({ scope, expectedFullIds, failurePosition })),
+    ),
+  )(
+    "recovers discarded discovery entries with $scope scope when failure is $failurePosition",
+    ({ scope, expectedFullIds, failurePosition }) => {
+      const healthy = {
+        ...createManifestPlugin("healthy"),
+        setup: { providers: [{ id: "healthy", envVars: ["HEALTHY_API_KEY"] }] },
+      };
+      const broken = createManifestPlugin("broken");
+      mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["static", "healthy", "broken"]);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        index: { plugins: [] },
+        manifestRegistry: {
+          plugins: [
+            createManifestPluginWithModelCatalog("static"),
+            ...(failurePosition === "first" ? [broken, healthy] : [healthy, broken]),
+          ],
+          diagnostics: [],
+        },
+      });
+      mocks.loadSource.mockImplementation((modulePath: string) => {
+        if (modulePath === broken.providerDiscoverySource) {
+          throw new Error("discovery entry unavailable");
+        }
+        return { ...createProvider({ id: "healthy", mode: "catalog" }), label: "entry" };
+      });
+      const fullProviders = expectedFullIds.map((id) => ({
+        ...createProvider({ id, mode: "catalog" }),
+        label: `full:${id}`,
+      }));
+      mocks.resolvePluginProvidersCore.mockReturnValue(fullProviders);
+
+      const providers = resolvePluginDiscoveryProvidersRuntime({
+        env: { HEALTHY_API_KEY: "catalog-test-key" },
+        ...(scope === "unscoped" ? {} : { onlyPluginIds: ["static", "healthy", "broken"] }),
+        discoveryEntriesOnly: scope === "entries-only",
+      });
+
+      expect(providers.map(({ id, label }) => [id, label])).toEqual([
+        ["static", "static"],
+        ...fullProviders.map(({ id, label }) => [id, label]),
+      ]);
+      if (expectedFullIds.length === 0) {
+        expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledOnce();
+        expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(expectedFullIds);
+      }
+    },
+  );
+
   it("does not fall back to full plugin loading when discovery entries are requested only", () => {
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       index: { plugins: [] },

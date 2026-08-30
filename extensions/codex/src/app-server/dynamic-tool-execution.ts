@@ -5,6 +5,7 @@
 import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
+  normalizeQuestionTimeoutSeconds,
   resolveToolExecutionErrorKind,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -504,6 +505,23 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
 }): number {
+  const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
+  if (
+    params.call.tool === "ask_user" ||
+    (params.call.tool === "secrets" && args?.action === "request")
+  ) {
+    try {
+      // Human entry owns a validated wait longer than ordinary tool execution.
+      // Leave grace for registration, cancellation, and the structured no_answer result.
+      return (
+        normalizeQuestionTimeoutSeconds(args?.timeoutSeconds) * 1_000 +
+        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
+      );
+    } catch {
+      // Invalid input still reaches the tool's validation under the ordinary watchdog.
+      return CODEX_DYNAMIC_TOOL_TIMEOUT_MS;
+    }
+  }
   if (params.call.tool === "computer") {
     return clampDynamicToolTimeoutMs(readComputerToolTimeoutMs(params.call.arguments));
   }
@@ -534,6 +552,18 @@ export function resolveDynamicToolCallTimeoutMs(params: {
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
       CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  );
+}
+
+/** Transport guard stays outside the handler's bounded tool wait and completion grace. */
+export function resolveDynamicToolServerRequestTimeoutMs(
+  call?: CodexDynamicToolCallParams,
+): number {
+  return (
+    Math.max(
+      CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+      call ? resolveDynamicToolCallTimeoutMs({ call, config: undefined }) : 0,
+    ) + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
   );
 }
 

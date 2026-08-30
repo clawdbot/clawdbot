@@ -15,7 +15,7 @@ const storeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../secrets/runtime-state.js", () => ({
-  collectSecretStoreRefKeysInConfig: storeMocks.collectRefKeys,
+  collectSecretStoreRefKeysInSnapshot: storeMocks.collectRefKeys,
   getActiveSecretsRuntimeSnapshotState: storeMocks.getSnapshot,
 }));
 

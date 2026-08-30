@@ -21,6 +21,10 @@ describe("chat pane typing presence", () => {
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
       sessions: {} as SessionCapability,
     });
+    state.sessionKey = "agent:work:main";
+    state.assistantAgentId = "work";
+    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+    state.sessionsResultAgentId = "work";
     const aliceId = "0d9f4c35-d221-49da-9a3f-b8c73921066b";
     pane.presencePayload = {
       presence: [{ user: { id: "owner" } }, { user: { id: aliceId } }, { user: { id: "bob" } }],
@@ -30,8 +34,8 @@ describe("chat pane typing presence", () => {
       path: "",
       sessions: [
         {
-          key: state.sessionKey,
-          kind: "direct",
+          key: "global",
+          kind: "global",
           sessionId: "session-a",
           updatedAt: 1,
         } as GatewaySessionRow,
@@ -130,17 +134,27 @@ describe("chat pane typing presence", () => {
       sessions: {} as SessionCapability,
     });
     pane.presencePayload = { presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }] };
+    state.sessionKey = "agent:work:main";
+    state.assistantAgentId = "work";
+    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+    state.sessionsResultAgentId = "work";
     state.sessionsResult = {
       count: 1,
       path: "",
-      sessions: [{ key: state.sessionKey, kind: "direct", sessionId: "session-a", updatedAt: 1 }],
+      sessions: [{ key: "global", kind: "global", sessionId: "session-a", updatedAt: 1 }],
     } as never;
 
     pane.sendTypingState(true, `  prefix${"😀".repeat(300)}  `);
     expect(request).toHaveBeenNthCalledWith(
       1,
       "session.typing",
-      expect.objectContaining({ typing: true, preview: "😀".repeat(300) }),
+      expect.objectContaining({
+        sessionKey: "agent:work:main",
+        sessionId: "session-a",
+        agentId: "work",
+        typing: true,
+        preview: "😀".repeat(300),
+      }),
     );
 
     pane.sendTypingState(false, "must not leak");

@@ -23,6 +23,7 @@ import {
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -31,12 +32,14 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { getActiveAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   isDiagnosticEmbeddedRunOwnerClosed,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticRunProgress,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
@@ -44,6 +47,7 @@ import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/d
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-admission.js";
+import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
@@ -58,6 +62,7 @@ import {
   EMBEDDED_RUN_WAITERS,
   RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS,
   setActiveEmbeddedRunLifecycleGeneration,
+  resolveActiveEmbeddedRunRecoveryBlocker,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
@@ -65,12 +70,7 @@ import {
   type EmbeddedRunWaiter,
 } from "./run-state.js";
 
-export {
-  getActiveEmbeddedRunCount,
-  resolveActiveEmbeddedRunSessionId,
-  type EmbeddedAgentQueueHandle,
-  type EmbeddedAgentQueueMessageOptions,
-} from "./run-state.js";
+export type { EmbeddedAgentQueueHandle, EmbeddedAgentQueueMessageOptions } from "./run-state.js";
 
 type EmbeddedAgentQueueFailureReason =
   | "no_active_run"
@@ -472,6 +472,7 @@ function clearEmbeddedRunAbortability(
   handle: EmbeddedAgentQueueHandle,
   opts?: { retainFinalizing?: boolean },
 ): void {
+  ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.humanInputWaits?.clear();
   if (!handle.runId || ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(handle.runId) !== handle) {
     return;
   }
@@ -611,10 +612,15 @@ function prepareEmbeddedAgentQueueMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
   }
+  const recoveryBlocker = resolveActiveEmbeddedRunRecoveryBlocker(sessionId, handle);
+  if (ACTIVE_EMBEDDED_RUNS.get(sessionId) !== handle) {
+    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "no_active_run") };
+  }
   const activity = getDiagnosticSessionActivitySnapshot({ sessionId });
   if (
     typeof activity.lastProgressAgeMs === "number" &&
-    activity.lastProgressAgeMs > resolveRunStaleThresholdMs(activity)
+    activity.lastProgressAgeMs > resolveRunStaleThresholdMs(activity) &&
+    recoveryBlocker !== "human_input_wait"
   ) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
@@ -879,7 +885,8 @@ function projectActiveEmbeddedRunOwner(
   }
   return {
     runId,
-    ...registration,
+    sessionId: registration.sessionId,
+    ...(registration.sessionKey ? { sessionKey: registration.sessionKey } : {}),
     ...(handle.startedAtMs === undefined ? {} : { startedAtMs: handle.startedAtMs }),
     // A recovered run ID is correlation only. Recheck the captured owner before
     // Stop so a stale UI action cannot abort replacement work in the session.
@@ -1273,9 +1280,32 @@ export function setActiveEmbeddedRun(
   }
   clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
+  // The dispatch scope carries the admitted instance across both core and
+  // plugin attempts. A handle's public runId alone cannot confer wait authority.
+  const operationalRunInstance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS.set(handle, {
     sessionId,
     ...(sessionKey ? { sessionKey } : {}),
+    delegatedAuthority:
+      operationalRunInstance?.runId === handle.runId && operationalRunInstance
+        ? getActiveAgentRunDelegatedAuthority(operationalRunInstance)
+        : undefined,
+    onHumanInputResolved: () => {
+      const operation = resolveActiveReplyOperationForSessionId(sessionId);
+      if (operation && getAttachedBackend(operation) === handle) {
+        operation.recordActivity();
+      }
+      markDiagnosticRunProgress({ sessionId, sessionKey, reason: "human_input:resolved" });
+      // A real resolution resumes work and invalidates recovery queued before it.
+      // This does not refresh progress while waiting or extend any run deadline.
+      logSessionStateChange({
+        sessionId,
+        sessionKey,
+        sessionFile,
+        state: "processing",
+        reason: "human_input_resolved",
+      });
+    },
   });
   const forcedTerminalSettlement = resolveSessionPlacementForcedTerminalSettlement();
   if (forcedTerminalSettlement) {

@@ -140,7 +140,7 @@ export async function runManagerTurn(params: {
         lastEventAt: Date.now(),
         error: formatAcpErrorChain(errorToRecord),
         progressSummary: taskProgressSummary || null,
-        terminalSummary: null,
+        terminalSummary: failureStatus === "timed_out" ? taskProgressSummary || null : null,
       });
       if (spawnedByWatcher) {
         recordSubagentTerminalState({

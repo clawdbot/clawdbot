@@ -186,13 +186,18 @@ ollama list
 openclaw models list
 ```
 
-Setting `models.providers.ollama` with an explicit `models` array, or a
-custom provider with `api: "ollama"` and a non-loopback `baseUrl`, disables
-auto-discovery; models must then be defined manually (see
-[Configuration](#configuration)). A `models.providers.ollama` entry pointed at
-hosted `https://ollama.com` also skips discovery, since Ollama Cloud models
-are provider-managed. Loopback custom providers such as
-`http://127.0.0.2:11434` still count as local and keep auto-discovery.
+A **nonempty** `models.providers.ollama.models` list selects manual models and
+skips discovery. When Ollama is in the agent's model scope, an explicit
+self-hosted endpoint with `models: []` remains eligible for discovery;
+`models.providers.ollama.apiKey` alone does not select that provider for Gateway
+model browsing.
+
+Hosted `https://ollama.com` entries skip discovery because Ollama Cloud models
+are provider-managed. Without an explicit Ollama endpoint, a custom provider
+with `api: "ollama"` and a non-loopback `baseUrl` suppresses ambient localhost
+discovery; list that custom provider's models manually (see
+[Configuration](#configuration)). Loopback custom providers such as
+`http://127.0.0.2:11434` keep ambient local discovery eligible.
 
 You can use a full ref such as `ollama/<pulled-model>:latest` without a
 hand-written `models.json` entry; OpenClaw resolves it live. For signed-in
@@ -514,7 +519,7 @@ capability.
   </Tab>
 
   <Tab title="Custom base URL">
-    Explicit config disables auto-discovery, so models must be listed:
+    This example uses a nonempty manual model list, so it skips discovery:
 
     ```json5
     {
@@ -564,7 +569,8 @@ Replace model IDs with exact names from `ollama list` or
     openclaw models set ollama/gemma4
     ```
 
-    Do not add a `models.providers.ollama` block unless you need manual models.
+    Leave `models.providers.ollama` unset to use the default local endpoint, or
+    configure a self-hosted endpoint with `models: []` to keep discovery eligible.
 
   </Accordion>
 
@@ -1187,8 +1193,10 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
   </Accordion>
 
   <Accordion title="Ollama not detected">
-    Confirm Ollama is running, `OLLAMA_API_KEY` (or an auth profile) is set,
-    and `models.providers.ollama` is **not** defined explicitly:
+    Confirm Ollama is running and is in the agent's model scope. For ambient
+    localhost discovery, set `OLLAMA_API_KEY` (or an auth profile). A nonempty
+    manual model list skips discovery; an explicit self-hosted endpoint with
+    `models: []` does not:
 
     ```bash
     ollama serve

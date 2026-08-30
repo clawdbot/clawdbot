@@ -26,7 +26,7 @@ export type GatewayRestartProbeAuth = {
 export type GatewayReachability = {
   reachable: boolean;
   gatewayVersion: string | null;
-  gatewayBuildId: string | null;
+  gatewayBuildId: string | null | undefined;
   activatedPluginErrors: PluginHealthErrorSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
   probeError?: string;
@@ -184,7 +184,11 @@ export async function confirmGatewayReachable(params: {
     return {
       reachable: reachedGateway,
       gatewayVersion: probe.server?.version ?? null,
-      gatewayBuildId: probe.server?.buildId ?? null,
+      gatewayBuildId:
+        probe.server?.buildId ??
+        (reachedGateway || probe.server?.version != null || probe.server?.connId != null
+          ? null
+          : undefined),
       activatedPluginErrors: readActivatedPluginErrors(probe.health),
       channelProbeErrors: readChannelProbeErrors(probe.health),
       ...(!reachedGateway && probe.error
@@ -195,7 +199,7 @@ export async function confirmGatewayReachable(params: {
     return {
       reachable: false,
       gatewayVersion: null,
-      gatewayBuildId: null,
+      gatewayBuildId: undefined,
       activatedPluginErrors: [],
       channelProbeErrors: [],
       probeError: formatGatewayRestartProbeError(error),

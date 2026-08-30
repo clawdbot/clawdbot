@@ -117,7 +117,9 @@ export async function loadModelProvidersData(
     updatedAt: Date.now(),
     // Auth status is the primary provider list; its failure is the only one
     // worth surfacing as a page-level error.
-    error: authStatus.ok ? null : errorMessage(authStatus.error),
+    error: authStatus.ok
+      ? (authStatus.result.unavailable?.message ?? null)
+      : errorMessage(authStatus.error),
   };
 }
 

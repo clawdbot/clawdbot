@@ -10,9 +10,23 @@ import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
+type ProviderAuthSecretStorage = {
+  /** Final persistence target. The inline credential remains available for staged validation. */
+  kind: "store";
+  /** Environment-style prefix used for the host-owned secret-store entry. */
+  namePrefix: string;
+};
+
+export type ProviderAuthProfile = {
+  profileId: string;
+  credential: AuthProfileCredential;
+  /** Request host-owned SecretRef materialization at the final persistence boundary. */
+  secretStorage?: ProviderAuthSecretStorage;
+};
+
 /** Standard result payload returned by provider auth methods. */
 export type ProviderAuthResult = {
-  profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
+  profiles: ProviderAuthProfile[];
   /**
    * Optional config patch to merge after credentials are written.
    *

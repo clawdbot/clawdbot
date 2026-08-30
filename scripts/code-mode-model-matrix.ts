@@ -16,6 +16,7 @@ import {
   type QaEvidenceSummaryJson,
 } from "../extensions/qa-lab/api.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec.ts";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
 
 export { validateQaEvidenceSummaryJson };
@@ -164,14 +165,6 @@ Provider credentials are read from the environment and are never written to arti
 `;
 }
 
-function readOptionValue(argv: readonly string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
 function parseIntegerOption(raw: string, flag: string, max?: number): number {
   if (!/^\d+$/u.test(raw)) {
     throw new Error(`${flag} must be a positive integer`);
@@ -230,7 +223,7 @@ export function parseCodeModeMatrixOptions(
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--model") {
-      const value = readOptionValue(argv, index, arg).trim();
+      const value = requireOptionArgument(argv, index, arg).trim();
       if (!value.includes("/")) {
         throw new Error(
           `--model must use a provider/model reference; got ${JSON.stringify(value)}`,
@@ -241,36 +234,40 @@ export function parseCodeModeMatrixOptions(
       continue;
     }
     if (arg === "--mode") {
-      collectUnique(modes, parseMode(readOptionValue(argv, index, arg)), arg);
+      collectUnique(modes, parseMode(requireOptionArgument(argv, index, arg)), arg);
       index += 1;
       continue;
     }
     if (arg === "--task") {
-      collectUnique(tasks, parseTask(readOptionValue(argv, index, arg)), arg);
+      collectUnique(tasks, parseTask(requireOptionArgument(argv, index, arg)), arg);
       index += 1;
       continue;
     }
     if (arg === "--repetitions") {
       recordOnce(arg);
-      repetitions = parseIntegerOption(readOptionValue(argv, index, arg), arg, MAX_REPETITIONS);
+      repetitions = parseIntegerOption(
+        requireOptionArgument(argv, index, arg),
+        arg,
+        MAX_REPETITIONS,
+      );
       index += 1;
       continue;
     }
     if (arg === "--timeout") {
       recordOnce(arg);
-      timeoutSeconds = parseIntegerOption(readOptionValue(argv, index, arg), arg);
+      timeoutSeconds = parseIntegerOption(requireOptionArgument(argv, index, arg), arg);
       index += 1;
       continue;
     }
     if (arg === "--thinking") {
       recordOnce(arg);
-      thinking = readOptionValue(argv, index, arg).trim();
+      thinking = requireOptionArgument(argv, index, arg).trim();
       index += 1;
       continue;
     }
     if (arg === "--output-dir") {
       recordOnce(arg);
-      outputDir = readOptionValue(argv, index, arg);
+      outputDir = requireOptionArgument(argv, index, arg);
       index += 1;
       continue;
     }

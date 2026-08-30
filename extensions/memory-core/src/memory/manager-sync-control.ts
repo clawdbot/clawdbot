@@ -5,6 +5,13 @@ import type {
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
+export function hasTargetedSessionSyncParams(params: MemorySyncParams | undefined): boolean {
+  return Boolean(
+    params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
+    params?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0),
+  );
+}
+
 export function enqueueMemoryTargetedSessionSync(
   state: {
     isClosed: () => boolean;

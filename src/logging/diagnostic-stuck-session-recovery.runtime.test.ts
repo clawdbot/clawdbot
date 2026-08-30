@@ -52,7 +52,6 @@ vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
   forceClearEmbeddedAgentRun: mocks.forceClearEmbeddedAgentRun,
   isEmbeddedAgentRunActive: mocks.isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive: mocks.isEmbeddedAgentRunHandleActive,
-  resolveActiveEmbeddedRunSessionId: mocks.resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile:
     mocks.resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveActiveEmbeddedRunHandleSessionId: mocks.resolveActiveEmbeddedRunHandleSessionId,
@@ -60,6 +59,10 @@ vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
     mocks.resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   resolveEmbeddedReplyActivity: mocks.resolveEmbeddedReplyActivity,
   waitForEmbeddedAgentRunEnd: mocks.waitForEmbeddedAgentRunEnd,
+}));
+
+vi.mock("../agents/embedded-agent-runner/active-run-projections.js", () => ({
+  resolveActiveEmbeddedRunSessionId: mocks.resolveActiveEmbeddedRunSessionId,
 }));
 
 vi.mock("../agents/embedded-agent-runner/lanes.js", () => ({

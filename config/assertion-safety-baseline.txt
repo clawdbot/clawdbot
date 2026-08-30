@@ -234,7 +234,6 @@ extensions/codex/src/app-server/side-question.ts	8
 extensions/codex/src/app-server/startup-binding.ts	2
 extensions/codex/src/app-server/thread-fingerprints.ts	2
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
-extensions/codex/src/app-server/thread-supervision.ts	2
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/tool-progress-normalization.ts	1
 extensions/codex/src/app-server/transcript-history-projection.ts	2
@@ -759,7 +758,6 @@ extensions/memory-core/src/memory/manager-embedding-cache.ts	1
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-embedding-ops.ts	2
 extensions/memory-core/src/memory/manager-keyword-retrieval.ts	1
-extensions/memory-core/src/memory/manager-reindex-lock.ts	1
 extensions/memory-core/src/memory/manager-search-orchestration.ts	3
 extensions/memory-core/src/memory/manager-search.ts	12
 extensions/memory-core/src/memory/manager-source-state.ts	2
@@ -772,7 +770,6 @@ extensions/memory-core/src/memory/search-deadline.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
 extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	8
 extensions/memory-core/src/migration/doctor-memory-sidecar.ts	2
-extensions/memory-core/src/migration/doctor-vector-index-provider-diagnostic.ts	1
 extensions/memory-core/src/migration/doctor-workspaces.ts	1
 extensions/memory-core/src/session-backfill-gateway.ts	2
 extensions/memory-core/src/session-backfill-lifecycle.ts	2
@@ -926,7 +923,7 @@ extensions/openai/realtime-provider-shared.ts	2
 extensions/openai/realtime-quicksilver-bridge.ts	1
 extensions/openai/realtime-quicksilver-delegation-controller.ts	1
 extensions/openai/realtime-quicksilver-gateway-bridge.ts	1
-extensions/openai/realtime-quicksilver-wire.ts	6
+extensions/openai/realtime-quicksilver-wire.ts	4
 extensions/openai/realtime-quicksilver.ts	1
 extensions/openai/realtime-voice-bridge.ts	3
 extensions/openai/realtime-voice-provider.ts	1
@@ -1039,7 +1036,7 @@ extensions/qa-lab/src/live-transports/slack/slack-live.message-observations.ts	1
 extensions/qa-lab/src/live-transports/slack/slack-live.observations.ts	7
 extensions/qa-lab/src/live-transports/slack/slack-live.scenario-implementations.ts	2
 extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts	1
-extensions/qa-lab/src/live-transports/telegram/telegram-api.runtime.ts	3
+extensions/qa-lab/src/live-transports/telegram/telegram-api.runtime.ts	1
 extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/whatsapp/scenario-environment.ts	3
 extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	6
@@ -1870,7 +1867,7 @@ src/agents/embedded-agent-subscribe.handlers.tools.results.ts	14
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	8
 src/agents/embedded-agent-subscribe.handlers.ts	11
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
-src/agents/embedded-agent-subscribe.ts	8
+src/agents/embedded-agent-subscribe.ts	5
 src/agents/embedded-agent-tool-media.ts	10
 src/agents/embedded-agent-tool-results.ts	16
 src/agents/embedded-agent-utils.ts	3
@@ -1932,7 +1929,6 @@ src/agents/models-config-state.ts	1
 src/agents/models-config.merge.ts	2
 src/agents/models-config.plan.ts	4
 src/agents/models-config.providers.policy.lookup.ts	1
-src/agents/models-config.providers.source-managed.ts	4
 src/agents/models-config.ts	1
 src/agents/modes/interactive/theme/theme.ts	11
 src/agents/node-plugin-tools.ts	1
@@ -1960,7 +1956,7 @@ src/agents/run-termination.ts	3
 src/agents/run-timeout-attribution.ts	1
 src/agents/run-wait.ts	8
 src/agents/runtime-plan/build.ts	4
-src/agents/runtime-plan/tools.ts	5
+src/agents/runtime-plan/tools.ts	4
 src/agents/runtime/proxy.ts	7
 src/agents/sandbox-paths.ts	1
 src/agents/sandbox-tool-policy.ts	1
@@ -2099,7 +2095,7 @@ src/agents/tools/portal-tool.ts	1
 src/agents/tools/screen-tool.ts	1
 src/agents/tools/session-status-tool.ts	6
 src/agents/tools/sessions-history-tool.ts	7
-src/agents/tools/sessions-list-tool.ts	6
+src/agents/tools/sessions-list-tool.ts	5
 src/agents/tools/sessions-search-tool.ts	1
 src/agents/tools/sessions-send-tool.ts	1
 src/agents/tools/sessions-spawn-tool.ts	5
@@ -2448,7 +2444,7 @@ src/cli/update-cli/update-command-plugins.ts	1
 src/cli/update-cli/update-command-post-update.ts	2
 src/cli/users-cli.ts	1
 src/commands/agent-exec.ts	6
-src/commands/agent-via-gateway.ts	11
+src/commands/agent-via-gateway.ts	7
 src/commands/agents.commands.bind.ts	5
 src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
@@ -2743,7 +2739,7 @@ src/config/zod-schema.channels-config.ts	3
 src/config/zod-schema.core.ts	1
 src/config/zod-schema.ts	2
 src/context-engine/delegate.ts	1
-src/context-engine/registry.ts	9
+src/context-engine/registry.ts	7
 src/context-engine/runtime-settings.ts	2
 src/cron/delivery-channel-validation.ts	2
 src/cron/delivery-context.ts	1
@@ -3901,7 +3897,7 @@ ui/src/app/theme.ts	4
 ui/src/app/update-schedule-dto.ts	2
 ui/src/app/update-success-notice.ts	1
 ui/src/app/user-profile.ts	2
-ui/src/app/web-push.runtime.ts	3
+ui/src/app/web-push.runtime.ts	2
 ui/src/components/agent-select.ts	3
 ui/src/components/app-sidebar-agent-menu.ts	2
 ui/src/components/app-sidebar-nav-menus.ts	6

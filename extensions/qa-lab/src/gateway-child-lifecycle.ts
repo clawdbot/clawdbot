@@ -126,11 +126,13 @@ export class QaGatewayChildLifecycle {
           ? new QaSuiteInfraError(error.code, message, { cause: error })
           : new Error(message, { cause: error });
       if (result.errors.length) {
-        throw new AggregateError(
+        // AggregateError retains the primary failure as cause and every cleanup failure in errors.
+        const aggregate = new AggregateError(
           [primary, ...result.errors],
           "qa gateway startup and cleanup failed",
-          { cause: error },
         );
+        aggregate.cause = error;
+        throw aggregate;
       }
       throw primary;
     } finally {

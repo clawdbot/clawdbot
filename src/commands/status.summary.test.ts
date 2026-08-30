@@ -833,10 +833,10 @@ describe("getStatusSummary", () => {
     statusSummaryMocks.listSessionEntriesCore.mockImplementation((scope) =>
       scope?.agentId === "ops"
         ? toSessionEntrySummaries({
-            main: { sessionId: "ops-session", updatedAt: 2 },
+            "agent:ops:main": { sessionId: "ops-session", updatedAt: 2 },
           })
         : toSessionEntrySummaries({
-            main: { sessionId: "main-session", updatedAt: 1 },
+            "agent:main:main": { sessionId: "main-session", updatedAt: 1 },
           }),
     );
 
@@ -1070,7 +1070,7 @@ describe("getStatusSummary", () => {
       toSessionEntrySummaries({
         "agent:ops:main": { sessionId: "ops-session", updatedAt: 3 },
         "agent:research:main": { sessionId: "research-session", updatedAt: 2 },
-        main: { sessionId: "global-session", updatedAt: 1 },
+        "agent:main:main": { sessionId: "global-session", updatedAt: 1 },
       }),
     );
 
@@ -1078,5 +1078,8 @@ describe("getStatusSummary", () => {
     const selected = summary.sessions.recent.map(({ selectedModel }) => selectedModel);
 
     expect(selected).toEqual(["openai/ops", "openai/research", "openai/global"]);
+    expect(summary.sessions.count).toBe(3);
+    expect(summary.sessions.byAgent[0]?.count).toBe(1);
+    expect(summary.sessions.byAgent[0]?.recent.map(({ key }) => key)).toEqual(["agent:main:main"]);
   });
 });

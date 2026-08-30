@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  cleanupPreparedModelRuntimeHarness,
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
@@ -16,6 +17,10 @@ import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-regi
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import * as agentScope from "./agent-scope.js";
 import { resolveAgentRuntimePluginLoadPlan } from "./harness/runtime-plugin-load-plan.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
@@ -38,10 +43,12 @@ vi.mock("../auto-reply/reply/get-reply-run-execute.js", () => ({
 }));
 
 const mocks = getPreparedModelRuntimeMocks();
+let state: OpenClawTestState;
 
 describe("prepared reply fallback ownership", () => {
   beforeEach(async () => {
-    resetPreparedModelRuntimeHarness();
+    state = await createOpenClawTestState({ label: "prepared-model-runtime" });
+    resetPreparedModelRuntimeHarness(state);
     vi.clearAllMocks();
     const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
     vi.spyOn(agentScope, "resolveAgentConfig").mockImplementation(actual.resolveAgentConfig);
@@ -187,4 +194,8 @@ describe("prepared reply fallback ownership", () => {
       expect(reply.execute).toHaveBeenCalledOnce();
     },
   );
+});
+
+afterEach(async ({ task }) => {
+  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

@@ -140,6 +140,8 @@ export type CompactEmbeddedAgentSessionParams = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  /** @internal Refreshes the host watchdog when delegated native compaction makes progress. */
+  compactionTimeoutReset?: () => void;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";
     messages: string[];

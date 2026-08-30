@@ -8,6 +8,7 @@ import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayErrorDetails
+import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
@@ -19,6 +20,7 @@ import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
+import ai.openclaw.app.ui.canFinishOnboarding
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
@@ -34,6 +36,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
@@ -41,6 +44,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -167,6 +171,93 @@ class GatewayBootstrapAuthTest {
       },
     )
   }
+
+  @Test
+  fun nodeFirstBootstrapBecomesReadyWhenOperatorConnects() {
+    assertReadyAfterBothSessionsConnect(nodeFirst = true)
+  }
+
+  @Test
+  fun operatorFirstConnectionRefreshesApprovalWhenNodeConnects() {
+    assertReadyAfterBothSessionsConnect(nodeFirst = false)
+  }
+
+  private fun assertReadyAfterBothSessionsConnect(nodeFirst: Boolean) =
+    runBlocking {
+      val (app, prefs, runtime) = gatewayFixture()
+      val runtimeJob = requireNotNull(readField<CoroutineScope>(runtime, "scope").coroutineContext[Job])
+      try {
+        // Stop startup collectors before callbacks register a gateway, but keep the scope live
+        // so the real ready callbacks can launch their refreshes without opening sockets.
+        withTimeout(10_000) {
+          val startupJobs = runtimeJob.children.toList()
+          startupJobs.forEach { it.cancel() }
+          startupJobs.forEach { it.join() }
+        }
+        writeField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
+        val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
+        val initialNodeListRead = CompletableDeferred<Job>()
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "node.list" ->
+              if (runtime.nodeConnected.value) {
+                """{"nodes":[{"nodeId":"$deviceId","paired":true,"connected":true,"approvalState":"approved"}]}"""
+              } else {
+                initialNodeListRead.complete(requireNotNull(currentCoroutineContext()[Job]))
+                """{"nodes":[]}"""
+              }
+            else -> "{}"
+          }
+        }
+        val hello =
+          GatewayHelloSummary(
+            serverName = "Test gateway",
+            remoteAddress = "127.0.0.1:18789",
+            serverVersion = null,
+            mainSessionKey = null,
+            updateAvailable = null,
+            authScopes = listOf("operator.read"),
+            methods = setOf("node.list"),
+          )
+
+        fun connectSession(fieldName: String) {
+          val session = readField<GatewaySession>(runtime, fieldName)
+          readField<(GatewayHelloSummary) -> Unit>(session, "onConnected")(hello)
+        }
+
+        fun ready(): Boolean =
+          canFinishOnboarding(
+            isConnected = runtime.gatewayConnectionDisplay.value.isConnected,
+            isNodeConnected = runtime.nodeConnected.value,
+            nodeCapabilityApproval = runtime.nodeCapabilityApproval.value,
+          )
+
+        connectSession(if (nodeFirst) "nodeSession" else "operatorSession")
+        withTimeout(10_000) {
+          if (nodeFirst) {
+            // Finish the offline node refresh before operator success can make it usable.
+            runtimeJob.children.toList().forEach { it.join() }
+          } else {
+            // Settle the empty read before node success can hide a missing node-ready refresh.
+            initialNodeListRead.await().join()
+          }
+        }
+        assertEquals(GatewayNodeCapabilityApproval.Loading, runtime.nodeCapabilityApproval.value)
+        assertFalse(ready())
+        assertFalse(runtime.nodesDevicesRefreshing.value)
+
+        connectSession(if (nodeFirst) "operatorSession" else "nodeSession")
+        withTimeoutOrNull(10_000) {
+          runtime.nodeCapabilityApproval.first { it == GatewayNodeCapabilityApproval.Approved }
+        }
+
+        assertEquals(GatewayNodeCapabilityApproval.Approved, runtime.nodeCapabilityApproval.value)
+        assertTrue(ready())
+      } finally {
+        runtime.disconnect()
+        runtimeJob.cancelAndJoin()
+      }
+    }
 
   @Test
   fun standaloneStatusPreservesLiveOperatorConnection() {

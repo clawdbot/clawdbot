@@ -357,6 +357,25 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect.objectContaining({ lastAssistant: yieldedAssistant, currentAssistant: null }),
     );
   });
+
+  it("carries the canonical restart reason into terminal payload rendering", async () => {
+    await prepareAttempt({
+      attempt: attemptResult({
+        lastToolError: {
+          toolName: "gateway_exec",
+          error: "OpenClaw dynamic tool call aborted.",
+        },
+      }),
+      terminalState: {
+        outcome: { reason: "cancelled", status: "error", stopReason: "restart" },
+        signalOwnedInterruption: true,
+      },
+    });
+
+    expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ runAborted: true, runStopReason: "restart" }),
+    );
+  });
 });
 
 describe("prepareEmbeddedRunTerminal run stats", () => {

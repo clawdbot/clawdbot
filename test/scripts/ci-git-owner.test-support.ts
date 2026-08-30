@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
 import { parse } from "yaml";
@@ -81,12 +88,27 @@ function readWorkflowStep({ file, job, step: name }: WorkflowTarget): Step & { r
 export async function runCiGitStep(options: {
   workflow?: "workflow-sanity" | WorkflowTarget;
   job?: string;
-  action?: "ensure-base-commit" | "git-owner";
+  action?: "ensure-base-commit" | "git-owner" | "mantis-validate-trusted-ref";
   policy?: string;
   inlinePolicy?: boolean;
   step?: string;
   env?: Record<string, string>;
   fetchResults: FetchResult[];
+  cloneResults?: FetchResult[];
+  worktreeResults?: FetchResult[];
+  rebaseResults?: FetchResult[];
+  pushResults?: FetchResult[];
+  revParseResult?: FetchResult;
+  diffResult?: number;
+  commandResults?: Record<string, { code: FetchResult; output?: string }>;
+  workflowRuns?: {
+    id: number;
+    created_at: string;
+    status: string;
+    conclusion: string | null;
+    head_sha: string;
+  }[];
+  publishPath?: "directory" | "file" | "symlink";
   checkoutResults?: number[];
   mergeSnapshots?: { sha: string; head: string }[];
   prepare?: boolean;
@@ -106,6 +128,13 @@ export async function runCiGitStep(options: {
   cancelDuringBackoff?: boolean;
   setupFailure?: "owner" | "python" | "git";
 }) {
+  const docsPublish =
+    typeof options.workflow === "object" &&
+    options.workflow.file === ".github/workflows/docs-sync-publish.yml";
+  const docsAgent =
+    typeof options.workflow === "object" &&
+    options.workflow.file === ".github/workflows/docs-agent.yml";
+  const externalOwner = options.workflow || options.action === "mantis-validate-trusted-ref";
   const clock = {
     ...options,
     realDrain:
@@ -116,7 +145,7 @@ export async function runCiGitStep(options: {
         parse(readFileSync(`.github/actions/${options.action}/action.yml`, "utf8")) as {
           runs: { steps: (Step & { run: string })[] };
         }
-      ).runs.steps[0]
+      ).runs.steps.find((entry) => (options.step ? entry.name === options.step : entry.run))
     : options.workflow
       ? readWorkflowStep(
           options.workflow === "workflow-sanity"
@@ -131,7 +160,7 @@ export async function runCiGitStep(options: {
           options.job ?? "security-fast",
           options.step ?? (options.job ? "Checkout" : "Prepare Git owner"),
         );
-  if (!step) {
+  if (!step?.run) {
     throw new Error("Missing executable action step");
   }
   let env: Record<string, string>;
@@ -148,7 +177,26 @@ export async function runCiGitStep(options: {
         ...options.env,
       });
       const workspace = path.join(root, "workspace");
-      if (options.workflow) {
+      if (docsAgent) {
+        env.GITHUB_TOKEN = "fixture-docs-agent-token";
+        env.GH_TOKEN = "";
+      }
+      if (docsPublish) {
+        env.GITHUB_SHA = candidate;
+        // Never let a caller's credential reach fixture command reports.
+        env.OPENCLAW_DOCS_SYNC_TOKEN = "fixture-docs-token";
+        mkdirSync(path.join(workspace, "clawhub-source/.git"), { recursive: true });
+        const publish = path.join(workspace, "publish");
+        if (options.publishPath === "file") {
+          writeFileSync(publish, "previous publish path\n");
+        } else if (options.publishPath === "symlink") {
+          symlinkSync(root, publish, "junction");
+        } else if (options.publishPath === "directory") {
+          mkdirSync(publish);
+          writeFileSync(path.join(publish, ".previous-checkout"), "stale\n");
+        }
+      }
+      if (externalOwner) {
         // Workflow bodies follow actions/checkout; selected-source bootstrap must
         // still create its own directory, while later selected steps inherit one.
         for (const directory of [
@@ -208,9 +256,19 @@ export async function runCiGitStep(options: {
           mergeBase: options.mergeBase,
           workingDirectory: step["working-directory"],
           fetchResults: options.fetchResults,
+          cloneResults: options.cloneResults,
+          worktreeResults: options.worktreeResults,
+          rebaseResults: options.rebaseResults,
+          pushResults: options.pushResults,
+          revParseResult: options.revParseResult,
+          diffResult: options.diffResult,
+          commandResults: options.commandResults,
+          workflowRuns: options.workflowRuns,
+          docsAgent,
+          docsPublish,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
-          consumers: options.prepare ?? false,
+          consumers: Boolean(options.prepare || externalOwner),
           cancelDuringCleanup: options.cancelDuringCleanup,
           baseAvailableAfter: options.baseAvailableAfter,
           invalidRef: options.invalidRef,
@@ -222,7 +280,7 @@ export async function runCiGitStep(options: {
         }),
       );
       let run = renderGitTestClock(step.run, clock);
-      if (options.workflow) {
+      if (externalOwner) {
         const prepare = parse(readFileSync(".github/actions/git-owner/action.yml", "utf8")) as {
           runs: { steps: { run?: string }[] };
         };
@@ -269,12 +327,22 @@ ${run}`;
       expect(result, stderr).toEqual({ code: 0, signal: null });
       expect(report.error, stderr).toBeUndefined();
       expectCiCheckoutCleanup(report);
-      if (options.workflow) {
+      if (docsAgent) {
+        expect(
+          readdirSync(path.join(root, "temp")).filter((name) => name.startsWith("docs-agent-")),
+        ).toEqual([]);
+      }
+      if (externalOwner) {
         for (const directory of new Set([
           workspace,
           ...report.commands
             .filter(({ tool, args }) => tool === "git" && args[0] === "fetch")
             .map(({ cwd }) => cwd),
+          ...report.commands
+            .filter(
+              ({ tool, args }) => tool === "git" && (args[0] === "clone" || args[0] === "worktree"),
+            )
+            .map(({ cwd, args }) => path.resolve(cwd, args.at(args[0] === "clone" ? -1 : -2)!)),
         ])) {
           expect(readFileSync(path.join(directory, ".git/preexisting.lock"), "utf8")).toBe(
             "not invocation-owned\n",
@@ -312,6 +380,14 @@ ${run}`;
         trustedZizmor: readOutput("temp/zizmor-base.yml"),
         runnerTemp: path.join(root, "temp"),
         fetches: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "fetch"),
+        clones: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "clone"),
+        worktrees: report.commands.filter(
+          ({ tool, args }) => tool === "git" && args[0] === "worktree",
+        ),
+        rebases: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "rebase"),
+        pushes: report.commands.filter(({ tool, args }) => tool === "git" && args[0] === "push"),
+        go: report.commands.filter(({ tool }) => tool === "go"),
+        crabbox: report.commands.filter(({ tool }) => tool === "crabbox"),
         checkouts: report.commands.filter(
           ({ tool, args }) => tool === "git" && args[0] === "checkout",
         ),

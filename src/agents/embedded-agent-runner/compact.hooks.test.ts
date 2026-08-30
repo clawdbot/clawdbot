@@ -615,6 +615,64 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  it("refreshes the delegated watchdog before post-compaction hooks", async () => {
+    const compactionTimeoutReset = vi.fn();
+    hookRunner.hasHooks.mockImplementation((name?: string) => name === "after_compaction");
+    hookRunner.runAfterCompaction.mockImplementationOnce(async () => {
+      expect(compactionTimeoutReset).toHaveBeenCalledTimes(3);
+    });
+
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({ compactionTimeoutReset }),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes the delegated watchdog before delayed fallback setup", async () => {
+    vi.useFakeTimers();
+    try {
+      const compactionTimeoutReset = vi.fn();
+      const fallbackSetupStarted = createDeferred();
+      const createAgentSession = createAgentSessionMock.getMockImplementation();
+      if (!createAgentSession) {
+        throw new Error("Expected a create-agent-session implementation");
+      }
+      createAgentSessionMock.mockImplementation(async (...args) => {
+        if (createAgentSessionMock.mock.calls.length === 2) {
+          expect(compactionTimeoutReset).toHaveBeenCalledTimes(3);
+          fallbackSetupStarted.resolve(undefined);
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 20);
+          });
+        }
+        return await createAgentSession(...args);
+      });
+      sessionCompactImpl
+        .mockRejectedValueOnce(new Error("Reasoning is mandatory for this endpoint"))
+        .mockResolvedValueOnce({
+          summary: "fallback summary",
+          firstKeptEntryId: "entry-fallback",
+          tokensBefore: 120,
+          details: { ok: true },
+        });
+
+      const pending = compactEmbeddedAgentSessionDirect(
+        wrappedCompactionArgs({ compactionTimeoutReset, thinkLevel: "off" }),
+      );
+      await fallbackSetupStarted.promise;
+      await vi.advanceTimersByTimeAsync(20);
+
+      await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
+      expect(createAgentSessionMock).toHaveBeenCalledTimes(2);
+      expect(compactionTimeoutReset).toHaveBeenCalledTimes(6);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed before generic compaction for a model-locked native session", async () => {
     const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
@@ -1768,6 +1826,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           "## Exact identifiers",
           "None.",
         ].join("\n");
+        const expectedSummaryRequest = `## Latest user request context\n${JSON.stringify("Compare the remaining options.")}`;
         const sessionManager = SessionManager.inMemory(TEST_WORKSPACE_DIR);
         for (const content of [
           "Review the deployment checklist.",
@@ -1873,12 +1932,15 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           expect(result).toMatchObject({
             ok: true,
             compacted: true,
-            result: { summary: fallbackSummary },
+            result: { summary: expect.stringContaining(expectedSummaryRequest) },
           });
+          expect(result.result?.summary).toContain(
+            "Review the deployment checklist before rollout.",
+          );
           expect(
             sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
           ).toMatchObject({
-            summary: fallbackSummary,
+            summary: expect.stringContaining(expectedSummaryRequest),
           });
         } else {
           expect(result).toMatchObject({ ok: false, compacted: false });
@@ -3418,6 +3480,19 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.compactionKind).toBe("server-endpoint");
     expect(result.result).toMatchObject({ kind: "server-endpoint", tokensAfter: 200 });
     expect(result.result).not.toHaveProperty("summary");
+  });
+
+  it("does not impose a second aggregate timeout on delegated native compaction", async () => {
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+
+    const result = await compactEmbeddedAgentSession(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+    expect(compactWithSafetyTimeoutMock).not.toHaveBeenCalled();
   });
 
   it("fails closed for a fallback-owned legacy compaction target", async () => {

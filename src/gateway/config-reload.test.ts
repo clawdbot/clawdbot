@@ -1725,41 +1725,72 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("settles an in-process write only after its hot reload commits", async () => {
-    let releaseHotReload!: () => void;
-    const hotReloadGate = new Promise<void>((resolve) => {
-      releaseHotReload = resolve;
-    });
-    const application = createRuntimeConfigWriteApplication();
-    const harness = createReloaderHarness(vi.fn(), {
-      initialSnapshotRawHash: null,
-      initialAuthoredConfig: {},
-      onHotReload: async () => {
-        await hotReloadGate;
-        return "applied" as const;
-      },
-    });
-    let settled = false;
-    void application.result.then(() => {
-      settled = true;
-    });
+  it.each(
+    (["hot reload", "writer-requested restart", "restart-only change"] as const).flatMap((kind) =>
+      (["accepted", "rejected"] as const).map((outcome) => ({ kind, outcome })),
+    ),
+  )(
+    "settles an in-process $kind receipt after its owner is $outcome",
+    async ({ kind, outcome }) => {
+      let releaseReload!: () => void;
+      const reloadGate = new Promise<void>((resolve) => {
+        releaseReload = resolve;
+      });
+      const finishReload = async () => {
+        await reloadGate;
+        if (outcome === "rejected") {
+          throw new Error("reload refused");
+        }
+      };
+      const application = createRuntimeConfigWriteApplication();
+      const harness = createReloaderHarness(vi.fn(), {
+        initialSnapshotRawHash: null,
+        initialAuthoredConfig: {},
+        onHotReload: async () => {
+          await finishReload();
+          return "applied" as const;
+        },
+        onRestart: finishReload,
+      });
+      const settled = vi.fn();
+      void application.result.then(settled);
+      const write = makeZeroDebounceHookWrite("application-settlement");
+      if (kind === "writer-requested restart") {
+        write.afterWrite = { mode: "restart", reason: "plugin source changed" };
+      } else if (kind === "restart-only change") {
+        write.sourceConfig = makeGatewayPortConfig(18790);
+        write.runtimeConfig = write.sourceConfig;
+      }
 
-    harness.emitWrite(
-      attachRuntimeConfigWriteApplication(
-        makeZeroDebounceHookWrite("application-settlement"),
-        application,
-      ),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.waitFor(() => expect(harness.onHotReload).toHaveBeenCalledOnce());
+      try {
+        harness.emitWrite(attachRuntimeConfigWriteApplication(write, application));
+        await vi.advanceTimersByTimeAsync(0);
+        const reloadOwner = kind === "hot reload" ? harness.onHotReload : harness.onRestart;
+        await vi.waitFor(() => expect(reloadOwner).toHaveBeenCalledOnce());
+        expect(application.claimed).toBe(true);
+        expect(settled).not.toHaveBeenCalled();
+        expect(harness.onConfigAccepted).not.toHaveBeenCalled();
 
-    expect(application.claimed).toBe(true);
-    expect(settled).toBe(false);
-
-    releaseHotReload();
-    await expect(application.result).resolves.toBe("applied");
-    await harness.reloader.stop();
-  });
+        releaseReload();
+        const expected =
+          outcome === "rejected" ? "failed" : kind === "hot reload" ? "applied" : "restart-pending";
+        await expect(application.result).resolves.toBe(expected);
+        if (outcome === "accepted") {
+          expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+        } else {
+          expect(harness.onConfigAccepted).not.toHaveBeenCalled();
+        }
+        if (kind !== "hot reload") {
+          expect(harness.onHotReload).not.toHaveBeenCalled();
+          expect(harness.onConfigApplied).not.toHaveBeenCalled();
+          expect(harness.onConfigRevisionApplied).not.toHaveBeenCalled();
+        }
+      } finally {
+        releaseReload();
+        await harness.reloader.stop();
+      }
+    },
+  );
 
   it("applies an RPC write receipt inside its originating gateway root", async () => {
     const root = tempDirs.make("openclaw-config-receipt-");
@@ -1880,28 +1911,6 @@ describe("startGatewayConfigReloader", () => {
     } finally {
       resetConfigRuntimeState();
     }
-  });
-
-  it("settles an in-process write as failed when hot reload rejects", async () => {
-    const application = createRuntimeConfigWriteApplication();
-    const harness = createReloaderHarness(vi.fn(), {
-      initialSnapshotRawHash: null,
-      initialAuthoredConfig: {},
-      onHotReload: async () => {
-        throw new Error("reload refused");
-      },
-    });
-
-    harness.emitWrite(
-      attachRuntimeConfigWriteApplication(
-        makeZeroDebounceHookWrite("application-failed"),
-        application,
-      ),
-    );
-    await vi.runAllTimersAsync();
-
-    await expect(application.result).resolves.toBe("failed");
-    await harness.reloader.stop();
   });
 
   it("reports when a committed hot reload requires recovery restart", async () => {
@@ -4459,7 +4468,10 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  const expectPendingRestartSurvivesCoalescing = async (emitWatcherEcho: boolean) => {
+  const expectPendingRestartSurvivesCoalescing = async (
+    emitWatcherEcho: boolean,
+    latestMode: "auto" | "none",
+  ) => {
     let releasePluginRead = () => {};
     let recordPluginReadStarted: (() => void) | undefined;
     const pluginReadStarted = new Promise<void>((resolve) => {
@@ -4483,10 +4495,17 @@ describe("startGatewayConfigReloader", () => {
     await vi.advanceTimersByTimeAsync(0);
     await pluginReadStarted;
 
-    harness.emitWrite({
-      ...makeZeroDebounceHookWrite("pending-b"),
-      afterWrite: { mode: "restart", reason: "pending B requires restart" },
-    });
+    const pendingApplication = createRuntimeConfigWriteApplication();
+    const latestApplication = createRuntimeConfigWriteApplication();
+    harness.emitWrite(
+      attachRuntimeConfigWriteApplication(
+        {
+          ...makeZeroDebounceHookWrite("pending-b"),
+          afterWrite: { mode: "restart", reason: "pending B requires restart" },
+        },
+        pendingApplication,
+      ),
+    );
     if (emitWatcherEcho) {
       harness.watcher.emit("change");
     }
@@ -4494,30 +4513,47 @@ describe("startGatewayConfigReloader", () => {
       gateway: { reload: {} },
       hooks: { enabled: false },
     } satisfies OpenClawConfig;
-    harness.emitWrite({
-      ...makeZeroDebounceHookWrite("latest-c"),
-      sourceConfig: latestConfig,
-      runtimeConfig: latestConfig,
-      afterWrite: { mode: "none", reason: "latest C intent" },
-    });
+    harness.emitWrite(
+      attachRuntimeConfigWriteApplication(
+        {
+          ...makeZeroDebounceHookWrite("latest-c"),
+          sourceConfig: latestConfig,
+          runtimeConfig: latestConfig,
+          afterWrite:
+            latestMode === "none" ? { mode: "none", reason: "latest C intent" } : { mode: "auto" },
+        },
+        latestApplication,
+      ),
+    );
     releasePluginRead();
-    await vi.runAllTimersAsync();
-
-    const [restartPlan, restartedConfig] = getOnlyRestartCall(harness);
-    expect(restartedConfig).toEqual(latestConfig);
-    expect(restartPlan.restartReasons).toContain("pending B requires restart");
-    expect(harness.onHotReload).not.toHaveBeenCalled();
-
-    await harness.reloader.stop();
+    try {
+      await vi.runAllTimersAsync();
+      await expect(pendingApplication.result).resolves.toBe("superseded");
+      await expect(latestApplication.result).resolves.toBe("restart-pending");
+      const [restartPlan, restartedConfig] = getOnlyRestartCall(harness);
+      expect(restartedConfig).toEqual(latestConfig);
+      expect(restartPlan.restartReasons).toContain("pending B requires restart");
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(harness.onConfigApplied).not.toHaveBeenCalled();
+      expect(harness.onConfigRevisionApplied).not.toHaveBeenCalled();
+    } finally {
+      await harness.reloader.stop();
+    }
   };
 
-  it("preserves a pending restart intent while coalescing a newer write", async () => {
-    await expectPendingRestartSurvivesCoalescing(false);
-  });
+  it.each(["none", "auto"] as const)(
+    "preserves a pending restart intent while coalescing a newer %s write",
+    async (latestMode) => {
+      await expectPendingRestartSurvivesCoalescing(false, latestMode);
+    },
+  );
 
-  it("preserves a pending restart intent across a watcher echo", async () => {
-    await expectPendingRestartSurvivesCoalescing(true);
-  });
+  it.each(["none", "auto"] as const)(
+    "preserves a pending restart intent across a watcher echo and a newer %s write",
+    async (latestMode) => {
+      await expectPendingRestartSurvivesCoalescing(true, latestMode);
+    },
+  );
 
   it("preserves a pending restart intent when a newer write arrives during missing-file retry", async () => {
     let releasePluginRead = () => {};

@@ -125,7 +125,12 @@ const runtimeAbortMocks = vi.hoisted(() => ({
 
 const killControlledSubagentRunMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../agents/embedded-agent-runner/runs.js", () => runtimeAbortMocks);
+vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
+  abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
+}));
+vi.mock("../../agents/embedded-agent-runner/active-run-projections.js", () => ({
+  resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
+}));
 vi.mock("../../agents/subagents/registry/subagent-control.js", () => ({
   killControlledSubagentRun: killControlledSubagentRunMock,
 }));

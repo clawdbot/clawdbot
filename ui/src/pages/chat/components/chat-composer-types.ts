@@ -1,7 +1,11 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import type {
@@ -90,6 +94,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   modelCatalog: readonly ModelCatalogEntry[];
   modelSwitching: boolean;
   sessions: SessionsListResult | null;
+  /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
+  selectedSession?: GatewaySessionRow;
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: CapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;

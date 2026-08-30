@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectMemoryStatusAggregate,
   resolveInitialMemoryDirty,
+  resolveMemoryManagerSyncStatus,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
 
@@ -39,6 +40,22 @@ describe("memory manager status state", () => {
     },
   ])("resolves $name", ({ params, expected }) => {
     expect(resolveInitialMemoryDirty(params)).toBe(expected);
+  });
+
+  it("reports detached maintenance as stale with every refreshed source", () => {
+    expect(
+      resolveMemoryManagerSyncStatus({
+        syncing: false,
+        memoryDirty: false,
+        sessionsDirty: false,
+        indexIdentityDirty: false,
+        backgroundMaintenance: true,
+        sources: ["memory", "sessions"],
+      }),
+    ).toEqual({
+      dirty: true,
+      pendingSyncSources: ["memory", "sessions"],
+    });
   });
 
   it.each([

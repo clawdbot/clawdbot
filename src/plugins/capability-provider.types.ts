@@ -114,7 +114,16 @@ export type WorkerExecutionMode = "worker-turn" | "remote-exec";
 /** Replay-safe node enrollment prepared only after a provider has allocated its machine. */
 export type WorkerNodeEnrollment = {
   openclawVersion: string;
-  packageSpecs: readonly string[];
+  /** Immutable node distribution prepared by the Gateway for this enrollment only. */
+  nodeBootstrap: {
+    url: string;
+    token: string;
+    sha256: string;
+    bytes: number;
+    openclawVersion: string;
+    enabledPluginIds: readonly string[];
+    tlsFingerprint?: string;
+  };
   displayName: string;
   /** Gateway shutdown cancels enrollment without releasing its replay-owned provider lease. */
   signal?: AbortSignal;

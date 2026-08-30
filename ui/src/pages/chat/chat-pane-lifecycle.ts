@@ -28,7 +28,10 @@ import {
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import {
@@ -59,6 +62,7 @@ import {
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
+  applyChatAgentOwnerTransition,
   applySelectedChatAgent,
   refreshPageChat,
   retireChatMetadataRequests,
@@ -83,6 +87,7 @@ import {
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
 import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
+import { subscribeToolTitleChanges } from "./tool-titles.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
@@ -293,14 +298,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     });
   }
 
-  protected readonly handlePaneFocus = () => {
-    this.onFocusPane?.(this.paneId);
-  };
+  protected readonly handlePaneFocus = () => this.onFocusPane?.(this.paneId);
 
   /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
-    const accepted = admitBrowserAnnotation(this.state, this.active && this.presented, event);
-    if (!accepted) {
+    if (!admitBrowserAnnotation(this.state, this.active && this.presented, event)) {
       return;
     }
     // A null mount binds only when its first annotation ownership begins.
@@ -433,6 +435,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
     document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
     const chatState = this.chatState;
+    chatState.addCleanup(subscribeToolTitleChanges(() => this.state?.requestUpdate?.()));
     chatState.addCleanup(() => {
       document.removeEventListener("keydown", this.handleDocumentKeydown, true);
       document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
@@ -628,6 +631,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         // A retained pane owns one conversation for its lifetime. Only its
         // canonical spelling can change after Gateway defaults resolve.
         this.state.sessionKey = nextSessionKey;
+        const nextAgentId = parseAgentSessionKey(nextSessionKey)?.agentId;
+        if (nextAgentId) {
+          applyChatAgentOwnerTransition(this.state, nextAgentId);
+        }
         // A pane routed straight onto the created session never runs the switch
         // path, so its one-shot handoffs would expire unclaimed: the rejected turn
         // would vanish instead of offering a retry, and the accepted prompt would

@@ -5,10 +5,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import {
-  abortEmbeddedAgentRun,
-  resolveActiveEmbeddedRunSessionId,
-} from "../../agents/embedded-agent-runner/runs.js";
+import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
+import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
 import { killControlledSubagentRun } from "../../agents/subagents/registry/subagent-control.js";
 import {
   getLatestSubagentRunByChildSessionKey,

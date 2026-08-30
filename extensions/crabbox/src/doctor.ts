@@ -5,8 +5,14 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
 import { CRABBOX_WORKER_PROVIDER_ID, findCrabboxBinary } from "./crabbox-worker-profile.js";
+import {
+  crabboxWarmImageRecoveryHint,
+  isCrabboxWarmImageCapturePaused,
+  listCrabboxWarmImages,
+} from "./crabbox-worker-warm-image-store.js";
 
 export const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
+const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
 
 type CrabboxDoctorRegistrationHost = {
   readonly openclawRoot: string;
@@ -113,8 +119,48 @@ export function registerCrabboxWorkerProviderDoctorChecks(
   host: CrabboxDoctorRegistrationHost,
 ): void {
   // Lookup and registration must use the same host registry across artifact loaders.
-  if (host.getHealthCheck(CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID)) {
-    return;
+  if (!host.getHealthCheck(CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID)) {
+    host.registerHealthCheck(createCrabboxCloudWorkerProfileCheck(host.openclawRoot));
   }
-  host.registerHealthCheck(createCrabboxCloudWorkerProfileCheck(host.openclawRoot));
+  if (!host.getHealthCheck(CRABBOX_WARM_IMAGES_CHECK_ID)) {
+    host.registerHealthCheck({
+      id: CRABBOX_WARM_IMAGES_CHECK_ID,
+      kind: "plugin",
+      description: "Report paused Crabbox warm-image captures and retained cleanup obligations.",
+      source: "crabbox",
+      async detect(ctx) {
+        const findings: HealthFinding[] = [];
+        for (const image of listCrabboxWarmImages(ctx.env)) {
+          const details = {
+            checkId: CRABBOX_WARM_IMAGES_CHECK_ID,
+            severity: "warning",
+            source: "crabbox",
+            target: image.profileKey,
+          } as const;
+          if (image.capture) {
+            const paused = isCrabboxWarmImageCapturePaused(image.capture);
+            findings.push({
+              ...details,
+              severity: paused ? "warning" : "info",
+              message: paused
+                ? `Warm-image capture ${image.capture.selector} is paused; its provider outcome requires manual reconciliation.`
+                : `Warm-image capture ${image.capture.selector} is in progress.`,
+              fixHint: paused
+                ? crabboxWarmImageRecoveryHint(image.capture.selector)
+                : "Allow the current capture to finish; inspect `openclaw crabbox warm-images --json` if it remains pending.",
+            });
+          }
+          if (image.retirement) {
+            findings.push({
+              ...details,
+              message: `Warm-image checkpoint ${image.retirement.checkpointId} is still awaiting deletion.`,
+              fixHint:
+                "Cleanup retries during the next warm-image-enabled worker teardown. Inspect `openclaw crabbox warm-images --json` and resolve provider deletion errors if it remains pending.",
+            });
+          }
+        }
+        return findings;
+      },
+    });
+  }
 }

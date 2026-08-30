@@ -33,10 +33,12 @@ const mocks = vi.hoisted(() => {
     getAll: vi.fn(() => []),
     find: vi.fn<ModelRegistry["find"]>(() => undefined),
   };
-  const resolveSyntheticAuth = vi.fn(() => ({
+  const resolveSyntheticAuth = vi.fn<
+    () => { apiKey: string; source: string; mode: "api-key" } | undefined
+  >(() => ({
     apiKey: "synthetic-openai-key",
     source: "test",
-    mode: "api-key" as const,
+    mode: "api-key",
   }));
   return {
     authStorage,
@@ -217,8 +219,11 @@ const {
   registerPreparedModelRuntimePublicationListener,
 } = await import("./prepared-model-runtime.js");
 const { getAvailablePreparedModelCatalogSnapshot } = await import("./prepared-model-catalog.js");
-const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
-  await import("./prepared-model-runtime.scoped-catalog.js");
+const {
+  prepareScopedReadOnlyLiveModelCatalog,
+  prepareScopedReadOnlyModelAuthModes,
+  prepareScopedReadOnlyModelCatalog,
+} = await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
 const { resolveThinkingProfile } = await import("../auto-reply/thinking.js");
@@ -232,6 +237,62 @@ beforeEach(() => {
   mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
   mocks.resolveProviderPolicySurface.mockReset().mockReturnValue(null);
+});
+
+describe("prepareScopedReadOnlyModelAuthModes", () => {
+  function usePreparedSyntheticAuth() {
+    mocks.resolveAmbientCredentials.mockImplementationOnce((...args: unknown[]) => {
+      const params = args[0] as {
+        syntheticAuthProviderRefs: string[];
+        resolveSyntheticAuth: (provider: string) => { apiKey?: string } | undefined;
+      };
+      return Object.fromEntries(
+        params.syntheticAuthProviderRefs.flatMap((provider) => {
+          const key = params.resolveSyntheticAuth(provider)?.apiKey;
+          return key ? [[provider, { type: "api_key", key }]] : [];
+        }),
+      );
+    });
+  }
+
+  it("returns a verified provider-owned auth mode", async () => {
+    usePreparedSyntheticAuth();
+
+    await expect(
+      prepareScopedReadOnlyModelAuthModes(
+        { config: {}, env: {}, workspaceDir: "/tmp/workspace" },
+        ["openai"],
+        mocks.metadataSnapshot as never,
+      ),
+    ).resolves.toEqual({ openai: "api_key" });
+  });
+
+  it("keeps a missing native login unknown", async () => {
+    mocks.resolveSyntheticAuth.mockReturnValueOnce(undefined);
+    usePreparedSyntheticAuth();
+
+    await expect(
+      prepareScopedReadOnlyModelAuthModes(
+        { config: {}, env: {}, workspaceDir: "/tmp/workspace" },
+        ["openai"],
+        mocks.metadataSnapshot as never,
+      ),
+    ).resolves.toEqual({});
+  });
+
+  it("does not resolve auth for a disabled provider", async () => {
+    mocks.prepareStaticCatalog.mockResolvedValueOnce({ providers: [], entries: [] });
+    usePreparedSyntheticAuth();
+
+    await expect(
+      prepareScopedReadOnlyModelAuthModes(
+        { config: {}, env: {}, workspaceDir: "/tmp/workspace" },
+        ["openai"],
+        mocks.metadataSnapshot as never,
+      ),
+    ).resolves.toEqual({});
+    expect(mocks.resolveSyntheticAuth).not.toHaveBeenCalled();
+  });
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {

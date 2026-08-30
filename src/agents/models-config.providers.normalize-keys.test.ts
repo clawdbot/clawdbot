@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createConfigIoContext } from "../config/io.context.js";
+import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import { ModelsConfigSchema } from "../config/zod-schema.core.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   normalizeProviderCatalogModelsForConfig,
@@ -364,6 +367,76 @@ describe("normalizeProviders", () => {
     }
   });
 
+  it.each([
+    {
+      label: "substituted literal",
+      authored: "${HEADER_SOURCE}",
+      env: { HEADER_SOURCE: "${HEADER_LITERAL}" },
+      expected: "${HEADER_LITERAL}",
+    },
+    {
+      label: "escaped literal",
+      authored: "$${HEADER_LITERAL}",
+      env: {},
+      expected: "${HEADER_LITERAL}",
+    },
+    {
+      label: "pending reference",
+      authored: "$HEADER_PENDING",
+      env: {},
+      expected: "secretref-env:HEADER_PENDING",
+    },
+  ])(
+    "preserves loader $label headers through normalization and source enforcement",
+    async ({ authored, env, expected }) => {
+      await withOpenClawTestState(
+        {
+          label: "catalog-header-facts",
+          env: { HEADER_LITERAL: undefined, HEADER_PENDING: undefined, ...env },
+        },
+        async (state) => {
+          await state.writeConfig({
+            plugins: { enabled: false },
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "https://provider.example/v1",
+                  api: "openai-completions",
+                  apiKey: "plain-fixture-key",
+                  models: [],
+                  headers: { "X.Trace": authored },
+                },
+              },
+            },
+          });
+          const snapshot = await readConfigFileSnapshotFromContext(
+            createConfigIoContext({
+              configPath: state.configPath,
+              env: state.env,
+              homedir: () => state.home,
+              observe: false,
+            }),
+          );
+          expect(snapshot.valid).toBe(true);
+          const params = {
+            providers: snapshot.config.models?.providers,
+            sourceConfigForSecrets: snapshot.sourceConfig,
+          };
+          const normalized = normalizeProviders({
+            ...params,
+            agentDir: state.agentDir(),
+            env: state.env,
+          });
+          const enforced = enforceSourceManagedProviderSecrets(params);
+          expect({
+            normalized: normalized?.custom?.headers?.["X.Trace"],
+            enforced: enforced?.custom?.headers?.["X.Trace"],
+          }).toEqual({ normalized: expected, enforced: expected });
+        },
+      );
+    },
+  );
+
   it("ignores non-object provider entries during source-managed enforcement", () => {
     const providers = {
       openai: null,
@@ -392,7 +465,7 @@ describe("normalizeProviders", () => {
 
     const enforced = enforceSourceManagedProviderSecrets({
       providers,
-      sourceProviders,
+      sourceConfigForSecrets: { models: { providers: sourceProviders } },
     });
     expect((enforced as Record<string, unknown>).openai).toBeNull();
     expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret

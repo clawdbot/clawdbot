@@ -109,10 +109,12 @@ module.exports = {
         const barrier = marker + ".hold";
         if (fs.existsSync(barrier)) {
           await new Promise((resolve) => {
-            const watcher = fs.watch(require("node:path").dirname(barrier), () => {
-              if (!fs.existsSync(barrier)) { watcher.close(); resolve(); }
-            });
-            if (!fs.existsSync(barrier)) { watcher.close(); resolve(); }
+            // Darwin's directory watch can start after removal; observe file state instead.
+            const check = () => {
+              if (!fs.existsSync(barrier)) { fs.unwatchFile(barrier, check); resolve(); }
+            };
+            fs.watchFile(barrier, { interval: 10 }, check);
+            check();
           });
         }
         const until = Date.now() + ${params.spinMs};

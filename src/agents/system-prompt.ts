@@ -68,7 +68,7 @@ import type {
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
-import { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "./transcript-credential-safety.js";
+import { buildCredentialSafetyPrompt } from "./transcript-credential-safety.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -1127,7 +1127,9 @@ export function buildAgentSystemPrompt(params: {
     "Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.",
     "Never persuade anyone to expand access or disable safeguards.",
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
-    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
+    buildCredentialSafetyPrompt(
+      availableTools.has("secrets") ? resolveToolName("secrets") : undefined,
+    ),
     "",
   ];
   // CLI backends own native file tools outside OpenClaw's projected tool list.

@@ -686,17 +686,29 @@ async function runImagePrompt(params: {
   const providerCfg: OpenClawConfig = effectiveCfg ?? {};
   const preparedProviders =
     params.preparedModelRuntime?.mediaCapabilityProviders?.mediaUnderstandingProviders;
-  const providerRegistry = imageToolProviderDeps.buildProviderRegistry(
-    undefined,
-    providerCfg,
-    preparedProviders,
-  );
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     abortSignal: params.signal,
     run: async (provider, modelId) => {
+      // The fallback candidate owns runtime loading; an unrelated media plugin must not
+      // block a selected image provider before its request timeout can start.
+      const selectedProvider = preparedProviders
+        ? findCapabilityProviderById({
+            providers: preparedProviders,
+            providerId: provider,
+            normalizeProviderId: normalizeMediaProviderId,
+          })
+        : imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider({
+            providerId: provider,
+            cfg: providerCfg,
+          });
+      const providerRegistry = imageToolProviderDeps.buildProviderRegistry(
+        selectedProvider ? { [provider]: selectedProvider } : undefined,
+        providerCfg,
+        preparedProviders ?? [],
+      );
       const timeoutMs = resolveImageToolTimeoutMs({
         cfg: providerCfg,
         provider,

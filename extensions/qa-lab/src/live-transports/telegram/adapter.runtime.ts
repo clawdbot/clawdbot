@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements Telegram live transport adapter behavior.
+import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
@@ -9,33 +9,23 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
+import { buildTelegramQaConfig, waitForTelegramChannelRunning } from "./telegram-api.runtime.js";
+import { TelegramUserbotDriver, type TelegramUserbotUpdate } from "./userbot-driver.runtime.js";
 import {
-  buildTelegramQaConfig,
-  callTelegramApi,
-  flushTelegramUpdates,
-  isRecoverableTelegramQaPollError,
-  normalizeTelegramObservedMessage,
-  parseTelegramQaCredentialPayload,
-  resolveTelegramQaRuntimeEnv,
-  TelegramQaApiError,
-  waitForTelegramChannelRunning,
-  waitForTelegramPollRetryDelay,
-  type TelegramBotIdentity,
-  type TelegramQaRuntimeEnv,
-  type TelegramUpdate,
-} from "./telegram-api.runtime.js";
+  loadTelegramUserbotSkillRuntime,
+  type TelegramTestCredential,
+} from "./userbot-skill.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const TELEGRAM_QA_DIAGNOSTIC_COUNT_LIMIT = 9_999;
+
 type TelegramQaObserverState = {
   filteredCount: number;
   matchedCount: number;
-  pollCount: number;
-  relevantUpdateKinds: Set<"edited_message" | "message" | "other">;
-  terminalError?: Error;
+  relevantUpdateKinds: Set<"edit" | "message">;
   updateCount: number;
 };
 
@@ -45,26 +35,14 @@ function renderTelegramQaDiagnosticCount(value: number) {
     : String(value);
 }
 
-function describeTelegramQaTerminalError(error: Error | undefined) {
-  if (!error) {
-    return "none";
-  }
-  if (error instanceof TelegramQaApiError) {
-    return `{name=TelegramQaApiError,method=${error.method},error_code=${error.error_code},status=${error.status}}`;
-  }
-  return `{name=${error.name === "Error" ? "Error" : "unknown"}}`;
-}
-
 function describeTelegramQaObserverState(state: TelegramQaObserverState) {
   const updateKinds =
     state.relevantUpdateKinds.size > 0 ? [...state.relevantUpdateKinds] : ["none"];
   return [
-    `telegram observer polls=${renderTelegramQaDiagnosticCount(state.pollCount)}`,
-    `updates=${renderTelegramQaDiagnosticCount(state.updateCount)}`,
+    `telegram userbot updates=${renderTelegramQaDiagnosticCount(state.updateCount)}`,
     `filtered=${renderTelegramQaDiagnosticCount(state.filteredCount)}`,
     `matched=${renderTelegramQaDiagnosticCount(state.matchedCount)}`,
     `update kinds=[${updateKinds.join(",")}]`,
-    `terminal error=${describeTelegramQaTerminalError(state.terminalError)}`,
   ].join("; ");
 }
 
@@ -75,23 +53,35 @@ function renderTelegramQaInboundText(
   const commandName = input.nativeCommand?.name.trim().toLowerCase();
   const renderedText = input.text.replaceAll("@openclaw", `@${botUsername}`);
   const commandToken = renderedText.match(/^\S+/u)?.[0];
-  // Scenarios declare command semantics once; the live adapter owns Telegram's
-  // bot-username targeting while local drivers may encode the same metadata differently.
   return commandName && commandToken?.toLowerCase() === `/${commandName}`
     ? `/${commandName}@${botUsername}${renderedText.slice(commandToken.length)}`
     : renderedText;
+}
+
+async function releaseTelegramCredential(params: {
+  heartbeat: { stop(): Promise<void> };
+  release(): Promise<void>;
+}) {
+  try {
+    await params.heartbeat.stop();
+  } finally {
+    await params.release();
+  }
 }
 
 export async function createTelegramQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const credentialLease = await acquireQaCredentialLease<TelegramQaRuntimeEnv>({
-    kind: "telegram",
-    source: options.credentialSource,
+  const skillRuntime = await loadTelegramUserbotSkillRuntime({ repoRoot: options.repoRoot });
+  const credentialLease = await acquireQaCredentialLease<TelegramTestCredential>({
+    kind: "telegram-test-userbot",
+    source: options.credentialSource || "convex",
     role: options.credentialRole,
-    resolveEnvPayload: () => resolveTelegramQaRuntimeEnv(),
-    parsePayload: parseTelegramQaCredentialPayload,
+    resolveEnvPayload: () => {
+      throw new Error("Telegram live QA requires a Convex-leased Test Server userbot.");
+    },
+    parsePayload: (payload) => skillRuntime.parseCredential(payload),
   });
   try {
     assertQaGatewayCredentialLeaseQuarantine(credentialLease);
@@ -100,129 +90,129 @@ export async function createTelegramQaTransportAdapter(
     throw error;
   }
   const heartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
-  const releaseCredentialLease = async () => {
-    // Lease release must still run when heartbeat shutdown reports an error.
-    try {
-      await heartbeat.stop();
-    } finally {
-      await credentialLease.release();
-    }
+  const leaseHealth = {
+    assertHealthy: () => heartbeat.throwIfFailed(),
+    whenUnhealthy: heartbeat.whenFailed,
   };
-  const runtimeEnv = credentialLease.payload;
-  let driverIdentity: TelegramBotIdentity;
-  let sutIdentity: TelegramBotIdentity;
-  let sutUsername: string;
-  let offset: number;
-  try {
-    [driverIdentity, sutIdentity] = await Promise.all([
-      callTelegramApi<TelegramBotIdentity>(runtimeEnv.driverToken, "getMe"),
-      callTelegramApi<TelegramBotIdentity>(runtimeEnv.sutToken, "getMe"),
-    ]);
-    if (!driverIdentity.is_bot || !sutIdentity.is_bot) {
-      throw new Error("Telegram QA credentials must belong to bots.");
+  let leaseReleased = false;
+  const releaseCredentialLease = async () => {
+    if (leaseReleased) {
+      return;
     }
-    if (driverIdentity.id === sutIdentity.id) {
-      throw new Error("Telegram QA requires two distinct bots for driver and SUT.");
-    }
-    if (!sutIdentity.username?.trim()) {
-      throw new Error("Telegram QA requires the SUT bot to have a Telegram username.");
-    }
-    sutUsername = sutIdentity.username.trim();
-    [offset] = await Promise.all([
-      flushTelegramUpdates(runtimeEnv.driverToken),
-      flushTelegramUpdates(runtimeEnv.sutToken),
-    ]);
-  } catch (error) {
-    await releaseCredentialLease();
-    throw error;
-  }
-  const accountId = options.sutAccountId?.trim() || "sut";
-  let stopped = false;
+    await releaseTelegramCredential({ heartbeat, release: () => credentialLease.release() });
+    leaseReleased = true;
+  };
+  let stateRoot: string | undefined;
+  let apiProxy: Awaited<ReturnType<typeof skillRuntime.startApiProxy>> | undefined;
+  let userbot: TelegramUserbotDriver | undefined;
   const observerState: TelegramQaObserverState = {
     filteredCount: 0,
     matchedCount: 0,
-    pollCount: 0,
     relevantUpdateKinds: new Set(),
     updateCount: 0,
   };
-  let logicalConversationId = runtimeEnv.groupId;
+  const accountId = options.sutAccountId?.trim() || "sut";
+  let logicalConversationId = credentialLease.payload.groupId;
   let logicalConversationKind: "channel" | "direct" | "group" = "channel";
   const nativeMessageIds = new Map<string, number>();
   const busMessageIds = new Map<number, string>();
-  const pollingAbort = new AbortController();
-  const poll = async () => {
-    let retryAttempt = 0;
-    for (;;) {
-      if (stopped) {
-        return;
-      }
-      let updates: TelegramUpdate[];
-      try {
-        observerState.pollCount += 1;
-        updates = await callTelegramApi<TelegramUpdate[]>(
-          runtimeEnv.driverToken,
-          "getUpdates",
-          { offset, timeout: 1, allowed_updates: ["message", "edited_message"] },
-          6_000,
-        );
-      } catch (error) {
-        if (!isRecoverableTelegramQaPollError(error)) {
-          throw error;
-        }
-        retryAttempt += 1;
-        await waitForTelegramPollRetryDelay(error, retryAttempt, pollingAbort.signal);
-        continue;
-      }
-      retryAttempt = 0;
-      observerState.updateCount += updates.length;
-      for (const update of updates) {
-        observerState.relevantUpdateKinds.add(
-          update.edited_message ? "edited_message" : update.message ? "message" : "other",
-        );
-        offset = Math.max(offset, update.update_id + 1);
-        const message = normalizeTelegramObservedMessage(update);
-        if (
-          !message ||
-          message.chatId !== Number(runtimeEnv.groupId) ||
-          message.senderId !== sutIdentity.id
-        ) {
-          observerState.filteredCount += 1;
-          continue;
-        }
-        observerState.matchedCount += 1;
-        const existingMessageId = busMessageIds.get(message.messageId);
-        if (update.edited_message && existingMessageId) {
-          await context.messages.editMessage({
-            accountId,
-            messageId: existingMessageId,
-            text: message.text,
-            timestamp: message.timestamp,
-          });
-          continue;
-        }
-        // Telegram may expose only the final edit after the adapter resets between
-        // scenarios. Adopt that edit so the live observation cannot disappear.
-        const outbound = await context.messages.addOutboundMessage({
-          accountId,
-          to: `${logicalConversationKind}:${logicalConversationId}`,
-          senderId: String(message.senderId),
-          senderName: message.senderUsername,
-          text: message.text,
-          timestamp: message.timestamp,
-          replyToId: message.replyToMessageId
-            ? busMessageIds.get(message.replyToMessageId)
-            : undefined,
-        });
-        nativeMessageIds.set(outbound.id, message.messageId);
-        busMessageIds.set(message.messageId, outbound.id);
-      }
+  let sendsInFlight = 0;
+  let deferredReplies: TelegramUserbotUpdate[] = [];
+
+  const publishUpdate = async (update: TelegramUserbotUpdate) => {
+    const existingMessageId = busMessageIds.get(update.messageId);
+    if (update.kind === "edit" && existingMessageId) {
+      await context.messages.editMessage({
+        accountId,
+        messageId: existingMessageId,
+        text: update.text,
+        timestamp: update.timestamp,
+      });
+      return;
     }
+    const outbound = await context.messages.addOutboundMessage({
+      accountId,
+      to: `${logicalConversationKind}:${logicalConversationId}`,
+      senderId: String(update.senderId),
+      senderName: update.senderUsername,
+      text: update.text,
+      timestamp: update.timestamp,
+      replyToId: update.replyToMessageId ? busMessageIds.get(update.replyToMessageId) : undefined,
+    });
+    nativeMessageIds.set(outbound.id, update.messageId);
+    busMessageIds.set(update.messageId, outbound.id);
   };
-  const polling = poll().catch((error: unknown) => {
-    if (!stopped) {
-      observerState.terminalError = error instanceof Error ? error : new Error("unknown error");
+
+  const observeUpdate = async (update: TelegramUserbotUpdate) => {
+    observerState.updateCount += 1;
+    observerState.relevantUpdateKinds.add(update.kind);
+    if (
+      update.chatId !== Number(credentialLease.payload.groupId) ||
+      update.senderId !== Number(credentialLease.payload.sutBotId)
+    ) {
+      observerState.filteredCount += 1;
+      return;
     }
-  });
+    observerState.matchedCount += 1;
+    if (
+      sendsInFlight > 0 &&
+      update.replyToMessageId &&
+      !busMessageIds.has(update.replyToMessageId)
+    ) {
+      deferredReplies.push(update);
+      return;
+    }
+    await publishUpdate(update);
+  };
+
+  try {
+    stateRoot = skillRuntime.createStateRoot();
+    const restored = skillRuntime.restoreCredential(credentialLease.payload, stateRoot);
+    apiProxy = await skillRuntime.startApiProxy(leaseHealth);
+    await apiProxy.drainUpdates(restored.sutToken);
+    userbot = await TelegramUserbotDriver.start({
+      chatId: restored.groupId,
+      driverEnv: restored.driverEnv,
+      leaseHealth,
+      userDriverPath: skillRuntime.userDriverPath,
+      onUpdate: observeUpdate,
+    });
+  } catch (error) {
+    const cleanupErrors: unknown[] = [];
+    try {
+      await userbot?.close();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    try {
+      await apiProxy?.close();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (stateRoot) {
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+    try {
+      await releaseCredentialLease();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(cleanupErrors, "Telegram userbot setup and cleanup failed", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+
+  if (!userbot || !apiProxy || !stateRoot) {
+    throw new Error("Telegram userbot runtime did not start.");
+  }
+  const activeUserbot = userbot;
+  const activeApiProxy = apiProxy;
+  const activeStateRoot = stateRoot;
+  let observerStopped = false;
+  let apiProxyClosed = false;
   return {
     id: "telegram",
     label: "Telegram live",
@@ -230,9 +220,7 @@ export async function createTelegramQaTransportAdapter(
     requiredPluginIds: ["telegram"],
     supportedActions: [],
     assertTransportHealthy() {
-      if (observerState.terminalError) {
-        throw observerState.terminalError;
-      }
+      activeUserbot.assertHealthy();
       heartbeat.throwIfFailed();
     },
     describeTransportState: () => describeTelegramQaObserverState(observerState),
@@ -240,41 +228,36 @@ export async function createTelegramQaTransportAdapter(
       heartbeat.throwIfFailed();
       logicalConversationId = input.conversation.id;
       logicalConversationKind = input.conversation.kind;
-      const text = renderTelegramQaInboundText(input, sutUsername);
+      const text = renderTelegramQaInboundText(input, credentialLease.payload.sutUsername);
       const nativeReplyToId = input.replyToId ? nativeMessageIds.get(input.replyToId) : undefined;
-      const sent = await callTelegramApi<{ message_id: number }>(
-        runtimeEnv.driverToken,
-        "sendMessage",
-        {
-          chat_id: runtimeEnv.groupId,
-          text,
-          disable_notification: true,
-          ...(nativeReplyToId
-            ? {
-                reply_parameters: {
-                  message_id: nativeReplyToId,
-                  allow_sending_without_reply: true,
-                },
-              }
-            : {}),
-        },
-      );
-      const message = await context.messages.addInboundMessage({
-        ...input,
-        accountId,
-        senderId: String(driverIdentity.id),
-        senderName: driverIdentity.username,
-      });
-      nativeMessageIds.set(message.id, sent.message_id);
-      busMessageIds.set(sent.message_id, message.id);
-      return message;
+      sendsInFlight += 1;
+      try {
+        const sent = await activeUserbot.send({ text, replyToMessageId: nativeReplyToId });
+        const message = await context.messages.addInboundMessage({
+          ...input,
+          accountId,
+          senderId: credentialLease.payload.testerUserId,
+        });
+        nativeMessageIds.set(message.id, sent.messageId);
+        busMessageIds.set(sent.messageId, message.id);
+        const readyReplies = deferredReplies.filter(
+          (update) => update.replyToMessageId && busMessageIds.has(update.replyToMessageId),
+        );
+        deferredReplies = deferredReplies.filter((update) => !readyReplies.includes(update));
+        for (const update of readyReplies) {
+          await publishUpdate(update);
+        }
+        return message;
+      } finally {
+        sendsInFlight -= 1;
+      }
     },
     resetTransport: () => {
-      logicalConversationId = runtimeEnv.groupId;
+      logicalConversationId = credentialLease.payload.groupId;
       logicalConversationKind = "channel";
       nativeMessageIds.clear();
       busMessageIds.clear();
-      observerState.pollCount = 0;
+      deferredReplies = [];
       observerState.updateCount = 0;
       observerState.filteredCount = 0;
       observerState.matchedCount = 0;
@@ -282,11 +265,11 @@ export async function createTelegramQaTransportAdapter(
     },
     createGatewayConfig: () =>
       buildTelegramQaConfig({} as OpenClawConfig, {
-        groupId: runtimeEnv.groupId,
-        sutToken: runtimeEnv.sutToken,
-        driverBotId: driverIdentity.id,
+        apiRoot: activeApiProxy.apiRoot,
+        groupId: credentialLease.payload.groupId,
+        sutToken: credentialLease.payload.sutToken,
+        testerUserId: credentialLease.payload.testerUserId,
         sutAccountId: accountId,
-        // Mention-gating scenarios opt in through the shared transport policy.
         requireMention: options.transportPolicy?.requireGroupMention === true,
       }),
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
@@ -296,38 +279,62 @@ export async function createTelegramQaTransportAdapter(
       }),
     buildAgentDelivery: () => ({
       channel: "telegram",
-      to: runtimeEnv.groupId,
+      to: credentialLease.payload.groupId,
       replyChannel: "telegram",
-      replyTo: runtimeEnv.groupId,
+      replyTo: credentialLease.payload.groupId,
     }),
     async handleAction() {
       throw new Error("Telegram live QA adapter does not implement transport actions");
     },
-    createReportNotes: () => ["Runs through the Telegram live adapter and shared QA suite host."],
+    createReportNotes: () => ["Runs through the Telegram Test Server userbot adapter."],
     async cleanup() {
-      stopped = true;
-      pollingAbort.abort(new Error("Telegram QA observer stopped"));
-      await polling.catch(() => undefined);
+      if (observerStopped) {
+        return;
+      }
+      observerStopped = true;
+      try {
+        await activeUserbot.close();
+      } finally {
+        fs.rmSync(activeStateRoot, { recursive: true, force: true });
+      }
     },
     async cleanupAfterGatewayStop() {
+      const cleanupErrors: unknown[] = [];
+      if (!apiProxyClosed) {
+        try {
+          await activeApiProxy.close();
+          apiProxyClosed = true;
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
       if (await shouldRetainQaGatewayCredentialLease()) {
-        const quarantineErrors: unknown[] = [];
         try {
           await credentialLease.heartbeat();
         } catch (error) {
-          quarantineErrors.push(error);
+          cleanupErrors.push(error);
         }
         try {
           await heartbeat.stop();
         } catch (error) {
-          quarantineErrors.push(error);
+          cleanupErrors.push(error);
         }
         throw new Error(
           "retained Telegram credential lease for two hours because isolated SUT quiescence was not proven",
-          quarantineErrors.length > 0 ? { cause: new AggregateError(quarantineErrors) } : undefined,
+          cleanupErrors.length > 0 ? { cause: new AggregateError(cleanupErrors) } : undefined,
         );
       }
-      await releaseCredentialLease();
+      try {
+        await releaseCredentialLease();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      if (cleanupErrors.length === 1) {
+        throw cleanupErrors[0];
+      }
+      if (cleanupErrors.length > 1) {
+        throw new AggregateError(cleanupErrors, "Telegram userbot cleanup failed");
+      }
     },
   };
 }

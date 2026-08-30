@@ -18,7 +18,7 @@ import {
   supportsWorkerExecutionContextLaunch,
 } from "./admission.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
-import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
+import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import { waitForTurnOperation } from "./worker-turn-admission.js";
 import {
   WorkerTurnExecutionError,
@@ -134,13 +134,16 @@ export async function executeWorkerTurn(
       placement.activeOwnerEpoch,
     )) === true;
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
-  const { browser, toolAuthority } = resolveWorkerBrowserLaunchPlan({
-    desktop: environment.desktop,
-    modelRef,
-    turn,
-    githubPublicationAvailable,
-    portalAvailable,
-  });
+  const { browser, computer, preparedComputer, toolAuthority } =
+    await prepareWorkerDesktopLaunchPlan({
+      desktop: environment.desktop,
+      protocolFeatures: bootstrapReceipt.protocolFeatures,
+      prepareComputer: () => params.environments.prepareComputer?.(params.turnClaim),
+      modelRef,
+      turn,
+      githubPublicationAvailable,
+      portalAvailable,
+    });
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
   const { operationalRunInstance, runtimeIdentity, assertActive } =
     await prepareWorkerAgentRuntimeIdentity({
@@ -151,6 +154,7 @@ export async function executeWorkerTurn(
       turn,
       turnClaim: params.turnClaim,
     });
+  preparedComputer?.bind(operationalRunInstance);
   const authority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
   const authorityAbort = new AbortController();
   const signal = turn.abortSignal
@@ -280,10 +284,11 @@ export async function executeWorkerTurn(
             },
             toolAuthority,
             ...(browser ? { browser } : {}),
+            ...(computer ? { computer } : {}),
           },
         }),
     });
-    if (launchPlan.kind === "local-fallback") {
+    if (launchPlan.kind === "provider-replay-unavailable") {
       emitProviderReplayRejected(turn.config, {
         bytes: launchPlan.bytes,
         limitBytes: launchPlan.limitBytes,
@@ -291,7 +296,6 @@ export async function executeWorkerTurn(
       });
       throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
     }
-    const plan = launchPlan.plan;
     if (!isAuthorized()) {
       throw new Error("Worker turn authority changed while preparing its launch");
     }
@@ -318,15 +322,14 @@ export async function executeWorkerTurn(
         handoffAbort.abort(handoffError);
       }
     };
-    const processPromise = tunnel.launchTurn({
-      plan,
+    const processResult = await tunnel.launchTurn({
+      plan: launchPlan.plan,
       turnClaim: params.turnClaim,
       timeoutMs: turn.timeoutMs,
       credentialExpiresAtMs: credential.expiresAtMs,
       signal: AbortSignal.any([signal, handoffAbort.signal]),
       onDispatchReady,
     });
-    const processResult = await processPromise;
     // Node launches return only after the exact launch journal receipt is terminal,
     // including any admission re-arms. Transport failures never reach this fact.
     if (environment.nodeDeviceId && environment.sshEndpoint === null) {

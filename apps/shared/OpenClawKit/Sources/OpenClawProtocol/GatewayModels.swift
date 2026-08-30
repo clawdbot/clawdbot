@@ -13981,6 +13981,7 @@ public struct AgentSummary: Codable, Sendable {
     public let thinkinglevels: [[String: AnyCodable]]?
     public let thinkingoptions: [String]?
     public let thinkingdefault: String?
+    public let defaultpermissionmode: SessionPermissionMode?
 
     public init(
         id: String,
@@ -13996,7 +13997,8 @@ public struct AgentSummary: Codable, Sendable {
         agentruntime: [String: AnyCodable]? = nil,
         thinkinglevels: [[String: AnyCodable]]? = nil,
         thinkingoptions: [String]? = nil,
-        thinkingdefault: String? = nil)
+        thinkingdefault: String? = nil,
+        defaultpermissionmode: SessionPermissionMode? = nil)
     {
         self.id = id
         self.kind = kind
@@ -14012,6 +14014,7 @@ public struct AgentSummary: Codable, Sendable {
         self.thinkinglevels = thinkinglevels
         self.thinkingoptions = thinkingoptions
         self.thinkingdefault = thinkingdefault
+        self.defaultpermissionmode = defaultpermissionmode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -14029,6 +14032,7 @@ public struct AgentSummary: Codable, Sendable {
         case thinkinglevels = "thinkingLevels"
         case thinkingoptions = "thinkingOptions"
         case thinkingdefault = "thinkingDefault"
+        case defaultpermissionmode = "defaultPermissionMode"
     }
 }
 
@@ -17351,6 +17355,7 @@ public struct LogsTailResult: Codable, Sendable {
     public let lines: [String]
     public let truncated: Bool?
     public let reset: Bool?
+    public let skippedbytes: Int?
 
     public init(
         file: String,
@@ -17358,7 +17363,8 @@ public struct LogsTailResult: Codable, Sendable {
         size: Int,
         lines: [String],
         truncated: Bool? = nil,
-        reset: Bool? = nil)
+        reset: Bool? = nil,
+        skippedbytes: Int? = nil)
     {
         self.file = file
         self.cursor = cursor
@@ -17366,6 +17372,17 @@ public struct LogsTailResult: Codable, Sendable {
         self.lines = lines
         self.truncated = truncated
         self.reset = reset
+        self.skippedbytes = skippedbytes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case file
+        case cursor
+        case size
+        case lines
+        case truncated
+        case reset
+        case skippedbytes = "skippedBytes"
     }
 }
 

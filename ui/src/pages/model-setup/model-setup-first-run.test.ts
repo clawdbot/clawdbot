@@ -931,15 +931,16 @@ describe("ModelSetupPage first-run inference", () => {
 
   it("does not continue a stale first-run activation after leaving the onboarding route", async () => {
     const { context, client, request } = createFirstRunContext();
-    let resolveActivation:
-      | ((result: { ok: false; status: "auth"; error: string }) => void)
-      | undefined;
-    request.mockImplementation(
-      async () =>
-        await new Promise<{ ok: false; status: "auth"; error: string }>((resolve) => {
-          resolveActivation = resolve;
-        }),
-    );
+    const activation = createDeferred<{ ok: false; status: "auth"; error: string }>();
+    request.mockImplementation(async (method) => {
+      if (method === "openclaw.setup.detect") {
+        return detection;
+      }
+      if (method === "openclaw.setup.activate") {
+        return activation.promise;
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
 
     const { page } = await mountPage(context, {
       state: {
@@ -955,19 +956,23 @@ describe("ModelSetupPage first-run inference", () => {
       client,
       firstRun: true,
     });
-    await waitForFast(() => expect(resolveActivation).toBeTypeOf("function"));
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
-    page.routeData = { ...page.routeData!, firstRun: false };
+    page.routeData = { firstRun: false };
     await page.updateComplete;
-    resolveActivation?.({ ok: false, status: "auth", error: "The first login expired" });
+    activation.resolve({ ok: false, status: "auth", error: "The first login expired" });
 
+    await waitForFast(() => expect(request.mock.settledResults[0]?.type).toBe("fulfilled"));
     await page.updateComplete;
     expect(page.textContent).not.toContain("The first login expired");
-    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.setup.activate",
+      "openclaw.setup.detect",
+    ]);
     expect(context.navigate).not.toHaveBeenCalled();
   });
 
-  it("redetects before activating when stale first-run route data replaces ready state", async () => {
+  it("redetects before activating when a first-run visit replaces ordinary settings", async () => {
     const { context, client, request } = createFirstRunContext();
     request.mockImplementation(async (method, params) => {
       if (method === "openclaw.setup.detect") {
@@ -997,14 +1002,7 @@ describe("ModelSetupPage first-run inference", () => {
       firstRun: false,
     });
 
-    page.routeData = {
-      ...page.routeData!,
-      firstRun: true,
-      connection: {
-        ...page.routeData!.connection,
-        hello: { ...page.routeData!.connection.hello! },
-      },
-    };
+    page.routeData = { firstRun: true };
     await page.updateComplete;
 
     await waitForFast(() => {

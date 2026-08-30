@@ -48,6 +48,7 @@ import {
   appendGatewayLifecycleAudit,
   createGatewayLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
+import { resolveGatewayConfigPorts, resolveGatewayLifecycleContext } from "./lifecycle-context.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -69,11 +70,7 @@ import {
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
-import {
-  resolveGatewayLifecycleContext,
-  resolveGatewayConfigPorts,
-  renderGatewayServiceStartHints,
-} from "./shared.js";
+import { renderGatewayServiceStartHints } from "./shared.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 

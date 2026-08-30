@@ -4,6 +4,10 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
@@ -56,9 +60,10 @@ afterEach(() => {
   vi.restoreAllMocks();
   resetPluginStateStoreForTests();
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
 });
 
-it("initializes trusted state and executable CLI before resolving the broad runtime", async () => {
+it("initializes config, trusted state and executable CLI before resolving the broad runtime", async () => {
   const root = fs.realpathSync(makePluginLoaderTempDir());
   const bundledDir = path.join(root, "bundled");
   const observed = path.join(root, "observed.json");
@@ -70,7 +75,7 @@ it("initializes trusted state and executable CLI before resolving the broad runt
       const sync = api.runtime.state.openSyncKeyedStore({ namespace: "registration", maxEntries: 2 });
       const entries = sync.entries();
       const asyncStore = api.runtime.state.openKeyedStore({ namespace: "registration", maxEntries: 2 });
-      require("node:fs").writeFileSync(${JSON.stringify(observed)}, JSON.stringify(entries));
+      require("node:fs").writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ entries, config: api.runtime.config.current() }));
       api.registerCli(({ program }) => program.command("state-proof").action(async () => {
         sync.register("before", { value: "retained" });
         const chunks = api.runtime.channel.text.chunkText("channel runtime works", 100);
@@ -117,6 +122,7 @@ it("initializes trusted state and executable CLI before resolving the broad runt
       const dispatchReplyFromConfig =
         vi.fn<PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"]>();
       const config = { plugins: { entries: { [plugin.id]: { enabled: true } } } };
+      setRuntimeConfigSnapshot(config);
       const metadata = await loadOpenClawPluginCliRegistry({ config, pluginSdkResolution: "src" });
       expect(metadata.plugins).toContainEqual(
         expect.objectContaining({
@@ -136,10 +142,15 @@ it("initializes trusted state and executable CLI before resolving the broad runt
       expect(registry.plugins).toContainEqual(
         expect.objectContaining({ id: plugin.id, status: "loaded" }),
       );
-      expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual([]);
+      expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({ entries: [], config });
       expect(fs.existsSync(path.join(root, "state", "state", "openclaw.sqlite"))).toBe(false);
       expect(resolveRuntime).not.toHaveBeenCalled();
       const runtime = getPluginRegistryRuntime(registry)!;
+      const configApi = runtime.config;
+      const refreshedConfig = { ...config, agents: { defaults: { workspace: "/refreshed" } } };
+      setRuntimeConfigSnapshot(refreshedConfig);
+      expect(configApi.current()).toBe(refreshedConfig);
+      expect(Object.getOwnPropertyDescriptor(runtime, "config")?.get?.()).toBe(configApi);
       const state = runtime.state;
       const descriptor = Object.getOwnPropertyDescriptor(runtime, "state")!;
       expect(descriptor.get?.()).toBe(state);
@@ -163,6 +174,9 @@ it("initializes trusted state and executable CLI before resolving the broad runt
       expect(resolveRuntime).toHaveBeenCalledTimes(1);
       expect(factories).toHaveBeenCalledTimes(1);
       expect(runtime.state).toBe(state);
+      expect(runtime.config).toBe(configApi);
+      setRuntimeConfigSnapshot(config);
+      expect(configApi.current()).toBe(config);
       expect(runtime.hooks).toBe(hooks);
       expect(runtime.channel.reply.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
       const replacement = { ...state };

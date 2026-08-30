@@ -250,6 +250,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         const systemPromptText = buildSystemPromptText(thinkLevel);
         let session: AgentSession | undefined;
         let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
+        let resetCompactionTimeout: (() => void) | undefined;
         try {
           const createdSession = await createAgentSessionForEmbeddedRunner(
             {
@@ -335,6 +336,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
               nextCallId: nextDiagnosticModelCallId,
               ownerGeneration: diagnosticOwner.generation,
+              // Multi-stage compaction intentionally serializes provider calls. Each new
+              // request is progress, so both native and delegated watchdogs get a fresh window.
+              onStarted: () => {
+                resetCompactionTimeout?.();
+                params.compactionTimeoutReset?.();
+              },
             },
           );
 
@@ -452,6 +459,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }
 
           const compactStartedAt = Date.now();
+          // Setup completed: give the first provider request a full safety window.
+          params.compactionTimeoutReset?.();
           const serverResult = await attemptServerEndpointCompaction({
             trigger,
             streamFn: session.agent.streamFn,
@@ -471,14 +480,20 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             },
           });
           const activeSession = session;
-          const clientResult = serverResult
-            ? undefined
-            : await compactWithSafetyTimeout(
-                () =>
-                  resolveEffectiveCompactionMode(params.config) === "default" &&
-                  trigger !== "manual"
+          let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
+          if (!serverResult) {
+            try {
+              // The client watchdog starts here; refresh the delegated host watchdog with it.
+              params.compactionTimeoutReset?.();
+              clientResult = await compactWithSafetyTimeout(
+                (_signal, resetTimeout) => {
+                  resetCompactionTimeout = resetTimeout;
+                  setCompactionSafeguardCancellation(compactionSessionManager, undefined);
+                  return resolveEffectiveCompactionMode(params.config) === "default" &&
+                    trigger !== "manual"
                     ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
-                    : activeSession.compact(params.customInstructions),
+                    : activeSession.compact(params.customInstructions);
+                },
                 compactionTimeoutMs,
                 {
                   abortSignal: params.abortSignal,
@@ -487,6 +502,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   },
                 },
               );
+            } finally {
+              resetCompactionTimeout = undefined;
+            }
+          }
+          // Compaction succeeded: post-processing gets its own full watchdog window.
+          params.compactionTimeoutReset?.();
           const effectiveFirstKeptEntryId = clientResult?.firstKeptEntryId;
           const tokensBefore = serverResult?.usage.input_tokens ?? clientResult!.tokensBefore;
           // Endpoint output_tokens excludes retained inputs. Count the actual
@@ -613,6 +634,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               `[compaction] request rejected for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );
             thinkLevel = fallbackThinking;
+            // The rejected request may have consumed nearly its full window. Rearm the
+            // delegated watchdog before rebuilding the session for the fallback attempt.
+            params.compactionTimeoutReset?.();
             continue;
           }
           throw err;

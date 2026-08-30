@@ -596,6 +596,8 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     Use `openclaw memory status --deep` to verify embedding readiness at runtime.
 
+    Embedding-provider readiness is a health check, not a state migration. Gateway startup does not initialize memory embedding providers during migration preflight, so auth-profile SecretRefs can activate afterward. If embeddings remain unavailable, memory sync preserves an existing semantic index rather than replacing it with FTS-only data. Genuine migration warnings still block Gateway readiness.
+
   </Accordion>
   <Accordion title="14. Channel status warnings">
     If the gateway is healthy, doctor runs a channel status probe and reports warnings with suggested fixes.

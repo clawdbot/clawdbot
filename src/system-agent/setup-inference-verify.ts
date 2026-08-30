@@ -321,7 +321,7 @@ export async function verifySetupInferenceConfig(params: {
         if (!credential) {
           throw new Error("staged profile missing after verification");
         }
-        return { profileId: profile.profileId, credential };
+        return { ...profile, credential };
       });
     };
     const retainStagedAuthProfiles = () => {

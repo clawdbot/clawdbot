@@ -201,8 +201,6 @@ async function prepareResolvedImageRuntime(
 export async function resolveImageRuntime(
   params: ImageRuntimeParams,
 ): Promise<ResolvedImageRuntime> {
-  // Fast static resolution avoids provider runtime hooks during tool discovery. The bounded lease
-  // admits dynamic workspaces before attachment preprocessing reaches the embedded run boundary.
   const resolvedRef = normalizeModelRef(params.provider, params.model);
   const workspaceDir =
     params.workspaceDir ??
@@ -212,18 +210,30 @@ export async function resolveImageRuntime(
     ...(params.profile ? { authProfileId: params.profile } : {}),
     ...(params.preferredProfile ? { preferredProfile: params.preferredProfile } : {}),
   };
-  // Opaque media handles may lack model facts; resolveModelAsync then uses normal discovery.
+  // Borrow a supplied generation; only direct calls acquire and release a new lease.
   const preparedRuntimeLease = params.preparedModelRuntime
     ? {
         snapshot: params.preparedModelRuntime as PreparedModelRuntimeSnapshot,
         release: () => {},
       }
-    : await acquireAgentRunPreparedModelRuntime({
-        agentDir: params.agentDir,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        config: params.cfg ?? {},
-        ...(runtimeParams.workspaceDir ? { workspaceDir: runtimeParams.workspaceDir } : {}),
-      });
+    : await acquireAgentRunPreparedModelRuntime(
+        {
+          agentDir: params.agentDir,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          config: params.cfg ?? {},
+          ...(runtimeParams.workspaceDir ? { workspaceDir: runtimeParams.workspaceDir } : {}),
+          loadRuntimePlugins: true,
+          runtimePluginSelections: [
+            {
+              provider: resolvedRef.provider,
+              modelId: resolvedRef.model,
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+            },
+          ],
+        },
+        // The request already chose a model; full inventory discovery must stay outside setup.
+        { catalogMode: "static" },
+      );
   let leaseRetained = false;
   const retainLease = (resolved: PreparedImageRuntime): ResolvedImageRuntime => {
     leaseRetained = true;
@@ -252,33 +262,6 @@ export async function resolveImageRuntime(
       ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
       ...authProfileOptions,
     };
-    const fastResolved = await resolveModelAsync(
-      resolvedRef.provider,
-      resolvedRef.model,
-      preparedParams.agentDir,
-      preparedParams.cfg,
-      { ...resolveOptions, skipProviderRuntimeHooks: true },
-    );
-    if (fastResolved.model?.input?.includes("image")) {
-      const normalizedResolved = await resolveModelAsync(
-        resolvedRef.provider,
-        resolvedRef.model,
-        preparedParams.agentDir,
-        preparedParams.cfg,
-        resolveOptions,
-      );
-      if (normalizedResolved.model?.input?.includes("image")) {
-        return retainLease(
-          await prepareResolvedImageRuntime(
-            preparedParams,
-            normalizedResolved.model,
-            normalizedResolved.authStorage,
-            normalizedResolved.modelRegistry,
-          ),
-        );
-      }
-    }
-
     const resolved = await resolveModelAsync(
       resolvedRef.provider,
       resolvedRef.model,

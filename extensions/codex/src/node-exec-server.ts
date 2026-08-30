@@ -168,7 +168,8 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
       const nodeName = context.node?.displayName ?? context.nodeId;
       const approval = await context.approvals.request({
         title: "Run Codex execution on node",
-        description: `${nodeName}: ${placement.cwd}; allows arbitrary processes and filesystem access across the node account, not only this workspace.`,
+        // Keep the risk visible when the Gateway bounds a long workspace description.
+        description: `Allows arbitrary processes and filesystem access across the node account, not only this workspace. ${nodeName}: ${placement.cwd}`,
         severity: "critical",
         allowedDecisions: ["allow-once"],
       });

@@ -219,17 +219,17 @@ test.each([
         resolveInvokeFrame?.(event.payload as { id: string; nodeId: string; command: string });
       },
     });
-    await vi.waitFor(async () => {
-      const listed = await operator?.request<{
-        nodes?: Array<{ nodeId?: string; connected?: boolean; commands?: string[] }>;
-      }>("node.list", {}, { timeoutMs: 10_000 });
-      expect(listed?.nodes?.find((entry) => entry.nodeId === pairedNode.identity.deviceId)).toEqual(
-        expect.objectContaining({
-          connected: true,
-          commands: ["camera.list"],
-        }),
-      );
-    });
+    const initialInventory = await operator.request<{
+      nodes?: Array<{ nodeId?: string; connected?: boolean; commands?: string[] }>;
+    }>("node.list", {}, { timeoutMs: 10_000 });
+    expect(
+      initialInventory.nodes?.find((entry) => entry.nodeId === pairedNode.identity.deviceId),
+    ).toEqual(
+      expect.objectContaining({
+        connected: true,
+        commands: ["camera.list"],
+      }),
+    );
 
     const invoked = operator.request<{
       ok: boolean;

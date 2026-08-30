@@ -1,11 +1,15 @@
+import path from "node:path";
 import type {
   AssistantMessage,
   Context,
   Model,
   SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
@@ -15,6 +19,7 @@ import {
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
+import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
@@ -41,6 +46,7 @@ import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createStaleThinkingContent(): AssistantMessage["content"] {
   return [
@@ -105,18 +111,19 @@ describe("AgentSession compaction", () => {
       };
       const summary = recovers
         ? [
-            "## Decisions",
-            "The old prompt was answered.",
-            "## Open TODOs",
-            "None.",
-            "## Constraints/Rules",
-            "Preserve the session history.",
-            "## Pending user asks",
-            "None.",
-            "## Exact identifiers",
-            "None.",
-          ].join("\n")
+            "## Decisions\nThe old prompt was answered.",
+            "## Open TODOs\nNone.",
+            "## Constraints/Rules\nPreserve the session history.",
+            "## Pending user asks\nNone.",
+            "## Exact identifiers\nNone.",
+          ].join("\n\n")
         : "Core summary without required safeguard headings";
+      const recoveredSummary = [
+        "## Latest user request context",
+        JSON.stringify("old prompt"),
+        "",
+        summary,
+      ].join("\n");
       const sessionManager = SessionManager.inMemory();
       sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
       sessionManager.appendMessage({
@@ -221,9 +228,11 @@ describe("AgentSession compaction", () => {
           providerCalls: 1,
           callerAbortedAtProviderEntry: false,
           callerAborted: cancelCaller,
-          result: recovers ? { status: "resolved", summary } : { status: "rejected" },
+          result: recovers
+            ? { status: "resolved", summary: recoveredSummary }
+            : { status: "rejected" },
           outcomes: [recovers ? "completed" : "aborted"],
-          appended: recovers ? [{ summary, fromHook: true }] : [],
+          appended: recovers ? [{ summary: recoveredSummary, fromHook: true }] : [],
         });
         // The guarded pipeline may chunk the history; do not pin its request count.
         if (!cancelCaller) {
@@ -396,6 +405,75 @@ describe("AgentSession compaction", () => {
     expect(subscription.getLastCompactionTokensAfter()).toEqual(expect.any(Number));
     expect(subscription.getLastCompactionTokensAfter()).toBeGreaterThan(0);
     subscription.unsubscribe();
+  });
+
+  it("sends a pre-persisted keyed user once after pre-prompt compaction", async () => {
+    const dir = tempDirs.make("openclaw-agent-session-compaction-keyed-user-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-agent-session-compaction-keyed-user",
+      sessionKey: "agent:main:dashboard:sqlite-agent-session-compaction-keyed-user",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionFile: formatSqliteSessionFileMarker(scope),
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    const sessionManager = SessionManager.open(scope, dir);
+    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "old answer" }], "stop", 950),
+      timestamp: 2,
+    });
+    const currentUser = {
+      role: "user" as const,
+      content: "current question",
+      idempotencyKey: "agent-session-compaction-keyed-user:user",
+      timestamp: 3,
+    };
+    const currentUserId = sessionManager.appendMessage(currentUser);
+    guardSessionManager(sessionManager, { preparedUserTurnMessage: currentUser });
+    const requests: Context[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }]),
+      );
+    });
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager: createAutoCompactionSettings(),
+      resourceLoader: createResourceLoader(createResultHandlers("condensed history")),
+    });
+    // Embedded attempt preparation removes the ingress-persisted user from model state.
+    // Pre-prompt compaction rebuilds it from the durable branch before prompt submission.
+    session.agent.state.messages = session.agent.state.messages.slice(0, -1);
+
+    await session.prompt(currentUser.content, {
+      persistedUserIdempotencyKey: currentUser.idempotencyKey,
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(
+      requests[0]?.messages.filter(
+        (message) =>
+          message.role === "user" && JSON.stringify(message.content).includes(currentUser.content),
+      ),
+    ).toHaveLength(1);
+    expect(
+      sessionManager
+        .getBranch()
+        .filter(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message.role === "user" &&
+            "idempotencyKey" in entry.message &&
+            entry.message.idempotencyKey === currentUser.idempotencyKey,
+        ),
+    ).toHaveLength(1);
+    expect(sessionManager.getEntry(currentUserId)).toBeDefined();
+    expect(session.getLastAssistantText()).toBe("complete answer");
   });
 
   it("accounts every automatic compaction response before summary validation", async () => {

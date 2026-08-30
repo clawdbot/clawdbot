@@ -2064,31 +2064,31 @@ describe("chat transcript rendering", () => {
 });
 
 describe("chat goal status", () => {
-  function goalSessions(goal: Partial<NonNullable<GatewaySessionRow["goal"]>> = {}) {
-    return createSessionsResultFromRows([
-      {
-        key: "main",
-        kind: "direct",
+  function goalSession(
+    goal: Partial<NonNullable<GatewaySessionRow["goal"]>> = {},
+  ): GatewaySessionRow {
+    return {
+      key: "main",
+      kind: "direct",
+      updatedAt: 2,
+      goal: {
+        schemaVersion: 1,
+        id: "goal-1",
+        objective: "Land the web goal UI",
+        status: "active",
+        createdAt: Date.now() - 15_000,
         updatedAt: 2,
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "Land the web goal UI",
-          status: "active",
-          createdAt: Date.now() - 15_000,
-          updatedAt: 2,
-          tokenStart: 100,
-          tokensUsed: 12_400,
-          tokenBudget: 50_000,
-          continuationTurns: 0,
-          ...goal,
-        },
+        tokenStart: 100,
+        tokensUsed: 12_400,
+        tokenBudget: 50_000,
+        continuationTurns: 0,
+        ...goal,
       },
-    ]);
+    };
   }
 
   it("renders the goal pill with status, objective, and elapsed time", () => {
-    const container = renderChatView({ sessions: goalSessions() });
+    const container = renderChatView({ selectedSession: goalSession() });
 
     const goal = container.querySelector(".agent-chat__goal");
     expect(goal?.querySelector(".agent-chat__goal-label")?.textContent).toBe("Pursuing goal");
@@ -2103,7 +2103,7 @@ describe("chat goal status", () => {
 
   it("dispatches typed goal actions from the pill controls", () => {
     const onGoalAction = vi.fn();
-    const container = renderChatView({ sessions: goalSessions(), onGoalAction });
+    const container = renderChatView({ selectedSession: goalSession(), onGoalAction });
 
     container.querySelector<HTMLButtonElement>('button[aria-label="Pause goal"]')?.click();
     container.querySelector<HTMLButtonElement>('button[aria-label="Clear goal"]')?.click();
@@ -2116,7 +2116,7 @@ describe("chat goal status", () => {
   it("offers resume instead of pause for paused goals", () => {
     const onGoalAction = vi.fn();
     const container = renderChatView({
-      sessions: goalSessions({ status: "paused", pausedAt: Date.now() }),
+      selectedSession: goalSession({ status: "paused", pausedAt: Date.now() }),
       onGoalAction,
     });
 
@@ -2133,7 +2133,7 @@ describe("chat goal status", () => {
     });
     const draw = () =>
       renderChatInto(container, {
-        sessions: goalSessions(),
+        selectedSession: goalSession(),
         draft,
         getDraft: () => draft,
         onGoalAction: vi.fn(),
@@ -2154,7 +2154,7 @@ describe("chat goal status", () => {
 
   it("expands goal details on demand", () => {
     const props = createChatProps({
-      sessions: goalSessions({ lastStatusNote: "Waiting for CI" }),
+      selectedSession: goalSession({ lastStatusNote: "Waiting for CI" }),
       onGoalAction: vi.fn(),
     });
     const container = document.createElement("div");
@@ -2192,7 +2192,7 @@ describe("chat goal status", () => {
 
   it("hides goal action buttons when the composer cannot send", () => {
     const container = renderChatView({
-      sessions: goalSessions(),
+      selectedSession: goalSession(),
       onGoalAction: vi.fn(),
       connected: false,
     });
@@ -3260,7 +3260,7 @@ describe("chat loading skeleton", () => {
         Model
       </button>`,
       queue: [createPendingSend()],
-      sessions: createContextUsageSessions(),
+      selectedSession: createContextUsageSessions().sessions[0],
     });
 
     // The composer shows no working chrome; the thread spark is the visible
@@ -3300,7 +3300,7 @@ describe("chat loading skeleton", () => {
           cost: { input: 0.001, output: 0.002 },
         },
       ],
-      sessions: createContextUsageSessions(),
+      selectedSession: createContextUsageSessions().sessions[0],
     });
 
     const context = container.querySelector(".context-ring");
@@ -5342,34 +5342,45 @@ describe("chat slash menu accessibility", () => {
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
   });
 
-  it("opens model-supported thinking arguments after tab-completing /think", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "off", label: "off" },
-      { id: "minimal", label: "minimal" },
-      { id: "low", label: "low" },
-      { id: "medium", label: "medium" },
-      { id: "high", label: "high" },
-      { id: "xhigh", label: "xhigh" },
-      { id: "max", label: "max" },
-      { id: "ultra", label: "ultra" },
-    ];
-    const { container } = createReactiveDraftHarness({ sessions });
+  it.each([
+    { name: "direct", sessionKey: "main", rowKey: "main" },
+    { name: "global alias", sessionKey: "agent:work:main", rowKey: "global" },
+  ])(
+    "opens model-supported thinking arguments after tab-completing /think ($name)",
+    ({ sessionKey, rowKey }) => {
+      const sessions = createSessionsListResult({
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+      });
+      const session = expectDefined(sessions.sessions[0], "active session");
+      session.key = rowKey;
+      session.thinkingLevels = [
+        { id: "off", label: "off" },
+        { id: "minimal", label: "minimal" },
+        { id: "low", label: "low" },
+        { id: "medium", label: "medium" },
+        { id: "high", label: "high" },
+        { id: "xhigh", label: "xhigh" },
+        { id: "max", label: "max" },
+        { id: "ultra", label: "ultra" },
+      ];
+      const { container } = createReactiveDraftHarness({
+        sessions,
+        sessionKey,
+        selectedSession: session,
+      });
 
-    inputDraft(container, "/think");
-    keydownComposer(container, "Tab");
+      inputDraft(container, "/think");
+      keydownComposer(container, "Tab");
 
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-    expect(
-      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-      ),
-    ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
-  });
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
+      expect(
+        Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
+          (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
+        ),
+      ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+    },
+  );
 
   it("suppresses thinking arguments while the active model is switching", () => {
     const sessions = createSessionsListResult({
@@ -5381,7 +5392,11 @@ describe("chat slash menu accessibility", () => {
       { id: "low", label: "low" },
       { id: "high", label: "high" },
     ];
-    const { container } = createReactiveDraftHarness({ modelSwitching: true, sessions });
+    const { container } = createReactiveDraftHarness({
+      modelSwitching: true,
+      sessions,
+      selectedSession: session,
+    });
 
     inputDraft(container, "/think");
     keydownComposer(container, "Tab");
@@ -5400,7 +5415,10 @@ describe("chat slash menu accessibility", () => {
       { id: "low", label: "low" },
       { id: "high", label: "high" },
     ];
-    const { container, renderCurrent } = createReactiveDraftHarness({ sessions });
+    const { container, renderCurrent } = createReactiveDraftHarness({
+      sessions,
+      selectedSession: session,
+    });
 
     inputDraft(container, "/think");
     keydownComposer(container, "Tab");

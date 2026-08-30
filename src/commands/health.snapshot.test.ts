@@ -586,8 +586,8 @@ describe("collectGatewayHealthSnapshot", () => {
     testStore = {
       global: { updatedAt: Date.now() },
       unknown: { updatedAt: Date.now() },
-      main: { updatedAt: 1000 },
-      foo: { updatedAt: 2000 },
+      "agent:main:main": { updatedAt: 1000 },
+      "agent:main:foo": { updatedAt: 2000 },
     };
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
@@ -602,7 +602,7 @@ describe("collectGatewayHealthSnapshot", () => {
     expect(telegram.configured).toBe(false);
     expect(telegram.probe).toBeUndefined();
     expect(snap.sessions.count).toBe(2);
-    expect(snap.sessions.recent[0]?.key).toBe("foo");
+    expect(snap.sessions.recent[0]?.key).toBe("agent:main:foo");
   });
 
   it("probes telegram getMe + webhook info when configured", async () => {

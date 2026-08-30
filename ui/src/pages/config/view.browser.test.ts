@@ -923,7 +923,7 @@ describe("config view", () => {
       webPush: {
         supported: true,
         permission: "default",
-        subscribed: false,
+        subscription: "missing",
         loading: false,
       },
     });
@@ -950,7 +950,7 @@ describe("config view", () => {
       webPush: {
         supported: true,
         permission: "default",
-        subscribed: false,
+        subscription: "missing",
         loading: false,
       },
     });

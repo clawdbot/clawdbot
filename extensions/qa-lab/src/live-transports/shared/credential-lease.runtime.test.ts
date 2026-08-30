@@ -766,6 +766,7 @@ describe("credential lease runtime", () => {
     await vi.advanceTimersByTimeAsync(55);
     expect(heartbeat.getFailure()).toBeInstanceOf(Error);
     expect(() => heartbeat.throwIfFailed()).toThrow("heartbeat-down");
+    expect((await heartbeat.whenFailed).message).toContain("heartbeat-down");
     await heartbeat.stop();
   });
 

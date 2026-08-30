@@ -1,4 +1,4 @@
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
@@ -8,7 +8,7 @@ import {
 } from "../../agent-bundle-mcp-tools.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
-import { isRuntimeToolAllowed } from "../../tool-policy-match.js";
+import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
@@ -73,17 +73,21 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     !params.attempt.disableTools &&
     !params.isRawModelRun &&
     !params.attempt.forceRestartSafeTools &&
-    !params.attempt.forceCodeModeReconciliationTools
+    params.attempt.codeModeRecovery?.kind !== "inspect"
       ? params.attempt.clientTools
       : undefined;
   // Client functions share the attempt's authority; filter before their names
   // can reserve bundled tools or enter deferred catalogs and provider requests.
-  const clientTools =
-    providedClientTools && effectiveToolsAllow
-      ? providedClientTools.filter((definition) =>
-          isRuntimeToolAllowed(definition.function.name, effectiveToolsAllow),
-        )
-      : providedClientTools;
+  let clientTools = providedClientTools;
+  if (providedClientTools && effectiveToolsAllow) {
+    clientTools = [];
+    if (providedClientTools.length > 0) {
+      const matchesRuntime = createRuntimeToolMatcher(effectiveToolsAllow);
+      clientTools = providedClientTools.filter((definition) =>
+        matchesRuntime(definition.function.name),
+      );
+    }
+  }
   const bundleMetadataSnapshot = params.getCurrentAttemptPluginMetadataSnapshot();
   // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.
   const bundleManifestRegistry =
@@ -98,7 +102,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   };
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
-    !params.attempt.forceCodeModeReconciliationTools &&
+    params.attempt.codeModeRecovery?.kind !== "inspect" &&
     shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.attempt.disableTools || params.isRawModelRun,
@@ -146,7 +150,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   try {
     const bundleLspEnabled =
       !params.attempt.forceRestartSafeTools &&
-      !params.attempt.forceCodeModeReconciliationTools &&
+      params.attempt.codeModeRecovery?.kind !== "inspect" &&
       shouldCreateBundleLspRuntimeForAttempt({
         toolsEnabled,
         disableTools: params.attempt.disableTools || params.isRawModelRun,

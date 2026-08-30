@@ -1,7 +1,6 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { createAbortError, isAbortError } from "../infra/abort-signal.js";
 import type {
   ContextEngineFactory,
   ContextEngineFactoryContext,
@@ -12,6 +11,11 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  inheritRuntimeCompactionDelegate,
+  markRuntimeCompactionDelegate,
+} from "./compaction-watchdog.js";
+import { contextEngineAbortSignal, isContextEngineAbortRejection } from "./context-engine-abort.js";
 import {
   clearPersistedContextEngineQuarantineForProcess,
   listPersistedContextEngineQuarantines,
@@ -40,6 +44,7 @@ type RegisterContextEngineForOwnerOptions = {
 };
 
 type GuardedContextEngineMethodName = Exclude<keyof ContextEngine, "info" | "dispose">;
+type GuardedContextEngineMethod = (...args: never[]) => unknown;
 const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
   "bootstrap maintain ingest ingestBatch afterTurn commitTurn assemble compact prepareSubagentSpawn onSubagentEnded".split(
     " ",
@@ -55,6 +60,22 @@ type ResolvedContextEngineMetadata = {
 };
 
 const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
+
+function inheritCompactionWatchdogOwnership(
+  property: PropertyKey,
+  source: GuardedContextEngineMethod,
+  wrapped: GuardedContextEngineMethod,
+): GuardedContextEngineMethod {
+  if (property !== "compact") {
+    return wrapped;
+  }
+  // SAFETY: the compact property narrows both functions to the ContextEngine compact contract.
+  const compact = source as ContextEngine["compact"];
+  // SAFETY: guarded compact wrappers preserve the source method's single-parameter contract.
+  const wrappedCompact = wrapped as ContextEngine["compact"];
+  return inheritRuntimeCompactionDelegate(compact, wrappedCompact);
+}
+
 function projectContextEngineHostParams(
   engine: ContextEngine,
   methodName: PropertyKey,
@@ -128,29 +149,29 @@ function wrapResolvedContextEngine(
         }
         const methodName = property as GuardedContextEngineMethodName;
         if (!fallback || !getFallbackEngine) {
-          return (params: Record<string, unknown>) =>
+          const invoke = (params: Record<string, unknown>) =>
             method.call(engine, projectContextEngineHostParams(engine, methodName, params));
+          return inheritCompactionWatchdogOwnership(property, method, invoke);
         }
-
-        return async (methodParams: Record<string, unknown>) => {
+        const invokeFallback = async (methodParams: Record<string, unknown>) => {
+          contextEngineAbortSignal(methodParams);
+          return await invokeFallbackContextEngineMethod({
+            getFallbackEngine,
+            methodName,
+            methodParams,
+          });
+        };
+        if (getContextEngineQuarantine(metadata.engineId)) {
+          return methodName === "compact"
+            ? markRuntimeCompactionDelegate(invokeFallback as ContextEngine["compact"]) // SAFETY: compact keeps this parameter contract.
+            : invokeFallback;
+        }
+        const invoke = async (methodParams: Record<string, unknown>) => {
           const abortSignal = contextEngineAbortSignal(methodParams);
-          if (abortSignal?.aborted) {
-            const reason = abortSignal.reason;
-            throw reason instanceof Error
-              ? reason
-              : createAbortError(
-                  typeof reason === "string" && reason
-                    ? reason
-                    : "Context engine operation aborted.",
-                );
-          }
-          const invokeFallback = () =>
-            invokeFallbackContextEngineMethod({ getFallbackEngine, methodName, methodParams });
           if (getContextEngineQuarantine(metadata.engineId)) {
             // Runtime failures downgrade future guarded calls for this process.
-            return await invokeFallback();
+            return await invokeFallback(methodParams);
           }
-
           try {
             return await method.call(
               engine,
@@ -171,11 +192,12 @@ function wrapResolvedContextEngine(
             if (methodName === "compact" || methodName === "prepareSubagentSpawn") {
               throw error;
             }
-            return await invokeFallback().catch(() => {
+            return await invokeFallback(methodParams).catch(() => {
               throw error;
             });
           }
         };
+        return inheritCompactionWatchdogOwnership(property, method, invoke);
       },
     },
   );
@@ -185,7 +207,6 @@ function wrapResolvedContextEngine(
   });
   return wrapped;
 }
-
 // ---------------------------------------------------------------------------
 // Registry (module-level singleton)
 // ---------------------------------------------------------------------------
@@ -506,36 +527,7 @@ const CONTEXT_ENGINE_FALLBACK_RESULTS = {
   ingestBatch: IngestBatchResult;
 };
 
-function contextEngineAbortSignal(methodParams: unknown): AbortSignal | undefined {
-  const signal = (methodParams as { abortSignal?: unknown } | null | undefined)?.abortSignal;
-  return signal && typeof signal === "object" && "aborted" in signal
-    ? (signal as AbortSignal)
-    : undefined;
-}
-
-export function isContextEngineAbortRejection(
-  error: unknown,
-  signal: AbortSignal | undefined,
-): boolean {
-  if (!signal?.aborted) {
-    return false;
-  }
-  if (error === signal.reason || isAbortError(error)) {
-    return true;
-  }
-  const seen = new Set<Error>();
-  for (
-    let current = error;
-    current instanceof Error && !seen.has(current);
-    current = current.cause
-  ) {
-    seen.add(current);
-    if (current.cause === signal.reason) {
-      return true;
-    }
-  }
-  return false;
-}
+export { isContextEngineAbortRejection };
 
 async function invokeFallbackContextEngineMethod(params: {
   getFallbackEngine: () => Promise<ContextEngine>;

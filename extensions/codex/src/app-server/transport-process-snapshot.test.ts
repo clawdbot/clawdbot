@@ -38,11 +38,12 @@ describe("Codex procfs command inspector", () => {
       input: "/opt/codex\0app-server\0--listen\0stdio://\0",
       expected: "/opt/codex app-server --listen stdio://",
     },
-    { input: "", expected: undefined },
-    { input: "\0", expected: undefined },
-    { code: "ENOENT", expected: undefined },
-    { code: "ESRCH", expected: undefined },
-    { code: "EACCES", expected: undefined },
+    { input: "", reason: "unavailable" },
+    { input: "\0", reason: "unavailable" },
+    { code: "ENOENT", reason: "unavailable" },
+    { code: "ESRCH", reason: "unavailable" },
+    { code: "EACCES", reason: "permission" },
+    { code: "ABORT_ERR", reason: "deadline" },
   ])(
     "reads command identity without authorizing absent or unreadable processes: %j",
     async (fixture, ctx) => {
@@ -59,24 +60,37 @@ describe("Codex procfs command inspector", () => {
         return fixture.input!;
       });
 
-      expect(await readCodexAppServerProcessCommand(process.pid, Date.now() + 1_000)).toBe(
-        fixture.expected,
-      );
+      const inspected = readCodexAppServerProcessCommand(process.pid, Date.now() + 1_000);
+      if (fixture.reason) {
+        await expect(inspected).rejects.toMatchObject({ reason: fixture.reason });
+        if (fixture.reason !== "permission") {
+          await expect(inspected).rejects.not.toThrow("permissions");
+        }
+        if (fixture.reason === "deadline") {
+          await expect(inspected).rejects.toThrow("deadline");
+        }
+      } else {
+        await expect(inspected).resolves.toBe(fixture.expected);
+      }
       procfs.readFile.mockClear();
-      expect(await readCodexAppServerProcessCommand(process.pid, Date.now() - 1)).toBeUndefined();
+      await expect(
+        readCodexAppServerProcessCommand(process.pid, Date.now() - 1),
+      ).rejects.toMatchObject({ reason: "deadline" });
       expect(procfs.readFile).not.toHaveBeenCalled();
     },
   );
 });
 
-describe.skipIf(process.platform !== "linux")("Codex procfs process inspector", () => {
+describe("Codex procfs process inspector", () => {
   it.for(["ENOENT", "ESRCH", "EACCES"] as const)(
     "distinguishes a vanished neighbor from unreadable state: %s",
     async (code, ctx) => {
       ctx.onTestFinished(() => {
         procfs.readFile.mockReset();
         procfs.readdir.mockReset();
+        vi.restoreAllMocks();
       });
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const bootId = "00000000-0000-0000-0000-000000000001";
       const neighborPid = process.pid + 1;
       procfs.readdir.mockResolvedValue([String(process.pid), String(neighborPid)]);
@@ -93,20 +107,20 @@ describe.skipIf(process.platform !== "linux")("Codex procfs process inspector", 
         }
         throw new Error(`Unexpected procfs read: ${file}`);
       });
-      const snapshot = await readCodexAppServerProcessSnapshot();
-      expect(snapshot).toEqual(
-        code === "EACCES"
-          ? undefined
-          : [
-              {
-                pid: process.pid,
-                ppid: process.ppid,
-                pgid: process.pid,
-                state: "S",
-                startedAt: `${bootId}:12345`,
-              },
-            ],
-      );
+      const snapshot = readCodexAppServerProcessSnapshot();
+      if (code === "EACCES") {
+        await expect(snapshot).rejects.toMatchObject({ reason: "permission" });
+      } else {
+        await expect(snapshot).resolves.toEqual([
+          {
+            pid: process.pid,
+            ppid: process.ppid,
+            pgid: process.pid,
+            state: "S",
+            startedAt: `${bootId}:12345`,
+          },
+        ]);
+      }
     },
   );
 });
@@ -114,6 +128,36 @@ describe.skipIf(process.platform !== "linux")("Codex procfs process inspector", 
 describe.skipIf(process.platform === "win32" || process.platform === "linux")(
   "Codex POSIX process inspector",
   () => {
+    it.for(["gone", "missing observer", "malformed"])(
+      "requires complete selected ps evidence when the target is %s",
+      async (mode, ctx) => {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-ps-selected-"));
+        ctx.onTestFinished(() => fs.rm(tempDir, { recursive: true, force: true }));
+        await fs.writeFile(
+          path.join(tempDir, "ps"),
+          `#!/usr/bin/env node
+const selected = process.argv[process.argv.indexOf("-p") + 1]?.split(",");
+if (selected?.includes("${process.pid}") && ${JSON.stringify(mode)} !== "missing observer") {
+  console.log("${process.pid} ${process.ppid} ${process.pid} S Sat Aug 29 10:00:00 2026");
+}
+if (${JSON.stringify(mode)} === "malformed") console.log("unusable selected process");
+`,
+          { mode: 0o755 },
+        );
+        await withEnvAsync(
+          { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
+          async () => {
+            const inspected = readCodexAppServerProcessSnapshot(undefined, [process.pid + 1]);
+            if (mode === "gone") {
+              await expect(inspected).resolves.toMatchObject([{ pid: process.pid }]);
+            } else {
+              await expect(inspected).rejects.toMatchObject({ reason: "unavailable" });
+            }
+          },
+        );
+      },
+    );
+
     it.for([
       ["snapshot", "unavailable"],
       ["snapshot", "hung"],
@@ -158,12 +202,14 @@ ${mode === "unavailable" ? "process.exit(1);" : "setInterval(() => {}, 1000);"}
             const budgetMs = 1_000;
             const result =
               kind === "command"
-                ? await readCodexAppServerProcessCommand(process.pid, startedAt + budgetMs)
-                : await readCodexAppServerProcessSnapshot(startedAt + budgetMs);
+                ? readCodexAppServerProcessCommand(process.pid, startedAt + budgetMs)
+                : readCodexAppServerProcessSnapshot(startedAt + budgetMs);
+            await expect(result).rejects.toMatchObject({
+              reason: mode === "hung" ? "deadline" : "unavailable",
+            });
             const pid = Number(await fs.readFile(pidPath, "utf8"));
             inspectorPid = pid;
             expect(pid).toBeGreaterThan(0);
-            expect(result).toBeUndefined();
             // Allow scheduler jitter, but not the inspector's unbounded event loop.
             expect(Date.now() - startedAt).toBeLessThan(budgetMs + 500);
             await expect.poll(() => isPidAlive(pid)).toBe(false);

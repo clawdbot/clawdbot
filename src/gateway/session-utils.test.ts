@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
+import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
@@ -19,6 +21,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { CronJob } from "../cron/types.js";
+import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
+import * as execApprovalsStore from "../infra/exec-approvals-store.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -3693,6 +3697,155 @@ describe("gateway session utils", () => {
       const agents = listAgentsForGateway({}).agents;
       expect(agents.map((agent) => agent.id)).toEqual(["main"]);
       expect(agents[0]).not.toHaveProperty("kind");
+    });
+  });
+
+  test.each([
+    [undefined, undefined, "full"],
+    [{ mode: "deny" }, undefined, "read-only"],
+    [{ mode: "ask" }, undefined, "guarded"],
+    [{ mode: "auto" }, undefined, "workspace"],
+    [{ mode: "full" }, undefined, "full"],
+    [{ mode: "allowlist" }, undefined, undefined],
+    [{ mode: "full" }, { mode: "ask" }, "guarded"],
+    [{ mode: "ask" }, { mode: "auto" }, "workspace"],
+    [{ mode: "auto" }, { mode: "allowlist" }, undefined],
+    [{ mode: "allowlist" }, { mode: "full" }, "full"],
+    [{ security: "deny", ask: "off" }, undefined, "read-only"],
+    [{ security: "allowlist", ask: "on-miss" }, undefined, "guarded"],
+    [{ security: "full", ask: "off" }, undefined, "full"],
+    [{ security: "allowlist", ask: "off" }, undefined, undefined],
+    [{ security: "full", ask: "on-miss" }, undefined, undefined],
+    [{ security: "deny", ask: "on-miss" }, undefined, undefined],
+    [{ security: "deny", ask: "always" }, undefined, undefined],
+    [{ security: "allowlist", ask: "always" }, undefined, undefined],
+    [{ security: "full", ask: "always" }, undefined, undefined],
+    [{ mode: "auto" }, { ask: "on-miss" }, "guarded"],
+    [{ mode: "full" }, { security: "deny" }, "read-only"],
+    [{ mode: "ask" }, { ask: "always" }, undefined],
+    [{ mode: "ask" }, { host: "sandbox" }, "guarded"],
+  ] as const)(
+    "listAgentsForGateway labels global %j plus agent %j as %s",
+    async (globalExec, agentExec, expected) => {
+      await withStateDirEnv("openclaw-agent-permission-label-", async () => {
+        const cfg: OpenClawConfig = {
+          tools: { exec: globalExec },
+          agents: { entries: { main: { tools: { exec: agentExec } } } },
+        };
+        const original = structuredClone(cfg);
+        const agent = listAgentsForGateway(cfg).agents.find((entry) => entry.id === "main");
+        if (expected === undefined) {
+          expect(agent).not.toHaveProperty("defaultPermissionMode");
+        } else {
+          expect(agent).toHaveProperty("defaultPermissionMode", expected);
+          const resolved = resolveExecDefaults({ cfg, agentId: "main" });
+          expect(agent?.defaultPermissionMode).toBe(SESSION_PERMISSION_BY_EXEC_MODE[resolved.mode]);
+        }
+        expect(cfg).toEqual(original);
+      });
+    },
+  );
+
+  test.each<{
+    name: string;
+    cfg: OpenClawConfig;
+    approvals: ExecApprovalsFile;
+    expected: SessionEntry["permissionMode"];
+  }>([
+    {
+      name: "auto tightened by approvals",
+      cfg: { tools: { exec: { mode: "auto" } } },
+      approvals: { version: 1, defaults: { security: "deny", ask: "off" } },
+      expected: undefined,
+    },
+    {
+      name: "full tightened by approvals",
+      cfg: { tools: { exec: { mode: "full" } } },
+      approvals: { version: 1, defaults: { security: "deny", ask: "off" } },
+      expected: "read-only",
+    },
+    {
+      name: "full tightened by agent approvals",
+      cfg: { tools: { exec: { mode: "full" } } },
+      approvals: { version: 1, agents: { main: { security: "allowlist", ask: "on-miss" } } },
+      expected: "guarded",
+    },
+    {
+      name: "wildcard approvals always asking",
+      cfg: { tools: { exec: { mode: "ask" } } },
+      approvals: { version: 1, agents: { "*": { ask: "always" } } },
+      expected: undefined,
+    },
+    ...(["all", "non-main"] as const).flatMap((mode) => [
+      {
+        name: `global sandbox ${mode}`,
+        cfg: { agents: { defaults: { sandbox: { mode } } } },
+        approvals: { version: 1 as const },
+        expected: undefined,
+      },
+      {
+        name: `agent sandbox ${mode}`,
+        cfg: { agents: { entries: { main: { sandbox: { mode } } } } },
+        approvals: { version: 1 as const },
+        expected: undefined,
+      },
+    ]),
+    {
+      name: "agent disabling global sandbox",
+      cfg: {
+        tools: { exec: { mode: "ask" } },
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          entries: { main: { sandbox: { mode: "off" } } },
+        },
+      },
+      approvals: { version: 1 },
+      expected: "guarded",
+    },
+  ])("listAgentsForGateway never overstates $name", async ({ cfg, approvals, expected }) => {
+    await withStateDirEnv("openclaw-agent-permission-floor-", async () => {
+      execApprovalsStore.saveExecApprovals(approvals);
+      const agent = listAgentsForGateway(cfg).agents.find((entry) => entry.id === "main");
+      expect(agent).toBeDefined();
+      if (expected === undefined) {
+        expect(agent).not.toHaveProperty("defaultPermissionMode");
+      } else {
+        expect(agent).toHaveProperty("defaultPermissionMode", expected);
+      }
+      for (const sessionKey of ["agent:main:main", "agent:main:other"]) {
+        const resolved = resolveExecDefaults({ cfg, agentId: "main", sessionKey });
+        expect([undefined, SESSION_PERMISSION_BY_EXEC_MODE[resolved.mode]]).toContain(
+          agent?.defaultPermissionMode,
+        );
+      }
+    });
+  });
+
+  test("listAgentsForGateway shares one approvals read across agent permission labels", async () => {
+    await withStateDirEnv("openclaw-agent-permission-roster-", async () => {
+      const cfg: OpenClawConfig = {
+        tools: { exec: { mode: "ask" } },
+        agents: {
+          entries: {
+            guarded: {},
+            restricted: { tools: { exec: { mode: "allowlist" } } },
+            workspace: { tools: { exec: { mode: "auto" } } },
+          },
+        },
+      };
+      const loadApprovals = vi.spyOn(execApprovalsStore, "loadExecApprovals");
+      onTestFinished(() => loadApprovals.mockRestore());
+      expect(
+        listAgentsForGateway(cfg).agents.map(({ id, defaultPermissionMode }) => [
+          id,
+          defaultPermissionMode,
+        ]),
+      ).toEqual([
+        ["guarded", "guarded"],
+        ["restricted", undefined],
+        ["workspace", "workspace"],
+      ]);
+      expect(loadApprovals).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -16,7 +16,7 @@ import { renderChatComposer } from "./components/chat-composer.ts";
 import * as realtimeTalkInput from "./realtime-talk-input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
-const openRealtimeTalkInputMock = vi.fn();
+const openMicrophoneMock = vi.fn();
 
 describe("suggestion composer", () => {
   it("labels the send action as Suggest and emits ephemeral typing state", () => {
@@ -114,15 +114,15 @@ beforeEach(() => {
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
     discoverRealtimeTalkInputsMock,
   );
-  vi.spyOn(realtimeTalkInput, "openRealtimeTalkInput").mockImplementation(
-    openRealtimeTalkInputMock,
+  vi.spyOn(realtimeTalkInput.RealtimeTalkInputController.prototype, "open").mockImplementation(
+    openMicrophoneMock,
   );
 });
 
 afterEach(async () => {
   await resetComposerFixture(() => {
     discoverRealtimeTalkInputsMock.mockReset();
-    openRealtimeTalkInputMock.mockReset();
+    openMicrophoneMock.mockReset();
   });
 });
 
@@ -663,7 +663,7 @@ describe("renderChatComposer controls", () => {
 
   it("keeps the dictation button stable through hold progress and latch", async () => {
     vi.useFakeTimers();
-    openRealtimeTalkInputMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
+    openMicrophoneMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
     vi.stubGlobal("AudioContext", DictationAudioContext);
     const request = vi.fn(async (method: string) => {
       if (method === "talk.catalog") {
@@ -777,7 +777,7 @@ describe("renderChatComposer controls", () => {
 
   it("shows an actionable error underlap and returns the microphone to idle on startup failure", async () => {
     vi.useFakeTimers();
-    openRealtimeTalkInputMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
+    openMicrophoneMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
     const request = vi.fn(async (method: string) => {
       if (method === "talk.catalog") {
         return { realtime: { ready: true }, transcription: { ready: true } };

@@ -2346,6 +2346,8 @@ describe("createBackupArchive", () => {
         const outputDir = state.path("backups");
         const transientPaths = [
           state.statePath("memory", "main.sqlite.reindex-lock.sqlite"),
+          state.statePath("memory", "main.sqlite.generation-writer.sqlite"),
+          state.statePath("memory", "main.sqlite.generation-lock.sqlite"),
           state.statePath("memory", "main.sqlite.tmp-11111111-2222-3333-4444-555555555555"),
           state.statePath("memory", "main.sqlite.backup-66666666-7777-8888-9999-aaaaaaaaaaaa"),
           state.statePath(

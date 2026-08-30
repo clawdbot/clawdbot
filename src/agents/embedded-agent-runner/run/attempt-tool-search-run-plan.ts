@@ -1,8 +1,8 @@
 /**
  * Builds tool-search execution plans from allowlists and available controls.
  */
-import { getPluginToolMeta } from "../../../plugins/tools.js";
-import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { createToolPolicyMatcher } from "../../tool-policy-match.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
 import {
   collectUniqueCatalogToolNames,
@@ -36,14 +36,16 @@ function collectExplicitlyAllowedClientToolNames(params: {
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
   explicitAllowlistSources: Array<{ entries: string[] }>;
 }): string[] {
-  return (params.clientTools ?? [])
+  const names = (params.clientTools ?? [])
     .map((tool) => tool.function?.name)
-    .filter((name): name is string => Boolean(name?.trim()))
-    .filter((name) =>
-      params.explicitAllowlistSources.some((source) =>
-        isToolAllowedByPolicyName(name, { allow: source.entries }),
-      ),
-    );
+    .filter((name): name is string => Boolean(name?.trim()));
+  if (names.length === 0) {
+    return [];
+  }
+  const matchers = params.explicitAllowlistSources.map((source) =>
+    createToolPolicyMatcher({ allow: source.entries }),
+  );
+  return names.filter((name) => matchers.some((matches) => matches(name)));
 }
 
 function collectOpenClawCapabilityToolNames(
