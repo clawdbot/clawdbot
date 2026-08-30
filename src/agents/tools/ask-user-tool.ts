@@ -21,6 +21,7 @@ import {
   readQuestionErrorReason,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
+import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
 
 const ASK_USER_RPC_GRACE_MS = 10_000;
 const ASK_USER_PROMPT_RECHECK_MS = 50;
@@ -340,6 +341,19 @@ export function settleAskUserPromptDelivery(questionId: string, error?: unknown)
   );
 }
 
+/**
+ * Settles the prompt wait from the same run that published the prompt.
+ *
+ * Detached on purpose: the waiter below races prompt delivery against the answer,
+ * so this must not block the tool call that is registering that answer.
+ */
+function settleAfterOwnPromptDelivery(questionId: string, delivery: Promise<void>): void {
+  void delivery.then(
+    () => settleAskUserPromptDelivery(questionId),
+    (error: unknown) => settleAskUserPromptDelivery(questionId, error),
+  );
+}
+
 /** Rechecks the Gateway immediately before exposing an answerable prompt. */
 export async function isAskUserPromptPending(
   questionId: string,
@@ -444,6 +458,8 @@ export function beginAskUserPromptDelivery(params: {
   agentId?: string;
   questions: QuestionRequestQuestion[];
   timeoutSeconds: number;
+  /** Publishes the prompt when no harness reserved one for this call. */
+  deliverPrompt?: (questionId: string) => Promise<void>;
 }) {
   const questionId = buildAskUserQuestionId(
     params.toolCallId,
@@ -473,13 +489,19 @@ export function beginAskUserPromptDelivery(params: {
   askUserQuestions.set(questionId, state);
   return {
     questionId,
-    hasSubscriber: reserved !== undefined,
+    hasSubscriber: reserved !== undefined || params.deliverPrompt !== undefined,
     markReady() {
       if (reserved) {
         markAskUserPromptReady(questionId, params.questions);
-      } else {
-        transitionAskUserQuestion(state, { kind: "answerable" });
+        return;
       }
+      if (params.deliverPrompt) {
+        // Nothing reserved this prompt, so this run publishes it and settles its own wait.
+        markAskUserPromptReady(questionId, params.questions);
+        settleAfterOwnPromptDelivery(questionId, params.deliverPrompt(questionId));
+        return;
+      }
+      transitionAskUserQuestion(state, { kind: "answerable" });
     },
     waitForDelivery(signal?: AbortSignal) {
       return waitForPromptDelivery(state, signal);
@@ -510,6 +532,8 @@ export function createAskUserTool(params: {
   sessionKey?: string;
   runId?: string;
   gatewayCall?: AskUserGatewayCall;
+  /** How this run shows a prompt when its harness does not reserve one. */
+  questionPrompt?: QuestionPromptDelivery;
 }): AnyAgentTool {
   const gatewayCall: AskUserGatewayCall = params.gatewayCall ?? callGatewayTool;
   return {
@@ -543,7 +567,11 @@ export function createAskUserTool(params: {
       }
 
       const timeoutMs = normalized.timeoutSeconds * 1_000;
-      const deliverPrompt = reserved?.phase.kind === "reserved";
+      // A harness that runs tools through the embedded tool lifecycle reserves the
+      // prompt before this call. One that dispatches tools itself reserves nothing,
+      // so the tool publishes its own prompt rather than blocking on a silent wait.
+      const publishOwnPrompt = reserved ? undefined : params.questionPrompt?.send;
+      const deliverPrompt = reserved?.phase.kind === "reserved" || publishOwnPrompt !== undefined;
       const state: AskUserQuestionState =
         reserved ??
         ({
@@ -656,6 +684,17 @@ export function createAskUserTool(params: {
           // user already answered, so a late prompt would be stale and the race
           // below could stall on a delivery that never happens.
           markAskUserPromptReady(questionId, normalized.questions);
+          if (publishOwnPrompt) {
+            settleAfterOwnPromptDelivery(
+              questionId,
+              sendQuestionToolPrompt({
+                toolName: "ask_user",
+                questionId,
+                questions: normalized.questions,
+                send: publishOwnPrompt,
+              }),
+            );
+          }
           const promptDeliveryPromise = waitForPromptDelivery(state, signal);
           const first = await Promise.race([
             promptDeliveryPromise.then((result) => ({

@@ -485,6 +485,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             runId: options?.runId,
+            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
           }),
         ]
       : []),
@@ -499,6 +500,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentId: sessionAgentId,
             sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             runId: options?.runId,
+            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
           }),
         ]
       : []),

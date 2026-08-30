@@ -67,6 +67,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 let tempDir: string;
 const hostCapabilityClosers: Array<() => void> = [];
 
+type OpenClawCodingToolsOptionsForTest = NonNullable<
+  Parameters<NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>>[0]
+>;
+
 function setOpenClawCodingToolsFactoryForTests(
   factory: NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>,
 ): void {
@@ -224,6 +228,29 @@ describe("Codex app-server dynamic tool build", () => {
     );
 
     expect(onYieldDetected).toHaveBeenCalledWith("Research started; results will follow.");
+  });
+
+  it("hands the question tools this run's own way to show a prompt", async () => {
+    // Codex dispatches dynamic tools itself, so no tool-start handler reserves the
+    // prompt for a blocking question. Without this the question is never shown and
+    // the turn waits out its full timeout.
+    const workspaceDir = path.join(tempDir, "question-prompt-workspace");
+    const params = createParams(path.join(tempDir, "question-prompt-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.messageChannel = "telegram";
+    const onToolResult = vi.fn();
+    params.onToolResult = onToolResult;
+    let capturedQuestionPrompt: OpenClawCodingToolsOptionsForTest["questionPrompt"];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      capturedQuestionPrompt = options?.questionPrompt;
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(capturedQuestionPrompt?.send).toBe(onToolResult);
+    expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
   });
 
   it("binds a resolver-backed constructed tool surface exactly once", async () => {
