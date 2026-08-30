@@ -11,7 +11,6 @@ import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tools.
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import {
-  filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "./tool-schema-projection.js";
@@ -161,8 +160,7 @@ function buildEffectiveToolInventoryEntries(
               summarizeEffectiveToolDescription(tool),
             rawDescription:
               normalizeOptionalString(metadata?.description) ??
-              resolveEffectiveToolRawDescription(tool) ??
-              summarizeEffectiveToolDescription(tool),
+              resolveEffectiveToolRawDescription(tool),
             ...(metadata?.risk ? { risk: metadata.risk } : {}),
             ...(metadata?.tags ? { tags: metadata.tags } : {}),
           },
@@ -188,14 +186,9 @@ export function buildRuntimeCompatibleToolInventory(params: {
   notices: EffectiveToolInventoryNotice[];
 } {
   const rawToolsByName = buildReadableToolsByName(params.tools);
-  const preNormalizationProjection = filterProviderNormalizableTools(params.tools);
-  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [
-    ...preNormalizationProjection.diagnostics,
-  ];
+  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const normalizedTools = normalizeAgentRuntimeTools({
-    // Schema normalization can replace tool definitions, so hand the runtime
-    // policy a mutable copy while keeping this inventory API readonly.
-    tools: [...preNormalizationProjection.tools],
+    tools: params.tools,
     provider: params.modelProvider ?? "",
     config: params.cfg,
     workspaceDir: params.workspaceDir,

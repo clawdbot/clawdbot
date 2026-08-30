@@ -8,7 +8,6 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import {
-  filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "./tool-schema-projection.js";
@@ -80,12 +79,9 @@ export function buildRuntimeCompatibleMcpToolInventory(params: {
   entries: EffectiveToolInventoryEntry[];
   notices: EffectiveToolInventoryNotice[];
 } {
-  const preNormalizationProjection = filterProviderNormalizableTools(params.tools);
-  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [
-    ...preNormalizationProjection.diagnostics,
-  ];
+  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const normalizedTools = normalizeAgentRuntimeTools({
-    tools: [...preNormalizationProjection.tools],
+    tools: params.tools,
     provider: params.modelProvider ?? "",
     config: params.cfg,
     workspaceDir: params.workspaceDir,

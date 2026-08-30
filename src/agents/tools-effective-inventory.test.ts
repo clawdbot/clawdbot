@@ -66,6 +66,7 @@ vi.mock("./agent-tools.js", () => ({
 }));
 
 vi.mock("../plugins/tools.js", () => ({
+  copyPluginToolMeta: vi.fn(),
   getPluginToolMeta: (tool: { name: string }) => effectiveInventoryState.pluginMeta[tool.name],
   buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
     JSON.stringify([pluginId, toolName]),
@@ -80,9 +81,10 @@ vi.mock("./agent-tools.policy.js", () => ({
   resolveEffectiveToolPolicy: () => effectiveInventoryState.effectivePolicy,
 }));
 
-vi.mock("./runtime-plan/tools.js", () => ({
-  normalizeAgentRuntimeTools: (options: { tools: AnyAgentTool[] }) =>
+vi.mock("./embedded-agent-runner/tool-schema-runtime.js", () => ({
+  normalizeProviderToolSchemas: (options: { tools: AnyAgentTool[] }) =>
     effectiveInventoryState.normalizeToolsMock(options),
+  logProviderToolSchemaDiagnostics: vi.fn(),
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
