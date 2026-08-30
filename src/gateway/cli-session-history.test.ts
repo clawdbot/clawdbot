@@ -1968,19 +1968,55 @@ describe("harness rows inside a CLI turn", () => {
       .join("\n");
   }
 
-  async function importTurn(lines: string): Promise<unknown[]> {
+  const boundEntry = () => ({
+    sessionId: "openclaw-session",
+    updatedAt: Date.now(),
+    cliSessionBindings: { "claude-cli": { sessionId: NATIVE_SESSION_ID } },
+  });
+
+  async function withTurnFixture<T>(
+    lines: string,
+    read: (homeDir: string) => Promise<T>,
+  ): Promise<T> {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-turn-"));
     const homeDir = path.join(root, "home");
     const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(path.join(projectsDir, `${NATIVE_SESSION_ID}.jsonl`), lines, "utf-8");
     try {
-      return await withEnvAsync({ HOME: homeDir }, async () =>
-        readClaudeCliSessionMessages({ cliSessionId: NATIVE_SESSION_ID, homeDir }),
-      );
+      return await withEnvAsync({ HOME: homeDir }, async () => await read(homeDir));
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  }
+
+  /** Synchronous decoder: every line is parsed on the loop, whatever its size. */
+  async function importTurn(lines: string): Promise<unknown[]> {
+    return await withTurnFixture(lines, async (homeDir) =>
+      readClaudeCliSessionMessages({ cliSessionId: NATIVE_SESSION_ID, homeDir }),
+    );
+  }
+
+  /** Async snapshot: lines past 1 MiB go through the bounded worker projection. */
+  async function importTurnAsync(lines: string): Promise<unknown[]> {
+    return await withTurnFixture(lines, async (homeDir) =>
+      readChatHistoryCliSessionImportSnapshot({
+        entry: boundEntry(),
+        provider: "claude-cli",
+        localMessages: [],
+        homeDir,
+      }),
+    );
+  }
+
+  /** Drives the production resolver, not the merge helper, over one import. */
+  function resolveAgainstAggregate(importedMessages: unknown[]) {
+    return resolveChatHistoryWithCliSessionImports({
+      entry: boundEntry(),
+      provider: "claude-cli",
+      localMessages: localAggregate(),
+      preparedImportedMessages: importedMessages,
+    });
   }
 
   function localAggregate(): Record<string, unknown>[] {
@@ -2000,6 +2036,22 @@ describe("harness rows inside a CLI turn", () => {
 
   function countAggregates(messages: unknown[]): number {
     return messages.filter((message) => readRecord(message).api === "cli").length;
+  }
+
+  function assistantTexts(messages: unknown[]): string[] {
+    return messages.flatMap((message) => {
+      const record = readRecord(message);
+      if (record.role !== "assistant") {
+        return [];
+      }
+      const content = Array.isArray(record.content) ? record.content : [];
+      return content.flatMap((block) => {
+        const blockRecord = readRecord(block);
+        return blockRecord.type === "text" && typeof blockRecord.text === "string"
+          ? [blockRecord.text]
+          : [];
+      });
+    });
   }
 
   it("keeps a skill instruction row inside the turn it belongs to", async () => {
@@ -2046,6 +2098,71 @@ describe("harness rows inside a CLI turn", () => {
     // A summary really does end the turn, so no turn covers the aggregate and
     // it survives as the durable fallback.
     expect(countAggregates(merged)).toBe(1);
+  });
+
+  // The async snapshot routes any JSONL line past 1 MiB through a bounded
+  // worker projection instead of the synchronous decoder. That projection
+  // rebuilds the entry from a fixed field list, so the turn-boundary facts the
+  // grouping reads have to survive it: a harness row that is dropped on one
+  // path and kept on the other would split the turn on that path alone.
+  const OVERSIZED_TEXT = "s".repeat(1024 * 1024 + 1);
+
+  function expectOversizedMidTurnRow(lines: string): void {
+    const midTurnRow = lines.split("\n")[3] ?? "";
+    expect(midTurnRow.length).toBeGreaterThan(1024 * 1024);
+  }
+
+  it("projects an oversized skill instruction row exactly as the sync reader does", async () => {
+    const lines = turnLines({
+      uuid: "u-2",
+      timestamp: at(3000),
+      type: "user",
+      isMeta: true,
+      sourceToolUseID: "toolu_1",
+      message: { role: "user", content: [{ type: "text", text: OVERSIZED_TEXT }] },
+    });
+    expectOversizedMidTurnRow(lines);
+
+    const [asyncMessages, syncMessages] = await Promise.all([
+      importTurnAsync(lines),
+      importTurn(lines),
+    ]);
+
+    // `isMeta` survives the bounded projection and still drops the row, so the
+    // two readers agree message for message.
+    expect(asyncMessages).toEqual(syncMessages);
+
+    const resolved = resolveAgainstAggregate(asyncMessages);
+    expect(resolved.imported).toBe(true);
+    expect(countAggregates(resolved.messages)).toBe(0);
+    expect(assistantTexts(resolved.messages)).toEqual(["part one", "part two"]);
+  });
+
+  it("keeps an oversized compaction summary a turn boundary through the async projection", async () => {
+    const lines = turnLines({
+      uuid: "u-2",
+      timestamp: at(3000),
+      type: "user",
+      isCompactSummary: true,
+      message: { role: "user", content: [{ type: "text", text: OVERSIZED_TEXT }] },
+    });
+    expectOversizedMidTurnRow(lines);
+
+    const asyncMessages = await importTurnAsync(lines);
+
+    // The summary is retained as a bounded placeholder, not as its megabyte of
+    // text, and it still ends the turn.
+    const summaries = asyncMessages
+      .map(readRecord)
+      .filter(
+        (message) => typeof message.content === "string" && message.content.includes("1 MiB"),
+      );
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.role).toBe("user");
+    expect(JSON.stringify(asyncMessages)).not.toContain(OVERSIZED_TEXT);
+
+    const resolved = resolveAgainstAggregate(asyncMessages);
+    expect(countAggregates(resolved.messages)).toBe(1);
   });
 });
 
