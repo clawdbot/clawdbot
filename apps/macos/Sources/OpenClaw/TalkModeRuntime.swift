@@ -51,6 +51,9 @@ actor TalkModeRuntime {
     }
 
     private var recognizer: SFSpeechRecognizer?
+    /// Reused across sessions so each utterance does not open a new
+    /// `localspeechrecognition` connection and asset subscription.
+    private var recognizerCache = SpeechRecognizerCache()
     private var audioEngine: AVAudioEngine?
     private var audioInputObserver: AudioInputDeviceObserver?
     private var activeInputResolution: AudioInputDeviceResolution?
@@ -319,9 +322,7 @@ actor TalkModeRuntime {
                 Locale.autoupdatingCurrent.identifier,
             ],
             supportedLocaleIDs: supportedLocaleIDs)
-        let recognizer = localeID
-            .map { SFSpeechRecognizer(locale: Locale(identifier: $0)) }
-            ?? SFSpeechRecognizer()
+        let recognizer = self.recognizerCache.recognizer(localeID: localeID)
         guard let recognizer, recognizer.isAvailable else {
             self.logger.error("talk recognizer unavailable")
             return false

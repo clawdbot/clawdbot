@@ -27,6 +27,9 @@ actor VoiceWakeRuntime {
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.runtime")
 
     private var recognizer: SFSpeechRecognizer?
+    /// Reused across restarts so each restart does not open a new
+    /// `localspeechrecognition` connection and asset subscription.
+    private var recognizerCache = SpeechRecognizerCache()
     // Lazily created on start to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth
     // headphones into the low-quality headset profile even if Voice Wake is disabled.
     private var audioEngine: AVAudioEngine?
@@ -280,8 +283,7 @@ actor VoiceWakeRuntime {
     }
 
     private func configureSession(localeID: String?) {
-        let locale = localeID.flatMap { Locale(identifier: $0) } ?? Locale(identifier: Locale.current.identifier)
-        self.recognizer = SFSpeechRecognizer(locale: locale)
+        self.recognizer = self.recognizerCache.recognizer(localeID: localeID)
         self.recognizer?.defaultTaskHint = .dictation
     }
 
