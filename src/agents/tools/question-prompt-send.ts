@@ -59,7 +59,10 @@ export async function sendQuestionToolPrompt(params: {
   await send(
     buildAgentHarnessQuestionPromptPayload({
       questionId,
-      questions: questions.map(({ questionId: id, ...question }) => ({ ...question, id })),
+      // Rest destructuring already allocates the copy; name the answer key on it.
+      questions: questions.map(({ questionId: id, ...question }) =>
+        Object.assign(question, { id }),
+      ),
       options: { intro: "Question for you:" },
     }),
   );
