@@ -180,17 +180,16 @@ Mount the gateway state **as a directory**, never as a single file. The repo
 # - "./openclaw.json:/home/node/.openclaw/openclaw.json"
 ```
 
-A Docker file bind attaches the mount-time inode, not the path name. OpenClaw
-never rewrites `openclaw.json` in place: it writes a sibling temp file and
-renames it over the target, and its permission-error fallback removes and
-recreates the file instead. Both paths publish a new inode, so a file-bound
-container keeps reading the old one while the host path points at the new
-one — config edits look like a no-op.
+A single-file bind follows the file the host path pointed at when the container
+started, not the path itself. OpenClaw never edits `openclaw.json` in place:
+every config write publishes a replacement file. So the first host-side save
+leaves the container reading the file it was bound to while the host path
+already points at the new one, and further edits look like a no-op inside the
+container.
 
-Do not treat a specific Docker errno or `openclaw doctor` as the signal. A
-failed rename can still save through that fallback, and doctor's config-drift
-checks cover service and MCP configuration, not a bind-mounted
-`openclaw.json`.
+Nothing reports this. The host-side save succeeds, and `openclaw doctor` checks
+service and MCP configuration drift, not whether a bind-mounted `openclaw.json`
+still resolves to the file the host is writing.
 
 Fix: keep the directory mount from Compose. Edit `openclaw.json` on the host
 inside that directory.
