@@ -239,7 +239,7 @@ export function resolveSessionPendingInputAppend(
             "in",
             owner.sources.map((source) => source.idempotencyKey),
           ),
-      ).rows.map((row) => [row.idempotency_key, row]),
+      ).rows.map((sourceRow) => [sourceRow.idempotency_key, sourceRow]),
     );
     const sources = owner.sources.map((source) => {
       const accepted = acceptedByKey.get(source.idempotencyKey);

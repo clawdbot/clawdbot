@@ -107,7 +107,7 @@ export function readChatInputRunIds(state: ChatState): string[] {
       runIds.filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS)),
     ),
   ]
-    .sort()
+    .toSorted()
     .slice(0, CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS);
 }
 

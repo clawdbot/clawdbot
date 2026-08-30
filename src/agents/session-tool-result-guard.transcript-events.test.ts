@@ -240,9 +240,9 @@ describe("guardSessionManager transcript updates", () => {
       ).toHaveLength(1);
       expect(updates).toEqual([]);
       expect(markRuntimePersisted).toHaveBeenCalledTimes(1);
-      expect(markRuntimePersisted).toHaveBeenCalledWith(
-        expect.objectContaining({ idempotencyKey: "canonical-run:user" }),
-      );
+      expect(markRuntimePersisted.mock.calls[0]?.[0]).toMatchObject({
+        idempotencyKey: "canonical-run:user",
+      });
     },
   );
 
@@ -304,9 +304,11 @@ describe("guardSessionManager transcript updates", () => {
 
     guarded.appendMessage(runtimeMessage as Parameters<typeof guarded.appendMessage>[0]);
 
-    expect(markRuntimePersisted).toHaveBeenCalledWith(
-      expect.objectContaining({ display: false, role: "user" }),
-    );
+    expect(markRuntimePersisted).toHaveBeenCalledTimes(1);
+    expect(markRuntimePersisted.mock.calls[0]?.[0]).toMatchObject({
+      display: false,
+      role: "user",
+    });
   });
 
   it("does not hide ordinary messages that mention memory flushes", () => {
