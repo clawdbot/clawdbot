@@ -1,4 +1,5 @@
 import { markReplyPayloadForSourceSuppressionDelivery } from "../../../auto-reply/reply-payload.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { appendAssistantMirrorMessageByIdentity } from "../../../plugin-sdk/session-transcript-runtime.js";
 import { resolveSettledTurnFinalizationText } from "../../harness/settled-turn-finalization-result.js";
@@ -379,7 +380,13 @@ async function persistSettledToolFallbackTranscript(input: {
   sessionId: string;
 }): Promise<string | undefined> {
   const sessionKey = input.attempt.sessionTarget?.sessionKey ?? input.attempt.sessionKey;
+  const hasWriterFence =
+    input.attempt.sessionTarget?.expectedLifecycleRevision !== undefined ||
+    input.attempt.sessionTarget?.expectedWriterRunId !== undefined;
   if (!sessionKey) {
+    if (hasWriterFence) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
     return undefined;
   }
   const idempotencyKey = `${input.attempt.runId}:settled-finalization-fallback`;
@@ -393,12 +400,21 @@ async function persistSettledToolFallbackTranscript(input: {
       ...(input.attempt.sessionTarget?.storePath
         ? { storePath: input.attempt.sessionTarget.storePath }
         : {}),
+      ...(input.attempt.sessionTarget?.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: input.attempt.sessionTarget.expectedLifecycleRevision }
+        : {}),
+      ...(input.attempt.sessionTarget?.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: input.attempt.sessionTarget.expectedWriterRunId }
+        : {}),
       config: input.attempt.config,
       idempotencyKey,
       signal: input.attempt.abortSignal,
       text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT,
     });
     if (!result.ok) {
+      if (hasWriterFence || result.code === "session-rebound") {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
       log.warn(
         `settled-turn fallback transcript append skipped: runId=${input.attempt.runId} sessionId=${input.sessionId} reason=${result.reason}`,
       );
@@ -406,6 +422,9 @@ async function persistSettledToolFallbackTranscript(input: {
     }
     return idempotencyKey;
   } catch (error) {
+    if (error instanceof SessionTranscriptWriterClaimReboundError) {
+      throw error;
+    }
     log.warn(
       `settled-turn fallback transcript append failed: runId=${input.attempt.runId} sessionId=${input.sessionId} error=${formatErrorMessage(error)}`,
     );

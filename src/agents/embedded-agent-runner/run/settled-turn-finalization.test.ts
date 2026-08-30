@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -311,6 +312,8 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     input.finalization.preparedAttempt.agentId = "main";
     input.finalization.preparedAttempt.sessionTarget = {
       agentId: "main",
+      expectedLifecycleRevision: "revision-a",
+      expectedWriterRunId: "run-settled",
       sessionId: "session-settled",
       sessionKey: "agent:main:settled",
       storePath: "/tmp/sessions.json",
@@ -338,6 +341,8 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledWith({
       agentId: "main",
       config: undefined,
+      expectedLifecycleRevision: "revision-a",
+      expectedWriterRunId: "run-settled",
       idempotencyKey: "run-settled:settled-finalization-fallback",
       sessionId: "session-settled",
       sessionKey: "agent:main:settled",
@@ -473,5 +478,67 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.prepared.payloadsWithToolMedia).not.toEqual([
       expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
     ]);
+  });
+
+  it("does not construct a fallback after its transcript writer is superseded", async () => {
+    const attempt = settledFailedAttempt();
+    const input = finalizationInput(attempt);
+    input.finalization.preparedAttempt.sessionKey = "agent:main:settled";
+    input.finalization.preparedAttempt.agentId = "main";
+    input.finalization.preparedAttempt.sessionTarget = {
+      agentId: "main",
+      expectedLifecycleRevision: "revision-a",
+      expectedWriterRunId: "run-settled",
+      sessionId: "session-settled",
+      sessionKey: "agent:main:settled",
+      storePath: "/tmp/sessions.json",
+    } as never;
+    const emptyAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "" }],
+    });
+    backendMocks.runSettledFinalization.mockResolvedValue({
+      outcome: "empty",
+      result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
+    });
+    transcriptMocks.appendAssistantMirrorMessageByIdentity.mockRejectedValueOnce(
+      new SessionTranscriptWriterClaimReboundError(),
+    );
+
+    await expect(prepareTerminalWithSettledTurnFinalization(input)).rejects.toBeInstanceOf(
+      SessionTranscriptWriterClaimReboundError,
+    );
+    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledOnce();
+  });
+
+  it("does not construct a fallback after its fenced session entry is removed", async () => {
+    const attempt = settledFailedAttempt();
+    const input = finalizationInput(attempt);
+    input.finalization.preparedAttempt.sessionKey = "agent:main:settled";
+    input.finalization.preparedAttempt.agentId = "main";
+    input.finalization.preparedAttempt.sessionTarget = {
+      agentId: "main",
+      expectedLifecycleRevision: "revision-a",
+      expectedWriterRunId: "run-settled",
+      sessionId: "session-settled",
+      sessionKey: "agent:main:settled",
+      storePath: "/tmp/sessions.json",
+    } as never;
+    const emptyAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "" }],
+    });
+    backendMocks.runSettledFinalization.mockResolvedValue({
+      outcome: "empty",
+      result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
+    });
+    transcriptMocks.appendAssistantMirrorMessageByIdentity.mockResolvedValueOnce({
+      ok: false,
+      code: "blocked",
+      reason: "missing active session",
+    });
+
+    await expect(prepareTerminalWithSettledTurnFinalization(input)).rejects.toBeInstanceOf(
+      SessionTranscriptWriterClaimReboundError,
+    );
+    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledOnce();
   });
 });

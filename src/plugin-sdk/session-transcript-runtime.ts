@@ -154,6 +154,8 @@ export type SessionTranscriptStrictMessageAppendResult<TMessage> =
 export type SessionTranscriptAssistantMirrorAppendParams = SessionTranscriptReadParams & {
   config?: OpenClawConfig;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   idempotencyKey?: string;
   mediaUrls?: string[];
   signal?: AbortSignal;
