@@ -199,7 +199,7 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
         },
       );
       await expect(fs.readFile(path.join(remoteRoot, "reference.md"), "utf8")).resolves.toBe(
-        "reference patched\n",
+        "reference patched",
       );
       await expect(fs.readFile(path.join(remoteRoot, "added.md"), "utf8")).resolves.toBe("added\n");
       await expect(fs.stat(path.join(remoteRoot, "obsolete.md"))).rejects.toMatchObject({
@@ -209,7 +209,7 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
         code: "ENOENT",
       });
       await expect(fs.readFile(path.join(remoteRoot, "moved.md"), "utf8")).resolves.toBe(
-        "move target\n",
+        "move target",
       );
       await createApplyPatchTool({ cwd: hostRoot, sandbox: { root: hostRoot, bridge } }).execute(
         "remote-at-replace-patch",
