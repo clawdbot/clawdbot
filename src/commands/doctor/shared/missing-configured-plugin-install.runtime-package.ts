@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { NpmSpecResolution } from "../../../infra/install-source-utils.js";
@@ -134,9 +135,7 @@ async function readRuntimePackageIdentity(params: {
     const parsed: unknown = JSON.parse(
       await readFile(path.join(resolveUserPath(installPath, params.env), "package.json"), "utf8"),
     );
-    return typeof parsed === "object" && parsed !== null
-      ? (parsed as { name?: unknown; version?: unknown })
-      : undefined;
+    return isRecord(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }
