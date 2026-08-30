@@ -321,12 +321,14 @@ export function resolveEmbeddedRunAbandonment(params: {
       ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile)
       : undefined,
   ];
-  const reasons = sessionIds.map((sessionId) =>
-    sessionId ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId)?.reason : undefined,
+  const reasons = new Set(
+    sessionIds.map((sessionId) =>
+      sessionId ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId)?.reason : undefined,
+    ),
   );
-  return reasons.includes("timeout")
+  return reasons.has("timeout")
     ? "timeout"
-    : reasons.includes("recovering_timeout")
+    : reasons.has("recovering_timeout")
       ? "recovering_timeout"
       : undefined;
 }
