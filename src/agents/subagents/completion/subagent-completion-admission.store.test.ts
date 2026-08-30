@@ -133,6 +133,24 @@ describe("atomic subagent completion admission store", () => {
     );
   }
 
+  async function waitForRestoredSessionQueue(taskId: string): Promise<number> {
+    ensureTaskRegistryReady();
+    await vi.waitFor(() => {
+      expect(
+        database.db
+          .prepare("SELECT delivery_status FROM task_runs WHERE task_id = ?")
+          .get(taskId),
+      ).toEqual({ delivery_status: "session_queued" });
+    });
+    const restored = database.db
+      .prepare("SELECT last_event_at FROM task_runs WHERE task_id = ?")
+      .get(taskId) as { last_event_at: number | null } | undefined;
+    if (typeof restored?.last_event_at !== "number") {
+      throw new Error("restored task replay did not persist its event timestamp");
+    }
+    return restored.last_event_at;
+  }
+
   it.each(["queue", "subagent", "task"] as const)(
     "rolls every owner row back when the %s cut fails",
     (cut) => {
@@ -389,7 +407,7 @@ describe("atomic subagent completion admission store", () => {
       for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
         subagentRuns.set(runId, entry);
       }
-      ensureTaskRegistryReady();
+      const replayedLastEventAt = await waitForRestoredSessionQueue(input.task.taskId);
       expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
         status: "suspended",
         disposition: "permanent_failure",
@@ -403,10 +421,10 @@ describe("atomic subagent completion admission store", () => {
       expect(subagentRuns.get(input.subagent.runId)?.delivery?.payload).not.toHaveProperty(
         "frozenResultText",
       );
-      expect(getTaskById(input.task.taskId)).toMatchObject({
-        deliveryStatus: "failed",
-        terminalOutcome: "blocked",
-        cleanupAfter: input.task.cleanupAfter,
+      expect(getTaskById(input.task.taskId)).toEqual({
+        ...input.task,
+        deliveryStatus: "session_queued",
+        lastEventAt: replayedLastEventAt,
         progressSummary: "canonical result",
       });
 

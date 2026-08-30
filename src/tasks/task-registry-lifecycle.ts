@@ -28,7 +28,7 @@ const ACTIVITY_LIVENESS_WRITE_MS = 60_000;
 
 function replayRestoredTaskTerminalDeliveries(taskIds: readonly string[]) {
   for (const taskId of taskIds) {
-    void maybeDeliverTaskTerminalUpdate(taskId).catch((error) => {
+    void maybeDeliverTaskTerminalUpdate(taskId).catch((error: unknown) => {
       taskRegistryLog.warn("Failed to replay restored task terminal delivery", {
         taskId,
         error,

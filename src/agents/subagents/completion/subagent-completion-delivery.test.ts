@@ -6,7 +6,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import { getTaskById } from "../../../tasks/runtime-internal.js";
+import { ensureTaskRegistryReady, getTaskById } from "../../../tasks/runtime-internal.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
@@ -102,6 +102,17 @@ describe("subagent completion recovery identity", () => {
     };
   }
 
+  async function waitForRestoredSessionQueue(
+    ...pairs: Array<ReturnType<typeof persistCompletion>>
+  ) {
+    ensureTaskRegistryReady();
+    await vi.waitFor(() => {
+      for (const pair of pairs) {
+        expect(storedPair(pair).task).toMatchObject({ delivery_status: "session_queued" });
+      }
+    });
+  }
+
   function dismiss(taskId: string) {
     return dismissSubagentCompletionDelivery(taskId, {
       discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
@@ -115,6 +126,7 @@ describe("subagent completion recovery identity", () => {
       // Retained completions precede follow-up runs on the same reusable child session.
       const old = persistCompletion("old");
       const current = persistCompletion("current", "suspended", remapped);
+      await waitForRestoredSessionQueue(old, current);
       const oldRows = storedPair(old);
       const oldLive = structuredClone(old.subagent);
 
@@ -148,6 +160,9 @@ describe("subagent completion recovery identity", () => {
     async (oldStatus) => {
       const old = persistCompletion("old", oldStatus);
       const current = persistCompletion("current", "suspended", true);
+      await waitForRestoredSessionQueue(
+        ...(oldStatus === "suspended" ? [old, current] : [current]),
+      );
       const oldRows = storedPair(old);
       const oldLive = structuredClone(old.subagent);
 
@@ -186,6 +201,7 @@ describe("subagent completion recovery identity", () => {
       const current = persistCompletion("current");
       subagentRuns.delete(current.subagent.runId);
       database.db.prepare("DELETE FROM subagent_runs WHERE run_id = ?").run(current.subagent.runId);
+      await waitForRestoredSessionQueue(old, current);
       const oldRows = storedPair(old);
       const currentRows = storedPair(current);
       const oldLive = structuredClone(old.subagent);
