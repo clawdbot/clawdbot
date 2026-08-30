@@ -20,6 +20,7 @@ import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -1101,6 +1102,18 @@ async function createCodexSideToolBridge(input: {
       sandbox,
       input.nativeToolSurfaceEnabled,
     );
+    // A side thread dispatches these tools through the same direct bridge as a normal
+    // Codex turn, so no tool-start handler reserves a blocking question's prompt here
+    // either. Hand the tools this run's own way to show one.
+    const publishSideToolResult = input.params.opts?.onToolResult;
+    const questionPrompt = publishSideToolResult
+      ? {
+          send: async (payload: ReplyPayload) => {
+            await publishSideToolResult(payload);
+          },
+          ...(input.params.messageChannel ? { messageChannel: input.params.messageChannel } : {}),
+        }
+      : undefined;
     const allTools = createOpenClawCodingTools({
       agentId: input.sessionAgentId,
       sessionKey: sandboxSessionKey,
@@ -1176,6 +1189,7 @@ async function createCodexSideToolBridge(input: {
       }).channelId,
       sandbox,
       ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
+      ...(questionPrompt ? { questionPrompt } : {}),
       emitBeforeToolCallDiagnostics: false,
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,
