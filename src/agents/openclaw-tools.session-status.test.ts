@@ -274,6 +274,7 @@ function createCommandsStatusRuntimeModuleMock() {
       statusChannel: string;
       provider?: string;
       model: string;
+      thinkingCatalog?: Array<{ provider: string; id: string; contextWindow?: number }>;
       workspaceDir?: string;
       primaryModelLabelOverride?: string;
       includeTranscriptUsage?: boolean;
@@ -314,6 +315,7 @@ function createCommandsStatusRuntimeModuleMock() {
         },
         sessionEntry: params.sessionEntry,
         modelAuth,
+        thinkingCatalog: params.thinkingCatalog,
         includeTranscriptUsage: params.includeTranscriptUsage,
         workspaceDir: params.workspaceDir,
       });
@@ -623,6 +625,15 @@ describe("session_status tool", () => {
     expect(details.statusText).not.toContain("OAuth/token status");
     expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(mockCallArg(buildStatusMessageMock)).toMatchObject({
+      thinkingCatalog: expect.arrayContaining([
+        expect.objectContaining({
+          provider: "openai",
+          id: "gpt-5.4",
+          contextWindow: 400_000,
+        }),
+      ]),
+    });
     // The full contract exceeds the compact hint budget; never promote a truncated shape.
     expect(compactToolOutputHint(tool.outputSchema)).toBeUndefined();
   });
