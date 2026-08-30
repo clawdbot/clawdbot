@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import "./subagent-registry.mocks.shared.js";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -93,6 +94,7 @@ function createOrphanedRequiredDelivery(
 
 describe("subagent registry persistence resume", () => {
   let tempStateDir: string | null = null;
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeAll(async () => {
     vi.resetModules();
@@ -497,8 +499,7 @@ describe("subagent registry persistence resume", () => {
   ])(
     "bounds restored $label requester-settle wakes after Gateway activation",
     async ({ activationSettlement }) => {
-      tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-      const stateDir = tempStateDir;
+      const stateDir = tempDirs.make("openclaw-subagent-");
       let activeWakes = 0;
       let maxActiveWakes = 0;
       const wakeResolvers: Array<() => void> = [];
