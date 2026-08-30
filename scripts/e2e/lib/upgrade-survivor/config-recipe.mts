@@ -132,6 +132,8 @@ function configSetJsonFile(
 
 const representativeConfigSteps: ConfigStep[] = [
   configSetJsonFile("models-openai", "models", "models.providers.openai", "models-openai.json"),
+  // Keep the migration specimen idle while baseline and candidate services run:
+  // a heartbeat refreshes its skills snapshot before inference, even when auth fails.
   configSetJsonFile("agents", "agents", "agents", "agents.json"),
   configSetJsonFile("skills", "skills", "skills", "skills.json"),
   configSetJsonFile("plugins", "plugins", "plugins", "plugins.json"),
