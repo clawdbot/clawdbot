@@ -44,6 +44,7 @@ const subagentRegistryReadMock = vi.hoisted(() => {
     getSubagentSessionRuntimeMs: vi.fn(() => undefined),
     getSubagentSessionStartedAt: vi.fn(() => undefined),
     isSubagentRunLive: vi.fn(() => false),
+    isSubagentRunQueued: vi.fn(() => false),
     listSubagentRunsForController: vi.fn((controllerSessionKey: string) =>
       [...runsByChildSessionKey.values()].filter((entry) => {
         const controller =

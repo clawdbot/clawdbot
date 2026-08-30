@@ -26,6 +26,7 @@ import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-regist
 import { createChatRunState } from "../server-chat-state.js";
 import { agentIdentityHandlers } from "./agent-identity.js";
 import { agentHandlers } from "./agent.js";
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -40,7 +41,7 @@ export const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("bas
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
-  loadGatewaySessionRow: vi.fn(),
+  loadGatewaySessionRow: vi.fn<typeof import("../session-utils.js").loadGatewaySessionRow>(),
   updateSessionStore: vi.fn(),
   applySessionEntryReplacements: vi.fn(),
   patchSessionEntryTarget: vi.fn(),
@@ -1129,6 +1130,9 @@ export function restoreAgentTaskRegistryRuntimeAfterTests(): void {
 }
 
 export const describe0AfterEach0 = () => {
+  // Drain deferred broadcasts before retiring the test-owned row and runtime state.
+  flushPendingSessionsChangedEvents();
+  mocks.loadGatewaySessionRow.mockReset();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetDiagnosticEventsForTest();
@@ -1163,6 +1167,7 @@ export const describe0AfterEach0 = () => {
 };
 
 function resetIntegrationState() {
+  flushPendingSessionsChangedEvents();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetAgentTaskRegistryForTests();

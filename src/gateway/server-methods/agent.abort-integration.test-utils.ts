@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import {
   getSubagentRunByChildSessionKey,
   registerSubagentRun,
@@ -18,6 +19,7 @@ import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { prepareAgentRunDispatch } from "../agent-turn/agent-run-admission-phase.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import type { GatewaySessionRow } from "../session-utils.js";
 import {
   getAgentTestMocks,
   operatorWriteCliClient,
@@ -45,6 +47,16 @@ import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
+
+function expectReactivationFailure(respond: ReturnType<typeof vi.fn>, runId: string): void {
+  expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledOnce();
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    { runId, status: "error", summary: "reactivate boom" },
+    { code: "UNAVAILABLE", message: "reactivate boom" },
+    { runId, error: "reactivate boom" },
+  );
+}
 
 describe("gateway agent handler chat.abort integration", () => {
   beforeEach(describe1BeforeEach0);
@@ -92,7 +104,7 @@ describe("gateway agent handler chat.abort integration", () => {
       tokenStart: 0,
       tokensUsed: 5,
       continuationTurns: 0,
-    };
+    } satisfies NonNullable<GatewaySessionRow["goal"]>;
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("global");
     mocks.loadSessionEntry.mockReturnValue({
@@ -2372,20 +2384,13 @@ describe("gateway agent handler chat.abort integration", () => {
 
   it("removes the chatAbortControllers entry if pre-dispatch reactivation fails", async () => {
     prime("reactivation-session");
-    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce({
-      runId: "previous-run",
-      childSessionKey: "agent:main:main",
-      controllerSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      requesterDisplayKey: "main",
-      task: "old task",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" },
-    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(
+      createSubagentRunRecord({
+        runId: "previous-run",
+        childSessionKey: "agent:main:main",
+        execution: { status: "terminal", endedAt: 3 },
+      }),
+    );
     mocks.replaceSubagentRunAfterSteer.mockRejectedValueOnce(new Error("reactivate boom"));
 
     const context = makeContext();
@@ -2403,11 +2408,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
     expect(context.chatAbortControllers.has(runId)).toBe(false);
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    const errorCall = respond.mock.calls.find((call: unknown[]) => call[0] === false);
-    const errorArgs = requireValue(errorCall, "error response missing");
-    expectRecordFields(errorArgs[1], { runId, status: "error" });
-    expectRecordFields(errorArgs[2], { code: "UNAVAILABLE" });
-    expectRecordFields(errorArgs[3], { runId });
+    expectReactivationFailure(respond, runId);
   });
 
   it("restores admitted restart recovery if pre-dispatch reactivation fails", async () => {
@@ -2440,20 +2441,13 @@ describe("gateway agent handler chat.abort integration", () => {
       canonicalKey: sessionKey,
     }));
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce({
-      runId: "previous-run",
-      childSessionKey: sessionKey,
-      controllerSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      requesterDisplayKey: "main",
-      task: "old task",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" },
-    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(
+      createSubagentRunRecord({
+        runId: "previous-run",
+        childSessionKey: sessionKey,
+        execution: { status: "terminal", endedAt: 3 },
+      }),
+    );
     mocks.replaceSubagentRunAfterSteer.mockRejectedValueOnce(new Error("reactivate boom"));
 
     const respond = vi.fn();
@@ -2484,12 +2478,7 @@ describe("gateway agent handler chat.abort integration", () => {
       },
     });
     expect(store[sessionKey]?.mainRestartRecovery?.reservation).toBeUndefined();
-    expect(
-      respond.mock.calls.some(
-        ([ok, payload]) =>
-          ok === false && (payload as { runId?: string; status?: string })?.runId === runId,
-      ),
-    ).toBe(true);
+    expectReactivationFailure(respond, runId);
   });
 
   it("releases a foreground recovery owner if pre-dispatch reactivation fails", async () => {
@@ -2517,23 +2506,16 @@ describe("gateway agent handler chat.abort integration", () => {
       canonicalKey: sessionKey,
     }));
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce({
-      runId: "previous-run",
-      childSessionKey: sessionKey,
-      controllerSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      requesterDisplayKey: "main",
-      task: "old task",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" },
-    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(
+      createSubagentRunRecord({
+        runId: "previous-run",
+        childSessionKey: sessionKey,
+        execution: { status: "terminal", endedAt: 3 },
+      }),
+    );
     mocks.replaceSubagentRunAfterSteer.mockRejectedValueOnce(new Error("reactivate boom"));
 
-    await invokeAgent(
+    const respond = await invokeAgent(
       {
         message: "new foreground turn",
         agentId: "main",
@@ -2541,11 +2523,12 @@ describe("gateway agent handler chat.abort integration", () => {
         sessionId,
         idempotencyKey: runId,
       },
-      { client: backendGatewayClient(), reqId: runId, respond: vi.fn() },
+      { client: backendGatewayClient(), reqId: runId },
     );
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(store[sessionKey]?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+    expectReactivationFailure(respond, runId);
   });
 
   it("releases gateway admission when foreground owner cleanup exhausts retries", async () => {
