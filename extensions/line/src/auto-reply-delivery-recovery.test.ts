@@ -22,6 +22,34 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       body: "provider error",
     });
 
+  it("keeps a stalled allowance from holding back the webhook reply failure", async () => {
+    // Same deadline as durable delivery: a stalled allowance endpoint must not
+    // hold the reply route's own failure, which the caller needs to report.
+    vi.useFakeTimers();
+    try {
+      const rejection = createHttpError(429);
+      const { deps } = createDeps({
+        pushMessagesLine: (async () => {
+          throw rejection;
+        }) as LineAutoReplyDeps["pushMessagesLine"],
+        readAccountMessageQuota: () => new Promise(() => {}),
+      });
+
+      const delivered = deliverLineAutoReply({
+        ...baseDeliveryParams,
+        replyTokenUsed: true,
+        payload: { text: "an answer nobody will see" },
+        lineData: {},
+        deps,
+      });
+      const settled = expect(delivered).rejects.toThrow("429 - provider rejected the request");
+      await vi.advanceTimersByTimeAsync(2_500);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     {
       label: "names the spent allowance once the reply token is gone",

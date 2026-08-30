@@ -5,6 +5,7 @@ import {
   classifyTransientNetworkErrorCode,
   createChannelApiRetryRunner,
 } from "openclaw/plugin-sdk/retry-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { describeLineQuotaRefusal, isLineMessageQuotaExhausted } from "./message-quota.js";
 import type { LineMessageQuota } from "./types.js";
 
@@ -42,6 +43,9 @@ function resolveAttemptNonDispatchRetryable(error: unknown): boolean | undefined
 // here, including a pre-connect failure that core can still prove by other
 // means, because this module cannot tell the two apart from the error alone.
 const pushErrorsWithAmbiguousAttempt = new WeakSet<object>();
+
+/** How long any refused send may spend asking LINE about the allowance. */
+const REFUSAL_QUOTA_BUDGET_MS = 2_000;
 
 /**
  * Refines a refusal verdict with the account's monthly allowance.
@@ -140,7 +144,15 @@ export async function explainLineRefusal(params: {
   const readOnce = async () => {
     if (!read) {
       read = true;
-      quota = await params.readQuota();
+      // The refusal already has a verdict; the allowance only refines it. Every
+      // refusal report shares this one deadline so a stalled allowance endpoint
+      // can never hold a retryable 429 back from the delivery that is waiting on
+      // it — the original verdict stands instead.
+      quota = await withTimeout(
+        params.readQuota(),
+        REFUSAL_QUOTA_BUDGET_MS,
+        "line quota refusal",
+      ).catch(() => undefined);
     }
     return quota;
   };

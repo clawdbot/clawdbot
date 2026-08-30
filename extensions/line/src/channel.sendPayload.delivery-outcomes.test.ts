@@ -1,6 +1,6 @@
 import { HTTPFetchError } from "@line/bot-sdk";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { createRuntime } from "./channel.sendPayload.test-support.js";
 import { lineOutboundAdapter } from "./outbound.js";
@@ -83,6 +83,42 @@ describe("line outbound delivery outcomes", () => {
       retryable,
       message: expect.stringContaining(reason),
     });
+  });
+
+  it("keeps a stalled allowance from holding back a retryable refusal", async () => {
+    // The refusal already has a verdict. If asking about the allowance stalls,
+    // durable delivery must still get its retryable 429 promptly instead of
+    // waiting on an endpoint that may never answer.
+    vi.useFakeTimers();
+    try {
+      const { runtime, mocks } = createRuntime();
+      const rejection = new HTTPFetchError("429 - Too Many Requests", {
+        status: 429,
+        statusText: "Too Many Requests",
+        headers: new Headers(),
+        body: JSON.stringify({ message: "You have reached your monthly limit." }),
+      });
+      mocks.pushMessageLine.mockRejectedValueOnce(rejection);
+      mocks.readAccountMessageQuota.mockImplementation(() => new Promise(() => {}));
+      setLineRuntime(runtime);
+
+      const sent = lineOutboundAdapter.sendPayload!({
+        to: "line:user:U123",
+        text: "hello",
+        payload: { text: "hello" },
+        accountId: "default",
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+      });
+      const settled = expect(sent).rejects.toMatchObject({
+        name: "PlatformMessageNotDispatchedError",
+        retryable: true,
+        message: "429 - Too Many Requests",
+      });
+      await vi.advanceTimersByTimeAsync(2_500);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("preserves partial delivery evidence with a nested LINE rejection", async () => {
