@@ -20,6 +20,7 @@ import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscrib
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
+import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
@@ -2049,10 +2050,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   it("rejects resolved terminal agent failures without exposing provider details", async () => {
     const privateDetail = "raw provider detail should stay private";
     agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Command may have changed state", isError: true }],
-      meta: { error: { kind: "incomplete_turn", message: privateDetail } },
-    } as never);
+    agentCommandMock.mockResolvedValueOnce(
+      recordAgentRunTerminalOutcome(
+        {
+          payloads: [{ text: "Command may have changed state", isError: true }],
+          meta: { error: { kind: "incomplete_turn", message: privateDetail } },
+        },
+        "failed",
+      ) as never,
+    );
 
     const res = await postChatCompletions(enabledPort, {
       model: "openclaw",
@@ -2066,18 +2072,30 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(body).not.toContain(privateDetail);
   });
 
-  it("rejects resolved error stop reasons", async () => {
+  it.each([
+    { name: "error stop", meta: { stopReason: "error" }, outcome: "failed", status: 500 },
+    {
+      name: "run-budget timeout without error metadata",
+      meta: { aborted: false, timeoutPhase: "provider", providerStarted: true },
+      outcome: "failed",
+      status: 500,
+    },
+    { name: "completed run with an error payload", meta: {}, outcome: "completed", status: 200 },
+  ] as const)("uses the recorded outcome for $name", async ({ meta, outcome, status }) => {
     agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Command may have changed state", isError: true }],
-      meta: { stopReason: "error" },
-    } as never);
+    agentCommandMock.mockResolvedValueOnce(
+      recordAgentRunTerminalOutcome(
+        { payloads: [{ text: "Command may have changed state", isError: true }], meta },
+        outcome,
+      ) as never,
+    );
 
     const res = await postChatCompletions(enabledPort, {
       model: "openclaw",
       messages: [{ role: "user", content: "hi" }],
     });
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(status);
+    await res.text();
   });
 
   it.each(
@@ -2090,6 +2108,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         label: "an error stop reason",
         meta: { stopReason: "error" },
+        expectedPhase: "end" as const,
+      },
+      {
+        label: "a run-budget timeout without error metadata",
+        meta: { aborted: false, timeoutPhase: "provider" as const, providerStarted: true },
         expectedPhase: "end" as const,
       },
     ].flatMap((failure) =>
@@ -2123,6 +2146,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         if (!runId) {
           throw new Error("expected a streaming chat-completion run ID");
         }
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "partial answer" } });
         const result = {
           payloads: [{ text: "Command may have changed state", isError: true }],
           meta: { durationMs: 0, ...meta },
@@ -2140,7 +2164,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           });
           const terminal = {
             metadata: {},
-            outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+            outcome: buildAgentRunTerminalOutcome({
+              status: meta.timeoutPhase ? "timeout" : "error",
+              stopReason: meta.timeoutPhase ? undefined : "error",
+              timeoutPhase: meta.timeoutPhase,
+            }),
           };
           if (lifecycle.resolveResultError(result, false)) {
             lifecycle.emitResultError(result, false, terminal);
@@ -2148,7 +2176,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             lifecycle.emitEnd(terminal);
           }
         }
-        return result;
+        return recordAgentRunTerminalOutcome(result, "failed");
       }) as never);
 
       try {
@@ -2158,16 +2186,22 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           stream: true,
         });
         const finishReasons: Array<string | null> = [];
+        const content: string[] = [];
         await expect(async () => {
           for await (const chunk of stream) {
             finishReasons.push(...chunk.choices.map((choice) => choice.finish_reason));
+            content.push(...chunk.choices.map((choice) => choice.delta.content ?? ""));
           }
         }).rejects.toMatchObject({
           error: { message: "internal error", type: "api_error" },
         });
         expect(finishReasons).not.toContain("stop");
+        expect(content.join("")).toBe("partial answer");
         expect(terminals).toEqual([
-          { phase: producerTerminal ? expectedPhase : "error", status: "error" },
+          {
+            phase: producerTerminal ? expectedPhase : "error",
+            status: producerTerminal && meta.timeoutPhase ? "timeout" : "error",
+          },
         ]);
       } finally {
         unsubscribe();

@@ -219,6 +219,8 @@ Set `stream: true` to receive Server-Sent Events:
 - Each event line is `data: <json>`
 - Stream ends with `data: [DONE]`
 
+Failed agent runs, including whole-agent timeouts, return an error instead of a successful completion. A streaming failure emits an `error` object followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
+
 ## Open WebUI quick setup
 
 - Base URL: `http://127.0.0.1:18789/v1`
