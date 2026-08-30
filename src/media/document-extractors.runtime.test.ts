@@ -133,22 +133,18 @@ describe("extractDocumentContent", () => {
     const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-document-worker-"));
     const pluginId = "delayed-document-extract";
     const pluginDir = path.join(fixtureRoot, pluginId);
-    const startedMarker = path.join(fixtureRoot, "started");
     await fs.mkdir(pluginDir, { recursive: true });
     await fs.writeFile(path.join(pluginDir, "package.json"), '{"type":"module"}\n');
     await fs.writeFile(
       path.join(pluginDir, "document-extractor.js"),
       `
-        import fs from "node:fs/promises";
         export function createDelayedDocumentExtractor() {
           return {
             id: "delayed",
             label: "Delayed",
             mimeTypes: ["application/pdf"],
             async extract() {
-              await fs.writeFile(${JSON.stringify(startedMarker)}, "started");
-              await new Promise((resolve) => setTimeout(resolve, 1000));
-              return { text: "completed after disconnect", images: [] };
+              await new Promise(() => {});
             },
           };
         }
@@ -169,10 +165,23 @@ describe("extractDocumentContent", () => {
     });
 
     try {
-      await vi.waitFor(async () => {
-        await expect(fs.readFile(startedMarker, "utf8")).resolves.toBe("started");
-      });
-      expect(processWorkerCount()).toBeGreaterThan(baselineWorkers);
+      const workerState = await Promise.race([
+        vi
+          .waitFor(() => expect(processWorkerCount()).toBeGreaterThan(baselineWorkers))
+          .then(() => ({ status: "running" }) as const),
+        pending.then(
+          () => ({ status: "resolved" }) as const,
+          (error: unknown) => ({ status: "rejected", error }) as const,
+        ),
+      ]);
+      if (workerState.status !== "running") {
+        throw new Error(
+          workerState.status === "resolved"
+            ? "Document extraction resolved before its worker became observable"
+            : "Document extraction failed before its worker became observable",
+          workerState.status === "rejected" ? { cause: workerState.error } : undefined,
+        );
+      }
 
       controller.abort(new Error("client disconnected"));
 
