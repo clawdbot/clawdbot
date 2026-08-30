@@ -489,7 +489,7 @@ const markdownLinkRegex = /!?\[[^\]]*\]\(([^)]+)\)/g;
 
 type FenceDelimiter = { marker: "`" | "~"; length: number };
 
-export function parseFenceDelimiter(line: string): FenceDelimiter | null {
+function parseFenceDelimiter(line: string): FenceDelimiter | null {
   const trimmed = line.trimStart();
   const match = /^(?<token>`{3,}|~{3,})/u.exec(trimmed);
   const token = match?.groups?.token;

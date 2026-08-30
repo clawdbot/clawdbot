@@ -7,7 +7,6 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
 const {
   normalizeRoute,
-  parseFenceDelimiter,
   prepareAnchorAuditDocsDir,
   prepareExternalLinkAuditTree,
   prepareMirroredDocsDir,
@@ -26,13 +25,6 @@ describe("docs-link-audit", () => {
       "/plugins/building-plugins",
     );
     expect(normalizeRoute("/plugins/building-plugins?tab=all")).toBe("/plugins/building-plugins");
-  });
-
-  it("parses backtick and tilde fences with their opening length", () => {
-    expect(parseFenceDelimiter("```ts")).toEqual({ marker: "`", length: 3 });
-    expect(parseFenceDelimiter("~~~~md")).toEqual({ marker: "~", length: 4 });
-    expect(parseFenceDelimiter("``short")).toBeNull();
-    expect(parseFenceDelimiter("[text](/route)")).toBeNull();
   });
 
   it("ignores links inside tilde and nested fences in the real audit CLI", () => {
