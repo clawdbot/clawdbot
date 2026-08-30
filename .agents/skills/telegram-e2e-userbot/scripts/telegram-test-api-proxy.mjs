@@ -47,6 +47,28 @@ function telegramApiMethod(pathname) {
   return pathname.match(/^\/bot[^/]+\/([^/?]+)/u)?.[1];
 }
 
+async function drainTelegramTestUpdates(apiRoot, token) {
+  let offset = 0;
+  for (;;) {
+    const response = await fetch(`${apiRoot}/bot${token}/getUpdates`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ offset, timeout: 0, allowed_updates: ["message", "edited_message"] }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const payload = await response.json();
+    if (!response.ok || payload?.ok !== true || !Array.isArray(payload.result)) {
+      throw new Error("Telegram Test Bot API getUpdates failed while draining stale updates.");
+    }
+    if (payload.result.length === 0) return;
+    const updateId = payload.result.at(-1)?.update_id;
+    if (!Number.isSafeInteger(updateId)) {
+      throw new Error("Telegram Test Bot API getUpdates returned an invalid update.");
+    }
+    offset = updateId + 1;
+  }
+}
+
 export async function startTelegramTestApiProxy({
   host = "127.0.0.1",
   port = 0,
@@ -186,8 +208,10 @@ export async function startTelegramTestApiProxy({
     server.close();
     throw new Error("Telegram Test Server proxy did not bind a TCP port.");
   }
+  const apiRoot = `http://${host}:${address.port}`;
   return {
-    apiRoot: `http://${host}:${address.port}`,
+    apiRoot,
+    drainUpdates: (token) => drainTelegramTestUpdates(apiRoot, token),
     holdNextResponse({ method, skip = 0 }) {
       if (responseHold || heldResponse) throw new Error("A Telegram API response hold is active.");
       responseHold = { method, skip };

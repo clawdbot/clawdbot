@@ -12,7 +12,6 @@ import {
 import { buildTelegramQaConfig, waitForTelegramChannelRunning } from "./telegram-api.runtime.js";
 import { TelegramUserbotDriver, type TelegramUserbotUpdate } from "./userbot-driver.runtime.js";
 import {
-  flushTelegramTestBotUpdates,
   loadTelegramUserbotSkillRuntime,
   type TelegramTestCredential,
 } from "./userbot-skill.runtime.js";
@@ -82,7 +81,7 @@ export async function createTelegramQaTransportAdapter(
     resolveEnvPayload: () => {
       throw new Error("Telegram live QA requires a Convex-leased Test Server userbot.");
     },
-    parsePayload: skillRuntime.parseCredential,
+    parsePayload: (payload) => skillRuntime.parseCredential(payload),
   });
   try {
     assertQaGatewayCredentialLeaseQuarantine(credentialLease);
@@ -152,7 +151,7 @@ export async function createTelegramQaTransportAdapter(
     stateRoot = skillRuntime.createStateRoot();
     const restored = skillRuntime.restoreCredential(credentialLease.payload, stateRoot);
     apiProxy = await skillRuntime.startApiProxy();
-    await flushTelegramTestBotUpdates(apiProxy.apiRoot, restored.sutToken);
+    await apiProxy.drainUpdates(restored.sutToken);
     userbot = await TelegramUserbotDriver.start({
       chatId: restored.groupId,
       driverEnv: restored.driverEnv,
@@ -180,10 +179,9 @@ export async function createTelegramQaTransportAdapter(
       cleanupErrors.push(cleanupError);
     }
     if (cleanupErrors.length > 0) {
-      throw new AggregateError(
-        [error, ...cleanupErrors],
-        "Telegram userbot setup and cleanup failed",
-      );
+      throw new AggregateError(cleanupErrors, "Telegram userbot setup and cleanup failed", {
+        cause: error,
+      });
     }
     throw error;
   }

@@ -1,13 +1,9 @@
 import fs from "node:fs";
-import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TelegramUserbotDriver, type TelegramUserbotUpdate } from "./userbot-driver.runtime.js";
-import {
-  flushTelegramTestBotUpdates,
-  loadTelegramUserbotSkillRuntime,
-} from "./userbot-skill.runtime.js";
+import { loadTelegramUserbotSkillRuntime } from "./userbot-skill.runtime.js";
 
 const tempRoots: string[] = [];
 
@@ -61,41 +57,6 @@ describe("Telegram userbot driver runtime", () => {
     expect(() => driver.assertHealthy()).not.toThrow();
 
     await driver.close();
-  });
-
-  it("drains every pending Test Bot API update", async () => {
-    const bodies: unknown[] = [];
-    const server = createServer(async (request, response) => {
-      let body = "";
-      for await (const chunk of request) {
-        body += chunk;
-      }
-      bodies.push(JSON.parse(body));
-      response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({
-          ok: true,
-          result: bodies.length === 1 ? [{ update_id: 7 }] : [],
-        }),
-      );
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected server address");
-    }
-    try {
-      await flushTelegramTestBotUpdates(`http://127.0.0.1:${address.port}`, "token");
-    } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
-    }
-
-    expect(bodies).toEqual([
-      { offset: 0, timeout: 0, allowed_updates: ["message", "edited_message"] },
-      { offset: 8, timeout: 0, allowed_updates: ["message", "edited_message"] },
-    ]);
   });
 
   it("loads the repository skill as the runtime source of truth", async () => {

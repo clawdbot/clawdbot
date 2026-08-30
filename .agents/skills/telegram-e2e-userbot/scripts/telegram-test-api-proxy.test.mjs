@@ -58,6 +58,32 @@ test("proxies method, query, headers, and body to the Test Server path", async (
   await new Promise((resolve) => upstreamServer.close(resolve));
 });
 
+test("drains every pending Test Server update", async () => {
+  const offsets = [];
+  const upstreamServer = http.createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      offsets.push(JSON.parse(body).offset);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({ ok: true, result: offsets.length === 1 ? [{ update_id: 7 }] : [] }),
+      );
+    });
+  });
+  const upstream = await listen(upstreamServer);
+  const proxy = await startTelegramTestApiProxy({ upstream });
+
+  await proxy.drainUpdates("123:ABC");
+
+  assert.deepEqual(offsets, [0, 8]);
+  await proxy.close();
+  await new Promise((resolve) => upstreamServer.close(resolve));
+});
+
 test("holds one upstream-accepted method response until explicit release", async () => {
   const upstreamServer = http.createServer((_request, response) => {
     response.writeHead(200, { "content-type": "application/json" });

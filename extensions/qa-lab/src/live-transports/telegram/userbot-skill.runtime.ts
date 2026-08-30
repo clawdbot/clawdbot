@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 export type TelegramTestCredential = {
   environment: "test";
@@ -17,7 +17,7 @@ export type TelegramTestCredential = {
   testerUserId: string;
 };
 
-export type RestoredTelegramTestCredential = TelegramTestCredential & {
+type RestoredTelegramTestCredential = TelegramTestCredential & {
   driverEnv: Record<string, string>;
   stateRoot: string;
   userDriverDir: string;
@@ -26,6 +26,7 @@ export type RestoredTelegramTestCredential = TelegramTestCredential & {
 type TelegramTestApiProxy = {
   apiRoot: string;
   close(): Promise<void>;
+  drainUpdates(token: string): Promise<void>;
 };
 
 type TelegramUserbotSkillRuntime = {
@@ -35,35 +36,6 @@ type TelegramUserbotSkillRuntime = {
   startApiProxy(): Promise<TelegramTestApiProxy>;
   userDriverPath: string;
 };
-
-export async function flushTelegramTestBotUpdates(apiRoot: string, token: string) {
-  let offset = 0;
-  for (;;) {
-    const response = await fetch(`${apiRoot}/bot${token}/getUpdates`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ offset, timeout: 0, allowed_updates: ["message", "edited_message"] }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    const payload: unknown = await response.json();
-    if (
-      !response.ok ||
-      !isRecord(payload) ||
-      payload.ok !== true ||
-      !Array.isArray(payload.result)
-    ) {
-      throw new Error("Telegram Test Bot API getUpdates failed while draining stale updates.");
-    }
-    if (payload.result.length === 0) {
-      return;
-    }
-    const last = payload.result.at(-1);
-    if (!isRecord(last) || typeof last.update_id !== "number") {
-      throw new Error("Telegram Test Bot API getUpdates returned an invalid update.");
-    }
-    offset = last.update_id + 1;
-  }
-}
 
 function requireString(record: Record<string, unknown>, key: string): string {
   const value = record[key];
@@ -154,7 +126,8 @@ export async function loadTelegramUserbotSkillRuntime(params?: {
   }
   return {
     userDriverPath,
-    createStateRoot: () => fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-telegram-")),
+    createStateRoot: () =>
+      fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-telegram-")),
     parseCredential(value) {
       return parseCredentialResult(Reflect.apply(parseCredential, undefined, [value]));
     },
@@ -168,14 +141,20 @@ export async function loadTelegramUserbotSkillRuntime(params?: {
       if (
         !isRecord(value) ||
         typeof value.apiRoot !== "string" ||
-        typeof value.close !== "function"
+        typeof value.close !== "function" ||
+        typeof value.drainUpdates !== "function"
       ) {
         throw new Error("Telegram userbot Test Bot API proxy returned an invalid runtime.");
       }
+      const close = value.close;
+      const drainUpdates = value.drainUpdates;
       return {
         apiRoot: value.apiRoot,
         async close() {
-          await Reflect.apply(value.close, value, []);
+          await Reflect.apply(close, value, []);
+        },
+        async drainUpdates(token) {
+          await Reflect.apply(drainUpdates, value, [token]);
         },
       };
     },

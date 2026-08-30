@@ -7,13 +7,13 @@ const mocks = vi.hoisted(() => ({
   acquireQaCredentialLease: vi.fn(),
   assertQaGatewayCredentialLeaseQuarantine: vi.fn(),
   createStateRoot: vi.fn(),
-  flushTelegramTestBotUpdates: vi.fn(),
   heartbeatStop: vi.fn(),
   heartbeatThrowIfFailed: vi.fn(),
   leaseHeartbeat: vi.fn(),
   leaseRelease: vi.fn(),
   loadTelegramUserbotSkillRuntime: vi.fn(),
   proxyClose: vi.fn(),
+  proxyDrainUpdates: vi.fn(),
   restoreCredential: vi.fn(),
   shouldRetainQaGatewayCredentialLease: vi.fn(),
   startApiProxy: vi.fn(),
@@ -41,7 +41,6 @@ vi.mock("./userbot-driver.runtime.js", () => ({
 }));
 
 vi.mock("./userbot-skill.runtime.js", () => ({
-  flushTelegramTestBotUpdates: mocks.flushTelegramTestBotUpdates,
   loadTelegramUserbotSkillRuntime: mocks.loadTelegramUserbotSkillRuntime,
 }));
 
@@ -87,13 +86,14 @@ describe("Telegram QA transport adapter", () => {
     mocks.startApiProxy.mockResolvedValue({
       apiRoot: "http://127.0.0.1:3210",
       close: mocks.proxyClose,
+      drainUpdates: mocks.proxyDrainUpdates,
     });
     mocks.userbotStart.mockResolvedValue({
       assertHealthy: mocks.userbotAssertHealthy,
       close: mocks.userbotClose,
       send: mocks.userbotSend,
     });
-    mocks.flushTelegramTestBotUpdates.mockResolvedValue(undefined);
+    mocks.proxyDrainUpdates.mockResolvedValue(undefined);
     mocks.shouldRetainQaGatewayCredentialLease.mockResolvedValue(false);
   });
 
@@ -110,10 +110,7 @@ describe("Telegram QA transport adapter", () => {
     expect(mocks.acquireQaCredentialLease).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "telegram-test-userbot", source: "convex", role: "ci" }),
     );
-    expect(mocks.flushTelegramTestBotUpdates).toHaveBeenCalledWith(
-      "http://127.0.0.1:3210",
-      "sut-token",
-    );
+    expect(mocks.proxyDrainUpdates).toHaveBeenCalledWith("sut-token");
     expect(adapter.createGatewayConfig?.({ baseUrl: "http://127.0.0.1:1234" })).toMatchObject({
       channels: {
         telegram: {

@@ -23,20 +23,24 @@ function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
   if (kind !== "message" && kind !== "edit") {
     throw new Error("Telegram userbot emitted an unknown update kind.");
   }
-  for (const key of ["chatId", "messageId", "senderId", "timestamp"] as const) {
-    if (typeof value[key] !== "number") {
-      throw new Error(`Telegram userbot update has invalid ${key}.`);
-    }
+  const { chatId, messageId, senderId, timestamp } = value;
+  if (
+    typeof chatId !== "number" ||
+    typeof messageId !== "number" ||
+    typeof senderId !== "number" ||
+    typeof timestamp !== "number"
+  ) {
+    throw new Error("Telegram userbot update has invalid numeric fields.");
   }
   if (typeof value.text !== "string") {
     throw new Error("Telegram userbot update has invalid text.");
   }
   return {
     kind,
-    chatId: value.chatId,
-    messageId: value.messageId,
-    senderId: value.senderId,
-    timestamp: value.timestamp,
+    chatId,
+    messageId,
+    senderId,
+    timestamp,
     text: value.text,
     ...(typeof value.botApiMessageId === "number"
       ? { botApiMessageId: value.botApiMessageId }
@@ -117,7 +121,7 @@ export class TelegramUserbotDriver {
       env: { ...process.env, ...params.driverEnv },
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const driver = new TelegramUserbotDriver(child, params.onUpdate);
+    const driver = new TelegramUserbotDriver(child, (update) => params.onUpdate(update));
     const timer = setTimeout(
       () => driver.fail(new Error("Telegram userbot did not become ready within 120000ms.")),
       120_000,
