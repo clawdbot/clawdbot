@@ -1,8 +1,7 @@
 // Google Chat thread-reply tests cover exact native thread delivery.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatIngressLifecycle } from "./monitor-ingress.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
@@ -33,6 +32,8 @@ const inboundMocks = vi.hoisted(() => ({
   buildEnvelope: vi.fn(({ body }: { body: string }) => body),
   resolveChannelInboundRouteEnvelope: vi.fn(),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
@@ -272,7 +273,7 @@ describe("googlechat monitor thread reply delivery", () => {
     const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
       "openclaw/plugin-sdk/channel-inbound",
     );
-    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-googlechat-delivery-"));
+    const created = tempDirs.make("openclaw-googlechat-delivery-");
     const observedDurableOptions = vi.fn();
     const messageTarget = "spaces/CLASSIFY/messages/1";
     const runTurn = vi.fn((input: Parameters<typeof actual.runChannelInboundEvent>[0]) =>
@@ -312,28 +313,24 @@ describe("googlechat monitor thread reply delivery", () => {
       }),
     );
 
-    try {
-      const { account, requestedThread } = await processGoogleChatThreadReplyTest({
-        runTurn,
-        typingIndicator: "none",
-        buildContext: actual.buildChannelInboundEventContext,
-        config: { session: { store: path.join(created, "sessions.json") } },
-      });
+    const { account, requestedThread } = await processGoogleChatThreadReplyTest({
+      runTurn,
+      typingIndicator: "none",
+      buildContext: actual.buildChannelInboundEventContext,
+      config: { session: { store: path.join(created, "sessions.json") } },
+    });
 
-      expect(observedDurableOptions).toHaveBeenCalledWith({
-        to: "spaces/CLASSIFY",
-        replyToId: requestedThread,
-        threadId: requestedThread,
-      });
-      expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledExactlyOnceWith({
-        account,
-        space: "spaces/CLASSIFY",
-        text: "final reply",
-        thread: requestedThread,
-      });
-    } finally {
-      await fs.rm(created, { recursive: true, force: true });
-    }
+    expect(observedDurableOptions).toHaveBeenCalledWith({
+      to: "spaces/CLASSIFY",
+      replyToId: requestedThread,
+      threadId: requestedThread,
+    });
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledExactlyOnceWith({
+      account,
+      space: "spaces/CLASSIFY",
+      text: "final reply",
+      thread: requestedThread,
+    });
   });
 
   it.each([
