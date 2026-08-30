@@ -579,7 +579,7 @@ export function renderTable(opts: RenderTableOptions): string {
 
   const metrics = columns.map((c) => {
     const headerW = visibleWidth(c.header);
-    const cellW = Math.max(0, ...rows.map((r) => visibleWidth(r[c.key] ?? "")));
+    const cellW = rows.reduce((max, row) => Math.max(max, visibleWidth(row[c.key] ?? "")), 0);
     return { headerW, cellW };
   });
 

@@ -27,6 +27,11 @@ openclaw sessions --store ./tmp/sessions.json
 openclaw sessions --json
 ```
 
+Human-readable lists and cleanup previews use terminal-width tables. Long model
+names and flags wrap without being truncated, and Unicode keys stay aligned.
+Long keys show their beginning and end; use `openclaw sessions --json` for complete
+session keys.
+
 Flags:
 
 | Flag                 | Description                                                                   |

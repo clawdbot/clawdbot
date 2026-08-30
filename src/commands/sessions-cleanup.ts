@@ -7,7 +7,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveSessionCleanupAction,
@@ -30,13 +31,8 @@ import {
   formatSessionFlagsCell,
   formatSessionKeyCell,
   formatSessionModelCell,
-  SESSION_AGE_PAD,
-  SESSION_KEY_PAD,
-  SESSION_MODEL_PAD,
   toSessionDisplayRows,
 } from "./sessions-table.js";
-
-const ACTION_PAD = "archive-dashboard".length;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
@@ -53,32 +49,31 @@ function formatCleanupActionCell(
   action: ReturnType<typeof resolveSessionCleanupAction>,
   rich: boolean,
 ): string {
-  const label = action.padEnd(ACTION_PAD);
   if (!rich) {
-    return label;
+    return action;
   }
   if (action === "keep") {
-    return theme.muted(label);
+    return theme.muted(action);
   }
   if (action === "archive-dashboard") {
-    return theme.warn(label);
+    return theme.warn(action);
   }
   if (action === "prune-missing") {
-    return theme.error(label);
+    return theme.error(action);
   }
   if (action === "prune-model-run") {
-    return theme.warn(label);
+    return theme.warn(action);
   }
   if (action === "prune-stale") {
-    return theme.warn(label);
+    return theme.warn(action);
   }
   if (action === "retire-dm-scope") {
-    return theme.warn(label);
+    return theme.warn(action);
   }
   if (action === "cap-overflow") {
-    return theme.accentBright(label);
+    return theme.accentBright(action);
   }
-  return theme.error(label);
+  return theme.error(action);
 }
 
 function buildActionRows(params: {
@@ -195,25 +190,27 @@ function renderStoreDryRunPlan(params: {
   }
   params.runtime.log("");
   params.runtime.log("Planned session actions:");
-  const header = [
-    "Action".padEnd(ACTION_PAD),
-    "Key".padEnd(SESSION_KEY_PAD),
-    "Age".padEnd(SESSION_AGE_PAD),
-    "Model".padEnd(SESSION_MODEL_PAD),
-    "Flags",
-  ].join(" ");
-  params.runtime.log(rich ? theme.heading(header) : header);
-  for (const actionRow of params.actionRows) {
-    const model = resolveSessionDisplayModel(params.cfg, actionRow);
-    const line = [
-      formatCleanupActionCell(actionRow.action, rich),
-      formatSessionKeyCell(actionRow.key, rich),
-      formatSessionAgeCell(actionRow.updatedAt, rich),
-      formatSessionModelCell(model, rich),
-      formatSessionFlagsCell(actionRow, rich),
-    ].join(" ");
-    params.runtime.log(line.trimEnd());
-  }
+  params.runtime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "action", header: "Action" },
+        { key: "key", header: "Key" },
+        { key: "age", header: "Age" },
+        { key: "model", header: "Model" },
+        { key: "flags", header: "Flags", flex: true },
+      ].map((column) =>
+        Object.assign(column, { header: colorize(rich, theme.heading, column.header) }),
+      ),
+      rows: params.actionRows.map((row) => ({
+        action: formatCleanupActionCell(row.action, rich),
+        key: formatSessionKeyCell(row.key, rich),
+        age: formatSessionAgeCell(row.updatedAt, rich),
+        model: formatSessionModelCell(resolveSessionDisplayModel(params.cfg, row), rich),
+        flags: formatSessionFlagsCell(row, rich),
+      })),
+    }).trimEnd(),
+  );
   renderLabelSummaries({ actionRows: params.actionRows, runtime: params.runtime });
 }
 

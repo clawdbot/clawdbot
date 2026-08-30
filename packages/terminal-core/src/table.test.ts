@@ -1,5 +1,7 @@
 // Terminal Core tests cover table behavior.
+import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sanitizeForLog, stripAnsi, visibleWidth } from "./ansi.js";
@@ -83,6 +85,46 @@ describe("renderTable", () => {
       ["+-------+", "| Name  |", "+-------+", "| alpha |", "| beta  |", "+-------+", ""].join("\n"),
     );
     expect(segment).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 3, 150_000])("renders all %i rows without an argument-count limit", (count) => {
+    const out = renderTable({
+      border: "ascii",
+      columns: [{ key: "Key", header: "Key" }],
+      rows: Array.from({ length: count }, () => ({ Key: "session" })),
+    });
+
+    const lines = out.trimEnd().split("\n");
+    expect(lines).toHaveLength(count + 4);
+    expect(lines.filter((line) => line === "| session |")).toHaveLength(count);
+    expect(lines[1]).toMatch(/^\| Key +\|$/u);
+    expect(lines.at(-1)).toBe(lines[0]);
+  });
+
+  it("renders large tables with the CLI process stack rather than the worker stack", () => {
+    // Worker threads have a larger stack than the CLI process; spreading every
+    // row into Math.max can pass in Vitest but crash a normal sessions --limit all.
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "-e",
+        `import { renderTable } from ${JSON.stringify(new URL("./table.ts", import.meta.url).href)};
+const output = renderTable({
+  border: "ascii",
+  columns: [{ key: "Key", header: "Key" }],
+  rows: Array.from({ length: 150_000 }, () => ({ Key: "session" })),
+});
+console.log(JSON.stringify({ rows: output.split("\\n").filter(line => line === "| session |").length }));`,
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ rows: 150_000 });
   });
 
   it("prefers shrinking flex columns to avoid wrapping non-flex labels", () => {
