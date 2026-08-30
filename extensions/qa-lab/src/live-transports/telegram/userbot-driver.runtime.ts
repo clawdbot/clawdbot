@@ -87,6 +87,10 @@ export class TelegramUserbotDriver {
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
     private readonly onUpdate: (update: TelegramUserbotUpdate) => Promise<void> | void,
+    private readonly leaseHealth: {
+      assertHealthy(): void;
+      whenUnhealthy: Promise<Error>;
+    },
   ) {
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve;
@@ -98,6 +102,10 @@ export class TelegramUserbotDriver {
       this.stderr = `${this.stderr}${chunk}`.slice(-4_096);
     });
     child.once("error", (error) => this.fail(error));
+    void leaseHealth.whenUnhealthy.then((error) => {
+      this.fail(error);
+      child.kill("SIGTERM");
+    });
     child.once("exit", (code, signal) => {
       if (this.terminalError || this.closing) {
         return;
@@ -114,14 +122,20 @@ export class TelegramUserbotDriver {
   static async start(params: {
     chatId: string;
     driverEnv: Record<string, string>;
+    leaseHealth: { assertHealthy(): void; whenUnhealthy: Promise<Error> };
     onUpdate(update: TelegramUserbotUpdate): Promise<void> | void;
     userDriverPath: string;
   }): Promise<TelegramUserbotDriver> {
+    params.leaseHealth.assertHealthy();
     const child = spawn("python3", [params.userDriverPath, "serve", "--chat", params.chatId], {
       env: { ...process.env, ...params.driverEnv },
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const driver = new TelegramUserbotDriver(child, (update) => params.onUpdate(update));
+    const driver = new TelegramUserbotDriver(
+      child,
+      (update) => params.onUpdate(update),
+      params.leaseHealth,
+    );
     const timer = setTimeout(
       () => driver.fail(new Error("Telegram userbot did not become ready within 120000ms.")),
       120_000,
@@ -212,6 +226,7 @@ export class TelegramUserbotDriver {
   }
 
   async send(params: { replyToMessageId?: number; text: string }): Promise<TelegramUserbotUpdate> {
+    this.leaseHealth.assertHealthy();
     this.assertHealthy();
     this.commandId += 1;
     const id = String(this.commandId);

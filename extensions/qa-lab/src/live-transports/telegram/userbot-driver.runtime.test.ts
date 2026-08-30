@@ -38,9 +38,11 @@ describe("Telegram userbot driver runtime", () => {
       ].join("\n"),
     );
     const updates: TelegramUserbotUpdate[] = [];
+    const leaseFailure = new Promise<Error>(() => {});
     const driver = await TelegramUserbotDriver.start({
       chatId: "-1001",
       driverEnv: {},
+      leaseHealth: { assertHealthy() {}, whenUnhealthy: leaseFailure },
       userDriverPath: scriptPath,
       onUpdate(update) {
         updates.push(update);
@@ -56,6 +58,44 @@ describe("Telegram userbot driver runtime", () => {
     expect(updates[0]).toMatchObject({ messageId: 12, senderId: 200, text: "reply" });
     expect(() => driver.assertHealthy()).not.toThrow();
 
+    await driver.close();
+  });
+
+  it("stops a delayed TDLib send before its final effect after lease loss", async () => {
+    const root = tempRoot();
+    const markerPath = path.join(root, "sent.txt");
+    const scriptPath = path.join(root, "delayed-user-driver.py");
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "import json",
+        "import pathlib",
+        "import sys",
+        "import time",
+        "print(json.dumps({'type':'ready','chatId':-1001,'user':{'id':100}}), flush=True)",
+        "for line in sys.stdin:",
+        "    request = json.loads(line)",
+        "    time.sleep(1)",
+        `    pathlib.Path(${JSON.stringify(markerPath)}).write_text('sent')`,
+      ].join("\n"),
+    );
+    const revoked = Promise.withResolvers<Error>();
+    const driver = await TelegramUserbotDriver.start({
+      chatId: "-1001",
+      driverEnv: {},
+      leaseHealth: { assertHealthy() {}, whenUnhealthy: revoked.promise },
+      userDriverPath: scriptPath,
+      onUpdate() {},
+    });
+
+    const sending = driver.send({ text: "must not send" });
+    revoked.resolve(new Error("lease revoked"));
+
+    await expect(sending).rejects.toThrow("lease revoked");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_100);
+    });
+    expect(fs.existsSync(markerPath)).toBe(false);
     await driver.close();
   });
 

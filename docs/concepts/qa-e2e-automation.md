@@ -574,12 +574,11 @@ OPENCLAW_QA_CREDENTIAL_SOURCE=convex \
 pnpm test:docker:npm-telegram-live
 ```
 
-When `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` is set, the package live wrapper
-leases a `kind: "telegram"` credential, exports the leased group/driver/SUT
-bot env into the installed-package run, heartbeats the lease, and releases it
-on shutdown. The package wrapper defaults to 20 RTT checks of
-`channel-canary`, a 30s RTT timeout, and Convex role
-`maintainer` outside CI when Convex is selected. Override
+The package live wrapper leases a `kind: "telegram-test-userbot"` credential,
+restores its isolated TDLib user session, and routes the SUT bot through the
+Test Bot API proxy. It heartbeats the lease and releases it on shutdown. The
+package wrapper defaults to 20 RTT checks of `channel-canary`, a 30s RTT
+timeout, and Convex role `maintainer` outside CI. Override
 `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`, `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`,
 or `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune RTT measurement without
 creating a separate RTT command or Telegram-specific summary format.

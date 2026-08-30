@@ -90,6 +90,10 @@ export async function createTelegramQaTransportAdapter(
     throw error;
   }
   const heartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
+  const leaseHealth = {
+    assertHealthy: () => heartbeat.throwIfFailed(),
+    whenUnhealthy: heartbeat.whenFailed,
+  };
   let leaseReleased = false;
   const releaseCredentialLease = async () => {
     if (leaseReleased) {
@@ -150,14 +154,12 @@ export async function createTelegramQaTransportAdapter(
   try {
     stateRoot = skillRuntime.createStateRoot();
     const restored = skillRuntime.restoreCredential(credentialLease.payload, stateRoot);
-    apiProxy = await skillRuntime.startApiProxy({
-      assertHealthy: () => heartbeat.throwIfFailed(),
-      whenUnhealthy: heartbeat.whenFailed,
-    });
+    apiProxy = await skillRuntime.startApiProxy(leaseHealth);
     await apiProxy.drainUpdates(restored.sutToken);
     userbot = await TelegramUserbotDriver.start({
       chatId: restored.groupId,
       driverEnv: restored.driverEnv,
+      leaseHealth,
       userDriverPath: skillRuntime.userDriverPath,
       onUpdate: observeUpdate,
     });
