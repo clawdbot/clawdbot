@@ -5,6 +5,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
@@ -50,7 +51,7 @@ import {
   restorePointerOpenedChatComposerTrigger,
 } from "./chat-picker-overlay.ts";
 import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
-import { renderChatVoiceError } from "./chat-voice-activity.ts";
+import { renderChatVoiceError, voiceStatusLabel } from "./chat-voice-activity.ts";
 
 type ChatComposerViewContext = {
   props: ChatComposerProps;
@@ -295,8 +296,45 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     <div
       class="agent-chat__composer-shell ${compoundQuestionComposer
         ? "agent-chat__composer-shell--question-composer"
-        : ""}"
+        : ""}${props.realtimeTalkActive ? " agent-chat__composer-shell--voice-active" : ""}"
     >
+      ${props.realtimeTalkActive && props.onToggleRealtimeTalk
+        ? html`<section
+            class="agent-chat__voice-canvas"
+            aria-label=${t("chat.composer.voiceCanvasLabel")}
+            data-status=${props.realtimeTalkStatus ?? "listening"}
+          >
+            <link
+              rel="stylesheet"
+              href=${inferControlUiPublicAssetPath("app-art/voice-canvas.css")}
+            />
+            <header class="agent-chat__voice-canvas-header">
+              <span class="agent-chat__voice-canvas-title">
+                <strong>${props.assistantName || "OpenClaw"}</strong>
+                <span>${t("chat.composer.voiceCanvasSubtitle")}</span>
+              </span>
+              <button
+                type="button"
+                class="agent-chat__voice-canvas-close"
+                aria-label=${t("chat.composer.endVoiceConversation")}
+                @click=${props.onToggleRealtimeTalk}
+              >
+                ${icons.x}
+              </button>
+            </header>
+            <div class="agent-chat__voice-canvas-presence">
+              <div class="agent-chat__voice-orb" aria-hidden="true">
+                <img src=${inferControlUiPublicAssetPath("app-art/voice-orb.webp")} alt="" />
+              </div>
+              <div class="agent-chat__voice-canvas-status" role="status" aria-live="polite">
+                <strong
+                  >${voiceStatusLabel(props.realtimeTalkStatus, props.realtimeTalkDetail)}</strong
+                >
+                <span>${t("chat.composer.voiceCanvasHint")}</span>
+              </div>
+            </div>
+          </section>`
+        : nothing}
       <div class="agent-chat__composer-overlay">
         ${props.anchoredNotices ?? nothing} ${composerAlerts} ${fallbackStatus} ${compactionStatus}
         ${interruptedStatus === nothing
@@ -317,7 +355,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ? html`<div
             class="agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${props.offline
               ? "agent-chat__input--offline"
-              : ""}${dictation?.active ? " agent-chat__input--dictating" : ""}"
+              : ""}${dictation?.active
+              ? " agent-chat__input--dictating"
+              : ""}${props.realtimeTalkActive ? " agent-chat__input--voice-active" : ""}"
             @wa-show=${handleChatComposerDropdownShow}
             @wa-after-show=${restorePointerOpenedChatComposerTrigger}
             @openclaw-composer-dismiss-invocations=${() => {
@@ -479,6 +519,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   open: state.capabilityMenuOpen,
                   view: state.capabilityMenuView,
                   toolOverrides: props.toolOverrides,
+                  voiceActive: props.realtimeTalkActive,
                   onOpenChange: (open) => {
                     state.capabilityMenuOpen = open;
                     if (!open) {

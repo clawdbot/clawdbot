@@ -250,6 +250,21 @@ describe("renderChatComposer controls", () => {
     expect(onAbort).toHaveBeenCalledOnce();
   });
 
+  it("shows Send for composed content while realtime voice remains active", () => {
+    const onSend = vi.fn();
+    const { container } = renderComposer({
+      draft: "Send this during the call",
+      onSend,
+      onToggleRealtimeTalk: vi.fn(),
+      realtimeTalkActive: true,
+    });
+
+    const send = button(container, t("chat.runControls.sendMessage"));
+    send.click();
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(button(container, t("chat.composer.stopVoiceInput"))).toBeTruthy();
+  });
+
   it("keeps mobile voice controls disabled while the composer is busy", () => {
     const { container } = renderComposer({
       sending: true,

@@ -136,6 +136,26 @@ describe("renderChatComposer controls", () => {
     );
   });
 
+  it("keeps the immersive voice canvas and multimodal composer in one live surface", () => {
+    const onToggleRealtimeTalk = vi.fn();
+    const { container } = renderComposer({
+      onToggleRealtimeTalk,
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+    });
+    const composer = container.querySelector(".agent-chat__input");
+    const canvas = container.querySelector(".agent-chat__voice-canvas");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+
+    expect(composer?.classList.contains("agent-chat__input--voice-active")).toBe(true);
+    expect(canvas?.getAttribute("aria-label")).toBe(t("chat.composer.voiceCanvasLabel"));
+    expect(canvas?.querySelector("img")?.getAttribute("src")).toBe("/app-art/voice-orb.webp");
+    expect(textarea?.placeholder).toBe(t("chat.composer.voiceActivePlaceholder"));
+    expect(button(container, t("chat.composer.addAttachment")).disabled).toBe(false);
+    button(container, t("chat.composer.endVoiceConversation")).click();
+    expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+  });
+
   it("clears a whitespace-only draft on blur so the native placeholder returns", () => {
     const onDraftChange = vi.fn();
     const { container } = renderComposer({ draft: "saved", onDraftChange });

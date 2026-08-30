@@ -24,6 +24,7 @@ import {
   renderChatAttachmentMenuTrigger,
   type ChatAttachmentControlsProps,
 } from "./chat-attachments.ts";
+import { renderVoiceAttachmentMenuOptions } from "./chat-voice-attachment-menu.ts";
 
 export type ChatComposerPlusMenuView = "root" | "skills" | "connectors" | `tools:${string}`;
 
@@ -69,6 +70,7 @@ type ChatComposerPlusMenuProps = {
   canAdmin: boolean;
   adminBlockedReason: string | null;
   rootToggles?: readonly ChatComposerRootToggle[];
+  voiceActive: boolean;
   addServerDialog?: TemplateResult | typeof nothing;
   onOpenChange: (open: boolean) => void;
   onViewChange: (view: ChatComposerPlusMenuView) => void;
@@ -91,6 +93,7 @@ export type ChatComposerCapabilityMenuProps = Omit<
   | "onViewChange"
   | "showCapabilities"
   | "rootToggles"
+  | "voiceActive"
 >;
 
 function menuDivider(): TemplateResult {
@@ -170,7 +173,9 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
     props.webSearchBaseEnabled,
     props.toolOverrides?.webSearch,
   );
-  const attachments = renderChatAttachmentMenuOptions(icons.paperclip);
+  const attachments = props.voiceActive
+    ? renderVoiceAttachmentMenuOptions()
+    : renderChatAttachmentMenuOptions(icons.paperclip);
   const rootToggles = props.rootToggles ?? [];
   if (!props.showCapabilities && rootToggles.length === 0) {
     return attachments;
@@ -616,7 +621,9 @@ function renderChatComposerPlusMenuContent(props: ChatComposerPlusMenuProps) {
           : renderRootView(props);
   return html`
     <wa-dropdown
-      class="agent-chat__attach-menu agent-chat__capability-menu"
+      class="agent-chat__attach-menu agent-chat__capability-menu ${props.voiceActive
+        ? "agent-chat__attach-menu--voice"
+        : ""}"
       placement="top-start"
       aria-label=${t("chat.composer.addAttachment")}
       .open=${props.open}
@@ -635,7 +642,13 @@ function renderChatComposerPlusMenuContent(props: ChatComposerPlusMenuProps) {
       }}
       data-view=${view}
     >
-      ${renderChatAttachmentMenuTrigger(props.disabled, hasOverrides)} ${content}
+      ${renderChatAttachmentMenuTrigger(props.disabled, hasOverrides)}
+      ${props.voiceActive
+        ? html`<div class="agent-chat__attach-menu-heading">
+            ${t("chat.composer.addToMessage")}
+          </div>`
+        : nothing}
+      ${content}
     </wa-dropdown>
     ${props.addServerDialog ?? nothing}
   `;
@@ -649,13 +662,15 @@ export function renderChatComposerPlusMenu(props: {
   view: ChatComposerPlusMenuView;
   toolOverrides: SessionToolOverrides | null | undefined;
   rootToggles?: readonly ChatComposerRootToggle[];
+  voiceActive?: boolean;
   onOpenChange: (open: boolean) => void;
   onViewChange: (view: ChatComposerPlusMenuView) => void;
 }) {
   const capabilityMenu = props.capabilityMenu;
+  const voiceActive = props.voiceActive === true;
   return renderChatComposerPlusMenuContent({
     attachments: props.attachments,
-    showCapabilities: capabilityMenu !== undefined,
+    showCapabilities: capabilityMenu !== undefined && !voiceActive,
     basePath: capabilityMenu?.basePath ?? "",
     disabled: props.disabled,
     open: props.open,
@@ -674,6 +689,7 @@ export function renderChatComposerPlusMenu(props: {
     canAdmin: capabilityMenu?.canAdmin ?? false,
     adminBlockedReason: capabilityMenu?.adminBlockedReason ?? null,
     rootToggles: props.rootToggles,
+    voiceActive,
     addServerDialog: capabilityMenu?.addServerDialog,
     onOpenChange: props.onOpenChange,
     onViewChange: props.onViewChange,

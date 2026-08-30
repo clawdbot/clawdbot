@@ -583,6 +583,11 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
           <span class="chat-mobile-primary-action">${mobilePrimaryAction}</span>
           <span class="chat-desktop-primary-action">${desktopPrimaryAction}</span>
         `;
+  const voicePrimaryAction = hasComposedContent
+    ? sendAction
+    : props.canAbort
+      ? abortAction
+      : nothing;
   return html`
     ${props.voiceActive && props.onToggleVoice
       ? html`
@@ -645,7 +650,9 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
                 </openclaw-tooltip>
               `
             : nothing}
-          <span class="chat-mobile-primary-action chat-desktop-primary-action">${abortAction}</span>
+          <span class="chat-mobile-primary-action chat-desktop-primary-action"
+            >${voicePrimaryAction}</span
+          >
         `
       : html` ${voiceControl} ${mobileDictationControl} ${primaryActions} `}
   `;

@@ -3565,6 +3565,10 @@ button.chat-pr__diff {
   min-width: 0;
 }
 
+.agent-chat__voice-canvas {
+  display: none;
+}
+
 .agent-chat__composer-combobox {
   position: relative;
   isolation: isolate;

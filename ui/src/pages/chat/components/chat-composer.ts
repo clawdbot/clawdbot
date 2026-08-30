@@ -286,9 +286,11 @@ export function renderChatComposer(props: ChatComposerProps) {
 
   const placeholder = goalComposer.active
     ? t("chat.goals.objectivePlaceholder")
-    : hasVisualAttachments
-      ? t("chat.composer.placeholderWithAttachments")
-      : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
+    : props.realtimeTalkActive
+      ? t("chat.composer.voiceActivePlaceholder")
+      : hasVisualAttachments
+        ? t("chat.composer.placeholderWithAttachments")
+        : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
 
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.

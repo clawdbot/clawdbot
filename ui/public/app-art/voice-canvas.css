@@ -1,0 +1,357 @@
+.agent-chat__attach-menu-copy {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.agent-chat__attach-menu-detail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.agent-chat__attach-menu-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.agent-chat__attach-menu-chevron svg {
+  width: 13px;
+  height: 13px;
+}
+
+.agent-chat__attach-menu-heading {
+  padding: 8px 12px 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* Realtime voice becomes an immersive, single-purpose canvas on phones. The
+   same composer and native file inputs stay mounted, so typing or attaching
+   never tears down the live audio session. */
+@media (max-width: 560px) {
+  .agent-chat__composer-shell--voice-active {
+    position: fixed;
+    right: max(12px, var(--safe-area-right, 0px));
+    bottom: calc(12px + var(--safe-area-bottom, 0px));
+    left: max(12px, var(--safe-area-left, 0px));
+    z-index: 90;
+    width: auto;
+    max-width: none;
+    margin: 0;
+  }
+
+  .agent-chat__voice-canvas {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    display: flex;
+    box-sizing: border-box;
+    min-height: 100dvh;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--media-bg);
+    color: var(--primary-foreground);
+  }
+
+  .agent-chat__voice-canvas::before {
+    position: absolute;
+    inset: 20% 0 auto;
+    height: 48%;
+    background: radial-gradient(
+      circle,
+      color-mix(in srgb, var(--primary-foreground) 7%, transparent),
+      transparent 62%
+    );
+    content: "";
+    pointer-events: none;
+  }
+
+  .agent-chat__voice-canvas-header {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 58px;
+    padding: calc(10px + var(--safe-area-top, 0px)) 54px 0;
+  }
+
+  .agent-chat__voice-canvas-title {
+    display: flex;
+    align-items: center;
+    flex-direction: column;
+    gap: 1px;
+    text-align: center;
+  }
+
+  .agent-chat__voice-canvas-title strong {
+    max-width: min(240px, 62vw);
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent-chat__voice-canvas-title span {
+    color: color-mix(in srgb, var(--primary-foreground) 48%, transparent);
+    font-size: 10px;
+    line-height: 1.3;
+  }
+
+  .agent-chat__voice-canvas-close {
+    position: absolute;
+    top: calc(12px + var(--safe-area-top, 0px));
+    right: max(14px, var(--safe-area-right, 0px));
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--primary-foreground) 8%, transparent);
+    color: color-mix(in srgb, var(--primary-foreground) 72%, transparent);
+  }
+
+  .agent-chat__voice-canvas-close svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .agent-chat__voice-canvas-presence {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    align-items: center;
+    flex-direction: column;
+    justify-content: center;
+    gap: 30px;
+    padding: 0 24px 116px;
+  }
+
+  .agent-chat__voice-orb {
+    position: relative;
+    width: clamp(148px, 45vw, 190px);
+    aspect-ratio: 1;
+    filter: drop-shadow(0 0 24px color-mix(in srgb, var(--primary-foreground) 18%, transparent));
+    animation: agent-chat-voice-orb-breathe 6s ease-in-out infinite;
+  }
+
+  .agent-chat__voice-orb::after {
+    position: absolute;
+    inset: 7%;
+    border-radius: var(--radius-full);
+    box-shadow: inset 0 0 26px color-mix(in srgb, var(--primary-foreground) 18%, transparent);
+    content: "";
+  }
+
+  .agent-chat__voice-orb img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .agent-chat__voice-canvas[data-status="connecting"] .agent-chat__voice-orb {
+    opacity: 0.62;
+    animation-duration: 2.4s;
+  }
+
+  .agent-chat__voice-canvas[data-status="thinking"] .agent-chat__voice-orb {
+    animation-duration: 3.2s;
+  }
+
+  .agent-chat__voice-canvas[data-status="error"] .agent-chat__voice-orb {
+    filter: grayscale(0.8) opacity(0.58);
+    animation: none;
+  }
+
+  .agent-chat__voice-canvas-status {
+    display: flex;
+    align-items: center;
+    flex-direction: column;
+    gap: 5px;
+    text-align: center;
+  }
+
+  .agent-chat__voice-canvas-status strong {
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.35;
+  }
+
+  .agent-chat__voice-canvas-status span {
+    color: color-mix(in srgb, var(--primary-foreground) 38%, transparent);
+    font-size: 10px;
+    line-height: 1.35;
+  }
+
+  .agent-chat__composer-shell--voice-active::before,
+  .agent-chat__composer-shell--voice-active .agent-chat__composer-overlay,
+  .agent-chat__composer-shell--voice-active .agent-chat__composer-underlaps {
+    display: none;
+  }
+
+  .agent-chat__composer-shell--voice-active .agent-chat__input--voice-active {
+    --chat-composer-hairline: color-mix(in srgb, var(--primary-foreground) 8%, transparent);
+    --chat-composer-secondary: color-mix(in srgb, var(--primary-foreground) 56%, transparent);
+    --chat-composer-surface: color-mix(in srgb, var(--primary-foreground) 7%, var(--media-bg));
+    --chat-composer-hover: color-mix(in srgb, var(--primary-foreground) 10%, transparent);
+
+    position: relative;
+    z-index: 1;
+    min-height: 52px;
+    max-height: min(42dvh, 280px);
+    border-color: var(--chat-composer-hairline);
+    border-radius: 26px;
+    background: var(--chat-composer-surface);
+    box-shadow: 0 12px 36px rgb(0 0 0 / 42%);
+    color: var(--primary-foreground);
+    overflow: visible;
+  }
+
+  .agent-chat__input--voice-active .agent-chat__composer-lede {
+    min-height: 0;
+  }
+
+  .agent-chat__input--voice-active
+    .agent-chat__composer-lede:has(.chat-attachments-preview, .chat-reply-preview) {
+    padding: 8px 10px 0;
+  }
+
+  .agent-chat__input--voice-active .agent-chat__composer-input-row {
+    min-height: 52px;
+    padding: 0 98px 0 48px;
+  }
+
+  .agent-chat__input--voice-active .agent-chat__composer-combobox > textarea {
+    min-height: 52px;
+    max-height: 132px;
+    padding: 16px 0 14px;
+    color: var(--primary-foreground);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .agent-chat__input--voice-active .agent-chat__composer-combobox > textarea::placeholder {
+    color: color-mix(in srgb, var(--primary-foreground) 34%, transparent);
+  }
+
+  .agent-chat__input--voice-active .agent-chat__composer-footer {
+    position: absolute;
+    inset: auto 7px 7px;
+    z-index: 2;
+    display: flex;
+    min-height: 38px;
+    margin: 0;
+    justify-content: space-between;
+    padding: 0;
+    pointer-events: none;
+  }
+
+  .agent-chat__input--voice-active
+    :is(.agent-chat__composer-lead, .agent-chat__composer-trail, .agent-chat__composer-actions) {
+    pointer-events: none;
+  }
+
+  .agent-chat__input--voice-active
+    :is(.agent-chat__attach-menu, .chat-send-btn, .chat-talk-control) {
+    pointer-events: auto;
+  }
+
+  .agent-chat__input--voice-active
+    :is(.agent-chat__composer-context, .agent-chat__composer-controls, .chat-send-btn--voice) {
+    display: none;
+  }
+
+  .agent-chat__input--voice-active .agent-chat__composer-lead > :not(.agent-chat__attach-menu) {
+    display: none;
+  }
+
+  .agent-chat__input--voice-active .chat-send-btn--voice-live {
+    display: inline-flex;
+    min-width: 60px;
+    height: 38px;
+    padding-inline: 7px;
+    color: color-mix(in srgb, var(--primary-foreground) 65%, transparent);
+  }
+
+  .agent-chat__input--voice-active .chat-send-btn--send {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    background: var(--primary-foreground);
+    color: var(--media-bg);
+  }
+
+  .agent-chat__input--voice-active .chat-send-btn--send > svg {
+    color: var(--media-bg);
+  }
+
+  .agent-chat__input--voice-active .agent-chat__input-btn--attach {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    color: color-mix(in srgb, var(--primary-foreground) 66%, transparent);
+  }
+
+  .agent-chat__input--voice-active .agent-chat__attach-menu--voice::part(menu) {
+    width: calc(100vw - 24px);
+    min-width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+    padding: 5px;
+    border: 1px solid color-mix(in srgb, var(--primary-foreground) 8%, transparent);
+    border-radius: 20px;
+    background: color-mix(in srgb, var(--primary-foreground) 9%, var(--media-bg));
+    box-shadow: 0 20px 48px rgb(0 0 0 / 48%);
+  }
+
+  .agent-chat__input--voice-active .agent-chat__attach-menu--voice .agent-chat__attach-menu-option {
+    min-height: 54px;
+    color: var(--primary-foreground);
+  }
+
+  .agent-chat__input--voice-active
+    .agent-chat__attach-menu--voice
+    .agent-chat__attach-menu-option::part(label) {
+    color: var(--primary-foreground);
+  }
+
+  .agent-chat__input--voice-active
+    .agent-chat__attach-menu--voice
+    :is(.agent-chat__attach-menu-detail, .agent-chat__attach-menu-heading) {
+    color: color-mix(in srgb, var(--primary-foreground) 42%, transparent);
+  }
+
+  @keyframes agent-chat-voice-orb-breathe {
+    0%,
+    100% {
+      opacity: 0.88;
+      transform: scale(0.975);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.025);
+    }
+  }
+}
+
+@media (max-width: 560px) and (prefers-reduced-motion: reduce) {
+  .agent-chat__voice-orb {
+    animation: none;
+  }
+}

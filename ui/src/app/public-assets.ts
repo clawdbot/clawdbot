@@ -10,7 +10,8 @@ type ControlUiPublicAsset =
   | `provider-icons/ProviderIcon-${string}.svg`
   | `file-icons/${string}.svg`
   | `plugin-art/${string}.webp`
-  | `app-art/${string}.webp`;
+  | `app-art/${string}.webp`
+  | `app-art/${string}.css`;
 
 export function controlUiPublicAssetPath(
   asset: ControlUiPublicAsset,
