@@ -16,7 +16,7 @@ import {
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
-import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
+import type { CanvasToolPreview, ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import {
   isInternalCanvasEntryUrl,
   resolveCanvasIframeUrl,
@@ -27,6 +27,7 @@ import { showToast } from "../../../lib/toast.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { exportWidget } from "./widget-export.ts";
+import "./browser-tab-card.ts";
 
 export { WIDGET_PROMPT_EVENT };
 export type { WidgetPromptEventDetail };
@@ -39,6 +40,8 @@ type WidgetCardOptions = {
   allowExternalEmbedUrls?: boolean;
   sessionKey?: string;
   boardProvider?: BoardProvider;
+  browserTabRevision?: string;
+  browserTabLatest?: boolean;
 };
 
 async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> {
@@ -65,7 +68,7 @@ async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> 
 
 async function pinCanvasWidget(
   event: Event,
-  preview: ToolPreview,
+  preview: CanvasToolPreview,
   provider: BoardProvider,
   name: string,
 ): Promise<void> {
@@ -84,7 +87,7 @@ async function pinCanvasWidget(
 
 async function pinMcpAppWidget(
   event: Event,
-  preview: ToolPreview,
+  preview: CanvasToolPreview,
   provider: BoardProvider,
   name: string,
   viewId: string,
@@ -98,7 +101,7 @@ async function pinMcpAppWidget(
   );
 }
 
-function canvasWidgetName(preview: ToolPreview): string | undefined {
+function canvasWidgetName(preview: CanvasToolPreview): string | undefined {
   if (preview.boardWidgetName) {
     return preview.boardWidgetName;
   }
@@ -106,7 +109,7 @@ function canvasWidgetName(preview: ToolPreview): string | undefined {
   return viewId ? canvasWidgetNameForDocument(viewId) : undefined;
 }
 
-function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
+function isManagedCanvasDocumentPreview(preview: CanvasToolPreview): boolean {
   const viewId = preview.viewId?.trim();
   const entryUrl = preview.url?.trim();
   if (!viewId || !entryUrl) {
@@ -139,7 +142,11 @@ const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
 const WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE = "openclaw:widget-prompt-host-ready";
 const WIDGET_CHAT_HOST_MESSAGE_TYPE = "openclaw:widget-chat-host";
 const WIDGET_FRAME_MIN_HEIGHT = 48;
-const WIDGET_FRAME_MAX_HEIGHT = 1200;
+// The ceiling is an abuse bound, not a layout preference: a widget that reports
+// a runaway size cannot blow up the transcript, but ordinary tall widgets must
+// fit their content here — a frame shorter than its document scrolls inside the
+// row, which hides content behind a nested scrollbar the transcript cannot see.
+const WIDGET_FRAME_MAX_HEIGHT = 8000;
 // Preview frames render inside lit shadow roots, so a document query cannot
 // find them; frames register themselves on load and are dropped once detached.
 const widgetFrameRegistry = new Set<HTMLIFrameElement>();
@@ -384,7 +391,7 @@ function renderMcpAppView(params: {
 
 function renderWidgetContent(
   kind: "canvas-html" | "mcp-app",
-  preview: ToolPreview,
+  preview: CanvasToolPreview,
   options?: WidgetCardOptions,
 ) {
   switch (kind) {
@@ -474,7 +481,7 @@ function handleWidgetExportAction(
     });
 }
 
-function renderWidgetActions(preview: ToolPreview, hasRawDetails: boolean) {
+function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean) {
   const canExportImage = !preview.mcpApp && isInternalCanvasEntryUrl(preview.url);
   if (!canExportImage && !hasRawDetails) {
     return nothing;
@@ -531,6 +538,15 @@ function renderWidgetCard(
 ) {
   if (!preview) {
     return nothing;
+  }
+  if (preview.kind === "browser-tab") {
+    return surface === "chat_tool"
+      ? html`<openclaw-browser-tab-card
+          .preview=${preview}
+          .revision=${options?.browserTabRevision}
+          .latest=${options?.browserTabLatest ?? false}
+        ></openclaw-browser-tab-card>`
+      : nothing;
   }
   if (
     preview.kind !== "canvas" ||

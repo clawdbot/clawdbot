@@ -91,10 +91,15 @@ function resolveGatewaySessionThinkingLevel(params: {
         modelId: params.model,
       })
     : undefined;
-  // Lightweight sessions.changed projections intentionally omit the catalog.
+  // Lightweight projections can omit the catalog or carry identity-only entries.
   // Runtime/model patches normalize persisted state with authoritative metadata;
   // projections must not reinterpret an already-validated level without it.
-  if (!catalogEntry) {
+  if (
+    !catalogEntry ||
+    (params.providerPolicySource !== undefined &&
+      params.providerPolicySource !== "active-or-bundled" &&
+      catalogEntry.reasoning === undefined)
+  ) {
     return params.level;
   }
   return resolveSupportedThinkingLevel({
@@ -123,9 +128,12 @@ function resolveGatewaySessionThinkingDefault(params: {
     ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
     : undefined;
   const resolveDefault =
-    params.providerPolicySource === "active"
+    params.providerPolicySource !== undefined && params.providerPolicySource !== "active-or-bundled"
       ? (defaultParams: Parameters<typeof resolveThinkingDefault>[0]) =>
-          resolveThinkingDefaultCore({ ...defaultParams, providerPolicySource: "active" })
+          resolveThinkingDefaultCore({
+            ...defaultParams,
+            providerPolicySource: params.providerPolicySource,
+          })
       : resolveThinkingDefault;
   const defaultLevel =
     agentThinkingDefault ??
@@ -179,34 +187,13 @@ export function resolveGatewayModelThinkingProfile(params: {
       sessionKey: params.sessionKey,
     });
   const thinkingPolicyProvider = params.thinkingPolicyProvider ?? params.provider;
-  if (!params.rowContext) {
-    return {
-      thinkingLevels: listGatewayThinkingLevelOptions({
-        provider: thinkingPolicyProvider,
-        model: params.model,
-        modelCatalog: params.modelCatalog,
-        agentRuntime,
-        configuredReasoning: params.configuredReasoning,
-        providerPolicySource: params.providerPolicySource,
-      }),
-      thinkingDefault: resolveGatewaySessionThinkingDefault({
-        cfg: params.cfg,
-        provider: params.provider,
-        thinkingPolicyProvider,
-        model: params.model,
-        agentId: params.agentId,
-        modelCatalog: params.modelCatalog,
-        agentRuntime,
-        configuredReasoning: params.configuredReasoning,
-        providerPolicySource: params.providerPolicySource,
-      }),
-    };
-  }
-  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${params.providerPolicySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
+  const policySource =
+    typeof params.providerPolicySource === "object" ? "prepared" : params.providerPolicySource;
+  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${policySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
-  const cached = params.rowContext.thinkingMetadataByModelRef.get(key);
+  const cached = params.rowContext?.thinkingMetadataByModelRef.get(key);
   if (cached) {
     return cached;
   }
@@ -231,7 +218,7 @@ export function resolveGatewayModelThinkingProfile(params: {
       providerPolicySource: params.providerPolicySource,
     }),
   };
-  params.rowContext.thinkingMetadataByModelRef.set(key, metadata);
+  params.rowContext?.thinkingMetadataByModelRef.set(key, metadata);
   return metadata;
 }
 
@@ -319,7 +306,11 @@ export function resolveGatewaySessionThinkingProjectionInternal(
 export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
-  options?: { agentId?: string; allowPluginNormalization?: boolean },
+  options?: {
+    agentId?: string;
+    allowPluginNormalization?: boolean;
+    providerPolicySource?: ThinkingProviderPolicySource;
+  },
 ): GatewaySessionsDefaults {
   const agentId = normalizeAgentId(
     options?.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
@@ -371,8 +362,14 @@ export function getSessionDefaults(
     provider: resolved.provider,
     model: resolved.model,
     agentId,
-    modelCatalog,
+    modelCatalog:
+      modelCatalog ??
+      (options?.providerPolicySource !== undefined &&
+      options.providerPolicySource !== "active-or-bundled"
+        ? []
+        : undefined),
     sessionKey,
+    providerPolicySource: options?.providerPolicySource,
   });
   return {
     modelProvider: resolved.provider ?? null,

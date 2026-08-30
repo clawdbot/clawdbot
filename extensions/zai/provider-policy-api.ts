@@ -15,6 +15,7 @@ const ZAI_REASONING_EFFORT_MAPS: Record<
 > = {
   "5.2": { low: "high", medium: "high", high: "high", adaptive: "high", xhigh: "max", max: "max" },
   "5.3": {
+    off: "low",
     minimal: "low",
     low: "low",
     medium: "high",

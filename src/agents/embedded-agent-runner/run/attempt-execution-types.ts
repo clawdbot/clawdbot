@@ -15,6 +15,7 @@ import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type Prepared<T extends (...args: never[]) => unknown> = Awaited<ReturnType<T>>;
@@ -27,6 +28,7 @@ type AttemptContextEngine = NonNullable<HistoryInput["activeContextEngine"]>;
 
 export type EmbeddedAttemptExecutionState = {
   beforeAgentRunBlockedBy: string | undefined;
+  deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   terminal: AgentRunAttemptTerminal;
   trajectoryEndRecorded: boolean;
 };

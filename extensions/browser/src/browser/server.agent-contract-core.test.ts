@@ -294,7 +294,7 @@ describe("browser control server", () => {
   );
 
   it(
-    "returns the replacement targetId after an action-triggered target swap",
+    "does not adopt an unrelated new target after the acted-on tab disappears",
     async () => {
       const base = await startServerAndBase();
       requirePwMock("clickViaPlaywright").mockImplementationOnce(async () => {
@@ -324,7 +324,43 @@ describe("browser control server", () => {
       });
 
       expect(response.ok).toBe(true);
-      expect(response.targetId).toBe("fresh5678");
+      expect(response.targetId).toBe("abcd1234");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "returns the replacement target proven by the acted-on Playwright page",
+    async () => {
+      const base = await startServerAndBase();
+      requirePwMock("executeActViaPlaywright").mockImplementationOnce(async () => {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (url: string) => {
+            if (url.includes("/json/list")) {
+              return makeResponse([
+                {
+                  id: "fresh5678",
+                  title: "Submitted",
+                  url: "https://submitted.example",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/fresh5678",
+                  type: "page",
+                },
+              ]);
+            }
+            throw new Error(`unexpected fetch: ${url}`);
+          }),
+        );
+        return { targetId: "fresh5678" };
+      });
+
+      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/act`, {
+        kind: "click",
+        ref: "5",
+        targetId: "abcd1234",
+      });
+
+      expect(response).toMatchObject({ ok: true, targetId: "fresh5678" });
     },
     slowTimeoutMs,
   );
@@ -621,6 +657,59 @@ describe("browser control server", () => {
     },
   );
 
+  it("never lets a navigation payload override its invalidated relay-owned target", async () => {
+    const base = await startServerAndBase();
+    const runtime = expectDefined(await startBrowserControlServerFromConfig(), "browser runtime");
+    const previousRelays = runtime.extensionRelays;
+    runtime.extensionRelays = new Map([
+      ["openclaw", { bridge: { captureOperationTarget: () => () => undefined } }],
+    ]) as unknown as NonNullable<typeof runtime.extensionRelays>;
+    requirePwMock("navigateViaPlaywright").mockImplementationOnce(async () => ({
+      url: "https://example.com/after",
+      targetId: "unrelated-999",
+    }));
+
+    try {
+      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/navigate`, {
+        url: "https://example.com/after",
+        targetId: "abcd1234",
+      });
+
+      expect(response).toMatchObject({ ok: true, targetId: "abcd1234" });
+    } finally {
+      runtime.extensionRelays = previousRelays;
+    }
+  });
+
+  it("passes exact relay ownership into navigation before a renderer replacement", async () => {
+    const base = await startServerAndBase();
+    const runtime = expectDefined(await startBrowserControlServerFromConfig(), "browser runtime");
+    const previousRelays = runtime.extensionRelays;
+    runtime.extensionRelays = new Map([
+      ["openclaw", { bridge: { captureOperationTarget: () => () => "replacement-target" } }],
+    ]) as unknown as NonNullable<typeof runtime.extensionRelays>;
+    requirePwMock("navigateViaPlaywright").mockImplementationOnce(async (options) => {
+      const targetId = (
+        options as { resolveOperationTarget?: () => string | undefined }
+      ).resolveOperationTarget?.();
+      if (!targetId) {
+        throw new Error("captured relay target was not forwarded to navigation");
+      }
+      return { url: "https://example.com/recovered", targetId };
+    });
+
+    try {
+      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/navigate`, {
+        url: "https://example.com/recovered",
+        targetId: "abcd1234",
+      });
+
+      expect(response).toMatchObject({ ok: true, targetId: "replacement-target" });
+    } finally {
+      runtime.extensionRelays = previousRelays;
+    }
+  });
+
   it.each(NAVIGATION_TIMEOUT_CASES)(
     "forwards timer-safe navigation timeout $requestedTimeoutMs to the Chrome MCP backend",
     async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
@@ -752,21 +841,20 @@ describe("browser control server", () => {
     expect((typeArgs as { submit?: boolean }).submit).toBeUndefined();
     expect((typeArgs as { slowly?: boolean }).slowly).toBeUndefined();
 
-    const press = await postJson<{ ok: boolean }>(`${base}/act`, {
-      kind: "press",
-      key: "Enter",
-    });
-    expect(press.ok).toBe(true);
-    const pressArgs = mockFirstArg(requirePwMock("pressKeyViaPlaywright"), 0, "press");
-    expectRecordFields(pressArgs, {
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      key: "Enter",
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
-    expect((pressArgs as { delayMs?: number }).delayMs).toBeUndefined();
+    for (const [index, key] of ["Enter", "Ctrl+Shift+Esc"].entries()) {
+      const press = await postJson<{ ok: boolean }>(`${base}/act`, { kind: "press", key });
+      expect(press.ok).toBe(true);
+      const pressArgs = mockFirstArg(requirePwMock("pressKeyViaPlaywright"), index, "press");
+      expectRecordFields(pressArgs, {
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        key: key === "Enter" ? "Enter" : "Control+Shift+Escape",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      });
+      expect((pressArgs as { delayMs?: number }).delayMs).toBeUndefined();
+    }
 
     const hover = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "hover",

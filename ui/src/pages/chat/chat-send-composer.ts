@@ -185,19 +185,6 @@ function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot
   return { attachments, draft: snapshot.previousDraft != null && composerBlank };
 }
 
-export function restoreComposer(host: ChatHost, snapshot: PendingComposerSnapshot): void {
-  if (snapshot.previousDraft != null && !host.chatMessage.trim()) {
-    host.chatMessage = snapshot.previousDraft;
-  }
-  if (
-    snapshot.previousAttachments?.length &&
-    (host.chatAttachments.length === 0 ||
-      composerRetainsSubmittedAnnotations(host, snapshot.previousAttachments))
-  ) {
-    host.chatAttachments = snapshot.previousAttachments;
-  }
-}
-
 export function cancelChatDelivery(
   host: ChatHost,
   item: ChatQueueItem,

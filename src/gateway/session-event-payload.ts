@@ -1,4 +1,9 @@
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import type { AgentEventPayload } from "../infra/agent-events.js";
+import {
+  deriveGatewaySessionLifecycleProjectionPatch,
+  isStaleLifecycleEventForSession,
+} from "./session-lifecycle-state.js";
 import type { GatewaySessionRow } from "./session-utils.js";
 
 /**
@@ -6,35 +11,6 @@ import type { GatewaySessionRow } from "./session-utils.js";
  * Picker metadata comes from catalog-backed list/patch responses; emitting a
  * locally reconstructed subset here would replace richer client state.
  */
-export function buildGatewaySessionEventRow(
-  sessionRow: GatewaySessionRow,
-  options: { lifecycle?: boolean } = {},
-): GatewaySessionRow {
-  const session = { ...sessionRow };
-  delete session.thinkingLevels;
-  delete session.thinkingOptions;
-  delete session.thinkingDefault;
-  if (options.lifecycle) {
-    delete session.modelProvider;
-    delete session.model;
-    delete session.agentRuntime;
-    if (session.totalTokensFresh !== true) {
-      delete session.totalTokens;
-      delete session.totalTokensFresh;
-      delete session.contextTokens;
-      delete session.estimatedCostUsd;
-    }
-  }
-  return session;
-}
-
-/** Incremental events clear cached exact IDs when the current owner exposes only liveness. */
-export function projectSessionEventActiveRunIds(
-  state: { runIds?: string[] } | null | undefined,
-): string[] | null | undefined {
-  return state ? (state.runIds ?? null) : undefined;
-}
-
 export function buildGatewaySessionEventFields(params: {
   sessionRow: GatewaySessionRow;
   agentId?: string;
@@ -69,6 +45,7 @@ export function buildGatewaySessionEventFields(params: {
     pinnedAt: sessionRow.pinnedAt ?? null,
     unread: sessionRow.unread ?? false,
     lastReadAt: sessionRow.lastReadAt,
+    markedUnreadAt: sessionRow.markedUnreadAt ?? null,
     agentStatus: sessionRow.agentStatus ?? null,
     observerDigest: sessionRow.observerDigest ?? null,
     lastActivityAt: sessionRow.lastActivityAt,
@@ -91,6 +68,8 @@ export function buildGatewaySessionEventFields(params: {
     previousSessionId: sessionRow.previousSessionId,
     label: params.label ?? sessionRow.label ?? null,
     icon: sessionRow.icon ?? null,
+    // Explicit null so subscribed clients drop a cleared color during merge-reconcile.
+    color: sessionRow.color ?? null,
     channelAvatarUrl: sessionRow.channelAvatarUrl ?? null,
     // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,
@@ -101,8 +80,12 @@ export function buildGatewaySessionEventFields(params: {
     // Explicit null lets subscribed clients clear an override during merge-reconcile.
     thinkingLevel: sessionRow.thinkingLevel ?? null,
     fastMode: sessionRow.fastMode,
+    effectiveFastMode: sessionRow.effectiveFastMode,
+    effectiveFastModeSource: sessionRow.effectiveFastModeSource,
+    fastAutoOnSeconds: sessionRow.fastAutoOnSeconds,
     toolOverrides: sessionRow.toolOverrides ?? null,
     verboseLevel: sessionRow.verboseLevel,
+    traceLevel: sessionRow.traceLevel,
     reasoningLevel: sessionRow.reasoningLevel,
     elevatedLevel: sessionRow.elevatedLevel,
     sendPolicy: sessionRow.sendPolicy,
@@ -124,6 +107,7 @@ export function buildGatewaySessionEventFields(params: {
     effectiveResponseUsage: sessionRow.effectiveResponseUsage,
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
+    modelOverrideSource: sessionRow.modelOverrideSource,
     agentRuntime: sessionRow.agentRuntime,
     status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
@@ -139,5 +123,82 @@ export function buildGatewaySessionEventFields(params: {
     runtimeMs: sessionRow.runtimeMs,
     compactionCheckpointCount: sessionRow.compactionCheckpointCount,
     latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
+    pluginExtensions: sessionRow.pluginExtensions,
+  };
+}
+
+export function buildGatewaySessionSnapshot(params: {
+  sessionRow: GatewaySessionRow | null | undefined;
+  agentId?: string;
+  includeSession?: boolean;
+  lifecycle?: boolean;
+  event?: AgentEventPayload;
+  lifecycleRunId?: string;
+  label?: string;
+  displayName?: string;
+  parentSessionKey?: string;
+  activeRunState?: { active: boolean; runIds?: string[]; status?: "queued" } | null;
+  status?: GatewaySessionRow["status"];
+}): Record<string, unknown> {
+  const { event, sessionRow: storedRow } = params;
+  if (!storedRow) {
+    return {};
+  }
+  const lifecycleRow = { ...storedRow, updatedAt: storedRow.updatedAt ?? undefined };
+  const patch =
+    event &&
+    !isStaleLifecycleEventForSession({
+      owningSessionId: event.sessionId,
+      currentSessionId: storedRow.sessionId,
+      eventRunId: event.runId,
+      currentRunId: params.lifecycleRunId,
+      eventStartedAt: event.data?.startedAt,
+      currentStartedAt: storedRow.startedAt,
+    })
+      ? deriveGatewaySessionLifecycleProjectionPatch({ entry: lifecycleRow, event })
+      : {};
+  const sessionRow = { ...storedRow, ...patch };
+  for (const key of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
+    delete sessionRow[key];
+  }
+  if (params.lifecycle) {
+    delete sessionRow.modelProvider;
+    delete sessionRow.model;
+    delete sessionRow.modelOverrideSource;
+    delete sessionRow.agentRuntime;
+    if (sessionRow.totalTokensFresh !== true) {
+      delete sessionRow.totalTokens;
+      delete sessionRow.totalTokensFresh;
+      delete sessionRow.contextTokens;
+      delete sessionRow.estimatedCostUsd;
+    }
+  }
+  const eventFields = buildGatewaySessionEventFields({
+    sessionRow,
+    agentId: params.agentId,
+    label: params.label,
+    displayName: params.displayName,
+    parentSessionKey: params.parentSessionKey,
+    status: params.status,
+    hasActiveRun: params.activeRunState?.active,
+    // Presence means an exact set; null clears stale IDs when only liveness is known.
+    activeRunIds: params.activeRunState ? (params.activeRunState.runIds ?? null) : undefined,
+  });
+  const session: Record<string, unknown> | undefined = params.includeSession
+    ? {
+        ...sessionRow,
+        ...Object.fromEntries(
+          Object.entries(eventFields).filter(([, value]) => value !== undefined),
+        ),
+      }
+    : undefined;
+  if (session && sessionRow.key === "global" && !params.agentId) {
+    delete session.goal;
+  }
+  return {
+    ...(session ? { session } : {}),
+    ...eventFields,
+    subagentRunState: sessionRow.subagentRunState,
+    hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,
   };
 }

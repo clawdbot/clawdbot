@@ -24,8 +24,12 @@ import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import {
+  uiSessionEventMatches,
+  type UiSessionDefaultsHost,
+} from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
@@ -77,9 +81,10 @@ export type ToolStreamEntry = {
 export type ToolStreamHost = {
   sessionKey: string;
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null } | null;
+  agentsList?: UiSessionDefaultsHost["agentsList"];
   hello?: { snapshot?: unknown } | null;
   chatRunId: string | null;
+  chatMessages?: unknown[];
   chatRunUsageById?: Map<string, number>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
@@ -95,7 +100,7 @@ export type ToolStreamHost = {
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
   requestUpdate?: () => void;
-  sessions: Pick<SessionCapability, "setModelOverride">;
+  sessions: Pick<SessionCapability, "refreshReplacement">;
 };
 
 function resolveModelLabel(provider: unknown, model: unknown): string | null {
@@ -106,17 +111,12 @@ function resolveModelLabel(provider: unknown, model: unknown): string | null {
   const providerValue = toTrimmedString(provider);
   if (providerValue) {
     const prefix = `${providerValue}/`;
-    if (
-      normalizeLowercaseStringOrEmpty(modelValue).startsWith(
-        normalizeLowercaseStringOrEmpty(prefix),
-      )
-    ) {
-      const trimmedModel = modelValue.slice(prefix.length).trim();
-      if (trimmedModel) {
-        return `${providerValue}/${trimmedModel}`;
-      }
-    }
-    return `${providerValue}/${modelValue}`;
+    const trimmedModel = normalizeLowercaseStringOrEmpty(modelValue).startsWith(
+      normalizeLowercaseStringOrEmpty(prefix),
+    )
+      ? modelValue.slice(prefix.length).trim()
+      : modelValue;
+    return `${providerValue}/${trimmedModel || modelValue}`;
   }
   const slashIndex = modelValue.indexOf("/");
   if (slashIndex > 0) {
@@ -129,77 +129,59 @@ function resolveModelLabel(provider: unknown, model: unknown): string | null {
   return modelValue;
 }
 
-type FallbackAttempt = {
-  provider: string;
-  model: string;
-  reason: string;
-};
-
-function parseFallbackAttemptSummaries(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => toTrimmedString(entry))
-    .filter((entry): entry is string => Boolean(entry))
-    .map((entry) => formatUiError(entry));
-}
-
-function parseFallbackAttempts(value: unknown): FallbackAttempt[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const out: FallbackAttempt[] = [];
-  for (const entry of value) {
-    if (!entry || typeof entry !== "object") {
-      continue;
+function parseFallbackAttemptSummaries(summaries: unknown, attempts: unknown): string[] {
+  if (Array.isArray(summaries)) {
+    const formatted = summaries
+      .map((entry) => toTrimmedString(entry))
+      .filter((entry): entry is string => Boolean(entry))
+      .map((entry) => formatUiError(entry));
+    if (formatted.length > 0) {
+      return formatted;
     }
-    const item = entry as Record<string, unknown>;
-    const provider = toTrimmedString(item.provider);
-    const model = toTrimmedString(item.model);
+  }
+  if (!Array.isArray(attempts)) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const entry of attempts) {
+    const item = readRecord(entry);
+    const provider = toTrimmedString(item?.provider);
+    const model = toTrimmedString(item?.model);
     if (!provider || !model) {
       continue;
     }
     const reason = formatUiError(
-      toTrimmedString(item.reason)?.replace(/_/g, " ") ??
-        toTrimmedString(item.code) ??
-        (typeof item.status === "number" ? `HTTP ${item.status}` : null) ??
-        toTrimmedString(item.error) ??
+      toTrimmedString(item?.reason)?.replace(/_/g, " ") ??
+        toTrimmedString(item?.code) ??
+        (typeof item?.status === "number" ? `HTTP ${item.status}` : null) ??
+        toTrimmedString(item?.error) ??
         "error",
     );
-    out.push({ provider, model, reason });
+    const modelRef = resolveModelLabel(provider, model) ?? `${provider}/${model}`;
+    out.push(`${modelRef}: ${formatUiExternalText(reason)}`);
   }
   return out;
 }
 
 function extractToolOutputText(value: unknown): string | null {
-  if (!value || typeof value !== "object") {
+  const record = readRecord(value);
+  if (!record) {
     return null;
   }
-  const record = value as Record<string, unknown>;
   if (typeof record.text === "string") {
     return record.text;
   }
-  const content = record.content;
-  if (!Array.isArray(content)) {
+  if (!Array.isArray(record.content)) {
     return null;
   }
-  const parts = content
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        return null;
-      }
-      const entry = item as Record<string, unknown>;
-      if (entry.type === "text" && typeof entry.text === "string") {
-        return entry.text;
-      }
-      return null;
-    })
-    .filter((part): part is string => Boolean(part));
-  if (parts.length === 0) {
-    return null;
+  const parts: string[] = [];
+  for (const content of record.content) {
+    const entry = readRecord(content);
+    if (entry?.type === "text" && typeof entry.text === "string" && entry.text) {
+      parts.push(entry.text);
+    }
   }
-  return parts.join("\n");
+  return parts.length > 0 ? parts.join("\n") : null;
 }
 
 function formatToolOutput(value: unknown): string | null {
@@ -243,35 +225,18 @@ function readLiveDiffStat(value: unknown): DiffStat | undefined {
     : undefined;
 }
 
-function resolveSessionStatusModelOverride(result: unknown): string | null | undefined {
-  const details = readRecord(readRecord(result)?.details);
-  if (!details || details.changedModel !== true) {
-    return undefined;
-  }
-  if (Object.hasOwn(details, "modelOverride")) {
-    const override = toTrimmedString(details.modelOverride);
-    return override;
-  }
-  const model = toTrimmedString(details.model);
-  if (!model) {
-    return undefined;
-  }
-  const provider = toTrimmedString(details.modelProvider);
-  return provider ? `${provider}/${model}` : model;
-}
-
-function syncSessionStatusModelOverride(host: ToolStreamHost, data: Record<string, unknown>) {
-  const result = data.result;
-  const details = readRecord(readRecord(result)?.details);
-  const targetSessionKey = toTrimmedString(details?.sessionKey) ?? host.sessionKey;
-  if (!uiSessionEventMatches(host, targetSessionKey, toTrimmedString(details?.agentId))) {
+function refreshSessionStatusModel(host: ToolStreamHost, data: Record<string, unknown>) {
+  const details = readRecord(readRecord(data.result)?.details);
+  if (details?.changedModel !== true) {
     return;
   }
-  const override = resolveSessionStatusModelOverride(result);
-  if (override === undefined) {
+  const targetSessionKey = toTrimmedString(details.sessionKey) ?? host.sessionKey;
+  const agentId = toTrimmedString(details.agentId);
+  if (!agentId || !uiSessionEventMatches(host, targetSessionKey, agentId)) {
     return;
   }
-  host.sessions.setModelOverride(targetSessionKey, override);
+  // Results can be replayed from history; read current truth without replacing pending UI intent.
+  void host.sessions.refreshReplacement(agentId);
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
@@ -619,14 +584,26 @@ function scheduleCompactionClear(
   }, delayMs);
 }
 
-function setCompactionComplete(host: CompactionHost, runId: string) {
+function setCompactionStatus(
+  host: CompactionHost,
+  runId: string,
+  phase: CompactionStatus["phase"],
+) {
+  const completed = phase === "complete";
   host.compactionStatus = {
-    phase: "complete",
+    phase,
     runId,
-    startedAt: host.compactionStatus?.startedAt ?? null,
-    completedAt: Date.now(),
+    startedAt:
+      phase === "active"
+        ? Date.now()
+        : (host.compactionStatus?.startedAt ?? (completed ? null : Date.now())),
+    completedAt: completed ? Date.now() : null,
   };
-  scheduleCompactionClear(host, COMPACTION_TOAST_DURATION_MS, { phase: "complete", runId });
+  scheduleCompactionClear(
+    host,
+    completed ? COMPACTION_TOAST_DURATION_MS : COMPACTION_ACTIVE_STALE_TIMEOUT_MS,
+    { phase, runId },
+  );
 }
 
 export function handleSessionOperationEvent(
@@ -647,16 +624,7 @@ export function handleSessionOperationEvent(
 
   if (payload.phase === "start") {
     clearCompactionTimer(compactionHost);
-    compactionHost.compactionStatus = {
-      phase: "active",
-      runId: operationId,
-      startedAt: Date.now(),
-      completedAt: null,
-    };
-    scheduleCompactionClear(compactionHost, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
-      phase: "active",
-      runId: operationId,
-    });
+    setCompactionStatus(compactionHost, operationId, "active");
     return;
   }
 
@@ -671,7 +639,7 @@ export function handleSessionOperationEvent(
   }
   clearCompactionTimer(compactionHost);
   if (payload.completed === true) {
-    setCompactionComplete(compactionHost, operationId);
+    setCompactionStatus(compactionHost, operationId, "complete");
     return;
   }
   compactionHost.compactionStatus = null;
@@ -685,36 +653,18 @@ function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload)
   clearCompactionTimer(host);
 
   if (phase === "start") {
-    host.compactionStatus = {
-      phase: "active",
-      runId: payload.runId,
-      startedAt: Date.now(),
-      completedAt: null,
-    };
-    scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
-      phase: "active",
-      runId: payload.runId,
-    });
+    setCompactionStatus(host, payload.runId, "active");
     return;
   }
   if (phase === "end") {
     if (data.willRetry === true && completed) {
       // Compaction already succeeded, but the run is still retrying.
       // Keep that distinct state until the matching lifecycle end arrives.
-      host.compactionStatus = {
-        phase: "retrying",
-        runId: payload.runId,
-        startedAt: host.compactionStatus?.startedAt ?? Date.now(),
-        completedAt: null,
-      };
-      scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
-        phase: "retrying",
-        runId: payload.runId,
-      });
+      setCompactionStatus(host, payload.runId, "retrying");
       return;
     }
     if (completed) {
-      setCompactionComplete(host, payload.runId);
+      setCompactionStatus(host, payload.runId, "complete");
       return;
     }
     host.compactionStatus = null;
@@ -741,7 +691,7 @@ function handleLifecycleCompactionEvent(host: CompactionHost, payload: AgentEven
     return;
   }
 
-  setCompactionComplete(host, payload.runId);
+  setCompactionStatus(host, payload.runId, "complete");
 }
 
 function resolveAcceptedSession(
@@ -757,10 +707,6 @@ function resolveAcceptedSession(
   }
   if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
     return { accepted: true, sessionKey };
-  }
-  // Fallback: only accept session-less events for the active run.
-  if (!sessionKey && host.chatRunId && payload.runId !== host.chatRunId) {
-    return { accepted: false };
   }
   if (host.chatRunId && payload.runId !== host.chatRunId) {
     return { accepted: false };
@@ -829,16 +775,7 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
 
   const rawReason = toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
   const reason = rawReason ? formatUiError(rawReason) : null;
-  const attempts = (() => {
-    const summaries = parseFallbackAttemptSummaries(data.attemptSummaries);
-    if (summaries.length > 0) {
-      return summaries;
-    }
-    return parseFallbackAttempts(data.attempts).map((attempt) => {
-      const modelRef = resolveModelLabel(attempt.provider, attempt.model);
-      return `${modelRef ?? `${attempt.provider}/${attempt.model}`}: ${formatUiExternalText(attempt.reason)}`;
-    });
-  })();
+  const attempts = parseFallbackAttemptSummaries(data.attemptSummaries, data.attempts);
 
   if (host.fallbackClearTimer != null) {
     window.clearTimeout(host.fallbackClearTimer);
@@ -934,6 +871,20 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
     return true;
   }
+  const persisted =
+    progress.itemId &&
+    host.chatMessages?.some((message) => {
+      const identity = readAssistantStreamSegmentIdentity(message);
+      return identity?.itemId === progress.itemId && identity?.runId === payload.runId;
+    });
+  if (persisted) {
+    // A history snapshot or delayed live event can follow the durable row.
+    // Its exact run/item owner already renders the commentary.
+    host.chatStreamSegments = host.chatStreamSegments.filter(
+      (segment) => segment.itemId !== progress.itemId || segment.runId !== payload.runId,
+    );
+    return true;
+  }
   if (progress.itemId && !progress.text.trim()) {
     host.chatStreamSegments = host.chatStreamSegments.filter(
       (segment) => segment.itemId !== progress.itemId,
@@ -969,46 +920,70 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   return true;
 }
 
-function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
-  if (payload.stream !== "codex_app_server.guardian") {
+function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  const systemNotice = payload.stream === "notice";
+  if (!systemNotice && payload.stream !== "codex_app_server.guardian") {
     return false;
+  }
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return true;
   }
   const data = payload.data ?? {};
   const phase = toTrimmedString(data.phase);
   const status = toTrimmedString(data.status);
+  const reviewId = toTrimmedString(data.reviewId);
+  const threadId = toTrimmedString(data.threadId);
+  const turnId = toTrimmedString(data.turnId);
+  const correlationId =
+    reviewId ??
+    (threadId && turnId && typeof data.startedAtMs === "number" && Number.isFinite(data.startedAtMs)
+      ? data.startedAtMs
+      : payload.seq);
+  const noticeKey =
+    `${systemNotice ? "system" : "guardian"}:${payload.runId}:` +
+    (phase === "warning"
+      ? `warning:${payload.seq}`
+      : `${threadId ?? "thread"}:${turnId ?? "turn"}:${correlationId}`);
+  const current = host.guardianNotices ?? [];
   const kind =
-    phase === "warning"
-      ? "warning"
-      : phase === "completed" && status === "approved"
-        ? "approved"
-        : phase === "completed" && ["denied", "timedOut", "aborted"].includes(status ?? "")
-          ? "denied"
-          : null;
+    phase === "strict_review_required"
+      ? "strict-review-required"
+      : phase === "warning"
+        ? "warning"
+        : phase === "started" && status === "inProgress"
+          ? "reviewing"
+          : phase === "completed" && status === "approved"
+            ? "approved"
+            : phase === "completed" && ["denied", "timedOut", "aborted"].includes(status ?? "")
+              ? "denied"
+              : null;
   if (!kind) {
     return true;
   }
-  const reviewId = toTrimmedString(data.reviewId) ?? String(payload.seq);
   const targetItemId = toTrimmedString(data.targetItemId);
-  if (phase === "completed" && targetItemId) {
+  if ((phase === "started" || phase === "completed") && targetItemId) {
     // Targeted decisions arrive again as generic tool-review metadata. Keep
-    // vendor notices only as the compatibility fallback for targetless reviews.
+    // vendor notices only for strict-review requirements and targetless reviews.
+    if (phase === "completed") {
+      host.guardianNotices = current.filter((candidate) => candidate.key !== noticeKey);
+    }
     return true;
   }
-  const command = toTrimmedString(data.command);
-  const riskLevel = toTrimmedString(data.riskLevel);
-  const rationale = toTrimmedString(data.rationale);
-  const message = toTrimmedString(data.message);
   const notice: ChatGuardianNotice = {
-    key: `guardian:${payload.runId}:${reviewId}:${kind}`,
+    key: noticeKey,
     runId: payload.runId,
-    timestamp: typeof payload.ts === "number" ? payload.ts : Date.now(),
+    timestamp: payload.ts,
     kind,
-    ...(command ? { command } : {}),
-    ...(riskLevel ? { riskLevel } : {}),
-    ...(rationale ? { rationale } : {}),
-    ...(message ? { message } : {}),
   };
-  const current = host.guardianNotices ?? [];
+  if (systemNotice) {
+    notice.source = "system";
+  }
+  for (const field of ["command", "riskLevel", "rationale", "message"] as const) {
+    const value = toTrimmedString(data[field]);
+    if (value) {
+      notice[field] = value;
+    }
+  }
   const existingIndex = current.findIndex((candidate) => candidate.key === notice.key);
   host.guardianNotices =
     existingIndex === -1
@@ -1092,7 +1067,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return true;
   }
 
-  if (handleGuardianEvent(host, payload)) {
+  if (handleNoticeEvent(host, payload)) {
     return true;
   }
 
@@ -1177,7 +1152,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       : undefined;
   const liveDiffStat = phase === "input_delta" ? readLiveDiffStat(data.diff) : undefined;
   if (name === "session_status" && phase === "result") {
-    syncSessionStatusModelOverride(host, data);
+    refreshSessionStatusModel(host, data);
   }
 
   const now = Date.now();

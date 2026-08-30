@@ -40,28 +40,138 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
   if (compact) {
     await page.locator(".chat-header-session-menu__trigger").click();
-    const updateButton = page.getByText("Update available v2.0.0", { exact: true });
-    await updateButton.waitFor({ timeout: 10_000 });
-    return { compact, gateway, updateButton };
+    expect(await page.getByText("Update available v2.0.0", { exact: true }).count()).toBe(0);
+    await page.screenshot({
+      animations: "disabled",
+      path: path.join(PROOF_DIR, "04a-compact-session-menu-without-update.png"),
+    });
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
   }
-  await page.locator(".sidebar-issues-button").click();
+  await page.locator(".sidebar-issues-button:visible").click();
   const updateIssue = page.locator(
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
   );
   await updateIssue.locator("summary").click();
   const updateButton = updateIssue.locator(".sidebar-update-card__action");
   await updateButton.waitFor({ timeout: 10_000 });
+  if (compact) {
+    await page.screenshot({
+      animations: "disabled",
+      path: path.join(PROOF_DIR, "04b-compact-update-inbox.png"),
+    });
+  }
   return { compact, gateway, updateButton };
 }
 
-async function openConfirmation(page: Page, updateButton: Locator, compact = false) {
+async function openConfirmation(page: Page, updateButton: Locator) {
   await updateButton.click();
-  if (compact) {
-    await page.getByRole("button", { name: "Update now", exact: true }).click();
-  }
 }
 
 suite.define(() => {
+  it("keeps a dismissed Inbox update hidden until the Gateway boot changes", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          gatewayBootId: "gateway-boot-a",
+          operatorScopes: ["operator.admin", "operator.read"],
+          updateAvailable: UPDATE_AVAILABLE,
+          updateSchedule: {
+            channel: "stable",
+            autoEnabled: false,
+            target: { kind: "package", version: "2.0.0" },
+          },
+        });
+        expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+        await gateway.waitForRequest("chat.startup");
+
+        // The Inbox is the sole update surface; the badge carries the attention.
+        const inboxBadge = page.locator(".sidebar-issues-button__count");
+        await inboxBadge.waitFor();
+        expect(
+          await page
+            .locator("openclaw-sidebar-attention")
+            .evaluate((attention) =>
+              [...attention.children]
+                .map((child) => child.className)
+                .filter((className) => typeof className === "string" && className.length > 0),
+            ),
+        ).toEqual(["sr-only", "sidebar-issues-button"]);
+        await page.locator(".sidebar-shell__footer").screenshot({
+          animations: "disabled",
+          path: path.join(PROOF_DIR, "00-footer-inbox-badge.png"),
+        });
+
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.waitFor();
+        const dismissButton = updateIssue.locator(".sidebar-issues-panel__dismiss");
+        await dismissButton.click();
+        await updateIssue.waitFor({ state: "detached" });
+        await page.keyboard.press("Escape");
+        await inboxBadge.waitFor({ state: "detached" });
+
+        await page.locator(".sidebar-identity-card").click();
+        await page.getByText("Update available", { exact: true }).waitFor();
+        await page.keyboard.press("Escape");
+
+        await page.reload();
+        await gateway.waitForRequest("chat.startup");
+        expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);
+
+        await gateway.setGatewayBootId("gateway-boot-b");
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await inboxBadge.waitFor();
+      },
+    );
+  });
+
+  it("keeps the update visible but non-dismissible for read-only operators", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          gatewayBootId: "gateway-boot-read-only",
+          operatorScopes: ["operator.read"],
+          updateAvailable: UPDATE_AVAILABLE,
+          updateSchedule: {
+            channel: "stable",
+            autoEnabled: false,
+            target: { kind: "package", version: "2.0.0" },
+          },
+        });
+        expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+        await gateway.waitForRequest("chat.startup");
+
+        await page.locator(".sidebar-issues-button").click();
+        const scopeGuidance = page.locator('[data-attention-kind="scopeUpgrade"]');
+        await scopeGuidance.locator(".sidebar-issues-panel__dismiss").click();
+        await scopeGuidance.waitFor({ state: "detached" });
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.waitFor();
+        expect(await updateIssue.locator(".sidebar-issues-panel__dismiss").count()).toBe(0);
+        expect(await page.locator(".sidebar-issues-button__count").count()).toBe(0);
+        expect(await page.locator("#sidebar-issues-tab-all .hub-tab__badge--count").count()).toBe(
+          0,
+        );
+        expect(
+          await page.locator("#sidebar-issues-tab-system .hub-tab__badge--count").count(),
+        ).toBe(0);
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(PROOF_DIR, "05-read-only-informational-update.png"),
+        });
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      },
+    );
+  });
+
   it("opens a confirmation that states the action, target, versions, and restart impact", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },
@@ -116,7 +226,7 @@ suite.define(() => {
             suite.server.baseUrl,
             compact,
           );
-          await openConfirmation(page, updateButton, compact);
+          await openConfirmation(page, updateButton);
           await confirmationDialog(page).waitFor();
           expect(
             await confirmationCopy(page)
@@ -216,6 +326,13 @@ suite.define(() => {
         });
 
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
+        await page.getByRole("button", { name: "Close", exact: true }).click();
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator("summary").click();
+        expect(await updateIssue.locator(".sidebar-update-card__action").isDisabled()).toBe(true);
       },
     );
   });

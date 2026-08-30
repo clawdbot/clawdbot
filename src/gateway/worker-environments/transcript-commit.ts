@@ -15,8 +15,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { resolveTerminalAssistantTranscriptRunId } from "../../sessions/transcript-events.js";
+import {
+  attachSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../sessions/transcript-events.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { prepareWorkerTurnTranscriptMessage } from "./placement-turn-claim-events.js";
 import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 import {
   createWorkerTranscriptCommitStore,
@@ -314,6 +318,7 @@ function resolvePersistedCommitAcrossDag(params: {
 
 async function applyWorkerTranscriptCommit(params: {
   config: OpenClawConfig;
+  identity: WorkerConnectionIdentity;
   messages: readonly CommittedAgentMessage[];
   recoverPersistedBatch: boolean;
   requestedBaseLeafId: string | null;
@@ -321,8 +326,11 @@ async function applyWorkerTranscriptCommit(params: {
   sessionId: string;
   target: ResolvedWorkerSessionTarget;
 }): Promise<ApplyTranscriptCommitResult> {
-  const redactedMessages = params.messages.map(
-    (message) => redactTranscriptMessage(message, params.config) as CommittedAgentMessage,
+  const redactedMessages = params.messages.map((message) =>
+    attachSessionTranscriptRunId(
+      redactTranscriptMessage(message, params.config) as CommittedAgentMessage,
+      params.runId,
+    ),
   );
   const expectedState = {
     sessionId: params.sessionId,
@@ -367,6 +375,9 @@ async function applyWorkerTranscriptCommit(params: {
       const messages = [...prefix.recoveredMessages];
       let nextMessageSeq = prefix.activeVisibleEntryCount;
       for (const message of redactedMessages.slice(prefix.recoveredMessages.length)) {
+        if (message.role === "assistant") {
+          Object.assign(message, prepareWorkerTurnTranscriptMessage(params.identity, message));
+        }
         const messageId = manager.appendMessage(message, {
           config: params.config,
           // Active-path recovery owns dedupe. A global key scan could reuse an
@@ -478,6 +489,7 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
       );
       const applied = await applyWorkerTranscriptCommit({
         config,
+        identity: params.identity,
         messages,
         recoverPersistedBatch: started.kind === "recover",
         requestedBaseLeafId: params.request.baseLeafId,

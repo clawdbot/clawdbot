@@ -1,4 +1,7 @@
 // Shared fixtures for agent runner tests and temporary session files.
+import path from "node:path";
+import { onTestFinished } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -23,22 +26,24 @@ export function createTestQueueSettings(overrides: Partial<QueueSettings> = {}):
 }
 
 export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
+  const rootDir = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-followup-run-");
   return {
     prompt: "hello",
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     run: {
       agentId: "main",
-      agentDir: "/tmp/agent",
+      agentDir: path.join(rootDir, "agent"),
       sessionId: "session",
       sessionKey: "main",
       messageProvider: "whatsapp",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
+      sessionFile: path.join(rootDir, "session.jsonl"),
+      workspaceDir: rootDir,
       config: {},
       skillsSnapshot: { prompt: "", skills: [] },
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
       thinkLevel: "low",
       verboseLevel: "off",
       elevatedLevel: "off",

@@ -30,7 +30,7 @@ import {
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareAcpDeliveryPayload } from "./dispatch-acp-payload.js";
-import type { NormalizeReplySkipReason } from "./normalize-reply.js";
+import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import {
   attachReplyDispatchUndeliveredFallback,
   captureReplyDispatchDeliveryOutcome,

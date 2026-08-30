@@ -200,6 +200,55 @@ describe("HEIC input image normalization", () => {
       },
     },
     {
+      name: "converts sniffed HEIC sequence images using the existing HEIC allowlist",
+      source: {
+        type: "base64",
+        data: Buffer.from("heic-sequence-source").toString("base64"),
+        mediaType: "image/heic",
+      } as const,
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"]),
+      detectedMime: "image/heic-sequence",
+      convertedBytes: Buffer.from("jpeg-heic-sequence"),
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-heic-sequence").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
+      name: "converts sniffed HEIF sequence images using the existing HEIF allowlist",
+      source: {
+        type: "base64",
+        data: Buffer.from("heif-sequence-source").toString("base64"),
+        mediaType: "image/heif",
+      } as const,
+      limits: createImageSourceLimits(["image/heif", "image/jpeg"]),
+      detectedMime: "image/heif-sequence",
+      convertedBytes: Buffer.from("jpeg-heif-sequence"),
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-heif-sequence").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
+      name: "converts fetched HEIC sequence images using the existing HEIC allowlist",
+      source: {
+        type: "url",
+        url: "https://example.com/photo.heic",
+      } as const,
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"], true),
+      detectedMime: "image/heic-sequence",
+      convertedBytes: Buffer.from("jpeg-url-sequence"),
+      fetchedContentType: "image/heic-sequence",
+      fetchedBody: Buffer.from("heic-url-sequence"),
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-url-sequence").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
       name: "keeps declared MIME for non-HEIC images after validation",
       source: {
         type: "base64",
@@ -273,6 +322,7 @@ describe("HEIC input image normalization", () => {
         mediaType: "image/png",
       },
       limits: createImageSourceLimits(["image/png", "image/jpeg"]),
+      detectedMime: "application/pdf",
       expectedError: "Unsupported image MIME type: application/pdf",
     },
     {
@@ -282,13 +332,36 @@ describe("HEIC input image normalization", () => {
         url: "https://example.com/photo.png",
       },
       limits: createImageSourceLimits(["image/png", "image/jpeg"], true),
+      detectedMime: "application/pdf",
       expectedError: "Unsupported image MIME type: application/pdf",
       fetchedUrl: "https://example.com/photo.png",
       fetchedContentType: "image/png",
       fetchedBody: Buffer.from("%PDF-1.4\n"),
     },
+    {
+      name: "rejects sequence images when their canonical HEIC MIME is not allowed",
+      source: {
+        type: "base64" as const,
+        data: Buffer.from("heic-sequence-source").toString("base64"),
+        mediaType: "image/heic-sequence",
+      },
+      limits: createImageSourceLimits(["image/png", "image/jpeg"]),
+      detectedMime: "image/heic-sequence",
+      expectedError: "Unsupported image MIME type",
+    },
+    {
+      name: "rejects spoofed HEIC sequence metadata when detected bytes are not an image",
+      source: {
+        type: "base64" as const,
+        data: Buffer.from("%PDF-1.4\n").toString("base64"),
+        mediaType: "image/heic-sequence",
+      },
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"]),
+      detectedMime: "application/pdf",
+      expectedError: "Unsupported image MIME type: application/pdf",
+    },
   ] as const)("$name", async (testCase) => {
-    detectMimeMock.mockResolvedValueOnce("application/pdf");
+    detectMimeMock.mockResolvedValueOnce(testCase.detectedMime);
     await expectRejectedImageMimeCase(testCase);
     expect(convertHeicToJpegMock).not.toHaveBeenCalled();
   });

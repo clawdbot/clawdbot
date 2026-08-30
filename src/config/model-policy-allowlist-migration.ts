@@ -1,28 +1,23 @@
 // Shared legacy model allowlist detection for runtime, doctor, and config writes.
 import { isRecord } from "../utils.js";
-
-export const MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER = "modelPolicyAllowlist";
+import { createModelPolicyRefValidator } from "./model-policy-ref.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function hasModelPolicyAllowlistMigrationMarker(value: unknown): boolean {
   if (
     isRecord(value) &&
     isRecord(value.meta) &&
     isRecord(value.meta.migrations) &&
-    value.meta.migrations[MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER] === true
+    value.meta.migrations.modelPolicyAllowlist === true
   ) {
     return true;
   }
   return false;
 }
 
-/** Any policy object opts into the explicit model-policy semantics. */
-export function isExplicitModelPolicy(value: unknown): value is Record<string, unknown> {
-  return isRecord(value);
-}
-
 /** A per-agent policy replaces inherited defaults only when it owns `allow`. */
 export function hasExplicitModelPolicyAllow(value: unknown): boolean {
-  return isExplicitModelPolicy(value) && Object.hasOwn(value, "allow");
+  return isRecord(value) && Object.hasOwn(value, "allow");
 }
 
 export function computeModelPolicyAllowlist(params: {
@@ -44,7 +39,7 @@ function collectLegacyDefaultModelAllowRefs(defaults: unknown): string[] | null 
   // An explicit modelPolicy object (even `{}`, which means allow-any) opts into the
   // new semantics, so a sibling models map stays metadata-only and is never read as
   // a legacy allowlist.
-  if (isExplicitModelPolicy(defaults.modelPolicy)) {
+  if (isRecord(defaults.modelPolicy)) {
     return null;
   }
   if (!isRecord(defaults.models)) {
@@ -52,4 +47,45 @@ function collectLegacyDefaultModelAllowRefs(defaults: unknown): string[] | null 
   }
   const refs = Object.keys(defaults.models).filter((key) => key.trim().length > 0);
   return refs.length > 0 ? refs : null;
+}
+
+/** Materialize a whole legacy restriction, or retain its shipped dynamic-map semantics. */
+export function materializeModelPolicyAllowlist(
+  cfg: OpenClawConfig,
+  previousConfig: unknown = cfg,
+): { kind: "complete" | "deferred"; config: OpenClawConfig } {
+  const previousAgents = isRecord(previousConfig) ? previousConfig.agents : undefined;
+  const allow = isRecord(cfg.agents?.defaults?.modelPolicy)
+    ? null
+    : computeModelPolicyAllowlist({
+        root: previousConfig,
+        defaults: isRecord(previousAgents) ? previousAgents.defaults : undefined,
+      });
+  if (allow && !allow.every(createModelPolicyRefValidator(cfg.agents?.defaults?.models))) {
+    // Bare refs depend on the effective agent/provider catalog. Without that context,
+    // keep the entire legacy map active; a partial/empty explicit policy can widen access.
+    const migrations = { ...cfg.meta?.migrations };
+    delete migrations.modelPolicyAllowlist;
+    return {
+      kind: "deferred",
+      config: hasModelPolicyAllowlistMigrationMarker(cfg)
+        ? { ...cfg, meta: { ...cfg.meta, migrations } }
+        : cfg,
+    };
+  }
+  return {
+    kind: "complete",
+    config: {
+      ...cfg,
+      ...(allow
+        ? {
+            agents: {
+              ...cfg.agents,
+              defaults: { ...cfg.agents?.defaults, modelPolicy: { allow } },
+            },
+          }
+        : {}),
+      meta: { ...cfg.meta, migrations: { ...cfg.meta?.migrations, modelPolicyAllowlist: true } },
+    },
+  };
 }

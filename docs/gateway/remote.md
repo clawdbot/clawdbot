@@ -74,6 +74,18 @@ Persist a remote target so CLI commands use it by default:
 
 When the Gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and open the SSH tunnel first. In the macOS app's SSH-tunnel transport, the discovered Gateway hostname goes in `gateway.remote.sshTarget` (`user@host` or `user@host:port`); `gateway.remote.url` stays the local tunnel URL. If the remote port differs from the local one, set `gateway.remote.remotePort`.
 
+Running `openclaw configure --section gateway` or interactive onboarding again
+preserves the remote TLS fingerprint and transport settings when you keep the
+same URL (ignoring surrounding whitespace). Changing the URL clears those
+endpoint settings. A newly confirmed discovery fingerprint replaces the saved
+pin only for the discovered URL, and your selected auth method still applies.
+Accepting a discovered direct connection selects direct transport. Choosing a
+discovered SSH tunnel clears saved transport settings for the suggested loopback
+URL, which may now reach a different host; start the displayed tunnel manually.
+
+The onboarding and configure readiness checks use the saved TLS fingerprint for
+that same endpoint. Probing a different URL does not inherit its certificate pin.
+
 Host-key verification is strict by default (`gateway.remote.sshHostKeyPolicy: "strict"`). Set it to `"openssh"` to delegate to your effective OpenSSH config instead; review your user and system SSH settings before enabling it.
 
 For a Gateway already reachable on a trusted LAN or Tailnet, use direct mode:

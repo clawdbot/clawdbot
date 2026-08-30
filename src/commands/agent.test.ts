@@ -22,6 +22,7 @@ import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
+import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -302,7 +303,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         onAgentEvent: params.onAgentEvent,
       } as never);
     }),
-    sessionFileHasContent: vi.fn(async () => false),
+    sessionTranscriptHasContent: vi.fn(async () => false),
   };
 });
 
@@ -329,9 +330,10 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
         payloads?: Array<{ text?: string; mediaUrl?: string | null }>;
       }) => {
         const payloads = params.payloads ?? [];
+        const deliveryResult = { payloads, meta: params.result.meta ?? {} };
         if (params.opts.json) {
-          params.runtime.log(JSON.stringify({ payloads, meta: params.result.meta ?? {} }));
-          return;
+          params.runtime.log(JSON.stringify(deliveryResult));
+          return deliveryResult;
         }
         if (params.opts.deliver && params.opts.channel === "telegram" && params.opts.to) {
           for (const payload of payloads) {
@@ -341,13 +343,14 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
               verbose: false,
             });
           }
-          return;
+          return deliveryResult;
         }
         for (const payload of payloads) {
           if (payload.text) {
             params.runtime.log(payload.text);
           }
         }
+        return deliveryResult;
       },
     ),
   };
@@ -389,8 +392,6 @@ const runtime = createThrowingTestRuntime();
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, {
     prefix: "openclaw-agent-",
-    skipHomeCleanup: true,
-    skipSessionCleanup: true,
   });
 }
 
@@ -593,6 +594,150 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it.each([
+    { name: "completed stop", meta: { stopReason: "stop" }, outcome: "completed" },
+    {
+      name: "structured blocked result",
+      meta: {
+        replayInvalid: true,
+        livenessState: "blocked" as const,
+        finalAssistantVisibleText: "Prompt exceeds model context",
+        finalAssistantRawText: "Prompt exceeds model context",
+        error: { kind: "context_overflow" as const, message: "Prompt exceeds model context" },
+      },
+      outcome: "failed",
+    },
+    { name: "cancelled result", meta: { aborted: true, stopReason: "stop" }, outcome: "failed" },
+    {
+      name: "provider timeout",
+      meta: { aborted: true, stopReason: "timeout", timeoutPhase: "provider" as const },
+      outcome: "failed",
+    },
+    { name: "yielded turn", meta: { yielded: true }, outcome: "completed" },
+    {
+      name: "exhausted fallback",
+      meta: {
+        error: {
+          kind: "incomplete_turn" as const,
+          message: "Incomplete terminal response",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+      },
+      outcome: "failed",
+    },
+    { name: "callback error", meta: {}, fault: "callback", outcome: "failed" },
+    { name: "late cancellation", meta: {}, fault: "abort", outcome: "failed" },
+  ])(
+    "hands off the terminal outcome after real delivery projection: $name",
+    async ({ meta, outcome, fault }) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"));
+        const controller = new AbortController();
+        const text = meta.error?.message ?? "ok";
+        const rawResult = {
+          ...createDefaultAgentResult(),
+          payloads: [{ text, ...(meta.error ? { isError: true } : {}) }],
+          meta: { ...createDefaultAgentResult().meta, ...meta },
+        };
+        vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
+          if (fault === "callback") {
+            await params.onAgentEvent?.({
+              stream: "lifecycle",
+              data: { phase: "finishing", error: "Deferred provider failure" },
+            });
+          }
+          return rawResult;
+        });
+        const actualDelivery = await vi.importActual<
+          typeof import("../agents/command/delivery.js")
+        >("../agents/command/delivery.js");
+        vi.mocked(deliverAgentCommandResult).mockImplementationOnce(async (params) => {
+          const projected = await actualDelivery.deliverAgentCommandResult(params);
+          if (fault === "abort") {
+            controller.abort();
+          }
+          return projected;
+        });
+
+        const result = await agentCommand(
+          { message: "probe", agentId: "main", json: true, abortSignal: controller.signal },
+          runtime,
+        );
+
+        expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+        expect(result?.payloads).toEqual([{ text, mediaUrl: null }]);
+        expect(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]).toBe(JSON.stringify(result, null, 2));
+        expect(readAgentRunTerminalOutcome(rawResult)).toBeUndefined();
+        expect(readAgentRunTerminalOutcome(result)).toBe(outcome);
+      });
+    },
+  );
+
+  it("keeps best-effort delivery failure separate from the completed run outcome", async () => {
+    await withTempHome(async (home) => {
+      mockConfig(home, path.join(home, "sessions.json"));
+      const actualDelivery = await vi.importActual<typeof import("../agents/command/delivery.js")>(
+        "../agents/command/delivery.js",
+      );
+      vi.mocked(deliverAgentCommandResult).mockImplementationOnce(
+        actualDelivery.deliverAgentCommandResult,
+      );
+
+      const result = await agentCommand(
+        {
+          message: "probe",
+          agentId: "main",
+          json: true,
+          deliver: true,
+          channel: "webchat",
+          bestEffortDeliver: true,
+        },
+        runtime,
+      );
+
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(result?.deliveryStatus).toMatchObject({ status: "failed", succeeded: false });
+      expect(readAgentRunTerminalOutcome(result)).toBe("completed");
+    });
+  });
+
+  it.each(["rejection", "cancellation"] as const)(
+    "settles deferred cleanup %s before handing off the reply",
+    async (fault) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"));
+        const controller = new AbortController();
+        const failure = new Error("Deferred cleanup failed");
+        vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockImplementationOnce(
+          async (params) => {
+            params.deferredLifecycle?.adopt({
+              complete: async () => {
+                if (fault === "rejection") {
+                  throw failure;
+                }
+                controller.abort();
+              },
+              discard: () => {},
+            });
+            return createDefaultAgentResult();
+          },
+        );
+
+        const command = agentCommand(
+          { message: "probe", agentId: "main", abortSignal: controller.signal },
+          runtime,
+        );
+        if (fault === "rejection") {
+          await expect(command).rejects.toBe(failure);
+        } else {
+          expect(readAgentRunTerminalOutcome(await command)).toBe("failed");
+        }
+        expect(runtime.log).toHaveBeenCalledWith("ok");
+      });
+    },
+  );
+
   it("carries an external cwd into the direct agent session skill snapshot", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -613,6 +758,67 @@ describe("agentCommand", () => {
           executionSkillsDir: path.join(executionWorkspace, "skills"),
         }),
       );
+    });
+  });
+
+  it.each([
+    ["local", undefined, false],
+    ["local", true, false],
+    ["ingress", undefined, true],
+    ["ingress", true, false],
+  ] as const)(
+    "owns skill watching for %s runs with oneShotCliRun=%s",
+    async (entrypoint, oneShotCliRun, watch) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"));
+        const opts = { message: "inspect skills", agentId: "main", oneShotCliRun };
+        if (entrypoint === "ingress") {
+          await agentCommandFromIngress({ ...opts, allowModelOverride: false }, runtime);
+        } else {
+          await agentCommand(opts, runtime);
+        }
+
+        expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+          expect.objectContaining({ watch }),
+        );
+      });
+    },
+  );
+
+  it("does not scaffold an implicit ACP workspace when the command supplies cwd", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const repository = path.join(home, "repository");
+      const configuredWorkspace = path.join(repository, ".openclaw", "workspace");
+      fs.mkdirSync(repository, { recursive: true });
+      execFileSync("git", ["-C", repository, "init", "-b", "main"]);
+      fs.writeFileSync(path.join(repository, "README.md"), "base\n");
+      execFileSync("git", ["-C", repository, "add", "README.md"]);
+      mockConfig(home, store, { workspace: configuredWorkspace }, undefined, [
+        { id: "codex", runtime: { type: "acp", acp: { agent: "codex" } } },
+      ]);
+      const actualWorkspace =
+        await vi.importActual<typeof import("../agents/workspace.js")>("../agents/workspace.js");
+      vi.mocked(ensureAgentWorkspace).mockImplementationOnce((params) =>
+        actualWorkspace.ensureAgentWorkspace(params),
+      );
+
+      const prepared = await prepareAgentCommandExecution(
+        {
+          message: "inspect this repo",
+          agentId: "codex",
+          sessionId: "explicit-cwd-acp",
+          cwd: repository,
+        },
+        runtime,
+      );
+      expect(prepared.workspaceDir).toBe(configuredWorkspace);
+      const implicitWorkspace = configuredWorkspace;
+
+      expect(fs.existsSync(implicitWorkspace)).toBe(true);
+      expect(fs.existsSync(path.join(implicitWorkspace, "AGENTS.md"))).toBe(false);
+      expect(fs.existsSync(path.join(implicitWorkspace, ".git"))).toBe(false);
+      expect(() => execFileSync("git", ["-C", repository, "add", "-A"])).not.toThrow();
     });
   });
 
@@ -862,6 +1068,7 @@ describe("agentCommand", () => {
             agentId: "main",
             runId: "public-ingress-run",
             allowModelOverride: false,
+            senderIsOwner: true,
             mainRestartRecoveryAdmitted: true,
             mainRestartRecoveryAttempt: 1,
             mainRestartRecoveryOwnerLease: {
@@ -890,6 +1097,9 @@ describe("agentCommand", () => {
         expect(prepare).toHaveBeenCalledWith(
           expect.objectContaining({ admission: undefined, runId: "public-ingress-run" }),
         );
+        expect(
+          vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].opts,
+        ).toMatchObject({ senderIsOwner: false });
       } finally {
         prepare.mockRestore();
         if (priorDescriptor) {

@@ -69,6 +69,7 @@ export type ControlUiPluginTabAuthGrant = {
   path: string;
   match: "exact" | "prefix";
   scopes: OperatorScope[];
+  profileId?: string;
 };
 
 /** Pure projection of tab descriptors visible to the presented scopes. */

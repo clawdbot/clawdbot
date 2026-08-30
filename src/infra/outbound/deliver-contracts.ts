@@ -97,7 +97,10 @@ export type ChannelHandler = {
   }) => { threadId: string | number } | null | undefined;
   buildTargetRef: (overrides?: { threadId?: string | number | null }) => ChannelOutboundTargetRef;
   shouldSkipPlainTextSanitization?: (payload: ReplyPayload) => boolean;
-  resolveEffectiveTextChunkLimit?: (fallbackLimit?: number) => number | undefined;
+  resolveEffectiveTextChunkLimit?: (params: {
+    fallbackLimit?: number;
+    formatting?: OutboundDeliveryFormattingOptions;
+  }) => number | undefined;
   sendPayload?: (
     payload: ReplyPayload,
     overrides?: OutboundMessageSendOverrides,

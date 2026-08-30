@@ -379,7 +379,12 @@ describe("Slack Web API routing", () => {
       await expect(readClient.auth.test()).rejects.toThrow();
       await expect(sharedClient.auth.test()).resolves.toMatchObject({ ok: true });
 
-      expect(requests).toHaveLength(2);
+      // The read client aborts at 20ms, so whether its request reaches the
+      // server before the abort is a race on a loaded runner. The bound itself
+      // is asserted above; here only the shared client's arrival is certain,
+      // and its token proves the dedicated client did not carry the call.
+      expect(requests.length).toBeGreaterThanOrEqual(1);
+      expect(requests.at(-1)?.authorization).toBe("Bearer xoxb-shared");
     } finally {
       await server.close();
     }

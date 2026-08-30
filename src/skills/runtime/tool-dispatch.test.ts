@@ -55,6 +55,7 @@ describe("resolveSkillDispatchTools", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["read", "cron"]);
     expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "automations" }]);
     expect(args?.nativeChannelId).toBe("native-room-1");
+    expect(args?.sessionConfigSource).toBe("runtime");
   });
 
   it("passes unrestricted skill-dispatch tool surfaces to cron jobs", () => {

@@ -151,7 +151,7 @@ suite.define(() => {
       });
 
       await group.locator(".sidebar-recent-sessions__head").hover();
-      await group.getByRole("button", { name: "New session in Client work" }).click();
+      await group.getByRole("link", { name: "New session in Client work" }).click();
       await page.locator(".new-session-page__message").waitFor();
       await expect.poll(() => new URL(page.url()).searchParams.get("group")).toBe("Client work");
       await expect
@@ -482,7 +482,7 @@ suite.define(() => {
       await dialog.waitFor({ state: "detached" });
 
       await group.locator(".sidebar-recent-sessions__head").hover();
-      await group.getByRole("button", { name: "New session in Client work" }).click();
+      await group.getByRole("link", { name: "New session in Client work" }).click();
       await page.locator("#new-session-detail-trigger").waitFor();
       await expect
         .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))

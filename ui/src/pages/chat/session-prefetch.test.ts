@@ -3,9 +3,11 @@
 import { IDBFactory } from "fake-indexeddb";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
@@ -129,6 +131,7 @@ describe("recent session prefetch", () => {
         },
       },
       sessions: {
+        subscribe: () => () => undefined,
         get canonicalListRevision() {
           return current.listRevision;
         },
@@ -188,7 +191,29 @@ describe("recent session prefetch", () => {
     controller.hostUpdated?.();
   }
 
-  it("idles, excludes open and fresh sessions, and fills five cache entries sequentially", async () => {
+  it("does not repopulate a removed session from an in-flight prefetch before the next list revision", async () => {
+    const key = "agent:main:deleted";
+    const response = createDeferred<ReturnType<typeof historyResult>>();
+    const request = vi.fn(() => response.promise);
+    const snapshot = {
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: [],
+      rows: [row(key, NOW - 1)],
+    };
+    updatePrefetch(snapshot);
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(request).toHaveBeenCalledOnce();
+    updatePrefetch({ ...snapshot, rows: [] });
+    response.resolve(historyResult(key));
+    await settlePromises();
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toBeNull();
+    await store.flush();
+    expect(await store.read(key)).toBeNull();
+  });
+
+  it("quickly warms five eligible sessions together without reopening fresh or active history", async () => {
     store.write("agent:main:fresh", historySnapshot("fresh"));
     await store.flush();
     const open = vi.spyOn(indexedDB, "open");
@@ -232,19 +257,18 @@ describe("recent session prefetch", () => {
 
     updatePrefetch(state);
     expect(request).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(300);
     await settlePromises();
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(5);
 
     for (let index = 0; index < 5; index += 1) {
-      expect(request).toHaveBeenCalledTimes(index + 1);
       const pendingRequest = pending[index];
       if (!pendingRequest) {
         throw new Error(`missing pending history request ${index}`);
       }
       pendingRequest.resolve(historyResult(pendingRequest.sessionKey));
-      await settlePromises();
     }
+    await settlePromises();
 
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([
       "agent:main:eligible-1",
@@ -279,6 +303,80 @@ describe("recent session prefetch", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await settlePromises();
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("keeps repeated roster refreshes within the bounded recent-session snapshot window", async () => {
+    const request = vi.fn(async (_method: string, params: unknown) =>
+      historyResult((params as { sessionKey: string }).sessionKey),
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const rows = Array.from({ length: 25 }, (_, index) =>
+      row(`agent:main:recent-${index}`, NOW - index - 1),
+    );
+
+    for (let listRevision = 1; listRevision <= 5; listRevision += 1) {
+      updatePrefetch({ client, listRevision, openSessionKeys: [], rows });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await settlePromises();
+      await store.flush();
+    }
+
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(
+      rows.slice(0, 20).map(({ key }) => key),
+    );
+    expect(store.readSavedAt("agent:main:recent-0")).not.toBeNull();
+    expect(store.readSavedAt("agent:main:recent-19")).not.toBeNull();
+
+    updatePrefetch({ client, listRevision: 6, openSessionKeys: [], rows });
+    await vi.advanceTimersByTimeAsync(31_000);
+    await settlePromises();
+    await store.flush();
+
+    expect(request).toHaveBeenCalledTimes(20);
+    expect(store.readSavedAt("agent:main:recent-0")).not.toBeNull();
+  });
+
+  it("reserves snapshot capacity for presented panes while warming recent background sessions", async () => {
+    const presentedSessionKey = "agent:main:presented";
+    cacheChatSessionSnapshot(
+      cache,
+      snapshotHost,
+      { sessionKey: presentedSessionKey },
+      historySnapshot("presented"),
+    );
+    for (let index = 1; index < MAX_CACHED_CHAT_SESSIONS; index += 1) {
+      cacheChatSessionSnapshot(
+        cache,
+        snapshotHost,
+        { sessionKey: `agent:main:stale-${index}` },
+        historySnapshot(`stale-${index}`),
+      );
+    }
+    await store.flush();
+
+    const request = vi.fn(async (_method: string, params: unknown) =>
+      historyResult((params as { sessionKey: string }).sessionKey),
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const backgroundRows = Array.from({ length: 25 }, (_, index) =>
+      row(`agent:main:background-${index}`, NOW - index - 1),
+    );
+    const rows = [row(presentedSessionKey, NOW), ...backgroundRows];
+
+    for (let listRevision = 1; listRevision <= 5; listRevision += 1) {
+      updatePrefetch({ client, listRevision, openSessionKeys: [presentedSessionKey], rows });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await settlePromises();
+      await store.flush();
+    }
+
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(
+      backgroundRows.slice(0, 19).map(({ key }) => key),
+    );
+    expect(
+      readChatSessionSnapshot(cache, snapshotHost, { sessionKey: presentedSessionKey }),
+    ).toEqual(historySnapshot("presented"));
+    expect(store.readSavedAt(presentedSessionKey)).not.toBeNull();
   });
 
   it("coalesces a newer list revision until the per-session cooldown expires", async () => {
@@ -398,6 +496,75 @@ describe("recent session prefetch", () => {
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",
     });
+  });
+
+  it("retains the prior cursor when a delta carries transient active-run replay", async () => {
+    const sessionKey = "agent:main:active";
+    cacheChatSessionSnapshot(
+      cache,
+      snapshotHost,
+      { sessionKey },
+      {
+        deltaCursor: "cursor-1",
+        messages: [{ role: "user", content: "cached" }],
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "session-active",
+      },
+    );
+    const request = vi.fn(async () => ({
+      kind: "delta",
+      messages: [],
+      deltaCursor: "cursor-2",
+      sessionInfo: {
+        key: sessionKey,
+        kind: "direct",
+        sessionId: "session-active",
+        updatedAt: 2,
+        hasActiveRun: true,
+      },
+      inFlightRun: {
+        runId: "run-active",
+        events: [
+          {
+            runId: "run-active",
+            seq: 1,
+            stream: "item",
+            ts: 1,
+            sessionKey,
+            data: { kind: "preamble", itemId: "progress", progressText: "Still working" },
+          },
+        ],
+      },
+    }));
+
+    updatePrefetch({
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: [],
+      rows: [row(sessionKey, NOW + 1)],
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settlePromises();
+
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })?.deltaCursor).toBe(
+      "cursor-1",
+    );
+  });
+
+  it("leaves active sessions for the presented pane to revalidate", async () => {
+    const sessionKey = "agent:main:active";
+    const request = vi.fn();
+
+    updatePrefetch({
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: [],
+      rows: [{ ...row(sessionKey, NOW + 1), hasActiveRun: true, status: "running" }],
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settlePromises();
+
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("skips the cycle when another tab holds the Web Lock", async () => {

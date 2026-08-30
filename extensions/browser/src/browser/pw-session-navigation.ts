@@ -414,6 +414,7 @@ export async function gotoPageWithNavigationGuard(
     url: string;
     timeoutMs: number;
     targetId?: string;
+    assertPageCurrent?: () => void;
   } & BrowserNavigationPolicyOptions,
 ): Promise<Response | null> {
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
@@ -461,6 +462,7 @@ export async function gotoPageWithNavigationGuard(
   let navigationFailed = false;
   let navigationError: unknown;
   try {
+    opts.assertPageCurrent?.();
     response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
   } catch (err) {
     navigationFailed = true;

@@ -7,6 +7,7 @@ vi.mock("./host-hook-cleanup.js", () => ({ cleanupReplacedPluginHostRegistry }))
 
 import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
 import { registerPluginCommandInRegistry } from "./command-registration.js";
+import { createPluginRecord } from "./loader-records.js";
 import { withPluginCommandAccountStartScope } from "./plugin-command-account-start-scope.js";
 import {
   createPluginCommandRuntime,
@@ -74,6 +75,58 @@ afterEach(() => {
 });
 
 describe("plugin command runtime", () => {
+  it("keeps failed command diagnostics scoped, authorized, redacted, and bounded", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      ...createPluginRecord({
+        id: "recovery",
+        source: "/plugins/recovery/index.js",
+        origin: "config",
+        enabled: true,
+        configSchema: true,
+      }),
+      status: "error",
+      failurePhase: "validation",
+      error: `missing payload token=fixture-secret-value private-detail ${"x".repeat(400)}\n    at loader`,
+      commandAliases: [{ name: "recover", kind: "runtime-slash" }],
+    });
+    setActivePluginRegistry(registry);
+    withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
+      expect(
+        matchPluginCommandInvocation(createPluginCommandRuntime(), "/recover stop", {
+          channel: "telegram",
+        }),
+      ).toBeNull();
+    });
+    const disabled = createEmptyPluginRegistry();
+    disabled.plugins.push({ ...registry.plugins[0]!, enabled: false });
+    withPluginRuntimeRegistryScope(disabled, () => {
+      expect(
+        matchPluginCommandInvocation(createPluginCommandRuntime(), "/recover stop", {
+          channel: "telegram",
+        }),
+      ).toBeNull();
+    });
+    const match = matchPluginCommandInvocation(createPluginCommandRuntime(), "/recover stop", {
+      channel: "telegram",
+    });
+    expect(match).not.toBeNull();
+    if (!match) {
+      throw new Error("expected failed command diagnostic");
+    }
+    await expect(
+      match.dispatch.execute({ ...executionContext, isAuthorizedSender: false }),
+    ).resolves.toEqual({ text: "⚠️ This command requires authorization." });
+    const reply = await match.dispatch.execute({
+      ...executionContext,
+      config: { logging: { redactPatterns: ["private-detail"] } },
+    });
+    expect(reply.text).toContain("missing payload");
+    expect(reply.text).toContain("openclaw doctor");
+    expect(reply.text).not.toMatch(/fixture-secret-value|private-detail|at loader/);
+    expect(reply.text!.length).toBeLessThan(400);
+  });
+
   it("prepares plugin host cleanup before gateway shutdown", async () => {
     await prepareActivePluginRegistryShutdown();
     const registry = createEmptyPluginRegistry();

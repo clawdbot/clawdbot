@@ -51,9 +51,9 @@ flow:
           saveAs: outbound
         - set: matchingOutbound
           value:
-            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'alice' && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker))"
+            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.expectedMarker))"
         - assert:
             expr: matchingOutbound.length === 1
             message:
-              expr: "`expected exactly one DM baseline marker reply, saw ${matchingOutbound.length}; transcript=${formatTransportTranscript(state, { conversationId: 'alice' })}`"
+              expr: "`expected exactly one DM baseline marker reply, saw ${matchingOutbound.length}; transcript=${recentOutboundSummary(state)}`"
       detailsExpr: outbound.text

@@ -1,8 +1,5 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import type {
-  DurableComposerDraftAttachment,
-  DurableComposerDraftScope,
-} from "../../lib/chat/composer-draft-store.runtime.ts";
+import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
@@ -14,23 +11,13 @@ import {
   hydrateDurableComposerAttachments,
   reportDurableComposerStorageError,
   writeDurableComposerSnapshot,
+  type DurableChatComposerSnapshot,
 } from "../chat/durable-composer-persistence.ts";
 
 type NewSessionDraftState = {
   message: string;
   attachments: ChatAttachment[];
   incognito: boolean;
-};
-
-type DraftSnapshot = {
-  scope: DurableComposerDraftScope;
-  expectedRevision: number;
-  expectedWriteId?: string;
-  expectedWriteIds: string[];
-  revision: number;
-  text: string;
-  attachments: DurableComposerDraftAttachment[] | null;
-  writeId: string;
 };
 
 const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
@@ -50,7 +37,7 @@ export class NewSessionDraftPersistence {
   private pristineMutationBaseline = 0;
   private restoreGeneration = 0;
   private restoredIdentity = "";
-  private pending: DraftSnapshot | null = null;
+  private pending: DurableChatComposerSnapshot | null = null;
   private timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private incognitoRetirement: Promise<void> = Promise.resolve();
   private readonly committedByScope = new Map<string, number>();
@@ -265,16 +252,7 @@ export class NewSessionDraftPersistence {
     void this.enqueueWrite(async () => {
       const identity = durableComposerScopeIdentity(snapshot.scope);
       try {
-        const { result, payloadUnavailable } = await writeDurableComposerSnapshot({
-          scope: snapshot.scope,
-          expectedRevision: snapshot.expectedRevision,
-          ...(snapshot.expectedWriteId ? { expectedWriteId: snapshot.expectedWriteId } : {}),
-          expectedWriteIds: snapshot.expectedWriteIds,
-          revision: snapshot.revision,
-          text: snapshot.text,
-          storedAttachments: snapshot.attachments,
-          writeId: snapshot.writeId,
-        });
+        const { result, payloadUnavailable } = await writeDurableComposerSnapshot(snapshot);
         if (payloadUnavailable) {
           reportDurableComposerStorageError(snapshot.scope, this.onStorageError);
         }
@@ -325,7 +303,7 @@ export class NewSessionDraftPersistence {
     };
   }
 
-  private snapshot(): DraftSnapshot | null {
+  private snapshot(): DurableChatComposerSnapshot | null {
     const scope = this.scope();
     if (!scope || this.revision <= 0) {
       return null;
@@ -344,7 +322,7 @@ export class NewSessionDraftPersistence {
       expectedWriteIds,
       revision: this.revision,
       text: state.message,
-      attachments: captureDurableChatAttachments(state.attachments),
+      storedAttachments: captureDurableChatAttachments(state.attachments),
       writeId,
     };
   }

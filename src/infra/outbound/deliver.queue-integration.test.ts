@@ -20,11 +20,11 @@ import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js"
 import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
 import {
   claimDeliveryPlatformSendAttempt,
-  loadPendingDeliveries,
   reserveDeliveryAttempt,
   enqueueDeliveryOnce,
 } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";
@@ -503,9 +503,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).toBe("completed");
-    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
-    );
+    await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
@@ -532,9 +530,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).toBe("completed");
-    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
-    );
+    await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
@@ -575,9 +571,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(sendMatrix).toHaveBeenCalledOnce();
     resolveSend({ messageId: "concurrent-stable-message" });
     await expect(first).resolves.toMatchObject([{ messageId: "concurrent-stable-message" }]);
-    await expect(concurrentReplay).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
-    );
+    await expect(concurrentReplay).resolves.toEqual([]);
     expect(
       getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
     ).toBe("completed");

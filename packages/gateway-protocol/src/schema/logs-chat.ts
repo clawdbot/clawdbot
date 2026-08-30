@@ -20,6 +20,7 @@ export const LogsTailResultSchema = closedObject({
   lines: Type.Array(Type.String()),
   truncated: Type.Optional(Type.Boolean()),
   reset: Type.Optional(Type.Boolean()),
+  skippedBytes: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 /** Session-scoped history request used by WebChat and native WebSocket clients. */
@@ -29,10 +30,28 @@ export const ChatHistoryParamsSchema = closedObject({
   cursor: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  pendingBefore: Type.Optional(Type.Integer({ minimum: 1 })),
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
+
+/** Accepted input awaiting a turn, separate from canonical model history. */
+export const ChatPendingInputsPageSchema = closedObject({
+  items: Type.Array(
+    closedObject({
+      id: NonEmptyString,
+      runId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+      message: Type.Unknown(),
+      acceptedAt: Type.Number(),
+      state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
+    }),
+    { maxItems: 20 },
+  ),
+  total: Type.Integer({ minimum: 0 }),
+  nextBefore: Type.Optional(Type.Integer({ minimum: 1 })),
+});
+export type ChatPendingInputsPage = Static<typeof ChatPendingInputsPageSchema>;
 
 /**
  * Bounded forward catch-up response. Clients replay `messages` as `session.message`
@@ -45,7 +64,9 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   deltaCursor: Type.String(),
   sessionInfo: Type.Unknown(),
   agentsList: Type.Optional(Type.Unknown()),
+  inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
+  pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
 });
 
 /** Normal cursor discontinuity; clients recover with a fresh tail request. */
@@ -59,9 +80,16 @@ export const ChatHistoryCursorResultSchema = Type.Union([
   ChatHistoryResetResultSchema,
 ]);
 
-/** Lightweight chat metadata request; optional agent scope keeps selector state explicit. */
+/** Lightweight metadata; session scope preserves the persisted auth-profile selection. */
 export const ChatMetadataParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Read the authorized session's persisted auth-profile selection instead of neutral agent metadata.",
+    }),
+  ),
 });
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */
@@ -138,12 +166,20 @@ const RunToolBindingsSchema = Type.Record(
 const QUEUE_MODES = ["steer", "followup", "collect", "interrupt"] as const;
 export type QueueMode = (typeof QUEUE_MODES)[number];
 
+export const ChatSendIntentSchema = closedObject({
+  kind: Type.Literal("session-goal-start"),
+  version: Type.Literal(1),
+  issuedAtMs: Type.Integer({ minimum: 0 }),
+});
+export type ChatSendIntent = Static<typeof ChatSendIntentSchema>;
+
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
   agentId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
+  intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
   // One-turn override for auto fast-mode cutoff seconds.
@@ -209,6 +245,9 @@ const ChatEventErrorKindSchema = Type.Union([
 /** Coarse startup stages shown while a run has not produced visible activity yet. */
 export const ChatRunStartupPhaseSchema = Type.Union([
   Type.Literal("preparing_workspace"),
+  Type.Literal("naming_worktree"),
+  Type.Literal("creating_worktree"),
+  Type.Literal("running_setup"),
   Type.Literal("provisioning_environment"),
   Type.Literal("preparing_context"),
   Type.Literal("starting_model"),

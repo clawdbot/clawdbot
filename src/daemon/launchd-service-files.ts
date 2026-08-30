@@ -60,7 +60,8 @@ function collectLaunchAgentEnvironmentEntries(
   for (const [rawKey, rawValue] of Object.entries(environment ?? {})) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     const value = rawValue?.trim();
-    if (!key || !value) {
+    // Empty NODE_OPTIONS intentionally clears launchd's inherited Node flags.
+    if (!key || value === undefined || (!value && key !== "NODE_OPTIONS")) {
       continue;
     }
     entries.push([key, value]);

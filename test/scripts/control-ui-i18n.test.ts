@@ -437,6 +437,21 @@ describe("control-ui-i18n process runner", () => {
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
   });
 
+  it("does not split a UTF-16 surrogate pair at the tail boundary", () => {
+    // "ab😀cdef" is 8 UTF-16 code units: a, b, <high>, <low>, c, d, e, f.
+    // maxChars = 5 forces a tail slice whose boundary lands inside the surrogate pair.
+    // The raw `slice(-5)` would return "<low>cdef" (leading dangling low surrogate).
+    // sliceUtf16Safe advances past the low surrogate, retaining "cdef" (4 units);
+    // truncatedChars must reflect the 4 actually-dropped units, not maxChars.
+    const result = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "ab😀cdef", 5);
+    expect(result.text.length).toBeLessThanOrEqual(5);
+    // No dangling surrogate (high 0xd800-0xdbff or low 0xdc00-0xdfff) at either edge.
+    expect(result.text.charCodeAt(0)).toBeLessThan(0xd800);
+    expect(result.text.charCodeAt(result.text.length - 1)).toBeLessThan(0xd800);
+    expect(result.text).toBe("cdef");
+    expect(result.truncatedChars).toBe(4);
+  });
+
   it("bounds failure diagnostics to the newest output", async () => {
     await expect(
       runProcess(

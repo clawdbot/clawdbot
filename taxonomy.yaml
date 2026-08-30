@@ -9037,7 +9037,7 @@ surfaces:
           - docs/tools/reactions.md
           - docs/tools/slash-commands.md
           - docs/gateway/config-agents.md
-          - docs/concepts/message-lifecycle-refactor.md
+          - docs/plugins/sdk-channel-outbound.md
         search_anchors:
           - Inbound attachments
           - Outbound media replies

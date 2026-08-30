@@ -214,6 +214,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
 
   it("redirects before setup detection without loading the discarded workspace", async () => {
     const page = await createPage();
+    await page.emulateMedia({ colorScheme: "dark" });
     const workspaceModules = new Set([
       "/src/components/app-sidebar.ts",
       "/src/components/browser/browser-panel.ts",
@@ -237,6 +238,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         "desktop.observe",
         "openclaw.chat",
         "openclaw.setup.detect",
+        "openclaw.setup.prepare.start",
         "terminal.open",
       ],
       terminalEnabled: true,
@@ -251,20 +253,95 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       exact: true,
     });
     await loading.waitFor();
+    const loadingSections = page.locator('.model-setup__loading[role="status"][aria-busy="true"]');
+    await loadingSections.locator(".model-setup__loading-sections").waitFor();
+    expect(await loadingSections.locator(".settings-section").count()).toBe(4);
+    expect(await loadingSections.locator(".model-setup__loading-row").count()).toBe(5);
+    expect(await loadingSections.locator("button, input, wa-dropdown").count()).toBe(0);
+    await page.evaluate(() => document.fonts.ready);
+    const sectionTitles = [
+      "Found on this Gateway",
+      "Run a model locally",
+      "Sign in with a provider",
+      "Connect with an API key or token",
+    ];
+    const loadingSectionTops = await Promise.all(
+      sectionTitles.map(
+        async (name) =>
+          (await page.locator(".model-setup__loading-sections h2").getByText(name).boundingBox())!
+            .y,
+      ),
+    );
     expect(await page.locator(".connect-splash").count()).toBe(0);
     expect([...requestedWorkspaceModules]).toEqual([]);
     await captureProof(page, "06-first-run-routed-before-detection");
+    await page.setViewportSize({ height: 844, width: 390 });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+        ),
+      )
+      .toBe(true);
+    await captureProof(page, "06b-first-run-routed-before-detection-mobile");
+    await page.setViewportSize(viewport);
 
     await gateway.resolveDeferred("openclaw.setup.detect", {
-      candidates: [],
-      manualProviders: [],
+      candidates: [
+        {
+          kind: "claude-cli",
+          brandId: "claude",
+          label: "Claude Code",
+          detail: "Signed in locally",
+          modelRef: "claude-cli/claude-opus-5",
+          recommended: false,
+          credentials: true,
+        },
+      ],
+      manualProviders: [{ id: "openai", brandId: "openai", label: "OpenAI" }],
+      authOptions: [
+        {
+          id: "openai-oauth",
+          brandId: "openai",
+          label: "OpenAI",
+          kind: "oauth",
+          featured: true,
+        },
+      ],
+      prepareOptions: [
+        { id: "ollama", brandId: "ollama", label: "Ollama" },
+        { id: "lmstudio", brandId: "lmstudio", label: "LM Studio" },
+      ],
       setupComplete: false,
       workspace: "/tmp/openclaw-e2e",
     });
     await loading.waitFor({ state: "detached" });
     await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
+    const readySectionTops = await Promise.all(
+      sectionTitles.map(
+        async (name) => (await page.getByRole("heading", { name }).boundingBox())!.y,
+      ),
+    );
+    expect(
+      Math.max(...readySectionTops.map((top, index) => Math.abs(top - loadingSectionTops[index]!))),
+    ).toBeLessThanOrEqual(13);
     expect([...requestedWorkspaceModules]).toEqual([]);
     await captureProof(page, "07-first-run-model-setup-ready");
+    await page.setViewportSize({ height: 844, width: 390 });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+        ),
+      )
+      .toBe(true);
+    await captureProof(page, "07b-first-run-model-setup-ready-mobile");
   });
 
   it("falls back to the login gate when stored credentials are rejected", async () => {

@@ -3,12 +3,14 @@ import {
   formatErrorMessage,
   isHostScopedAgentToolActive,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { buildCodexUserMcpServersThreadConfigPatchForRun } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { getCodexAppServerClientInstanceId } from "./client.js";
+import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
 } from "./dynamic-tool-profile.js";
+import { assertCodexNativeHookRelayAllowed } from "./native-hook-relay.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -32,6 +34,15 @@ import {
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrResumeThreadParams) {
+  await assertCodexModelBackedReviewerEffectiveConfig({
+    client: params.client,
+    approvalsReviewer: params.appServer.approvalsReviewer,
+    cwd: params.cwd,
+    signal: params.signal,
+  });
+  if (params.nativeHookRelayRequired) {
+    await assertCodexNativeHookRelayAllowed(params.client, params.signal);
+  }
   // Thread lifecycle spans are useful when profiling startup churn, but normal
   // turns should not pay Date.now/span-array overhead while resuming threads.
   const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
@@ -65,11 +76,12 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const userMcpServersConfigPatch =
     params.userMcpServersEnabled === false
       ? undefined
-      : await buildCodexUserMcpServersThreadConfigPatchForRuntime(params.params.config, {
+      : await buildCodexUserMcpServersThreadConfigPatchForRun({
+          run: params.params,
+          cwd: params.cwd,
           agentId: params.agentId ?? params.params.agentId,
-          agentDir: params.params.agentDir,
           allowLiteralOAuthProjection: params.appServer.connectionClass !== "remote",
-          toolOverrides: params.params.toolOverrides,
+          warn: (message) => embeddedAgentLog.warn(message),
           onServerUnavailable: (serverName, error) =>
             embeddedAgentLog.warn("skipping unavailable MCP OAuth server", {
               serverName,

@@ -1,7 +1,9 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
@@ -35,7 +37,7 @@ const MAX_JSON_AUTOPARSE_CHARS = 20_000;
  * Must start with `{`/`[` and end with `}`/`]` and parse successfully.
  * Size-capped to prevent render-loop DoS from large JSON messages.
  */
-export function detectJson(text: string): { parsed: unknown; pretty: string } | null {
+export function detectJson(text: string): { parsed: unknown; text: string } | null {
   const trimmed = text.trim();
 
   // Enforce size cap to prevent UI freeze from multi-MB JSON payloads
@@ -49,7 +51,8 @@ export function detectJson(text: string): { parsed: unknown; pretty: string } | 
   ) {
     try {
       const parsed = JSON.parse(trimmed);
-      return { parsed, pretty: JSON.stringify(parsed, null, 2) };
+      // Parsing is only for the summary; reserialization loses numeric precision and duplicate keys.
+      return { parsed, text: trimmed };
     } catch {
       return null;
     }
@@ -82,7 +85,7 @@ export type MessageActionDetails = {
   shouldFetchFullMessage: boolean;
 };
 
-export function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
+function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
   return normalizedMessage.content
     .reduce<string[]>((lines, item) => {
       if (item.type === "text" && typeof item.text === "string") {
@@ -94,14 +97,24 @@ export function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMe
     .trim();
 }
 
+/** Keep internal oversized-history markers out of every user-visible text surface. */
+export function resolveMessageDisplayMarkdown(
+  message: unknown,
+  normalizedMessage: NormalizedMessage,
+): string {
+  const metadata = asNullableRecord(asNullableRecord(message)?.["__openclaw"]);
+  if (metadata?.truncated === true && metadata.reason === "oversized") {
+    return t("chat.messages.tooLargeToDisplay");
+  }
+  const markdown = resolveNormalizedMessageMarkdown(normalizedMessage);
+  return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
+    ? stripThinkingTags(markdown).trim()
+    : markdown.trim();
+}
+
 export function resolveMessageReplyText(message: unknown): string {
   const normalizedMessage = normalizeMessage(message);
-  const markdown = resolveNormalizedMessageMarkdown(normalizedMessage);
-  const visibleMarkdown =
-    normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
-      ? stripThinkingTags(markdown).trim()
-      : markdown.trim();
-  return visibleMarkdown;
+  return resolveMessageDisplayMarkdown(message, normalizedMessage);
 }
 
 export function resolveMessageActionDetails(params: {
@@ -128,27 +141,29 @@ export function resolveMessageActionDetails(params: {
         : undefined;
   const normalizedMessage = normalizeMessage(message);
   const role = normalizeRoleForGrouping(normalizedMessage.role);
-  const previewMarkdown = resolveMessageReplyText(message);
+  const pendingInput = messageId?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) === true;
+  const previewMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
   // The Gateway records every display-cap truncation as __openclaw.truncated, so
   // that marker is the whole contract: sniffing the in-band sentinel would fetch
-  // for any reply that merely contains the text. Assistant-only because the
-  // expander renders loaded content for assistant rows alone.
+  // for any reply that merely contains the text. Pending user inputs share the
+  // same read-only expansion, without becoming transcript reply/rewind targets.
   const shouldFetchFullMessage = Boolean(
-    role === "assistant" &&
+    (role === "assistant" || pendingInput) &&
     canFetchFullMessage &&
     messageId &&
     !record.openclawMessageToolMirror &&
     transcriptMeta?.truncated === true,
   );
   const expansion =
-    role === "assistant" && shouldFetchFullMessage && messageId
+    shouldFetchFullMessage && messageId
       ? params.getAssistantMessageExpansion?.(messageId)
       : undefined;
+  const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   const visibleMarkdown =
-    expansion?.status === "loaded" ? stripThinkingTags(expansion.markdown).trim() : previewMarkdown;
-  const markdown = role === "assistant" ? visibleMarkdown : undefined;
-  const replyText = onReply ? truncateUtf16Safe(visibleMarkdown, 500) : "";
-  if (!markdown && !replyText && !(role === "assistant" && shouldFetchFullMessage)) {
+    role === "assistant" ? stripThinkingTags(expandedMarkdown).trim() : expandedMarkdown;
+  const markdown = role === "assistant" || pendingInput ? visibleMarkdown : undefined;
+  const replyText = onReply && !pendingInput ? truncateUtf16Safe(visibleMarkdown, 500) : "";
+  if (!markdown && !replyText && !shouldFetchFullMessage) {
     return null;
   }
   const sourceMessageId = persistedMessageEntryId(message);
@@ -250,10 +265,20 @@ export function renderUserMessageMarkdown(
     isStreaming: boolean;
     isUserMessageExpanded?: (messageId: string) => boolean;
     onToggleUserMessageExpanded?: (messageId: string) => void;
+    assistantMessageDisclosure?: AssistantMessageDisclosure;
   },
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
 ) {
+  if (opts.assistantMessageDisclosure?.onRetryFullMessage) {
+    return renderAssistantMessageMarkdown(
+      markdown,
+      opts.isStreaming,
+      opts.assistantMessageDisclosure,
+      markdownRenderOptions,
+      duplicateSuffix,
+    );
+  }
   if (!opts.onToggleUserMessageExpanded || !shouldCollapseUserMessage(markdown)) {
     return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix);
   }

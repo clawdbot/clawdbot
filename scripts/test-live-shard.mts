@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { asSafeIntegerInRange } from "../packages/normalization-core/src/number-coercion.ts";
 import { isRecord as isUnknownRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
+import { RUNTIME_POSTBUILD_STAMP_FILE } from "./lib/local-build-metadata-paths.mts";
 import { spawnPnpmRunner, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
   createVitestProcessCompletion,
@@ -29,6 +30,10 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/agents/embedded-agent-runner.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/live-cache-regression.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/provider-headers.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
+  [
+    "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
+    ["OPENCLAW_LIVE_OPENAI_COMPACTION"],
+  ],
   ["src/agents/subagents/announce/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
   ["src/agents/tools/image-tool.ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA_IMAGE"]],
   ["src/agents/tools/image-tool.providers.live.test.ts", ["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]],
@@ -53,7 +58,14 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
 const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "todo"]);
 const QA_RUNTIME_LIVE_TEST = "extensions/qa-lab/src/matrix-channel-driver.lifecycle.live.test.ts";
 const QA_RUNTIME_ARTIFACT = "dist/extensions/qa-lab/runtime-api.js";
+const SOURCE_PERFORMANCE_ARTIFACT = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 type ProcessSignal = `SIG${string}`;
+type LiveShardPreparation = {
+  env: NodeJS.ProcessEnv;
+  profile: string;
+  requiredArtifact: string;
+  runtimeEnv?: NodeJS.ProcessEnv;
+};
 
 /** Live-test shards included in release validation. */
 export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
@@ -233,6 +245,7 @@ function isExtensionMediaLiveTest(file: string) {
     file === "extensions/music-generation-providers.live.test.ts" ||
     file === "extensions/minimax/minimax.live.test.ts" ||
     file === "extensions/openai/openai-tts.live.test.ts" ||
+    file === "extensions/tts-local-cli/speech-provider.live.test.ts" ||
     file === "extensions/video-generation-providers.live.test.ts" ||
     file === "extensions/volcengine/tts.live.test.ts" ||
     file === "extensions/vydra/vydra.live.test.ts"
@@ -387,14 +400,40 @@ export function buildLiveShardPnpmArgs(files: string[], passthroughArgs: string[
 /**
  * Resolves build profiles required by selected live tests.
  */
-export function resolveLiveShardPreparation(files: string[]) {
-  return files.includes(QA_RUNTIME_LIVE_TEST)
-    ? {
-        env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
-        profile: "qaRuntime",
-        requiredArtifact: QA_RUNTIME_ARTIFACT,
-      }
-    : null;
+export function resolveLiveShardPreparation(files: string[]): LiveShardPreparation | null {
+  const gatewayProfiles = files.some(isGatewayProfilesLiveTest);
+  // Vision requests load provider and agent runtime plugins. Compile them before
+  // Vitest starts so cold source transforms do not consume the request deadline.
+  if (
+    gatewayProfiles ||
+    files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
+    files.includes("extensions/openai/openai.live.test.ts")
+  ) {
+    return {
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: SOURCE_PERFORMANCE_ARTIFACT,
+      ...(gatewayProfiles
+        ? {
+            runtimeEnv: {
+              OPENCLAW_DISABLE_BONJOUR: "1",
+              OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+              OPENCLAW_LIVE_TEST_QUIET: "0",
+              OPENCLAW_LOG_LEVEL: "info",
+              OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+            },
+          }
+        : {}),
+    };
+  }
+  if (files.includes(QA_RUNTIME_LIVE_TEST)) {
+    return {
+      env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
+      profile: "qaRuntime",
+      requiredArtifact: QA_RUNTIME_ARTIFACT,
+    };
+  }
+  return null;
 }
 
 /**
@@ -661,10 +700,14 @@ function validateLiveShardReport(
 /**
  * Builds spawn options for the live-shard Vitest child.
  */
-export function buildLiveShardSpawnParams(env = process.env, platform = process.platform) {
+export function buildLiveShardSpawnParams(
+  env = process.env,
+  platform = process.platform,
+  runtimeEnv?: NodeJS.ProcessEnv,
+) {
   return {
     detached: shouldUseDetachedVitestProcessGroup(platform),
-    env,
+    env: { ...env, ...runtimeEnv },
     stdio: "inherit",
   } satisfies Pick<PnpmRunnerParams, "detached" | "env" | "stdio">;
 }
@@ -750,7 +793,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const reportPath = buildLiveShardReportPath(shard, process.env);
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   removeLiveShardReportFile(reportPath);
-  const spawnParams = buildLiveShardSpawnParams(process.env);
+  const spawnParams = buildLiveShardSpawnParams(
+    process.env,
+    process.platform,
+    preparation?.runtimeEnv,
+  );
   const child = spawnPnpmRunner({
     pnpmArgs: buildLiveShardPnpmArgs(files, addLiveShardReportArgs(passthroughArgs, reportPath)),
     ...spawnParams,

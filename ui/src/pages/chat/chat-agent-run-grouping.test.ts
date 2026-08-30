@@ -132,6 +132,34 @@ describe("coalesceAgentRunFrames", () => {
     expect(history.key).toBe(live.key);
   });
 
+  it("keeps a restart-recovered tool-only run in one stable frame", () => {
+    const runId = "run-recovered";
+    const boundaryId = `send:${runId}`;
+    const recoveryNotice = {
+      kind: "notice" as const,
+      key: "notice:restart-recovery",
+      text: "Turn interrupted by a gateway restart.",
+      timestamp: 1,
+      startsTurn: true as const,
+      boundaryId,
+    };
+    const first = group("tool", "recovered-tool-1", runId);
+    const second = group("tool", "recovered-tool-2", runId);
+    const historyActivity: ActivityRunRenderItem = {
+      kind: "activity-run",
+      key: "activity:recovered-tools",
+      groups: [first, second],
+    };
+
+    const live = requireFrame(coalesceAgentRunFrames([recoveryNotice, first, second])[1]);
+    const history = requireFrame(coalesceAgentRunFrames([recoveryNotice, historyActivity])[1]);
+
+    expect(live.parts).toEqual([first, second]);
+    expect(history.parts).toEqual([historyActivity]);
+    expect(live.boundaryId).toBe(boundaryId);
+    expect(history.key).toBe(live.key);
+  });
+
   it("remounts a large live stream after steer without destabilizing ordinary frames", () => {
     const runId = "run-steered";
     const boundaryId = "send:steer-run";

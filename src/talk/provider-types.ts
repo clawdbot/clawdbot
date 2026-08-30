@@ -271,6 +271,7 @@ type RealtimeVoiceBrowserWebRtcSdpSession = {
   clientSecret: string;
   offerUrl?: string;
   offerHeaders?: Record<string, string>;
+  offerResponseMaxBytes?: number;
   model?: string;
   voice?: string;
   expiresAt?: number;

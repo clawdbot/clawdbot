@@ -365,8 +365,13 @@ async function applyUpdateMetadataMutation(params: {
 async function applyMemoryWikiMutationUnlocked(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: ApplyMemoryWikiMutation;
+  signal?: AbortSignal;
 }): Promise<ApplyMemoryWikiMutationResult> {
-  await initializeMemoryWikiVault(params.config);
+  await initializeMemoryWikiVault(
+    params.config,
+    params.signal ? { signal: params.signal } : undefined,
+  );
+  params.signal?.throwIfAborted();
   const result =
     params.mutation.op === "create_synthesis"
       ? await applyCreateSynthesisMutation({
@@ -377,7 +382,11 @@ async function applyMemoryWikiMutationUnlocked(params: {
           config: params.config,
           mutation: params.mutation,
         });
-  const compile = await compileMemoryWikiVault(params.config);
+  params.signal?.throwIfAborted();
+  const compile = await compileMemoryWikiVault(
+    params.config,
+    params.signal ? { signal: params.signal } : undefined,
+  );
   return {
     changed: result.changed,
     operation: params.mutation.op,
@@ -390,6 +399,7 @@ async function applyMemoryWikiMutationUnlocked(params: {
 export async function applyMemoryWikiMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: ApplyMemoryWikiMutation;
+  signal?: AbortSignal;
 }): Promise<ApplyMemoryWikiMutationResult> {
   return await withMemoryWikiVaultMutation(params.config.vault.path, () =>
     applyMemoryWikiMutationUnlocked(params),

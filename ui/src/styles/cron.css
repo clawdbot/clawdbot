@@ -1084,6 +1084,11 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
+.cron-run-entry--highlighted {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 75%, transparent);
+  padding-left: var(--space-3);
+}
+
 .cron-run-entry__header {
   display: flex;
   flex-direction: column;

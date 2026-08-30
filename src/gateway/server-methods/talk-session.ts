@@ -21,6 +21,10 @@ import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveSandboxedSessionCreation,
+} from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -292,9 +296,19 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         const sessionKey =
           realtimeContext.requestedSessionKey ??
           buildAgentMainSessionKey({ agentId: realtimeContext.agentId });
+        const creationError = authorizeGatewaySessionCreation({
+          cfg: runtimeConfig,
+          client,
+          agentId: realtimeContext.agentId,
+        });
+        if (creationError) {
+          respond(false, undefined, creationError);
+          return;
+        }
         await ensureClientVoiceAgentSessionEntry({
           agentId: realtimeContext.agentId,
           sessionKey,
+          creation: resolveSandboxedSessionCreation(client, runtimeConfig),
         });
         const session = createTalkRealtimeRelaySession({
           context,

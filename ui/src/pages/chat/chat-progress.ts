@@ -48,6 +48,16 @@ export function buildGuardianNoticeItem(
   notice: ChatGuardianNotice,
 ): Extract<ChatItem, { kind: "notice" }> {
   const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  if (notice.source === "system") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "cpu",
+      label: t("common.system"),
+      text: notice.message ?? "",
+      timestamp: notice.timestamp,
+    };
+  }
   if (notice.kind === "approved") {
     return {
       kind: "notice",
@@ -65,6 +75,17 @@ export function buildGuardianNoticeItem(
       icon: "shieldCheck",
       label: t("chat.systemNotice.guardian.warningLabel"),
       text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
+      timestamp: notice.timestamp,
+      tone: "danger",
+    };
+  }
+  if (notice.kind === "reviewing" || notice.kind === "strict-review-required") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "shieldCheck",
+      label: t("chat.systemNotice.guardian.strictReviewRequiredLabel"),
+      text: t("chat.systemNotice.guardian.strictReviewRequiredSummary"),
       timestamp: notice.timestamp,
       tone: "danger",
     };
@@ -138,14 +159,28 @@ export function buildResetDividerItem(
   };
 }
 
+function queuedSendStarted(item: ChatQueueItem): boolean {
+  return typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
+}
+
+export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
+  return (
+    queuedSendStarted(item) &&
+    !item.localCommandName &&
+    (item.sendState === "failed" ||
+      item.sendState === "unconfirmed" ||
+      (item.sendState === "waiting-idle" && Boolean(item.sendError)))
+  );
+}
+
 export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
-  const sendStarted = typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
   return (
-    sendStarted &&
+    queuedSendStarted(item) &&
     (item.sendState === "waiting-model" ||
       item.sendState === "sending" ||
-      item.sendState === "waiting-reconnect")
+      item.sendState === "waiting-reconnect" ||
+      isQueuedSendInlineState(item))
   );
 }
 

@@ -50,6 +50,13 @@ function configureTerminalShell(terminalElement: TestOptionalCustomElement): She
     configurable: true,
     get: () => Promise.resolve(true),
   });
+  // The production shell keeps panel tags mounted before definition; replay is
+  // gated on the rendered element, so the harness mounts the tag the same way.
+  Object.defineProperty(shell, "renderRoot", {
+    configurable: true,
+    get: () => shell,
+  });
+  (shell as unknown as HTMLElement).appendChild(document.createElement(terminalElement.tagName));
   return shell;
 }
 

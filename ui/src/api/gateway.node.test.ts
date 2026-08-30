@@ -481,6 +481,59 @@ describe("GatewayBrowserClient", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not publish hello when a response observer closes the browser socket", async () => {
+    useNodeFakeTimers();
+    const onHello = vi.fn();
+    const onClose = vi.fn();
+    const onConnectTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onHello,
+      onClose,
+      onConnectTiming,
+      onRequestTiming: ({ method }) => {
+        if (method === "connect") {
+          client.forceReconnect("response observer closed");
+        }
+      },
+    });
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: { role: "operator", deviceToken: "late-device-token", scopes: [] },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ws.lastClose).toEqual({ code: 4000, reason: "response observer closed" });
+      expect(onHello).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.token).toBe(
+        STORED_CRED,
+      );
+      expect(connectTimingPayloads(onConnectTiming).some(({ phase }) => phase === "hello")).toBe(
+        false,
+      );
+      ws.emitClose(4000, "response observer closed");
+      expect(onClose).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: 4000,
+          reason: "response observer closed",
+          willRetry: true,
+        }),
+      );
+      expect(connectTimingPayloads(onConnectTiming).at(-1)?.phase).toBe("failed");
+      await vi.advanceTimersByTimeAsync(800);
+      expect(getLatestWebSocket()).not.toBe(ws);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("requests full control ui operator scopes with explicit shared auth", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -502,6 +555,7 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
@@ -981,7 +1035,7 @@ describe("GatewayBrowserClient", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("reports failed request timing without including request params", async () => {
+  it("retains negative response payloads without leaking them into timing or error JSON", async () => {
     const onRequestTiming = vi.fn();
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -1010,17 +1064,36 @@ describe("GatewayBrowserClient", () => {
       type: "res",
       id: frame.id,
       ok: false,
-      error: { code: "CONFIG_ERROR", message: "config failed" },
+      payload: { runId: "browser-run", privateResult: "not-for-logs" },
+      error: {
+        code: "CONFIG_ERROR",
+        message: "config failed",
+        details: { reason: "busy" },
+        retryable: true,
+        retryAfterMs: 250,
+      },
     });
 
     try {
       await request;
       throw new Error("expected config.get request to reject");
     } catch (error) {
-      expect((error as { gatewayCode?: string }).gatewayCode).toBe("CONFIG_ERROR");
+      expect(error).toBeInstanceOf(GatewayRequestError);
+      expect(error).toMatchObject({
+        name: "GatewayRequestError",
+        code: "CONFIG_ERROR",
+        gatewayCode: "CONFIG_ERROR",
+        message: "config failed",
+        details: { reason: "busy" },
+        retryable: true,
+        retryAfterMs: 250,
+        responsePayload: { runId: "browser-run", privateResult: "not-for-logs" },
+      });
+      expect(JSON.stringify(error)).not.toContain("not-for-logs");
     }
     expect(onRequestTiming).toHaveBeenCalledTimes(1);
     expect(requireFirstMockArg(onRequestTiming, "request timing")).not.toHaveProperty("params");
+    expect(JSON.stringify(onRequestTiming.mock.calls)).not.toContain("not-for-logs");
     expectLatestRequestTiming(onRequestTiming, {
       id: frame.id,
       method: "config.get",

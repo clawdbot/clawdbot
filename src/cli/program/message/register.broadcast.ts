@@ -12,7 +12,5 @@ export function registerMessageBroadcastCommand(message: Command, helpers: Messa
     .requiredOption("--targets <target...>", CHANNEL_TARGETS_DESCRIPTION)
     .option("--message <text>", "Message to send")
     .option("--media <url>", "Media URL")
-    .action(async (options: Record<string, unknown>) => {
-      await helpers.runMessageAction("broadcast", options);
-    });
+    .action((options: Record<string, unknown>) => helpers.runMessageAction("broadcast", options));
 }

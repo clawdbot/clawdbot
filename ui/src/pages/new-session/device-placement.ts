@@ -1,16 +1,18 @@
 import { t } from "../../i18n/index.ts";
 import type { DraftEnvironment } from "./discovery.ts";
-import { environmentMenuFacts } from "./place-facts.ts";
+import { environmentMenuFacts, MAX_PLACE_MENU_FACTS } from "./place-facts.ts";
 import { disambiguate } from "./place-labels.ts";
 
-export type DevicePlacementOption = Readonly<{
-  deviceId: string;
-  label: string;
-  subtitle?: string;
-  facts: readonly string[];
-  selectable: boolean;
-  disabledReason?: string;
-}>;
+export type DevicePlacementOption = Readonly<
+  {
+    deviceId: string;
+    label: string;
+    subtitle?: string;
+    facts: readonly string[];
+    selectable: boolean;
+    disabledReason?: string;
+  } & Pick<DraftEnvironment, "workerSlots" | "capabilities" | "invocableCommands">
+>;
 
 export type DevicePlacementRequirement = Readonly<{
   requiredNodeCommands: readonly string[];
@@ -58,6 +60,7 @@ function unavailableReason(
 export function projectDevicePlacements(
   environments: readonly DraftEnvironment[] | null,
   requirement: DevicePlacementRequirement = DEFAULT_DEVICE_PLACEMENT,
+  placementDisabledReason?: string,
 ): DevicePlacementOption[] {
   const devices = (environments ?? [])
     .flatMap<DevicePlacementOption>((environment) => {
@@ -68,23 +71,27 @@ export function projectDevicePlacements(
       if (!deviceId) {
         return [];
       }
-      const disabledReason = unavailableReason(environment, requirement);
+      const disabledReason = placementDisabledReason ?? unavailableReason(environment, requirement);
       const facts = environmentMenuFacts(environment, {
         connected: environment.status === "available",
       });
       const priorityFacts =
         (environment.issues?.length ?? 0) > 0 || environment.status !== "available" ? 1 : 0;
-      const slotFacts = environment.workerSlots ? 1 : 0;
-      const insertion = priorityFacts + slotFacts;
       const visibleFacts =
         disabledReason && !facts.includes(disabledReason)
-          ? [...facts.slice(0, insertion), disabledReason, ...facts.slice(insertion)].slice(0, 4)
+          ? [...facts.slice(0, priorityFacts), disabledReason, ...facts.slice(priorityFacts)].slice(
+              0,
+              MAX_PLACE_MENU_FACTS,
+            )
           : facts;
       return [
         {
           deviceId,
           label: environment.label ?? deviceId,
-          facts: visibleFacts,
+          facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,
+          workerSlots: environment.workerSlots,
+          capabilities: environment.capabilities,
+          invocableCommands: environment.invocableCommands,
           selectable: disabledReason === undefined,
           ...(disabledReason ? { disabledReason } : {}),
         },
@@ -105,12 +112,28 @@ export function projectDevicePlacements(
   return projected;
 }
 
-export function findDevicePlacement(
+export function resolveAutomaticDevicePlacementDisabledReason(
   environments: readonly DraftEnvironment[] | null,
-  deviceId: string,
-  requirement?: DevicePlacementRequirement,
-): DevicePlacementOption | undefined {
-  return projectDevicePlacements(environments, requirement).find(
-    (device) => device.deviceId === deviceId,
+  devices: readonly DevicePlacementOption[],
+  runtimeDisabledReason?: string,
+): string | undefined {
+  if (runtimeDisabledReason) {
+    return runtimeDisabledReason;
+  }
+  const sessionHostIds = new Set(
+    (environments ?? [])
+      .filter((environment) => environment.type === "node" && environment.sessionHost === true)
+      .map((environment) => environment.id),
   );
+  if (sessionHostIds.size === 0) {
+    const outdated = (environments ?? []).find((environment) =>
+      environment.issues?.some((issue) => issue.code === "update-required"),
+    );
+    return outdated
+      ? unavailableReason(outdated, DEFAULT_DEVICE_PLACEMENT)
+      : t("newSession.noSessionHosts");
+  }
+  return devices.some((device) => device.selectable)
+    ? undefined
+    : devices.find((device) => sessionHostIds.has(`node:${device.deviceId}`))?.disabledReason;
 }

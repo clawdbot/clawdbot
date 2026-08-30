@@ -31,7 +31,7 @@ suite.define(() => {
       ],
       defaultId: "main",
       mainKey: "main",
-      scope: "agent",
+      scope: "global",
     };
     const historyResponse = (active: boolean) => ({
       messages: [],
@@ -57,6 +57,8 @@ suite.define(() => {
         },
       ]);
     const gateway = await installMockGateway(page, {
+      sessionScope: "global",
+      mainSessionKey: "global",
       methodResponses: {
         "agents.list": agentsList,
         "chat.history": {
@@ -91,7 +93,11 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.setOnline(false);
-      await page.locator(".agent-chat__offline-hint").waitFor({ timeout: 10_000 });
+      await page
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
+        .waitFor({ timeout: 10_000 });
 
       const prompt = "deliver the work outbox independently";
       await composer.fill(prompt);
@@ -113,7 +119,9 @@ suite.define(() => {
       });
       await gateway.setOnline(true);
       await page
-        .locator(".agent-chat__offline-hint")
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
         .waitFor({ state: "detached", timeout: 10_000 });
       await page.evaluate(async () => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {

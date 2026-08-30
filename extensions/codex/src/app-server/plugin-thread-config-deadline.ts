@@ -191,6 +191,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
     build: async (buildOptions?: { threadId?: string }) => {
       const config = await buildCodexPluginThreadConfigWithinDeadline({
         ...buildParams,
+        threadId: buildOptions?.threadId,
         appCache: appCache ?? defaultCodexAppInventoryCache,
         metadataCache,
         failClosedOnTimeout: Boolean(params.scheduledRuntimeAuthority),

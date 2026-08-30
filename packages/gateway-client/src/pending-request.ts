@@ -2,6 +2,7 @@ import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
+  retainGatewayResponsePayload,
   type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
 import { resolveSafeTimeoutDelayMs } from "./timeouts.js";
@@ -156,7 +157,7 @@ export class GatewayPendingRequests {
       return;
     }
     const status = (frame.payload as { status?: unknown } | undefined)?.status;
-    if (pending.expectFinal && status === "accepted") {
+    if (frame.ok && pending.expectFinal && status === "accepted") {
       if (!pending.acceptedNotified) {
         pending.acceptedNotified = true;
         this.invoke("accepted", () => pending.onAccepted?.(frame.payload));
@@ -171,22 +172,24 @@ export class GatewayPendingRequests {
       return;
     }
     this.finishTiming(frame.id, pending, false, frame.error?.code);
-    pending.reject(
+    const error =
       this.opts.createRequestError?.(frame.error ?? {}) ??
-        new GatewayProtocolRequestError(frame.error ?? {}),
-    );
+      new GatewayProtocolRequestError(frame.error ?? {});
+    retainGatewayResponsePayload(error, frame.payload);
+    pending.reject(error);
   }
 
   flush(error: Error): void {
-    for (const [id, pending] of this.pending) {
-      this.finishTiming(id, pending, false, "CLIENT_CLOSED");
+    const retired = [...this.pending];
+    this.pending.clear();
+    // Timing observers can reconnect synchronously, so detach the entire old
+    // generation and reset its sequence before running any caller-owned code.
+    this.requestSequence = 0;
+    for (const [id, pending] of retired) {
       pending.cleanup?.();
+      this.finishTiming(id, pending, false, "CLIENT_CLOSED");
       pending.reject(error);
     }
-    this.pending.clear();
-    // Request sequences belong to one socket generation. Retired socket frames
-    // are fenced by GatewayProtocolClient before the sequence restarts.
-    this.requestSequence = 0;
   }
 
   private allocateRequestId(): string {

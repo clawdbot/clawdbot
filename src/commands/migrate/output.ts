@@ -80,12 +80,16 @@ function formatPlanItems(plan: MigrationPlan, mode: FormatMode): string[] {
   return lines;
 }
 
-function formatPlanWarnings(plan: MigrationPlan): string[] {
-  if (!plan.warnings || plan.warnings.length === 0) {
+function formatPlanWarnings(
+  plan: MigrationPlan,
+  visibleElsewhere: readonly string[] = [],
+): string[] {
+  const warnings = plan.warnings?.filter((warning) => !visibleElsewhere.includes(warning));
+  if (!warnings || warnings.length === 0) {
     return [];
   }
   const lines = ["", theme.warn("Warnings:")];
-  for (const warning of plan.warnings) {
+  for (const warning of warnings) {
     lines.push(`⚠️  ${warning}`);
   }
   return lines;
@@ -107,6 +111,7 @@ export function formatMigrationResult(plan: MigrationPlan): string[] {
   const lines = [
     ...formatPlanHeader(safePlan, "Migration plan:"),
     ...formatPlanItems(safePlan, "result"),
+    ...formatPlanWarnings(safePlan, safePlan.nextSteps),
   ];
   if (safePlan.nextSteps && safePlan.nextSteps.length > 0) {
     lines.push("");

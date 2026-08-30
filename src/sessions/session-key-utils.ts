@@ -357,6 +357,14 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("acp:") === true;
 }
 
+/** Stored ACP bindings and stale ACP keys both belong to ACP dispatch, never local fallback. */
+export function resolveSessionDispatchKind(
+  sessionKey: string | undefined | null,
+  entry?: { acp?: unknown },
+): "agent" | "acp" {
+  return entry?.acp || isAcpSessionKey(sessionKey) ? "acp" : "agent";
+}
+
 export function parseThreadSessionSuffix(
   sessionKey: string | undefined | null,
 ): ParsedThreadSessionSuffix {

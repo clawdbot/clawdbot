@@ -13,6 +13,10 @@ import {
   validateConnectParams,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_RESTART_UNAVAILABLE_REASON,
+  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+} from "../../../../packages/gateway-protocol/src/restart-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import {
   releaseNodePairingCleanupClaim,
@@ -430,7 +434,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
 
     const restartDraining = isGatewayRestartDraining();
-    const reason = restartDraining ? "gateway-restarting" : "gateway-suspending";
+    const reason = restartDraining
+      ? GATEWAY_RESTART_UNAVAILABLE_REASON
+      : GATEWAY_SUSPEND_UNAVAILABLE_REASON;
     const operation = restartDraining ? "restart" : "suspension";
     const phase = getGatewaySuspendAdmissionPhase();
     setLastFrameMeta({ type: "req", method: "connect", id: parsed.id });
@@ -484,13 +490,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       }
       if (
         !isGatewayRestartDraining() &&
-        getGatewaySuspendAdmissionPhase() === "prepared" &&
+        (getGatewaySuspendAdmissionPhase() === "draining" ||
+          getGatewaySuspendAdmissionPhase() === "prepared") &&
         isPreparedControlConnect(data)
       ) {
-        // Refuse-only suspension fences work, not control-plane visibility. Only
-        // operator connects are admitted while prepared, and they can only reach
-        // suspend-control methods after handshake; node and worker connects would
-        // attach presence/registry state, so they stay refused.
+        // Suspension fences work, not authenticated owner recovery. Operators
+        // can reconnect throughout the held lease; node and worker connects
+        // would attach presence/registry state, so they stay refused.
         await handleMessage(data);
         return;
       }

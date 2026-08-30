@@ -64,7 +64,10 @@ export function scheduleChatDashboardSessionTitle(params: {
     try {
       await admission.run(async () => {
         const titleEntry = loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
-        if (titleEntry?.sessionId !== params.admittedSessionId) {
+        if (
+          titleEntry?.sessionId !== params.admittedSessionId ||
+          (titleEntry.pendingWorktree && !titleEntry.pendingWorktree.name)
+        ) {
           return;
         }
         const updated = await maybeGenerateDashboardSessionTitle({

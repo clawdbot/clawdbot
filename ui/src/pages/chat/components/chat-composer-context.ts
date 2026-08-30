@@ -16,15 +16,12 @@ import {
   type QuotaBudgetSummary,
   type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
+import { handleChatComposerDetailsToggle } from "./chat-picker-overlay.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
-const CONTEXT_COMPACT_RATIO = 0.9;
 
 type ContextNoticeOptions = {
-  compactBusy?: boolean;
-  compactDisabled?: boolean;
   messages?: unknown[];
-  onCompact?: () => void | Promise<void>;
   providerUsage?: ProviderUsageDisplayProps;
 };
 
@@ -33,7 +30,6 @@ type ProviderCostStats = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
-  provider: string | null;
 };
 
 function readCostValue(
@@ -44,11 +40,8 @@ function readCostValue(
 }
 
 function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostStats | null {
-  if (!messages?.length) {
-    return null;
-  }
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = readCostRecord(messages[index]);
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = readCostRecord(messages?.[index]);
     if (message?.role === "user") {
       return null;
     }
@@ -57,9 +50,7 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     }
     const directCost = readCostRecord(message.cost);
     const usageCost = readCostRecord(readCostRecord(message.usage)?.cost);
-    const stats: ProviderCostStats = {
-      provider: typeof message.provider === "string" ? message.provider.trim() || null : null,
-    };
+    const stats: ProviderCostStats = {};
     for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
       const cost = readCostValue(directCost, key) ?? readCostValue(usageCost, key);
       if (cost !== undefined) {
@@ -71,6 +62,17 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     ) {
       return stats;
     }
+  }
+  return null;
+}
+
+function latestAssistantProvider(messages: unknown[] | undefined): string | null {
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = readCostRecord(messages?.[index]);
+    if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
+      continue;
+    }
+    return typeof message.provider === "string" ? message.provider.trim() || null : null;
   }
   return null;
 }
@@ -124,7 +126,6 @@ function getContextNoticeViewModel(
   color: string;
   bg: string;
   warning: boolean;
-  compactRecommended: boolean;
   approximate: boolean;
 } | null {
   const used = session?.totalTokens;
@@ -162,7 +163,6 @@ function getContextNoticeViewModel(
       color: "var(--muted)",
       bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
       warning,
-      compactRecommended: false,
       approximate,
     };
   }
@@ -183,7 +183,6 @@ function getContextNoticeViewModel(
     color,
     bg,
     warning,
-    compactRecommended: ratio >= CONTEXT_COMPACT_RATIO,
     approximate,
   };
 }
@@ -325,11 +324,17 @@ export function renderContextNotice(
         isMonitoredAuthProvider,
       )
     : [];
-  if (!model && quotaGroups.length === 0) {
+  const currentProvider =
+    session?.modelProvider?.trim() || latestAssistantProvider(options.messages);
+  const normalizedProvider = currentProvider?.toLowerCase();
+  const currentGroup = normalizedProvider
+    ? quotaGroups.find((group) =>
+        group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
+      )
+    : undefined;
+  if (!model && !currentGroup) {
     return nothing;
   }
-  const canRenderCompact = Boolean(model?.compactRecommended && options.onCompact);
-  const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
   const summary = model
     ? t("chat.composer.contextUsage.summary", {
         used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
@@ -340,18 +345,6 @@ export function renderContextNotice(
   const percentage = model ? `${model.approximate ? "~" : ""}${model.pct}%` : null;
   const dashOffset = model ? RING_CIRCUMFERENCE * (1 - model.pct / 100) : RING_CIRCUMFERENCE;
   const providerCosts = model ? latestProviderCostStats(options.messages) : null;
-  const findQuotaGroup = (provider: string | null | undefined) => {
-    const normalizedProvider = provider?.trim().toLowerCase();
-    return normalizedProvider
-      ? quotaGroups.find((group) =>
-          group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
-        )
-      : undefined;
-  };
-  const currentGroup = findQuotaGroup(session?.modelProvider?.trim() || providerCosts?.provider);
-  const planGroups = currentGroup
-    ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
-    : quotaGroups;
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
   // Billing mode is provider-level: session rows do not record which auth
@@ -384,7 +377,7 @@ export function renderContextNotice(
       class="context-usage"
       style=${model ? `--ctx-color:${model.color};--ctx-bg:${model.bg}` : ""}
     >
-      <details>
+      <details @toggle=${handleChatComposerDetailsToggle}>
         <summary
           class="context-ring ${model?.warning ? "context-ring--warning" : ""}"
           aria-label=${summary}
@@ -407,7 +400,6 @@ export function renderContextNotice(
               stroke-dashoffset=${dashOffset.toFixed(2)}
             />
           </svg>
-          ${percentage ? html`<span class="context-ring__pct">${percentage}</span>` : nothing}
         </summary>
         <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
           ${model
@@ -468,36 +460,9 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
-          ${planGroups.map((group) => renderQuotaGroup(group, usageHref))}
+          ${currentGroup ? renderQuotaGroup(currentGroup, usageHref) : nothing}
         </section>
       </details>
-      ${canRenderCompact
-        ? html`
-            <button
-              class="context-ring__action ${options.compactBusy
-                ? "context-ring__action--busy"
-                : ""}"
-              type="button"
-              aria-label=${t("chat.composer.compactRecommendedContext")}
-              ?disabled=${compactDisabled}
-              @click=${(event: Event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (compactDisabled) {
-                  return;
-                }
-                void options.onCompact?.();
-              }}
-            >
-              ${options.compactBusy ? icons.loader : icons.minimize}
-              <span
-                >${options.compactBusy
-                  ? t("chat.composer.compacting")
-                  : t("chat.composer.compact")}</span
-              >
-            </button>
-          `
-        : nothing}
     </div>
   `;
 }

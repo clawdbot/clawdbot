@@ -55,6 +55,7 @@ export type TestChatPane = HTMLElement & {
   connectionGeneration: number;
   catalogLoadGeneration: number;
   continueCatalogSession: (key: CatalogSessionKey) => Promise<void>;
+  forkFromMessage: (entryId: string) => Promise<void>;
   createSession: () => Promise<boolean>;
   recoverSession: () => Promise<boolean>;
   restartRecoveryComposerBanner: () =>
@@ -114,7 +115,7 @@ export type TestChatPane = HTMLElement & {
   performUpdate: () => void;
   deferSessionHydrationUntilTranscript: (
     sessionKey: string,
-    transcriptLoad: Promise<unknown>,
+    transcriptLoad: Promise<boolean>,
   ) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;
@@ -220,7 +221,9 @@ export function createInitializationContext(): ApplicationContext {
     },
     placementStartup: {
       get: () => null,
+      hasPendingTurn: () => false,
       retry: () => undefined,
+      pause: () => undefined,
       subscribe: () => () => {},
     },
     navigate: () => undefined,
@@ -246,7 +249,7 @@ type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch
 export function createSessionCapabilityFixture(
   overrides: SessionCapabilityFixtureOverrides = {},
 ): SessionCapability {
-  return overrides as typeof overrides & SessionCapability;
+  return { deletionState: () => undefined, ...overrides } as typeof overrides & SessionCapability;
 }
 
 export function createSessionContext(
@@ -314,6 +317,7 @@ export function createSessionContext(
     initialUserMessage: createInitialUserMessageHandoff(),
     chatAttachmentHandoff: createChatAttachmentHandoff(),
     nativeChatDrafts: { subscribe: () => () => undefined },
+    placementStartup: { pause: vi.fn() },
     sessions,
   } as unknown as ApplicationContext;
 }
@@ -337,6 +341,9 @@ export function createTestChatPane(params: {
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessages: [],
+    chatModelCatalog: [],
+    chatModelCatalogError: null,
+    chatModelsLoading: false,
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
@@ -352,6 +359,7 @@ export function createTestChatPane(params: {
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
+    attachmentSidebarContent: null,
     sidebarFocusPanelId: "",
     sidebarFocusVersion: 0,
     sidebarLayout: { columns: [] },

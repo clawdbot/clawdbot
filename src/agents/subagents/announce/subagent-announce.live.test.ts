@@ -13,11 +13,12 @@ import { startGatewayServer, type GatewayServer } from "../../../gateway/server.
 import { extractPayloadText } from "../../../gateway/test-helpers.agent-results.js";
 import { onAgentEvent, type AgentEventPayload } from "../../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
-import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
+import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { getFreePort } from "../../../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../utils/message-channel.js";
 import { isLiveTestEnabled, readLiveTestConfig } from "../../live-test-helpers.js";
 import {
@@ -260,7 +261,7 @@ describeLive("subagent announce live", () => {
     await server?.close({ reason: "subagent announce live test done" }).catch(() => undefined);
     await state?.cleanup().catch(() => undefined);
     clearRuntimeConfigSnapshot();
-    clearPluginMetadataLifecycleCaches();
+    resetPluginRuntimeStateForTest();
     client = undefined;
     server = undefined;
     state = undefined;
@@ -268,9 +269,9 @@ describeLive("subagent announce live", () => {
 
   it(
     "keeps issue 82913 busy-parent completion announce pending until transcript delivery",
-    async () => {
+    async ({ skip }) => {
       if (!isTruthyEnvValue(process.env.OPENCLAW_SUBAGENT_ISSUE_82913_REPRO)) {
-        console.warn(
+        skip(
           "[issue-82913] skip: set OPENCLAW_SUBAGENT_ISSUE_82913_REPRO=1 to run this focused repro",
         );
         return;
@@ -279,7 +280,7 @@ describeLive("subagent announce live", () => {
       requireLiveSubagentAuth(modelConfig);
 
       const token = `subagent-82913-${randomUUID()}`;
-      const port = 30_000 + Math.floor(Math.random() * 10_000);
+      const port = await getFreePort();
       const modelKey = modelConfig.modelKey;
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const childToken = `ISSUE_82913_CHILD_${nonce}`;
@@ -294,7 +295,8 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CRON: "1",
           OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
           OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          // Agent admission needs the reply runtime published by normal startup.
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
@@ -309,13 +311,14 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearPluginMetadataLifecycleCaches();
+      resetPluginRuntimeStateForTest();
 
       server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
       });
+      await server.startupSettled;
       client = await createGatewayClient({ port, token });
 
       let initialError: unknown;
@@ -413,7 +416,7 @@ describeLive("subagent announce live", () => {
       requireLiveSubagentAuth(modelConfig);
 
       const token = `subagent-live-${randomUUID()}`;
-      const port = 30_000 + Math.floor(Math.random() * 10_000);
+      const port = await getFreePort();
       const modelKey = modelConfig.modelKey;
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const childToken = `CHILD_STEERED_${nonce}`;
@@ -487,7 +490,7 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CRON: "1",
           OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
           OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
@@ -501,13 +504,14 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearPluginMetadataLifecycleCaches();
+      resetPluginRuntimeStateForTest();
 
       server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
       });
+      await server.startupSettled;
       client = await createGatewayClient({ port, token });
 
       let initialError: unknown;
@@ -657,10 +661,10 @@ describeLive("subagent announce live", () => {
 
   it(
     "runs parallel isolated Gemini subagents with tool-heavy schemas",
-    async () => {
+    async ({ skip }) => {
       const modelConfig = resolveLiveSubagentModelConfig();
       if (!modelConfig.modelKey.startsWith("google/")) {
-        console.warn(
+        skip(
           "[subagent-stress] skip: set OPENCLAW_LIVE_SUBAGENT_E2E_MODEL=google/gemini-3.1-pro-preview",
         );
         return;
@@ -668,7 +672,7 @@ describeLive("subagent announce live", () => {
       requireLiveSubagentAuth(modelConfig);
 
       const token = `subagent-stress-${randomUUID()}`;
-      const port = 30_000 + Math.floor(Math.random() * 10_000);
+      const port = await getFreePort();
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const sessionKey = `agent:main:live-subagent-stress-${nonce.toLowerCase()}`;
       const childTokens = [1, 2, 3].map((index) => `GEMINI_STRESS_${nonce}_${index}`);
@@ -682,7 +686,7 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CRON: "1",
           OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
           OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
@@ -717,13 +721,14 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearPluginMetadataLifecycleCaches();
+      resetPluginRuntimeStateForTest();
 
       server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
       });
+      await server.startupSettled;
       client = await createGatewayClient({ port, token });
 
       let initialError: unknown;

@@ -254,7 +254,8 @@ describe("worker environment protocol schemas", () => {
             id: "aws",
             providerId: "crabbox",
             trust: "disposable",
-            executionMode: "remote-exec",
+            executionMode: "worker-turn",
+            executionModes: ["worker-turn", "remote-exec"],
             machines: [
               {
                 id: "standard",
@@ -265,7 +266,13 @@ describe("worker environment protocol schemas", () => {
               },
             ],
           },
-          { id: "worker", providerId: "static-ssh", executionMode: "worker-turn" },
+          {
+            id: "worker",
+            providerId: "static-ssh",
+            executionMode: "remote-exec",
+            executionModes: ["remote-exec"],
+          },
+          { id: "legacy-primary", providerId: "static-ssh", executionMode: "worker-turn" },
           { id: "legacy", providerId: "static-ssh" },
         ],
       }),
@@ -288,6 +295,20 @@ describe("worker environment protocol schemas", () => {
         profiles: [{ id: "aws", providerId: "crabbox", executionMode: "sandbox" }],
       }),
     ).toBe(false);
+    for (const executionModes of [
+      [],
+      ["worker-turn", "worker-turn"],
+      ["remote-exec", "worker-turn"],
+      ["worker-turn", "sandbox"],
+      ["worker-turn", "remote-exec", "worker-turn"],
+    ]) {
+      expect(
+        Value.Check(EnvironmentsListResultSchema, {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox", executionModes }],
+        }),
+      ).toBe(false);
+    }
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],

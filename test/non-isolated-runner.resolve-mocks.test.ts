@@ -98,6 +98,28 @@ describe("serializeMockerResolveMocks", () => {
     expect(FakeMocker.pendingIds).toEqual([]);
   });
 
+  it("drains ids queued during the final pass without requiring another caller", async () => {
+    FakeMocker.pendingIds = ["mock-a"];
+    const firstPassStarted = deferred();
+    const releaseFirstPass = deferred();
+    const mocker = new FakeMocker();
+    mocker.beforeFirstPass = async () => {
+      firstPassStarted.resolve();
+      await releaseFirstPass.promise;
+    };
+    serializeMockerResolveMocks(mocker);
+
+    const first = mocker.resolveMocks();
+    await firstPassStarted.promise;
+    FakeMocker.pendingIds.push("mock-late");
+    releaseFirstPass.resolve();
+    await first;
+
+    expect(mocker.processed).toEqual(["mock-a", "mock-late"]);
+    expect(mocker.passes).toBe(2);
+    expect(FakeMocker.pendingIds).toEqual([]);
+  });
+
   it("does not double-wrap when installed repeatedly", async () => {
     FakeMocker.pendingIds = ["mock-a"];
     const mocker = new FakeMocker();

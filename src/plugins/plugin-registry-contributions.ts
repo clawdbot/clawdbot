@@ -227,49 +227,6 @@ function listContributionManifestPlugins(
   }).plugins;
 }
 
-function resolveContributionOwnerMap(
-  table: PluginLookUpTable,
-  contribution: PluginRegistryContributionKey,
-): ReadonlyMap<string, readonly string[]> | undefined {
-  switch (contribution) {
-    case "channels":
-      return table.owners.channels;
-    case "channelConfigs":
-      return table.owners.channelConfigs;
-    case "providers":
-      return table.owners.providers;
-    case "modelCatalogProviders":
-      return table.owners.modelCatalogProviders;
-    case "cliBackends":
-      return table.owners.cliBackends;
-    case "setupProviders":
-      return table.owners.setupProviders;
-    case "commandAliases":
-      return table.owners.commandAliases;
-    case "contracts":
-      return table.owners.contracts;
-  }
-  return undefined;
-}
-
-function filterContributionOwnerIds(params: {
-  owners: readonly string[];
-  index: PluginRegistrySnapshot;
-  includeDisabled?: boolean;
-  config?: OpenClawConfig;
-}): readonly string[] {
-  const enabledPluginIds = new Set(
-    resolveContributionPluginIds({
-      index: params.index,
-      includeDisabled: params.includeDisabled,
-      config: params.config,
-    }),
-  );
-  return normalizeSortedUniqueStringEntries(
-    params.owners.filter((owner) => enabledPluginIds.has(owner)),
-  );
-}
-
 export function loadPluginManifestRegistryForPluginRegistry(
   params: LoadPluginRegistryManifestParams = {},
 ): PluginManifestRegistry {
@@ -314,17 +271,20 @@ export function resolvePluginContributionOwners(
 ): readonly string[] {
   const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
   if (params.lookUpTable && typeof params.matches === "string") {
-    const ownerMap = resolveContributionOwnerMap(params.lookUpTable, params.contribution);
-    const owners = ownerMap?.get(params.matches);
-    if (owners) {
-      return filterContributionOwnerIds({
-        owners,
+    const owners = params.lookUpTable.owners[params.contribution].get(params.matches);
+    if (!owners) {
+      return [];
+    }
+    const enabledPluginIds = new Set(
+      resolveContributionPluginIds({
         index,
         includeDisabled: params.includeDisabled,
         config: params.config,
-      });
-    }
-    return [];
+      }),
+    );
+    return normalizeSortedUniqueStringEntries(
+      owners.filter((owner) => enabledPluginIds.has(owner)),
+    );
   }
   const matcher =
     typeof params.matches === "string"

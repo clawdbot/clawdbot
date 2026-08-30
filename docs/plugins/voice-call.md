@@ -285,12 +285,23 @@ Current runtime behavior:
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, `per-call` for isolated calls, or `main` for the configured agent's main session).
 
+<Warning>
+GPT-Live uses agent delegation instead of native function tools. Its current
+Voice Call bridge cannot invoke `openclaw_end_call` or custom `realtime.tools`.
+Use an OpenAI GA realtime model or Google Gemini Live when the call needs those
+controls; selecting GPT-Live does not make them available through delegation.
+</Warning>
+
 ### Hangup detection
 
 Realtime calls normally end when the carrier sends a stream stop event or closes
 the media WebSocket. If an intermediary does not promptly forward that close,
 OpenClaw treats 30 seconds without inbound media as a disconnect, waits a
 2-second grace period for media to resume, and then ends the call.
+
+If the realtime provider ends its session first, OpenClaw also ends the carrier
+call, including when the provider reports a normal close. This prevents a silent
+phone connection from remaining open after its voice session has finished.
 
 The realtime model can also call `openclaw_end_call` when the caller asks to
 hang up. The model must speak any final words before calling the tool: a
@@ -553,6 +564,7 @@ Behavior notes:
 - If a Twilio media stream is already active, Voice Call does not fall back to TwiML `<Say>`. If telephony TTS is unavailable in that state, the playback request fails instead of mixing two playback paths.
 - When telephony TTS falls back to a secondary provider, Voice Call logs a warning with the provider chain (`from`, `to`, `attempts`) for debugging.
 - When Twilio barge-in or stream teardown clears the pending TTS queue, queued playback requests settle instead of hanging callers awaiting playback completion.
+- Resumed caller speech discards older automatic replies that are still being generated. Twilio streaming reacts to speech-start and partial transcripts; carrier webhook calls react when a new speech event arrives. Explicit speech requests remain available, and already accepted agent work can finish without speaking an obsolete reply.
 
 ### TTS examples
 
@@ -858,6 +870,13 @@ should use `voicecall.dtmf` after the call exists if they need post-connect
 digits.
 
 ## Troubleshooting
+
+### Call placement fails to save its initial record
+
+Voice Call saves the initial record before reserving a concurrency slot or
+contacting the carrier. If that write fails, the placement reports the storage
+error without dialing. Restore access to the state directory, then retry; the
+failed placement does not consume `maxConcurrentCalls` capacity.
 
 ### Setup fails webhook exposure
 

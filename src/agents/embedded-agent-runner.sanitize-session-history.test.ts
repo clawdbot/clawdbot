@@ -778,14 +778,14 @@ describe("sanitizeSessionHistory", () => {
       "toolResult",
       "user",
     ]);
-    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("call1");
+    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("call_1");
     expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "aborted" },
     ]);
     expect(JSON.stringify(result)).not.toContain("missing tool result");
   });
 
-  it("keeps OpenAI Responses real tool results paired when strict id sanitization rewrites aliases", async () => {
+  it("keeps OpenAI Responses real tool results paired without rewriting valid ids", async () => {
     const messages = castAgentMessages([
       makeUserMessage("generate"),
       makeAssistantMessage(
@@ -822,7 +822,7 @@ describe("sanitizeSessionHistory", () => {
       "toolResult",
       "user",
     ]);
-    expect(toolCall?.id).toBe("callmockimagegenerate1");
+    expect(toolCall?.id).toBe("call_mock_image_generate_1");
     expect(toolResult.toolCallId).toBe(toolCall?.id);
     expect(toolResult.call_id).toBe(toolCall?.id);
     expect(toolResult.content).toEqual([
@@ -957,7 +957,7 @@ describe("sanitizeSessionHistory", () => {
     expect(
       result.some((message) => (message as { model?: string }).model === "delivery-mirror"),
     ).toBe(false);
-    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("callmessage");
+    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("call_message");
     expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "aborted" },
     ]);
@@ -1021,7 +1021,7 @@ describe("sanitizeSessionHistory", () => {
     ]);
     expect(
       result.slice(1, 4).map((message) => (message as { toolCallId?: string }).toolCallId),
-    ).toEqual(["calla", "callb", "callc"]);
+    ).toEqual(["call_a", "call_b", "call_c"]);
     for (const message of result.slice(1, 4)) {
       expect((message as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
         { type: "text", text: "aborted" },
@@ -1064,13 +1064,13 @@ describe("sanitizeSessionHistory", () => {
         (call) => ({ id: call.id, name: call.name }),
       ),
     ).toEqual([
-      { id: "call1", name: "read" },
-      { id: "call2", name: "exec" },
-      { id: "call3", name: "write" },
+      { id: "call_1", name: "read" },
+      { id: "call_2", name: "exec" },
+      { id: "call_3", name: "write" },
     ]);
     expect(
       result.slice(1, 4).map((message) => (message as { toolCallId?: string }).toolCallId),
-    ).toEqual(["call1", "call2", "call3"]);
+    ).toEqual(["call_1", "call_2", "call_3"]);
     expect((result[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "aborted" },
     ]);
@@ -1100,7 +1100,7 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
-    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("callazure");
+    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("call_azure");
     expect((result[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "aborted" },
     ]);
@@ -1138,7 +1138,7 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeOpenAIHistory(messages);
 
     expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
-    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("callkeep");
+    expect((result[1] as { toolCallId?: string }).toolCallId).toBe("call_keep");
     expect((result[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "first" },
     ]);

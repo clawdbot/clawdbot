@@ -41,18 +41,26 @@ function contextFor(listResult: SessionsListResult | null, mainKey = "main") {
           session.key.toLowerCase().replaceAll("-", "").includes(shortId),
         ) ?? [];
       return matches.length === 1 && matches[0]
-        ? { ok: true, key: matches[0].key }
+        ? {
+            ok: true,
+            key: matches[0].key,
+            agentId: matches[0].agentId ?? matches[0].key.split(":")[1],
+            displayName: matches[0].displayName,
+            boardFace: matches[0].boardFace,
+          }
         : {
             ok: false,
             ...(matches.length > 1
-              ? { candidates: matches.map((session) => ({ key: session.key })) }
+              ? {
+                  candidates: matches.map((session) => ({
+                    key: session.key,
+                    agentId: session.agentId ?? session.key.split(":")[1],
+                    displayName: session.displayName,
+                    boardFace: session.boardFace,
+                  })),
+                }
               : {}),
           };
-    }
-    if (method === "sessions.describe") {
-      return {
-        session: listResult?.sessions.find((session) => session.key === params.key) ?? null,
-      };
     }
     throw new Error(`Unexpected gateway request: ${method}`);
   });
@@ -80,22 +88,23 @@ describe("loadChatRoute", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({ type: "notFound", data: { routeId: "chat" } });
     expect(list).not.toHaveBeenCalled();
   });
 
   it("survives sessionId rotation and canonicalizes decorative short-form segments", async () => {
     const { context, list, request } = contextFor(result([row()]));
-    let describeCount = 0;
     request.mockImplementation(async (method) => {
       if (method === "sessions.resolve") {
-        return { ok: true, key: sessionKey };
+        return {
+          ok: true,
+          key: sessionKey,
+          agentId: "main",
+          displayName: "Deploy Monitor",
+          boardFace: undefined,
+        };
       }
-      return {
-        session: row({
-          sessionId: describeCount++ === 0 ? "before-compaction" : "after-compaction",
-        }),
-      };
+      throw new Error(`Unexpected gateway request: ${method}`);
     });
     const signal = new AbortController().signal;
     const redirected = await loadChatRoute(
@@ -130,7 +139,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({ kind: "session", sessionKey, draft: "ship", face: "chat" });
     expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("round-trips literal channel, peer, and cron keys without searching", async () => {
@@ -489,7 +498,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:main:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "main",
       draft: undefined,
       face: "chat",
@@ -512,7 +521,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toMatchObject({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
     });
   });
@@ -532,7 +541,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
       draft: undefined,
       face: "dashboard",

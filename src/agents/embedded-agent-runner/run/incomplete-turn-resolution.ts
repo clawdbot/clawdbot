@@ -3,8 +3,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
+import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
+import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
@@ -36,6 +39,12 @@ type RunLivenessAttempt = Pick<
   "lastAssistant" | "replayMetadata" | "terminal"
 >;
 
+type TerminalAuthFailureContext = {
+  assistantProfileFailureReason?: AuthProfileFailureReason | null;
+  provider: string;
+  runParams: Pick<Parameters<typeof buildProviderAuthRecoveryHint>[0], "config" | "workspaceDir">;
+};
+
 /**
  * Builds the user-visible incomplete-turn warning when a terminal attempt did
  * not produce a safe final assistant response and no committed delivery/progress
@@ -48,6 +57,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   timedOut: boolean;
   hadPotentialSideEffects?: boolean;
   hasIntentionalTerminalCompletion?: boolean;
+  terminalAuthFailure?: TerminalAuthFailureContext;
   attempt: IncompleteTurnAttempt;
 }): string | null {
   // Prefer the current attempt's terminal message. The session fallback can
@@ -117,9 +127,25 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  return params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects
-    ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
-    : "⚠️ Agent couldn't generate a response. Please try again.";
+  if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
+    return "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.";
+  }
+  const authFailure = params.terminalAuthFailure;
+  const reason = authFailure?.assistantProfileFailureReason;
+  if (authFailure && (reason === "auth" || reason === "auth_permanent")) {
+    return renderAuthProfileFailoverCopy({
+      reason,
+      provider: authFailure.provider,
+      allInCooldown: false,
+      recoveryHint: buildProviderAuthRecoveryHint({
+        provider: authFailure.provider,
+        config: authFailure.runParams.config,
+        workspaceDir: authFailure.runParams.workspaceDir,
+        env: process.env,
+      }),
+    });
+  }
+  return "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
 /**

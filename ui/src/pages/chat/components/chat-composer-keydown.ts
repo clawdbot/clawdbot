@@ -1,13 +1,12 @@
-import type { ChatSendShortcut } from "../../../app/settings.ts";
+import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
-import { restoreHistoryCaret, scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
+import { restoreHistoryCaret } from "./chat-composer-dom.ts";
+import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
 import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
 import {
-  getActiveSlashMenuOptionId,
-  resetSlashMenuState,
-  selectSlashArg,
-  selectSlashCommand,
-  tabCompleteSlashCommand,
+  handleInlineSlashArgKeydown,
+  handleSlashMenuKeydown,
+  type SlashMenuHost,
 } from "./chat-composer-slash-menu.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -15,69 +14,30 @@ type ComposerKeyDownDeps = {
   state: ChatComposerState;
   props: ChatComposerProps;
   skillMenuHost: SkillMenuHost;
+  slashMenuHost: SlashMenuHost;
   requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
   commitDraft: (draft: string) => void;
   syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
   showAbortableUi: boolean;
-  steerNowEnabled: boolean;
+  alternateFollowUpMode?: ChatFollowUpMode;
+  goalComposer: GoalComposerController;
 };
-
-function handleComposerMenuKeyDown<T>(
-  event: KeyboardEvent,
-  state: ChatComposerState,
-  items: readonly T[],
-  paneId: string,
-  requestUpdate: () => void,
-  onSelect: (item: T, submit: boolean) => void,
-  scrollActive: (state: ChatComposerState, paneId: string) => void,
-): boolean {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    state.slashMenuOpen = false;
-    resetSlashMenuState(state);
-    requestUpdate();
-    return true;
-  }
-  if (items.length === 0) {
-    return false;
-  }
-  switch (event.key) {
-    case "ArrowDown":
-    case "ArrowUp": {
-      event.preventDefault();
-      const offset = event.key === "ArrowDown" ? 1 : items.length - 1;
-      state.slashMenuIndex = (state.slashMenuIndex + offset) % items.length;
-      requestUpdate();
-      scrollActive(state, paneId);
-      return true;
-    }
-    case "Tab":
-    case "Enter": {
-      event.preventDefault();
-      const item = items[state.slashMenuIndex];
-      if (item !== undefined) {
-        onSelect(item, event.key === "Enter");
-      }
-      return true;
-    }
-    default:
-      return false;
-  }
-}
 
 export function createComposerKeyDownHandler({
   state,
   props,
   skillMenuHost,
+  slashMenuHost,
   requestUpdate,
   sendShortcut,
   canSubmitDraft,
   commitDraft,
   syncDraftAfterSend,
   showAbortableUi,
-  steerNowEnabled,
+  alternateFollowUpMode,
+  goalComposer,
 }: ComposerKeyDownDeps): (event: KeyboardEvent) => void {
   return (event) => {
     // The handler only ever binds to the composer textarea; narrowing here
@@ -90,50 +50,36 @@ export function createComposerKeyDownHandler({
       return;
     }
 
+    if (goalComposer.active) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        goalComposer.cancel();
+      } else if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        (sendShortcut === "enter" || event.metaKey || event.ctrlKey) &&
+        canSubmitDraft(target.value)
+      ) {
+        event.preventDefault();
+        commitDraft(target.value);
+        void goalComposer.submit(event);
+      }
+      return;
+    }
+
     if (props.connected && handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate)) {
       return;
     }
 
     if (
       props.connected &&
-      state.slashMenuOpen &&
-      state.slashMenuMode === "args" &&
-      state.slashMenuArgItems.length > 0
+      handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut)
     ) {
-      if (
-        handleComposerMenuKeyDown(
-          event,
-          state,
-          state.slashMenuArgItems,
-          props.paneId,
-          requestUpdate,
-          (arg, submit) => selectSlashArg(arg, props, requestUpdate, submit),
-          (menuState, paneId) =>
-            scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(menuState, paneId)),
-        )
-      ) {
-        return;
-      }
+      return;
     }
 
-    if (props.connected && state.slashMenuOpen && state.slashMenuItems.length > 0) {
-      if (
-        handleComposerMenuKeyDown(
-          event,
-          state,
-          state.slashMenuItems,
-          props.paneId,
-          requestUpdate,
-          (command, submit) =>
-            submit
-              ? selectSlashCommand(command, props, requestUpdate)
-              : tabCompleteSlashCommand(command, props, requestUpdate),
-          (menuState, paneId) =>
-            scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(menuState, paneId)),
-        )
-      ) {
-        return;
-      }
+    if (props.connected && handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate)) {
+      return;
     }
 
     if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {
@@ -180,6 +126,11 @@ export function createComposerKeyDownHandler({
 
     const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
+      // Holding send is one action, even after the draft clears into the queue.
+      if (event.repeat) {
+        event.preventDefault();
+        return;
+      }
       const attachments = props.getAttachments?.() ?? props.attachments ?? [];
       const hasComposedContent = Boolean(target.value.trim() || attachments.length);
       if (!hasComposedContent) {
@@ -205,12 +156,9 @@ export function createComposerKeyDownHandler({
       }
       event.preventDefault();
       commitDraft(target.value);
-      const steerImmediately = steerNowEnabled && (event.metaKey || event.ctrlKey) && !event.altKey;
-      if (steerImmediately) {
-        props.onSend("steer", event);
-      } else {
-        props.onSend(undefined, event);
-      }
+      const followUpModeOverride =
+        (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
+      props.onSend(followUpModeOverride, event);
       syncDraftAfterSend(target);
     }
   };

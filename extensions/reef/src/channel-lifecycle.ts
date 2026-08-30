@@ -5,13 +5,13 @@ const CONTINUE_AFTER_RECONCILE_ERROR = () => true;
 const STOP_AFTER_RECONCILE_ERROR = () => false;
 
 async function runReconcileStep(params: {
-  reconcile: () => Promise<void>;
+  reconcile: (signal: AbortSignal) => Promise<void>;
   onReconcileError: (error: unknown) => void;
   shouldContinueAfterError: (error: unknown) => boolean;
   signal: AbortSignal;
 }): Promise<void> {
   try {
-    await params.reconcile();
+    await params.reconcile(params.signal);
   } catch (error) {
     if (params.signal.aborted) {
       return;
@@ -30,7 +30,7 @@ async function runReconcileStep(params: {
 export async function runReefChannelLifecycle(params: {
   parentSignal: AbortSignal;
   startInbox: (signal: AbortSignal) => Promise<void>;
-  reconcile: () => Promise<void>;
+  reconcile: (signal: AbortSignal) => Promise<void>;
   onReconcileError: (error: unknown) => void;
   // Startup may continue only for errors the channel classifies as retryable.
   // Periodic reconcile remains best-effort once the account is already active.

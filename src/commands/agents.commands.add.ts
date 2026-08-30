@@ -17,7 +17,6 @@ import {
 import {
   buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
-  persistAuthProfileBatch,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
@@ -29,6 +28,7 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { createChannelSetupTransaction } from "../flows/channel-setup.js";
@@ -37,6 +37,8 @@ import {
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { persistProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
+import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -66,6 +68,10 @@ type AgentsAddOptions = {
 
 type AgentBindingResult = ReturnType<typeof applyAgentBindings>;
 
+function failAgentsAdd(message: string): never {
+  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+}
+
 function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): AgentBindingResult {
   return { config, added: [], updated: [], skipped: [], conflicts: [] };
 }
@@ -73,7 +79,7 @@ function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): A
 function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileStore | null {
   const store = loadPersistedAuthProfileStore(agentDir);
   if (!store && inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
-    throw new AuthProfileStoreUnreadableError(agentDir);
+    throw new AuthProfileStoreUnreadableError(resolveAuthProfileDatabasePath(agentDir));
   }
   return store;
 }
@@ -101,11 +107,9 @@ export async function agentsAddCommand(
   const nonInteractive = opts.nonInteractive === true || hasAutomationFlags;
   const wizardOutput = opts.json ? process.stderr : process.stdout;
   if (!nonInteractive && !isTerminalInteractive(wizardOutput)) {
-    runtime.error(
+    failAgentsAdd(
       `Agent creation needs an interactive TTY. Use \`${formatCliCommand("openclaw agents add <id> --non-interactive --workspace <dir>")}\` for automation.`,
     );
-    runtime.exit(1);
-    return;
   }
 
   const configSnapshot = await requireValidConfigFileSnapshot(runtime);
@@ -120,28 +124,22 @@ export async function agentsAddCommand(
 
   if (nonInteractive) {
     if (!workspaceFlag) {
-      runtime.error(
+      failAgentsAdd(
         `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
       );
-      runtime.exit(1);
-      return;
     }
     if (!nameInput) {
-      runtime.error(
+      failAgentsAdd(
         `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
       );
-      runtime.exit(1);
-      return;
     }
     const validation = validateAgentIdInput(nameInput);
     if (!validation.ok) {
-      runtime.error(
+      failAgentsAdd(
         validation.reason === "reserved-id"
           ? `"${validation.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
           : validation.message,
       );
-      runtime.exit(1);
-      return;
     }
     const agentId = validation.agentId;
     if (agentId !== nameInput) {
@@ -159,15 +157,13 @@ export async function agentsAddCommand(
       });
     });
     if (created.status === "error") {
-      runtime.error(
+      failAgentsAdd(
         created.reason === "reserved-id"
           ? `"${created.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
           : created.reason === "already-exists"
             ? `Agent "${created.agentId}" already exists.`
             : created.message,
       );
-      runtime.exit(1);
-      return;
     }
 
     const bindingResult = created.bindingResult ?? emptyBindingResult(cfg);
@@ -290,9 +286,7 @@ export async function agentsAddCommand(
       workspace: workspaceDir,
       agentDir,
     });
-    const stagedAuthProfiles: Array<
-      Parameters<typeof persistAuthProfileBatch>[0]["profiles"][number]
-    > = [];
+    const stagedAuthProfiles: Array<ProviderAuthProfile & { replaceExisting?: boolean }> = [];
     let stagedAuthOrder: AuthProfileStore["order"];
     let reportPortableAuthCopy: (() => Promise<void>) | undefined;
 
@@ -489,6 +483,7 @@ export async function agentsAddCommand(
             profiles: stagedAuthProfiles,
             ...(stagedAuthOrder ? { order: stagedAuthOrder } : {}),
             agentDir,
+            config: nextConfig,
           }
         : undefined;
 
@@ -500,7 +495,7 @@ export async function agentsAddCommand(
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
       const authPersistence = stagedAuthBatch
-        ? await persistAuthProfileBatch(stagedAuthBatch)
+        ? await persistProviderAuthProfileBatch(stagedAuthBatch)
         : undefined;
       try {
         nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
@@ -533,7 +528,7 @@ export async function agentsAddCommand(
           ...(stagedAuthBatch
             ? {
                 prepareConfigCommit: async () =>
-                  (await persistAuthProfileBatch(stagedAuthBatch)).rollback,
+                  (await persistProviderAuthProfileBatch(stagedAuthBatch)).rollback,
               }
             : {}),
         });

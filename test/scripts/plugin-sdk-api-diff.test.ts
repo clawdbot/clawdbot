@@ -24,10 +24,28 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
 
 describe("Plugin SDK API diff CLI", () => {
   it("interrupts a running child and removes its registered worktree", async () => {
-    const repo = git(process.cwd(), ["rev-parse", "--show-toplevel"]).trim();
+    // Keep revision checkout bounded so startup reaches the child this test cancels.
+    const repo = tempDirs.make("plugin-sdk-api-diff-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-api-diff-temp-");
     const binDir = tempDirs.make("plugin-sdk-api-diff-bin-");
     const pnpmMarker = join(binDir, "pnpm-started");
+
+    git(repo, ["init", "--quiet", "--initial-branch=main"]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    git(repo, ["add", "README.md"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "commit",
+      "--no-gpg-sign",
+      "--quiet",
+      "-m",
+      "fixture",
+    ]);
 
     const fakePnpm = join(binDir, "pnpm");
     writeFileSync(
@@ -54,6 +72,8 @@ describe("Plugin SDK API diff CLI", () => {
           PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
           PNPM_MARKER: pnpmMarker,
           RUNNER_TEMP: runnerTemp,
+          // The fixture owns Git state; the source CLI still needs its workspace aliases.
+          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
         },
         stdio: ["ignore", "ignore", "pipe"],
       },

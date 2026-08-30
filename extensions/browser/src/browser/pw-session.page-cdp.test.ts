@@ -58,9 +58,16 @@ describe("pw-session page-scoped CDP client", () => {
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
 
-  it("marks backend DOM refs on the page", async () => {
+  it("requests the document before marking backend DOM refs on the page", async () => {
+    let documentRequested = false;
     const sessionSend = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "DOM.getDocument") {
+        documentRequested = true;
+      }
       if (method === "DOM.pushNodesByBackendIdsToFrontend") {
+        if (!documentRequested) {
+          throw new Error("Document needs to be requested first");
+        }
         expect(params).toEqual({ backendNodeIds: [42, 84] });
         return { nodeIds: [101, 202] };
       }
@@ -89,7 +96,8 @@ describe("pw-session page-scoped CDP client", () => {
 
     expect(page.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}]`);
     expect(evaluateAll).toHaveBeenCalledTimes(1);
-    expect(sessionSend).toHaveBeenNthCalledWith(1, "DOM.enable", undefined);
+    expect(marked).toEqual(new Set(["ax1", "ax2"]));
+    expect(sessionSend).toHaveBeenNthCalledWith(1, "DOM.getDocument", { depth: 0 });
     expect(sessionSend).toHaveBeenNthCalledWith(2, "DOM.pushNodesByBackendIdsToFrontend", {
       backendNodeIds: [42, 84],
     });
@@ -103,7 +111,6 @@ describe("pw-session page-scoped CDP client", () => {
       name: BROWSER_REF_MARKER_ATTRIBUTE,
       value: "ax2",
     });
-    expect(marked).toEqual(new Set(["ax1", "ax2"]));
     expect(sessionDetach).toHaveBeenCalledTimes(1);
   });
 

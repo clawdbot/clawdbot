@@ -2,9 +2,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -143,6 +145,408 @@ describe("prepareSqliteReadOnlyLocation", () => {
   it("prepares a readable WAL snapshot through the sync public entry point", async () => {
     await expectPublicSnapshot(prepareSqliteReadOnlyLocationSync);
   });
+
+  it.each([
+    { mode: "async", prepare: prepareSqliteReadOnlyLocation },
+    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSync },
+  ])("stages the $mode isolated worker snapshot in the private user cache", async ({ prepare }) => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-cache-");
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec("CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('cached');");
+    database.close();
+
+    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+      const prepared = await prepare(databasePath);
+      try {
+        expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
+        expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
+        const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+        expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "cached" }]);
+        snapshot.close();
+      } finally {
+        expect(prepared.cleanup()).toBe(true);
+      }
+    });
+  });
+
+  it("avoids an exhausted OS temp root when a private cache can hold the snapshot", async () => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-quota-");
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec("CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('survived');");
+    database.close();
+    const before = readFamily(databasePath);
+    const quotaError = Object.assign(new Error("disk I/O error"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 778,
+    });
+    const backup = sqlite.backup.bind(sqlite);
+    vi.spyOn(sqlite, "backup").mockImplementation(async (source, destination, options) => {
+      if (!String(destination).startsWith(`${cacheRoot}${path.sep}`)) {
+        throw quotaError;
+      }
+      return await (options ? backup(source, destination, options) : backup(source, destination));
+    });
+
+    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+      const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
+      try {
+        expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
+        expect(readFamily(databasePath)).toEqual(before);
+      } finally {
+        expect(prepared.cleanup()).toBe(true);
+      }
+    });
+  });
+
+  it.each([13, 778, 1034, 1290])(
+    "retains SQLite destination write failure %i and identifies the snapshot cache",
+    async (errcode) => {
+      const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-full-");
+      const sqlite = requireNodeSqlite();
+      const databasePath = createTempDatabasePath();
+      const database = new sqlite.DatabaseSync(databasePath);
+      database.exec("CREATE TABLE probe (value TEXT);");
+      database.close();
+      const quotaError = Object.assign(new Error("disk I/O error"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode,
+      });
+      vi.spyOn(sqlite, "backup").mockRejectedValueOnce(quotaError);
+
+      await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+        await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toMatchObject({
+          cause: quotaError,
+          message: expect.stringContaining(`SQLite errcode=${errcode}`),
+        });
+      });
+      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+    },
+  );
+
+  it.each(
+    [
+      {
+        mode: "async backup",
+        prepare: prepareSqliteReadOnlyLocationInProcess,
+        empty: false,
+        sync: false,
+      },
+      {
+        mode: "async copy",
+        prepare: prepareSqliteReadOnlyLocationInProcess,
+        empty: true,
+        sync: false,
+      },
+      {
+        mode: "sync copy",
+        prepare: prepareSqliteReadOnlyLocationSyncInProcess,
+        empty: false,
+        sync: true,
+      },
+    ].flatMap((scenario) =>
+      ["ENOSPC", "EDQUOT", "EACCES", "EPERM", "EROFS"].map((code) =>
+        Object.assign({}, scenario, { code }),
+      ),
+    ),
+  )(
+    "identifies $mode private cache allocation failure $code before backup or copying",
+    async ({ code, empty, prepare, sync }) => {
+      const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-allocation-");
+      const databasePath = createTempDatabasePath();
+      const sqlite = requireNodeSqlite();
+      if (empty) {
+        fs.writeFileSync(databasePath, "");
+      } else {
+        const database = new sqlite.DatabaseSync(databasePath);
+        database.exec("CREATE TABLE probe (value TEXT);");
+        database.close();
+      }
+      const stagingRoot = path.join(cacheRoot, "openclaw");
+      const allocationError = Object.assign(new Error("snapshot directory allocation failed"), {
+        code,
+        path: path.join(stagingRoot, "openclaw-sqlite-readonly-stage"),
+      });
+      const backup = vi.spyOn(sqlite, "backup");
+      const write = vi.spyOn(fs, "writeSync");
+      if (sync) {
+        vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
+          throw allocationError;
+        });
+      } else {
+        vi.spyOn(fs.promises, "mkdtemp").mockRejectedValueOnce(allocationError);
+      }
+
+      await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+        const error = await Promise.resolve()
+          .then(() => prepare(databasePath))
+          .catch((cause: unknown) => cause);
+        expect(error).toMatchObject({
+          cause: allocationError,
+          message: expect.stringContaining(stagingRoot),
+        });
+        expect((error as Error).message).toContain("XDG_CACHE_HOME");
+      });
+
+      expect(backup).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+      expect(fs.readdirSync(stagingRoot)).toEqual([]);
+    },
+  );
+
+  it.each([
+    { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess, sync: false },
+    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess, sync: true },
+  ])(
+    "identifies sanitized $mode Windows allocation failures without losing their causes",
+    async ({ prepare, sync }) => {
+      const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-windows-allocation-");
+      const databasePath = createTempDatabasePath();
+      const sqlite = requireNodeSqlite();
+      const database = new sqlite.DatabaseSync(databasePath);
+      database.exec("CREATE TABLE probe (value TEXT);");
+      database.close();
+      const stagingRoot = path.join(cacheRoot, "openclaw");
+      const directoryPath = path.join(stagingRoot, "openclaw-sqlite-readonly-stage");
+      const allocationError = new Error("PowerShell failed (status=1); stderr: Access is denied.");
+      const windowsError = new Error(
+        `Unable to create private Windows SQLite directory: ${directoryPath}`,
+        { cause: allocationError },
+      );
+      if (sync) {
+        vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
+          throw windowsError;
+        });
+      } else {
+        vi.spyOn(fs.promises, "mkdtemp").mockRejectedValueOnce(windowsError);
+      }
+
+      await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+        const error = await Promise.resolve()
+          .then(() => prepare(databasePath))
+          .catch((cause: unknown) => cause);
+        expect(error).toMatchObject({ cause: windowsError });
+        expect((error as Error).message).toContain(windowsError.message);
+        expect((error as Error).message).toContain(stagingRoot);
+        expect((error as Error).message).toContain("XDG_CACHE_HOME");
+        expect(((error as Error).cause as Error).cause).toBe(allocationError);
+      });
+
+      expect(fs.readdirSync(stagingRoot)).toEqual([]);
+    },
+  );
+
+  it.each([
+    { label: "SQLite source read", code: "ERR_SQLITE_ERROR", errcode: 266 },
+    { label: "SQLite source locking", code: "ERR_SQLITE_ERROR", errcode: 5 },
+    { label: "filesystem source read", code: "EACCES", errcode: undefined },
+  ])("preserves $label failures without staging guidance", async ({ label, code, errcode }) => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-source-failure-");
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec("CREATE TABLE probe (value TEXT);");
+    database.close();
+    const sourceError = Object.assign(new Error(label), {
+      code,
+      ...(errcode === undefined ? { path: databasePath } : { errcode }),
+    });
+    vi.spyOn(sqlite, "backup").mockRejectedValueOnce(sourceError);
+
+    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+      await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toBe(sourceError);
+    });
+    expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  });
+
+  it("preserves source failures inside the snapshot cache without staging guidance", async () => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-cached-source-");
+    const stagingRoot = path.join(cacheRoot, "openclaw");
+    fs.mkdirSync(stagingRoot, { mode: 0o700 });
+    const databasePath = path.join(stagingRoot, "source.sqlite");
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec("CREATE TABLE probe (value TEXT);");
+    database.close();
+    const sourceError = Object.assign(new Error("source permission denied"), {
+      code: "EACCES",
+      path: databasePath,
+    });
+    vi.spyOn(sqlite, "backup").mockRejectedValueOnce(sourceError);
+
+    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+      const error = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
+        (cause: unknown) => cause,
+      );
+      expect(error).toBe(sourceError);
+      expect((error as Error).message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
+    });
+    expect(fs.readdirSync(stagingRoot)).toEqual(["source.sqlite"]);
+  });
+
+  it("identifies filesystem failures whose path belongs to the staging destination", async () => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-destination-path-");
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec("CREATE TABLE probe (value TEXT);");
+    database.close();
+    vi.spyOn(sqlite, "backup").mockImplementationOnce(async (_source, destination) => {
+      throw Object.assign(new Error("destination permission denied"), {
+        code: "EACCES",
+        path: String(destination),
+      });
+    });
+
+    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+      await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toMatchObject({
+        cause: { code: "EACCES", path: expect.stringContaining(cacheRoot) },
+        message: expect.stringContaining(cacheRoot),
+      });
+    });
+    expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  });
+
+  it("preserves source corruption without reporting a snapshot staging quota failure", async () => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-corrupt-source-");
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec("CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('corrupt');");
+    database.close();
+
+    const descriptor = fs.openSync(databasePath, "r+");
+    try {
+      fs.writeSync(descriptor, Buffer.from([0]), 0, 1, 100);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+
+    const corruptSource = new sqlite.DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(() => corruptSource.prepare("PRAGMA quick_check;").get()).toThrow(
+        /database disk image is malformed/u,
+      );
+    } finally {
+      corruptSource.close();
+    }
+
+    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+      const inProcessError = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
+        (error: unknown) => error,
+      );
+      const workerError = await prepareSqliteReadOnlyLocation(databasePath).catch(
+        (error: unknown) => error,
+      );
+
+      expect(inProcessError).toMatchObject({
+        errcode: 11,
+        message: "database disk image is malformed",
+      });
+      expect(workerError).toBeInstanceOf(Error);
+      expect((workerError as Error).message).toContain("database disk image is malformed");
+      expect((workerError as Error).message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
+    });
+  });
+
+  it.each(["EDQUOT", "ENOSPC"])(
+    "keeps synchronous destination %s failures actionable without changing the source",
+    async (code) => {
+      const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-sync-full-");
+      const sqlite = requireNodeSqlite();
+      const databasePath = createTempDatabasePath();
+      const database = new sqlite.DatabaseSync(databasePath);
+      database.exec("CREATE TABLE probe (value TEXT);");
+      database.close();
+      const before = readFamily(databasePath);
+      const quotaError = Object.assign(new Error("Disk quota exceeded"), { code });
+      vi.spyOn(fs, "writeSync").mockImplementationOnce(() => {
+        throw quotaError;
+      });
+
+      await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+        expect(() => prepareSqliteReadOnlyLocationSyncInProcess(databasePath)).toThrowError(
+          expect.objectContaining({
+            cause: quotaError,
+            message: expect.stringContaining(cacheRoot),
+          }),
+        );
+      });
+      expect(readFamily(databasePath)).toEqual(before);
+      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+    },
+  );
+
+  it("keeps a newly created cache root on the requested cache filesystem", async () => {
+    const cacheRoot = path.join(tempDirs.make("openclaw-sqlite-snapshot-new-cache-"), "missing");
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec("CREATE TABLE probe (value TEXT);");
+    database.close();
+
+    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+      const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+      try {
+        expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
+        expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
+      } finally {
+        expect(prepared.cleanup()).toBe(true);
+      }
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reports the real SQLite write errcode across the isolated worker boundary",
+    () => {
+      const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-worker-full-");
+      const sqlite = requireNodeSqlite();
+      const databasePath = createTempDatabasePath();
+      const database = new sqlite.DatabaseSync(databasePath);
+      database.exec(
+        "CREATE TABLE probe (payload BLOB); INSERT INTO probe VALUES (zeroblob(8192));",
+      );
+      database.close();
+      const moduleUrl = pathToFileURL(path.resolve("src/infra/sqlite-readonly-location.ts")).href;
+      const script = `
+        const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
+        try {
+          await prepareSqliteReadOnlyLocation(${JSON.stringify(databasePath)});
+          process.exitCode = 24;
+        } catch (error) {
+          console.log(JSON.stringify({ message: error.message }));
+        }
+      `;
+      const child = spawnSync(
+        "/bin/sh",
+        [
+          "-c",
+          'ulimit -f 1; exec "$@"',
+          "openclaw-sqlite-snapshot-quota",
+          process.execPath,
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "-e",
+          script,
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, XDG_CACHE_HOME: cacheRoot },
+        },
+      );
+
+      expect(child.status, child.stderr).toBe(0);
+      const reported = JSON.parse(child.stdout) as { message: string };
+      expect(reported.message).toContain(cacheRoot);
+      expect(reported.message).toMatch(/free.*space|quota/iu);
+      expect(reported.message).toContain("778");
+    },
+  );
 
   it("propagates async public entry point failures", async () => {
     const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");

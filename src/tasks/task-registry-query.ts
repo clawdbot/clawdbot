@@ -152,12 +152,13 @@ export function listTaskRecordPage(params: {
   };
 }
 
-export function listTaskRecords(): TaskRecord[] {
+export function listTaskRecords(filter?: (task: Readonly<TaskRecord>) => boolean): TaskRecord[] {
   ensureTaskRegistryReady();
-  return [...tasks.values()]
+  const records = [...tasks.values()];
+  return (filter ? records.filter(filter) : records)
     .map((task, insertionIndex) => Object.assign({}, cloneTaskRecord(task), { insertionIndex }))
     .toSorted(compareTasksNewestFirst)
-    .map(({ insertionIndex: _, ...task }) => task);
+    .map(({ insertionIndex: _insertionIndex, ...task }) => task);
 }
 
 export function hasActiveTaskForChildSessionKey(params: {
@@ -219,7 +220,7 @@ function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskR
       } => Boolean(task),
     )
     .toSorted(compareTasksNewestFirst)
-    .map(({ insertionIndex: _, ...task }) => task);
+    .map(({ insertionIndex: _insertionIndex, ...task }) => task);
 }
 
 export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
@@ -272,7 +273,7 @@ export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
       return [...merged.values()]
         .map((task, insertionIndex) => Object.assign({}, task, { insertionIndex }))
         .toSorted(compareTasksNewestFirst)
-        .map(({ insertionIndex: _, ...task }) => task);
+        .map(({ insertionIndex: _insertionIndex, ...task }) => task);
     } catch (error) {
       taskRegistryLog.warn("Failed to read fresh owner task registry records", {
         ownerKey: key,

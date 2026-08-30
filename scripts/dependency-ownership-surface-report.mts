@@ -7,6 +7,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml } from "yaml";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
+import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { collectRootDependencyOwnershipAudit } from "./root-dependency-ownership-audit.mts";
 
 const DEFAULT_OWNERSHIP_PATH = "scripts/lib/dependency-ownership.json";
@@ -42,10 +44,6 @@ function readJson(filePath: string): JsonObject {
     throw new Error(`${filePath} must contain an object`);
   }
   return value;
-}
-
-function readLockfile(filePath: string): Lockfile {
-  return parseYaml(fs.readFileSync(filePath, "utf8")) as Lockfile;
 }
 
 function normalizeDependencies(record: ImporterRecord = {}): RootDependency[] {
@@ -166,7 +164,16 @@ function ownershipFor(dependencyOwnership: JsonObject, name: string) {
     ? dependencyOwnership.dependencies
     : {};
   const ownership = dependencies[name];
-  return isRecord(ownership) ? ownership : undefined;
+  if (!isRecord(ownership)) {
+    return undefined;
+  }
+  return {
+    owner: typeof ownership.owner === "string" ? ownership.owner : undefined,
+    class: typeof ownership.class === "string" ? ownership.class : undefined,
+    risk: Array.isArray(ownership.risk)
+      ? ownership.risk.filter((value): value is string => typeof value === "string")
+      : [],
+  };
 }
 
 function gitValue(repoRoot: string, args: string[]) {
@@ -206,7 +213,16 @@ function collectReportTarget({
 export function collectDependencyOwnershipSurfaceReport(params: ReportParams = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const packageJson = readJson(path.join(repoRoot, "package.json"));
-  const lockfile = readLockfile(path.join(repoRoot, "pnpm-lock.yaml"));
+  const documents = pnpmLockfileDocuments(
+    fs.readFileSync(path.join(repoRoot, "pnpm-lock.yaml"), "utf8"),
+  );
+  const lockfile = parseYaml(documents.dependencies) as Lockfile;
+  const allPackages = Object.values(documents)
+    .filter((document) => document !== null)
+    .map((document) => parseYaml(document) as Lockfile);
+  const buildRiskPackages = allPackages
+    .flatMap(collectBuildRiskPackages)
+    .toSorted((left, right) => left.lockKey.localeCompare(right.lockKey));
   const ownershipPath = path.resolve(repoRoot, params.ownershipPath ?? DEFAULT_OWNERSHIP_PATH);
   const dependencyOwnership = readJson(ownershipPath);
   const rootImporter = lockfile.importers?.["."] ?? {};
@@ -307,16 +323,18 @@ export function collectDependencyOwnershipSurfaceReport(params: ReportParams = {
     target: collectReportTarget({ repoRoot, packageJson, ownershipPath }),
     summary: {
       importerCount: Object.keys(lockfile.importers ?? {}).length,
-      lockfilePackageCount: Object.keys(lockfile.packages ?? {}).length,
+      lockfilePackageCount: new Set(
+        allPackages.flatMap((document) => Object.keys(document.packages ?? {})),
+      ).size,
       rootDirectDependencyCount: rootDependencies.length,
       rootClosurePackageCount: rootClosure.packageKeys.length,
       rootOwnershipRecordCount: Object.keys(dependencyOwnership.dependencies ?? {}).length,
-      buildRiskPackageCount: collectBuildRiskPackages(lockfile).length,
+      buildRiskPackageCount: buildRiskPackages.length,
     },
     ownershipGaps,
     staleOwnershipRecords,
     ownershipWarnings,
-    buildRiskPackages: collectBuildRiskPackages(lockfile),
+    buildRiskPackages,
     topRootDependencyCones: rootDependencyRows.toSorted((left, right) => {
       if (right.closureSize !== left.closureSize) {
         return right.closureSize - left.closureSize;
@@ -405,7 +423,7 @@ export function renderDependencyOwnershipSurfaceMarkdownReport(
     for (const warning of typedReport.ownershipWarnings) {
       lines.push(
         `- ${markdownCode(warning.name)}: ${warning.message}; source sections: ` +
-          `${warning.sourceSections.join(", ")}`,
+          warning.sourceSections.join(", "),
       );
     }
   }
@@ -458,14 +476,6 @@ function printTextReport(report: DependencyOwnershipReport) {
   process.stdout.write(renderDependencyOwnershipSurfaceMarkdownReport(report));
 }
 
-function readArtifactPath(argv: string[], index: number, optionName: string) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv: string[]): ParseOptions {
   const options: ParseOptions = {
     asJson: false,
@@ -504,7 +514,7 @@ export function parseArgs(argv: string[]): ParseOptions {
       continue;
     }
     if (arg === "--markdown") {
-      setOnce(arg, "markdownPath", readArtifactPath(argv, index, arg));
+      setOnce(arg, "markdownPath", requireOptionArgument(argv, index, arg));
       index += 1;
       continue;
     }

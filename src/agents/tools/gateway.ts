@@ -231,9 +231,13 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "cron.remove",
   "cron.run",
   "cron.runs",
+  "secrets.store.delete",
 ]);
 
-const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>(["node.invoke"]);
+const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
+  "node.invoke",
+  "question.request",
+]);
 
 function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
@@ -373,7 +377,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   const hasGatewayUrlOverride = trimToUndefined(params.opts.gatewayUrl) !== undefined;
   const hasGatewayTokenOverride = trimToUndefined(params.opts.gatewayToken) !== undefined;
   if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
-    // Optional provenance must never turn a supported remote node call into an auth failure.
+    // Optional provenance must never turn a supported remote call into an auth failure.
     if (optionalLocalIdentity && !params.required) {
       return undefined;
     }
@@ -381,6 +385,10 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   }
   if (identity.signedAgentRuntimeIdentityToken) {
     return identity.signedAgentRuntimeIdentityToken;
+  }
+  // Independent CLI runs have local claims, not authority in the target Gateway.
+  if (optionalLocalIdentity && !params.required && !identity.gatewayContextResolver) {
+    return undefined;
   }
   if (!identity.operationalRunInstance) {
     if (optionalLocalIdentity && !params.required) {
@@ -585,6 +593,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   },
 ) {
   const gateway = resolveGatewayOptions(opts);
+  const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   const callParams = attachNodeInvokeTurnSource(method, params);
   const scopes = Array.isArray(extra?.scopes)
     ? extra.scopes
@@ -622,18 +631,25 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     ...(deviceIdentity ? { deviceIdentity } : {}),
     scopes,
   };
+  const dispatch = (options: typeof callOptions) => {
+    // Token minting and a prior RPC may await; never downgrade a retired owner.
+    if (resolveGatewayContext && !resolveGatewayContext()) {
+      throw new Error("The admitting Gateway is no longer available. Retry from a new agent run.");
+    }
+    return callGateway<T>(options);
+  };
   try {
-    return await callGateway<T>(callOptions);
+    return await dispatch(callOptions);
   } catch (error) {
     if (method === "node.invoke" && isStaleGatewayNodeInvokeTurnSourceRejection(error)) {
-      return await callGateway<T>({
+      return await dispatch({
         ...callOptions,
         params: stripNodeInvokeTurnSource(callOptions.params),
       });
     }
     if (agentRuntimeIdentityToken && isStaleGatewayAgentRuntimeIdentityRejection(error)) {
       if (method === "node.invoke" && extra?.requireAgentRuntimeIdentity !== true) {
-        return await callGateway<T>({
+        return await dispatch({
           ...callOptions,
           params: stripNodeInvokeTurnSource(callOptions.params),
           agentRuntimeIdentityToken: undefined,

@@ -41,7 +41,8 @@ export function createCrabboxHeartbeatManager(dependencies: {
   warn: (message: string) => void;
 }) {
   const entries = new Map<string, HeartbeatEntry>();
-  const isCurrent = (entry: HeartbeatEntry) => entries.get(entry.id) === entry;
+  let disposed = false;
+  const isCurrent = (entry: HeartbeatEntry) => !disposed && entries.get(entry.id) === entry;
   const warn = (entry: HeartbeatEntry, message: string) =>
     dependencies.warn(
       `${message}; cloud worker machines may be reaped after ${entry.idleTimeout} of coordinator-idle time`,
@@ -62,6 +63,7 @@ export function createCrabboxHeartbeatManager(dependencies: {
     const controller = new AbortController();
     entry.controller = controller;
     let result: SpawnResult;
+    const startedAt = Date.now();
     try {
       result = await dependencies.run(entry, controller.signal);
     } catch (error) {
@@ -93,30 +95,39 @@ export function createCrabboxHeartbeatManager(dependencies: {
     }
     if (!entry.failureWarned) {
       entry.failureWarned = true;
-      warn(entry, crabboxCommandError("heartbeat", result).message);
+      const message = crabboxCommandError("heartbeat", result).message;
+      warn(entry, message.replace("(timeout)", `(timeout after ${Date.now() - startedAt} ms)`));
     }
     schedule(entry);
   };
 
+  const stop = (leaseId: string): void => {
+    const entry = entries.get(leaseId);
+    if (!entry) {
+      return;
+    }
+    entries.delete(leaseId);
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+    entry.controller?.abort();
+  };
+
   return {
     start(context: HeartbeatContext): void {
-      if (entries.has(context.id)) {
+      if (disposed || entries.has(context.id)) {
         return;
       }
       const entry = { ...context, failureWarned: false };
       entries.set(context.id, entry);
       schedule(entry, 0);
     },
-    stop(leaseId: string): void {
-      const entry = entries.get(leaseId);
-      if (!entry) {
-        return;
+    stop,
+    dispose(): void {
+      disposed = true;
+      for (const leaseId of entries.keys()) {
+        stop(leaseId);
       }
-      entries.delete(leaseId);
-      if (entry.timer) {
-        clearTimeout(entry.timer);
-      }
-      entry.controller?.abort();
     },
   };
 }

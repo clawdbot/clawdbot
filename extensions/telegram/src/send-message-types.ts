@@ -4,7 +4,7 @@ import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
-import type { TelegramApi, TelegramApiOverride } from "./send-context.js";
+import type { TelegramApiOverride } from "./send-context.js";
 import type { OpenClawConfig } from "./send.runtime.js";
 
 export type TelegramSendOpts = {
@@ -49,7 +49,7 @@ export type TelegramSendOpts = {
   forceDocument?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
-  /** @internal Refresh durable custody immediately before Telegram Bot API I/O. */
+  /** @internal Revalidate durable custody before a send operation, not after throttle waits. */
   onPlatformSendDispatch?: () => Promise<void>;
 };
 
@@ -62,8 +62,6 @@ export type TelegramThreadedSendOpts = TelegramApiCallOpts &
   Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId">;
 
 export type TelegramMessageActionOpts = TelegramApiCallOpts & { notify?: boolean };
-
-export type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
 
 export type TelegramSendResult = {
   messageId: string;

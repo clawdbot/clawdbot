@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   actionOpacity,
   activateSelfRemovingControl,
@@ -8,6 +9,7 @@ import {
   collapsedSessionSectionsStorageKey,
   controlUiSessionPath,
   createSessionManagementE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
@@ -77,7 +79,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
@@ -130,7 +132,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
@@ -175,58 +177,25 @@ suite.define(() => {
     const page = await context.newPage();
     await page.clock.install();
     const gateway = await installMockGateway(page, {
+      featureMethods: [...defaultControlUiFeatureMethods, "cron.list"],
       methodResponses: {
+        "cron.list": {
+          jobs: [
+            {
+              id: "nightly-invoices",
+              name: "Nightly invoices",
+              description: "Reconciles customer billing",
+            },
+          ],
+          snapshotRevision: "1",
+          total: 1,
+          limit: 200,
+          offset: 0,
+          nextOffset: null,
+          hasMore: false,
+        },
         "sessions.list": {
           cases: [
-            ...[50, 100, 150].map((offset) => ({
-              match: { offset, search: "helpers" },
-              response: sessionsListResponse(
-                Array.from({ length: 50 }, (_, index) =>
-                  sessionRow(
-                    `agent:main:hidden-helper-${offset + index}`,
-                    `Hidden helper ${offset + index}`,
-                    baseTime - offset - index,
-                    { spawnedBy: "agent:main:main" },
-                  ),
-                ),
-                { hasMore: true, nextOffset: offset + 50, offset, totalCount: 250 },
-              ),
-            })),
-            {
-              match: { search: "helpers" },
-              response: sessionsListResponse(
-                Array.from({ length: 50 }, (_, index) =>
-                  sessionRow(
-                    `agent:main:hidden-helper-${index}`,
-                    `Hidden helper ${index}`,
-                    baseTime - index,
-                    { spawnedBy: "agent:main:main" },
-                  ),
-                ),
-                { hasMore: true, nextOffset: 50, totalCount: 250 },
-              ),
-            },
-            {
-              match: { offset: 50, search: "release" },
-              response: sessionsListResponse(
-                [sessionRow("agent:main:release", "Release planning", baseTime - 60_000)],
-                { offset: 50, totalCount: 51 },
-              ),
-            },
-            {
-              match: { search: "release" },
-              response: sessionsListResponse(
-                Array.from({ length: 50 }, (_, index) =>
-                  sessionRow(
-                    `agent:main:release-helper-${index}`,
-                    `Release helper ${index}`,
-                    baseTime - index,
-                    { spawnedBy: "agent:main:main" },
-                  ),
-                ),
-                { hasMore: true, nextOffset: 50, totalCount: 51 },
-              ),
-            },
             {
               match: {},
               response: sessionsListResponse([
@@ -241,6 +210,19 @@ suite.define(() => {
                 }),
                 sessionRow("agent:main:research", "Research notes", baseTime - 120_000),
               ]),
+            },
+          ],
+        },
+        "sessions.search": {
+          results: [
+            {
+              messageId: "message-release-context",
+              role: "assistant",
+              score: 4.2,
+              sessionId: "release",
+              sessionKey: "agent:main:release",
+              snippet: "The view-only handshake is ready for final review.",
+              timestamp: baseTime - 45_000,
             },
           ],
         },
@@ -345,48 +327,38 @@ suite.define(() => {
         )
         .toBe(true);
 
-      // Command palette is the single search surface: querying lists matching
-      // chats from the gateway and selecting one navigates to it.
+      // The same palette lazily loads small non-session catalogs once and
+      // matches both item names and descriptions without involving FTS.
+      const cronRequestsBeforePalette = (await gateway.getRequests("cron.list")).length;
+      const transcriptRequestsBeforePalette = (await gateway.getRequests("sessions.search")).length;
       await page.getByRole("button", { name: "Open command palette" }).click();
       const paletteInput = page.locator(".cmd-palette__input");
       await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
-      // Automatic search is intentionally bounded: an all-hidden result set
-      // must not scan the entire session store from one palette query.
-      await paletteInput.fill("helpers");
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests("sessions.list");
-          return requests.filter((request) => requireRecord(request.params).search === "helpers")
-            .length;
-        })
-        .toBe(4);
-      await page.clock.runFor(400);
-      const boundedSearchRequests = await gateway.getRequests("sessions.list");
-      expect(
-        boundedSearchRequests.filter(
-          (request) => requireRecord(request.params).search === "helpers",
-        ),
-      ).toHaveLength(4);
+      await paletteInput.fill("reconciles customer billing");
+      await page.clock.runFor(50);
+      const automationOption = page.getByRole("option", { name: /Nightly invoices/u });
+      await automationOption.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await gateway.getRequests("cron.list")).toHaveLength(cronRequestsBeforePalette + 1);
+      await page.keyboard.press("Escape");
 
-      await paletteInput.fill("release");
+      // Command palette is the single search surface: metadata and indexed
+      // conversation text share one field, and selecting either navigates.
+      await page.getByRole("button", { name: "Open command palette" }).click();
+      await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
+      await paletteInput.fill("view-only handshake");
+      await page.clock.runFor(50);
       const paletteOption = page
         .locator(".cmd-palette__item")
         .filter({ hasText: "Release planning" });
       await paletteOption.waitFor({ state: "visible", timeout: 10_000 });
-      // The first result page contains 50 hidden child sessions; search must
-      // follow nextOffset before exposing the visible chat on page two.
-      await expect
-        .poll(() =>
-          page.locator(".cmd-palette__item").filter({ hasText: "Release helper" }).count(),
-        )
-        .toBe(0);
-      const searchRequests = await gateway.getRequests("sessions.list");
-      expect(
-        searchRequests.some((request) => {
-          const params = requireRecord(request.params);
-          return params.search === "release" && params.offset === 50;
-        }),
-      ).toBe(true);
+      await expect.poll(() => paletteOption.textContent()).toContain("view-only handshake");
+      expect(await gateway.getRequests("cron.list")).toHaveLength(cronRequestsBeforePalette + 1);
+      const transcriptRequests = await gateway.getRequests("sessions.search");
+      expect(transcriptRequests).toHaveLength(transcriptRequestsBeforePalette + 2);
+      expect(requireRecord(transcriptRequests.at(-1)?.params)).toMatchObject({
+        agentId: "main",
+        query: "view-only handshake",
+      });
       await captureUiProof(page, "command-palette-session-search.png");
       await paletteOption.click();
       await expect
@@ -803,7 +775,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-0"));
       const sidebarRows = page.locator(".sidebar-recent-session");
       // Category sections page independently: Alpha and Beta stay visible
       // alongside the first ten rows in the ungrouped section.

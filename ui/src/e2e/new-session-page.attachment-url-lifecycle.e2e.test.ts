@@ -123,12 +123,12 @@ suite.define(() => {
         const composer = page.locator(".new-session-page__message");
 
         await pastePng(composer);
-        await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+        await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await page.getByRole("button", { name: "Remove attachment" }).click();
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);
-        await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+        await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await waitForCommittedNewSessionDraft(page, "", 1);
         const agentDropdown = page.locator(".new-session-page__select--agent wa-dropdown");
         await page.locator(".new-session-page__select--agent .agent-select__trigger").click();
@@ -176,7 +176,7 @@ suite.define(() => {
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);
-        await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+        await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await waitForCommittedNewSessionDraft(page, "", 1);
         await navigate("chat");
         await page.waitForURL((url) => url.pathname.endsWith("/chat"));
@@ -189,7 +189,7 @@ suite.define(() => {
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);
-        await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+        await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await expectActiveObjectUrls(1);
         await page.getByRole("button", { name: "Start session" }).click();
         await page.waitForURL(

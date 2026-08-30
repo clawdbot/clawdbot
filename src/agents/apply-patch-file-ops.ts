@@ -10,6 +10,7 @@ import {
   FsSafeError,
   root as fsRoot,
 } from "../infra/fs-safe.js";
+import { writeHostFile } from "./host-file-write.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -57,7 +58,7 @@ export async function createPatchTarget(params: {
   }
 }
 
-export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOps {
+export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promise<PatchFileOps> {
   if (options.sandbox) {
     const { root, bridge } = options.sandbox;
     return withPatchMemoryWriteProvenance({
@@ -88,7 +89,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       operations: {
         readFile: async (filePath) => decodeUtf8File(await fs.readFile(filePath), filePath),
         writeFile: async (filePath, content) => {
-          await fs.writeFile(filePath, content, "utf8");
+          await writeHostFile(filePath, content);
         },
         createFileExclusive: async (filePath, content) => {
           try {
@@ -110,7 +111,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
   }
 
   const containmentRoot = options.root ?? options.cwd;
-  const rootPromise = fsRoot(containmentRoot);
+  const root = await fsRoot(containmentRoot);
   // Mirror the read path: canonicalize contained symlink parents so a patch
   // that reads through a directory alias can also mutate through it. Escaping
   // aliases still fail the containment check against the canonical root.
@@ -147,12 +148,12 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       },
       writeFile: async (filePath, content) => {
         const relative = await toCanonicalMutationRelative(filePath);
-        await (await rootPromise).write(relative, content, { encoding: "utf8" });
+        await root.write(relative, content, { encoding: "utf8" });
       },
       createFileExclusive: async (filePath, content) => {
         const relative = await toCanonicalMutationRelative(filePath);
         try {
-          await (await rootPromise).create(relative, content, { encoding: "utf8" });
+          await root.create(relative, content, { encoding: "utf8" });
           return "created";
         } catch (error) {
           // fs-safe opens an existing destination before its O_EXCL commit. A final
@@ -169,11 +170,10 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       },
       remove: async (filePath) => {
         const relative = await toCanonicalMutationRelative(filePath);
-        await (await rootPromise).remove(relative);
+        await root.remove(relative);
       },
       mkdirp: async (dir) => {
         const relative = await toCanonicalMutationRelative(dir, { allowRoot: true });
-        const root = await rootPromise;
         if (relative === "" || relative === ".") {
           await root.ensureRoot();
           return;

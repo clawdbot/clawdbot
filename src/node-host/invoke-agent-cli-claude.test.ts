@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
 import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
@@ -11,6 +15,7 @@ import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -23,10 +28,16 @@ function frame(params: unknown): NodeInvokeRequestPayload {
   };
 }
 
-function client(calls: Array<{ method: string; params: unknown }>): NodeHostClient {
+function client(
+  calls: Array<{ method: string; params: unknown }>,
+  onProgress?: () => void,
+): NodeHostClient {
   return {
     async request<T>(method: string, params?: unknown): Promise<T> {
       calls.push({ method, params });
+      if (method === "node.invoke.progress") {
+        onProgress?.();
+      }
       return {} as T;
     },
   };
@@ -38,7 +49,7 @@ async function executableScript(source: string): Promise<string> {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-")));
   tempDirs.push(dir);
   const file = path.join(dir, "claude-test.cjs");
-  await fs.writeFile(file, `#!/usr/bin/env node\n${source}\n`, { mode: 0o700 });
+  await fs.writeFile(file, `#!${process.execPath}\n${source}\n`, { mode: 0o700 });
   return file;
 }
 
@@ -206,55 +217,67 @@ describe("Claude CLI node command", () => {
     });
   });
 
-  it("consults the system.run approval surface with a prompt-free command", async () => {
-    const executable = await executableScript("process.exit(0);");
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const handleSystemRun = vi.fn(
-      async (options: {
-        params: { command: string[] };
-        sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
-        sendExecFinishedEvent: (params: unknown) => Promise<void>;
-        sendInvokeResult: (result: unknown) => Promise<void>;
-      }) => {
-        expect(options.params.command).toEqual([executable, "-p", "--resume", "session-1"]);
-        await options.sendNodeEvent(client(calls), "exec.denied", {});
-        await options.sendExecFinishedEvent({});
-        await options.sendInvokeResult({
-          ok: false,
-          error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
-        });
-      },
-    );
-    await handleInvoke(
-      frame({
-        argv: ["-p", "--resume", "session-1"],
-        systemPrompt: "private prompt",
-        idleTimeoutMs: 1_000,
-        timeoutMs: 2_000,
-      }),
-      client(calls),
-      { current: async () => [] },
-      undefined,
-      { claudePath: executable, handleSystemRun: handleSystemRun as never },
-    );
-
-    expect(handleSystemRun).toHaveBeenCalledOnce();
-    expect(calls.some((call) => call.method === "node.event")).toBe(false);
-    expect(JSON.stringify(calls)).not.toContain("private prompt");
-    const response = calls.find((call) => call.method === "node.invoke.result")?.params as {
-      ok?: boolean;
-      payloadJSON?: string;
-    };
-    expect(response.ok).toBe(true);
-    expect(JSON.parse(response.payloadJSON ?? "{}")).toMatchObject({
-      approvalRequired: true,
+  it.each([
+    { name: "unconfigured", config: {}, security: "full", ask: "off" },
+    {
+      name: "explicit ask",
+      config: { tools: { exec: { mode: "ask" } } },
       security: "allowlist",
       ask: "on-miss",
-      systemRunPlan: {
-        argv: [executable, "-p", "--resume", "session-1"],
-      },
-    });
-  });
+    },
+  ] as const)(
+    "consults the system.run approval surface with a prompt-free command ($name)",
+    async ({ config, security, ask }) => {
+      setRuntimeConfigSnapshot(config);
+      const executable = await executableScript("process.exit(0);");
+      const calls: Array<{ method: string; params: unknown }> = [];
+      const handleSystemRun = vi.fn(
+        async (options: {
+          params: { command: string[] };
+          sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
+          sendExecFinishedEvent: (params: unknown) => Promise<void>;
+          sendInvokeResult: (result: unknown) => Promise<void>;
+        }) => {
+          expect(options.params.command).toEqual([executable, "-p", "--resume", "session-1"]);
+          await options.sendNodeEvent(client(calls), "exec.denied", {});
+          await options.sendExecFinishedEvent({});
+          await options.sendInvokeResult({
+            ok: false,
+            error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
+          });
+        },
+      );
+      await handleInvoke(
+        frame({
+          argv: ["-p", "--resume", "session-1"],
+          systemPrompt: "private prompt",
+          idleTimeoutMs: 1_000,
+          timeoutMs: 2_000,
+        }),
+        client(calls),
+        { current: async () => [] },
+        undefined,
+        { claudePath: executable, handleSystemRun: handleSystemRun as never },
+      );
+
+      expect(handleSystemRun).toHaveBeenCalledOnce();
+      expect(calls.some((call) => call.method === "node.event")).toBe(false);
+      expect(JSON.stringify(calls)).not.toContain("private prompt");
+      const response = calls.find((call) => call.method === "node.invoke.result")?.params as {
+        ok?: boolean;
+        payloadJSON?: string;
+      };
+      expect(response.ok).toBe(true);
+      expect(JSON.parse(response.payloadJSON ?? "{}")).toMatchObject({
+        approvalRequired: true,
+        security,
+        ask,
+        systemRunPlan: {
+          argv: [executable, "-p", "--resume", "session-1"],
+        },
+      });
+    },
+  );
 
   it("converts forwarded OAuth into a child-only descriptor after approval", async () => {
     const executable = await executableScript(`
@@ -612,14 +635,16 @@ process.stdout.write(Buffer.concat([
     const controller = new AbortController();
     const request = { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 };
     const calls: Array<{ method: string; params: unknown }> = [];
+    let resolveProgress!: () => void;
+    const progressObserved = new Promise<void>((resolve) => {
+      resolveProgress = resolve;
+    });
     const run = runCommand(executable, request, {
-      client: client(calls),
+      client: client(calls, resolveProgress),
       signal: controller.signal,
     });
 
-    await vi.waitFor(() =>
-      expect(calls).toContainEqual(expect.objectContaining({ method: "node.invoke.progress" })),
-    );
+    await progressObserved;
     controller.abort();
 
     await expect(run).resolves.toMatchObject({

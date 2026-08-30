@@ -4,12 +4,14 @@ import { buildSessionCreationStamp } from "../../../config/sessions/session-entr
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
+import { resolveUserPath } from "../../../utils.js";
 import {
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "../../inherited-tool-deny.js";
+import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import {
@@ -64,6 +66,11 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
     entry.thinkingLevel = patch.thinkingLevel.trim();
   }
+  const authProfileOverride = normalizeOptionalString(patch.authProfileOverride);
+  if (authProfileOverride) {
+    entry.authProfileOverride = authProfileOverride;
+    entry.authProfileOverrideSource = patch.authProfileOverrideSource === "auto" ? "auto" : "user";
+  }
   if (patch.fastMode === true || patch.fastMode === false || patch.fastMode === "auto") {
     entry.fastMode = patch.fastMode;
   }
@@ -108,12 +115,14 @@ export async function createInitialSubagentSession(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
   childSessionKey: string;
+  label?: string;
   incognito: boolean;
   requesterInternalKey: string;
-  requesterAgentId: string;
+  creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   admissionPatch?: Record<string, unknown>;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
@@ -165,10 +174,20 @@ export async function createInitialSubagentSession(params: {
       },
       {
         ...buildDirectChildSessionPatch(initialChildSessionPatch),
+        // Native spawn keeps agent RPC label semantics, not sessions.patch's uniqueness policy.
+        ...(params.label ? { label: params.label } : {}),
+        ...(params.sessionPermissionPolicy
+          ? {
+              permissionMode: params.sessionPermissionPolicy.mode,
+              sessionRoot: resolveUserPath(
+                params.spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root,
+              ),
+            }
+          : {}),
         ...childSessionIdentity,
         ...buildSessionCreationStamp({
           via: "spawn",
-          actor: { type: "agent", id: params.requesterAgentId },
+          ...params.creationPolicy,
         }),
       },
     );

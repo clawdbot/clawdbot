@@ -177,7 +177,7 @@ export function loadTranscriptEventsFromDatabase(
   beforeEventSeq?: number,
 ): TranscriptEvent[] {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("transcript_events")
@@ -185,8 +185,9 @@ export function loadTranscriptEventsFromDatabase(
       .where("session_id", "=", sessionId)
       .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
       .orderBy("seq", "asc"),
-  ).rows;
-  return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+  );
+  // Array.from closes the iterator on parse failure; no live cursor escapes a fenced read.
+  return Array.from(rows, (row) => JSON.parse(row.event_json) as TranscriptEvent);
 }
 
 export function readTranscriptSnapshot(
@@ -242,7 +243,8 @@ export function readTranscriptStorageRows(
 }
 
 function sqliteTranscriptJsonlByteSize() {
-  return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(LENGTH(CAST(event_json AS BLOB))), 0)
+  // octet_length reads column metadata; casting to BLOB loads every overflow payload first.
+  return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(OCTET_LENGTH(event_json)), 0)
     + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");
 }
 
@@ -280,18 +282,6 @@ export function readTranscriptStatsSync(scope: SessionTranscriptReadScope): Sess
     maxSeq: row?.max_seq ?? 0,
     sizeBytes: row?.size_bytes ?? 0,
   };
-}
-
-export function readTranscriptEventJsonSetInTransaction(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-): Set<string> {
-  const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("transcript_events").select("event_json").where("session_id", "=", sessionId),
-  ).rows;
-  return new Set(rows.map((row) => row.event_json));
 }
 
 /** Reads the latest visible assistant text from SQLite transcript rows in reverse order. */

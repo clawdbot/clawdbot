@@ -15,6 +15,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
@@ -31,8 +32,6 @@ import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
-import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
-import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -188,7 +187,7 @@ function createPluginToolDelivery(params: {
   };
 }
 
-/** Resolves plugin tools for an agent run and applies delivery-context defaults. */
+/** Resolves plugin tools and their delivery context for an agent run. */
 export function resolveOpenClawPluginToolsForOptions(params: {
   options?: ResolveOpenClawPluginToolsOptions;
   resolvedConfig?: OpenClawConfig;
@@ -288,8 +287,15 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     : undefined;
   const existingToolNames = new Set(params.existingToolNames ?? []);
   const preparedModelRuntime = params.options?.preparedModelRuntime;
-  const runtimeRegistry =
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry() ?? undefined;
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const runtimeRegistry = requestRegistry ?? getActivePluginRegistry() ?? undefined;
+  // A scoped registry can own prepared plugin facts without a model runtime (headless cron).
+  // Never borrow process-global load facts for an unrelated direct caller.
+  const preparedRegistry = preparedModelRuntime
+    ? preparedModelRuntime.pluginRegistry
+    : requestRegistry;
+  const loadContext = getPluginRuntimeLoadContext(preparedRegistry);
+  const metadataSnapshot = preparedModelRuntime?.metadataSnapshot ?? loadContext?.metadataSnapshot;
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
     context: {
@@ -305,12 +311,12 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
     ...(runtimeRegistry ? { runtimeRegistry } : {}),
-    ...(preparedModelRuntime
+    ...(metadataSnapshot
       ? {
           preparedRuntime: {
-            loadContext: getPreparedPluginRuntimeLoadContext(preparedModelRuntime.pluginRegistry),
-            metadataSnapshot: preparedModelRuntime.metadataSnapshot,
-            registry: preparedModelRuntime.pluginRegistry,
+            loadContext,
+            metadataSnapshot,
+            registry: preparedRegistry,
           },
         }
       : {}),
@@ -327,8 +333,5 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     }),
   );
 
-  return applyPluginToolDeliveryDefaults({
-    tools: pluginTools,
-    deliveryContext: pluginToolInputs.context.deliveryContext,
-  });
+  return pluginTools;
 }

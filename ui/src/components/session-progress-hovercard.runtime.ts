@@ -1,7 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { ReactiveElement, render } from "lit";
+import { nothing, ReactiveElement, render } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { activityPersonLocation } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -17,11 +16,9 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
-import {
-  renderSessionHovercard,
-  type SessionHovercardPersonActivity,
-} from "./session-hovercard.ts";
+import { renderSessionHovercard } from "./session-hovercard.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 import {
   SESSION_MENU_OPEN_EVENT,
@@ -32,7 +29,6 @@ import {
 const OPEN_DELAY_MS = 450;
 const SWEEP_OPEN_DELAY_MS = 80;
 const SKIP_DELAY_MS = 300;
-const ROW_CARD_BRIDGE_MS = 220;
 const CLOSE_DELAY_MS = 100;
 const EXIT_DURATION_MS = 100;
 let nextHovercardId = 0;
@@ -51,6 +47,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   private applicationGateway: ApplicationGateway | null = null;
   private progressCards: SessionProgressCardStore | null = null;
   private stopProgressCardUpdates: (() => void) | null = null;
+  private stopSessionUpdates: (() => void) | null = null;
   private pullRequests: SessionPullRequestSnapshotStore | null = null;
   private stopPullRequestUpdates: (() => void) | null = null;
   private activeTarget: HTMLElement | null = null;
@@ -96,10 +93,13 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   }
 
   set context(value: ApplicationContext | null) {
+    this.stopSessionUpdates?.();
+    this.stopSessionUpdates = null;
     this.applicationContext = value;
     this.sessionLinkTitler.context = value;
     if (this.isConnected) {
       this.sessionLinkTitler.refresh();
+      this.connectStore();
     }
   }
 
@@ -153,6 +153,11 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   }
 
   private connectStore(): void {
+    if (this.applicationContext && !this.stopSessionUpdates) {
+      this.stopSessionUpdates = this.applicationContext.sessions.subscribe(
+        this.handleSessionUpdate,
+      );
+    }
     if (!this.applicationGateway || this.progressCards) {
       return;
     }
@@ -164,6 +169,8 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.progressCards?.unwatch(this);
     this.stopProgressCardUpdates?.();
     this.stopProgressCardUpdates = null;
+    this.stopSessionUpdates?.();
+    this.stopSessionUpdates = null;
     this.progressCards = null;
     this.releasePullRequestStore();
   }
@@ -178,6 +185,12 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       this.lastProgressCard = card;
     }
     this.showCurrent();
+  };
+
+  private readonly handleSessionUpdate = () => {
+    if (this.open && this.hovercard.held) {
+      this.showCurrent();
+    }
   };
 
   private readonly handlePullRequestUpdate = () => {
@@ -207,17 +220,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) {
       return;
     }
-    this.hovercard.pointerInside = false;
-    const card = this.hovercard.card;
-    const side = card?.dataset.side;
-    const rect = target.getBoundingClientRect();
-    const movingTowardCard =
-      (event.relatedTarget instanceof Node && card?.contains(event.relatedTarget)) ||
-      (side === "right" && event.clientX >= rect.right) ||
-      (side === "left" && event.clientX <= rect.left) ||
-      (side === "bottom" && event.clientY >= rect.bottom) ||
-      (side === "top" && event.clientY <= rect.top);
-    this.hovercard.scheduleClose(movingTowardCard ? ROW_CARD_BRIDGE_MS : CLOSE_DELAY_MS);
+    this.hovercard.schedulePointerExit(event, target);
   };
 
   private readonly handleFocusIn = (event: FocusEvent) => {
@@ -411,6 +414,8 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       row: sidebarRow
         ? {
             label: sidebarRow.label,
+            boardFace: sidebarRow.boardFace,
+            hasAutomation: sidebarRow.hasAutomation,
             channelAvatarUrl: sidebarRow.channelAvatarUrl,
             lastMessagePreview: sidebarRow.lastMessagePreview,
             createdActor: sidebarRow.createdActor,
@@ -418,7 +423,10 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
             participantCount: sidebarRow.participantCount,
             workContext: sidebarRow.workContext,
             createdAt: sidebarRow.createdAt,
+            startedAt: sidebarRow.startedAt,
             updatedAt: sidebarRow.updatedAt,
+            status: sidebarRow.status,
+            endedAt: sidebarRow.endedAt,
           }
         : null,
     });
@@ -496,7 +504,9 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     card.addEventListener("focusin", this.handleCardFocusIn);
     card.addEventListener("focusout", this.handleCardFocusOut);
     card.addEventListener("keydown", this.handleCardKeyDown);
-    this.hovercard.mount(target, card, sessionProgressHoverPlacementForTarget(target), false);
+    this.hovercard.mount(target, card, sessionProgressHoverPlacementForTarget(target), false, () =>
+      render(nothing, card),
+    );
     if (animateEntry) {
       void card.offsetWidth;
       window.setTimeout(() => {
@@ -548,25 +558,13 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   };
 
   private cardFocusables(): HTMLElement[] {
-    // Decorative link twins (avatars beside their labelled link) opt out with tabindex="-1".
-    return [
-      ...(this.hovercard.card?.querySelectorAll<HTMLElement>('a[href]:not([tabindex="-1"])') ?? []),
-    ];
+    return this.hovercard.focusables();
   }
 
-  private personActivity(): SessionHovercardPersonActivity | undefined {
+  private personActivity(): PersonActivityRouting | undefined {
     const context = this.applicationContext;
-    if (!context) {
-      return undefined;
-    }
-    return {
-      basePath: context.basePath,
-      navigate: (personId) => {
-        // The card outlives its trigger row after navigation, so close it with the same call.
-        this.close();
-        context.navigate("activity", activityPersonLocation(personId, context.basePath));
-      },
-    };
+    // The card outlives its trigger row after navigation, so close it on the way out.
+    return context ? personActivityRouting(context, () => this.close()) : undefined;
   }
 
   private close(animateExit = false): void {

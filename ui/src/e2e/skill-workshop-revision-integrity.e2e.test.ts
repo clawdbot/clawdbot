@@ -96,7 +96,7 @@ function proposalInspect(revision: ProposalRevision, status: ProposalStatus = "p
       updatedAt: revision.updatedAt,
       proposedVersion: revision.version,
       draftHash: "d".repeat(64),
-      origin: { agentId: "main", sessionKey: "main" },
+      origin: { agentId: "main", sessionKey: "agent:main:main" },
       target: { skillName: "Revision Integrity", skillKey: SKILL_KEY },
     },
     revisionHash: revision.hash,
@@ -306,7 +306,7 @@ suite.define(() => {
         expectedRevisionHash: H1_HASH,
         instructions,
         proposalId: PROPOSAL_ID,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.waitForURL(/\/skills\/workshop(?:[?#].*)?$/u);
@@ -351,7 +351,7 @@ suite.define(() => {
         expectedRevisionHash: H2_HASH,
         instructions: reviewedInstructions,
         proposalId: PROPOSAL_ID,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.screenshot({

@@ -19,6 +19,8 @@ import {
   isAssistantTextContentType,
   isProjectedSessionsSendForwardedMessage,
   shouldPreserveAssistantControlReplyText,
+  stripAssistantMediaDirectivesForDisplay,
+  takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
 import {
@@ -129,6 +131,28 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
   return true;
 }
 
+function projectChatHistoryAttachmentBlock(entry: Record<string, unknown>): boolean {
+  if (entry.type !== "attachment") {
+    return false;
+  }
+  const attachment = readRecord(entry.attachment);
+  if (!attachment) {
+    return false;
+  }
+  const projected = { ...attachment };
+  for (const field of MEDIA_PRIVATE_FIELDS) {
+    delete projected[field];
+  }
+  const url = projectChatHistoryMediaReference(projected.url);
+  if (!url) {
+    delete projected.url;
+  } else {
+    projected.url = url;
+  }
+  entry.attachment = projected;
+  return true;
+}
+
 function projectChatHistoryMediaFacts(value: unknown): unknown[] | undefined {
   return Array.isArray(value)
     ? value.map((fact) => {
@@ -207,7 +231,8 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
   }
   const mediaChanged = projectChatHistoryMediaBlock(entry);
-  changed ||= mediaChanged;
+  const attachmentChanged = projectChatHistoryAttachmentBlock(entry);
+  changed ||= mediaChanged || attachmentChanged;
   return { block: changed ? entry : block, changed, truncated };
 }
 
@@ -220,7 +245,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
       return false;
     }
     const entry = block as { type?: unknown; textSignature?: unknown };
-    return entry.type === "text" && Boolean(parseAssistantTextSignature(entry)?.phase);
+    return isAssistantTextContentType(entry.type) && parseAssistantTextSignature(entry)?.phase;
   });
   if (!hasExplicitPhasedText) {
     return { content, changed: false };
@@ -230,7 +255,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
       return true;
     }
     const entry = block as { type?: unknown; textSignature?: unknown };
-    if (entry.type !== "text") {
+    if (!isAssistantTextContentType(entry.type)) {
       return true;
     }
     return parseAssistantTextSignature(entry)?.phase === "final_answer";
@@ -261,9 +286,12 @@ function projectAssistantMixedToolContent(
     if (!block || typeof block !== "object") {
       continue;
     }
-    const entry = block as { type?: unknown; text?: unknown };
+    const entry = block as { type?: unknown; text?: unknown; textSignature?: unknown };
     if (!isAssistantTextContentType(entry.type)) {
       projectedContent.push(block);
+      continue;
+    }
+    if (parseAssistantTextSignature(entry)?.phase === "commentary") {
       continue;
     }
     if (typeof entry.text !== "string" || !entry.text.trim()) {
@@ -279,6 +307,64 @@ function projectAssistantMixedToolContent(
   // Mixed messages supply both the visible bubble and its reasoning/tool trace.
   // Keep structured siblings or a history reload loses activity shown while live.
   return hasVisibleText ? { content: projectedContent, changed: true } : null;
+}
+
+function projectAssistantCommentaryFallbacks(message: unknown, maxChars: number): unknown[] {
+  if (!message || typeof message !== "object") {
+    return [];
+  }
+  const entry = readRecord(message);
+  if (
+    !entry ||
+    entry.role !== "assistant" ||
+    !Array.isArray(entry.content) ||
+    entry.stopReason === "error" ||
+    typeof entry.errorMessage === "string"
+  ) {
+    return [];
+  }
+  const transcriptMeta = readRecord(entry["__openclaw"]);
+  return entry.content.flatMap((block) => {
+    const content = readRecord(block);
+    if (!content) {
+      return [];
+    }
+    const signature = parseAssistantTextSignature(content);
+    const text = typeof content.text === "string" ? content.text : "";
+    const itemId = signature?.id?.trim();
+    if (
+      !isAssistantTextContentType(content.type) ||
+      signature?.phase !== "commentary" ||
+      !itemId ||
+      !text.trim()
+    ) {
+      return [];
+    }
+    const projected = truncateChatHistoryText(text, maxChars);
+    const projectedMeta = projected.truncated
+      ? {
+          ...transcriptMeta,
+          truncated: true,
+          reason:
+            typeof transcriptMeta?.reason === "string" ? transcriptMeta.reason : "display-cap",
+        }
+      : transcriptMeta
+        ? { ...transcriptMeta }
+        : undefined;
+    return [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: projected.text }],
+        ...(typeof entry.timestamp === "number" ? { timestamp: entry.timestamp } : {}),
+        openclawStreamFallback: {
+          replacementText: projected.text,
+          source: "segment",
+          itemId,
+        },
+        ...(projectedMeta ? { __openclaw: projectedMeta } : {}),
+      },
+    ];
+  });
 }
 
 function sanitizeCost(raw: unknown): Record<string, number> | undefined {
@@ -406,6 +492,8 @@ export function sanitizeChatHistoryMessage(
     changed = true;
   }
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  const managedMedia = takeAssistantManagedMediaUrlsForDisplay(entry, role);
+  changed ||= managedMedia.changed;
   const preserveExactToolPayload =
     role === "toolresult" ||
     role === "tool_result" ||
@@ -467,7 +555,10 @@ export function sanitizeChatHistoryMessage(
 
   if (typeof entry.content === "string") {
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(entry.content)
+      ? stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(entry.content),
+          managedMedia.urls,
+        )
       : entry.content;
     changed ||= controlStripped !== entry.content;
     if (preserveExactToolPayload) {
@@ -496,7 +587,10 @@ export function sanitizeChatHistoryMessage(
       if (!isAssistantTextContentType(contentBlock.type) || typeof contentBlock.text !== "string") {
         return sanitized;
       }
-      const text = stripSuppressedControlReplyToken(contentBlock.text);
+      const text = stripAssistantMediaDirectivesForDisplay(
+        stripSuppressedControlReplyToken(contentBlock.text),
+        managedMedia.urls,
+      );
       return text === contentBlock.text
         ? sanitized
         : { block: { ...contentBlock, text }, changed: true, truncated: sanitized.truncated };
@@ -526,7 +620,10 @@ export function sanitizeChatHistoryMessage(
 
   if (typeof entry.text === "string") {
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(entry.text)
+      ? stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(entry.text),
+          managedMedia.urls,
+        )
       : entry.text;
     changed ||= controlStripped !== entry.text;
     if (preserveExactToolPayload) {
@@ -609,6 +706,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  opts?: { includeCommentaryFallbacks?: boolean },
 ): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -616,6 +714,13 @@ export function sanitizeChatHistoryMessages(
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
+    if (opts?.includeCommentaryFallbacks === true) {
+      for (const commentary of projectAssistantCommentaryFallbacks(message, maxChars)) {
+        const projected = sanitizeChatHistoryMessage(commentary, maxChars);
+        next.push(projected.message);
+        changed = true;
+      }
+    }
     if (shouldDropAssistantHistoryMessage(message)) {
       changed = true;
       continue;

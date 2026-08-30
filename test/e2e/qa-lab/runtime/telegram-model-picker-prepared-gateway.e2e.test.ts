@@ -2,7 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
-import { startQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type JsonObject = Record<string, unknown>;
 type TelegramCall = { method: string; body: JsonObject };
@@ -229,10 +230,10 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     },
     async (apiRoot) =>
       await withTempDir("openclaw-telegram-model-picker-", async () => {
-        let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+        const gatewayOwner = createQaGatewayChild();
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
-          gateway = await startQaGatewayChild({
+          await gatewayOwner.start({
             repoRoot,
             useRepoCli: true,
             transportBaseUrl: apiRoot,
@@ -350,7 +351,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
           expect(discoveryRequests).toBe(warmDiscoveryRequests);
           expect(postWarmDiscoveryAttempts).toBe(0);
         } finally {
-          await settleCleanup(async () => await gateway?.stop());
+          await settleCleanup(async () => await stopQaGatewayFixture(gatewayOwner));
         }
       }),
   );

@@ -221,7 +221,8 @@ enum GatewayLaunchAgentManager {
     /// ownership record so update callers fail closed instead of consuming it.
     static func launchdProgramArguments() -> [String]? {
         guard FileManager.default.fileExists(atPath: self.plistURL.path) else { return [] }
-        return self.launchdConfigSnapshot()?.programArguments
+        guard let arguments = self.launchdConfigSnapshot()?.programArguments, !arguments.isEmpty else { return nil }
+        return arguments
     }
 
     static func launchdGatewayLogPath() -> String {
@@ -302,11 +303,6 @@ extension GatewayLaunchAgentManager {
         let message: String?
     }
 
-    private struct ParsedDaemonJson {
-        let text: String
-        let object: [String: Any]
-    }
-
     private static func runDaemonCommand(
         _ args: [String],
         timeout: Double = Self.startupMigrationTolerance,
@@ -335,12 +331,13 @@ extension GatewayLaunchAgentManager {
                     self.testingDaemonStatusPayloads.removeFirst()
                 }
             } else {
-                "{\"ok\":true}"
+                self.testingDaemonStatusPayload ?? "{\"ok\":true}"
             }
+            let parsed = JSONObjectExtractionSupport.extract(from: payload)
             return CommandResult(
-                success: true,
+                success: (parsed?.object["ok"] as? Bool) ?? true,
                 payload: Data(payload.utf8),
-                message: nil)
+                message: parsed?.message)
         }
         if ProcessInfo.processInfo.isRunningTests {
             return CommandResult(
@@ -357,12 +354,13 @@ extension GatewayLaunchAgentManager {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
-        let parsed = self.parseDaemonJson(from: response.stdout) ?? self.parseDaemonJson(from: response.stderr)
+        let parsed = JSONObjectExtractionSupport.extract(from: response.stdout)
+            ?? JSONObjectExtractionSupport.extract(from: response.stderr)
         let ok = parsed?.object["ok"] as? Bool
-        let message = (parsed?.object["error"] as? String) ?? (parsed?.object["message"] as? String)
+        let message = parsed?.message
         let payload = parsed?.text.data(using: .utf8)
             ?? (response.stdout.isEmpty ? response.stderr : response.stdout).data(using: .utf8)
-        let success = ok ?? response.success
+        let success = response.success && (ok ?? true)
         if success {
             return CommandResult(success: true, payload: payload, message: nil)
         }
@@ -382,11 +380,6 @@ extension GatewayLaunchAgentManager {
     private static func withJsonFlag(_ args: [String]) -> [String] {
         if args.contains("--json") { return args }
         return args + ["--json"]
-    }
-
-    private static func parseDaemonJson(from raw: String) -> ParsedDaemonJson? {
-        guard let parsed = JSONObjectExtractionSupport.extract(from: raw) else { return nil }
-        return ParsedDaemonJson(text: parsed.text, object: parsed.object)
     }
 
     private static func summarize(_ text: String) -> String? {

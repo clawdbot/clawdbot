@@ -34,7 +34,7 @@ export function buildCliHookUserMessage(prompt: string): unknown {
   };
 }
 
-/** Interrupted turns persist as aborted so replayed history never reads partial text as a finished reply. */
+/** Interrupted turns persist as aborted so replayed history never treats partial text as complete. */
 export function resolveCliAssistantStopReason(output: CliOutput): StopReason {
   return output.terminalInterruption ? "aborted" : "stop";
 }
@@ -191,7 +191,11 @@ export async function persistCliAssistantTranscript(params: {
       storePath: runParams.storePath,
       idempotencyKey,
       config: runParams.config,
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      beforeMessageWrite: (write) =>
+        runAgentHarnessBeforeMessageWriteHook({
+          ...write,
+          prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
+        }),
       message: buildAssistantMessage({
         model: {
           api: "cli",
@@ -391,6 +395,7 @@ export async function finalizeCliContextEngineTurn(params: {
       yieldAborted: false,
       sessionIdUsed: runParams.sessionId,
       sessionKey: runParams.sessionKey,
+      sessionTarget: runParams.sessionTarget,
       sessionFile: runParams.sessionFile,
       isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       messagesSnapshot: transcript.messagesSnapshot,

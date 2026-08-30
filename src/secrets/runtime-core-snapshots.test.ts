@@ -11,9 +11,12 @@ import {
   getAuthoredConfigSecretRef,
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
+import { registerEmbeddingProvider } from "../plugins/embedding-providers.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -286,6 +289,104 @@ describe("secrets runtime snapshot core lanes", () => {
     expect(snapshot.config.gateway?.remote?.token).toBe("remote-token-ref");
     expect(snapshot.config.gateway?.remote?.password).toBe("remote-password-ref");
   });
+
+  it.each([
+    ["openai", "openai", "auto", true],
+    ["openai", "openai", undefined, true],
+    ["gemini", "google", "gemini", true],
+    ["bedrock", "amazon-bedrock", "bedrock", true],
+    ["gemini", "google", "tenant-gemini", true],
+    ["gemini", "google", "gemini", false],
+  ] as const)(
+    "binds %s memory credentials to %s (configured=%s, metadata=%s)",
+    async (adapterId, authProviderId, configuredProviderId, registryMetadata) => {
+      const apiKeyRef = {
+        source: "env" as const,
+        provider: "default",
+        id: "MEMORY_REMOTE_KEY",
+      };
+      const manifest: PluginManifestRecord = {
+        id: authProviderId,
+        origin: "bundled",
+        rootDir: "/test-plugin",
+        source: "/test-plugin/index.ts",
+        manifestPath: "/test-plugin/openclaw.plugin.json",
+        channels: [],
+        providers: [`${authProviderId}-secondary`, authProviderId],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        contracts: { embeddingProviders: [adapterId] },
+      };
+      const prepare = (version: "old" | "new", env: NodeJS.ProcessEnv) =>
+        prepareSecretsRuntimeSnapshot({
+          config: asConfig({
+            agents: { list: [{ id: "main", default: true }] },
+            memory: {
+              search: {
+                ...(configuredProviderId ? { provider: configuredProviderId } : {}),
+                remote: { apiKey: apiKeyRef },
+              },
+            },
+            models: {
+              providers: {
+                [authProviderId]: {
+                  baseUrl: `https://${version}.example.invalid/v1`,
+                  headers: { "X-Tenant": version },
+                  models: [],
+                },
+                ...(configuredProviderId &&
+                configuredProviderId !== "auto" &&
+                configuredProviderId !== adapterId
+                  ? {
+                      [configuredProviderId]: {
+                        api: adapterId,
+                        baseUrl: "https://tenant.example.invalid/v1",
+                        headers: { "X-Custom-Tenant": "configured" },
+                        models: [],
+                      },
+                    }
+                  : {}),
+              },
+            },
+          }),
+          env,
+          includeAuthStoreRefs: false,
+          allowUnavailableSecretOwners: true,
+          loadablePluginOrigins: new Map(),
+          ...(registryMetadata ? { manifestRegistry: { plugins: [manifest] } } : {}),
+        });
+      const active = await prepare("old", { MEMORY_REMOTE_KEY: "last-known-good" });
+      activateSecretsRuntimeSnapshot(active);
+
+      if (registryMetadata) {
+        registerEmbeddingProvider(
+          { id: adapterId, authProviderId, create: async () => ({ provider: null }) },
+          { ownerPluginId: authProviderId },
+        );
+      }
+
+      const unchanged = await prepare("old", {});
+      const changed = await prepare("new", {});
+
+      expect(unchanged.config.memory?.search?.remote?.apiKey).toBe("last-known-good");
+      expect(unchanged.degradedOwners).toMatchObject([
+        { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "stale" },
+      ]);
+      expect(changed.config.memory?.search?.remote?.apiKey).toEqual(apiKeyRef);
+      expect(changed.degradedOwners).toMatchObject([
+        { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "cold" },
+      ]);
+
+      activateSecretsRuntimeSnapshot(changed);
+      expect(() => assertSecretOwnerAvailable("capability", "memory-provider:main")).toThrow(
+        expect.objectContaining({
+          code: "SECRET_SURFACE_UNAVAILABLE",
+          ownerId: "memory-provider:main",
+        }),
+      );
+    },
+  );
 
   it("resolves env-backed auth profile SecretRefs", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({

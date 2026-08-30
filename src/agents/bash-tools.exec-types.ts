@@ -55,6 +55,8 @@ export type ExecToolDefaults = {
   approvalFollowupMode?: "agent" | "direct";
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
+  /** Immutable session policy that forbids execution outside its provisioned sandbox. */
+  sandboxRequired?: boolean;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
   /** Final run-local availability of the process continuation tool. */
@@ -130,8 +132,20 @@ export type ExecElevatedDefaults = {
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
 };
 
+/** One model-backed approval review recorded on an exec tool call. */
+export type ExecToolApprovalReview = {
+  id: string;
+  label: string;
+  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
+  riskLevel?: string;
+  rationale?: string;
+};
+
 /** Structured details returned by exec tool calls. */
-export type ExecToolDetails =
+export type ExecToolDetails = {
+  approvalReviews?: readonly ExecToolApprovalReview[];
+  approvalReviewOutcome?: "approved" | "denied" | "reviewing";
+} & (
   | {
       status: "running";
       sessionId: string;
@@ -145,7 +159,7 @@ export type ExecToolDetails =
       exitCode: number | null;
       exitSignal?: NodeJS.Signals | number | null;
       failureKind?: string;
-      reason?: "not-dispatched" | "outcome-unknown";
+      reason?: "not-dispatched" | "outcome-unknown" | "policy-denied";
       nodeInvokeFailure?: {
         failureCode?: string;
         message: string;
@@ -186,4 +200,5 @@ export type ExecToolDetails =
       cwd?: string;
       nodeId?: string;
       warningText?: string;
-    };
+    }
+);

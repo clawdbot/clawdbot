@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import OpenClawKit
 import OpenClawProtocol
+import os
 import Testing
 @testable import OpenClaw
 
@@ -39,7 +40,7 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
         true
     }
 
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {}
     func invokedCommands() -> [String] {
         self.requests.map(\.command)
@@ -94,25 +95,17 @@ struct MacNodeHostWorkerTests {
             .retry(attempt: 1, delayNanoseconds: 1_000_000_000))
     }
 
-    @Test func `worker allows a generous cold-start window`() async throws {
+    @Test func `worker reserves five minutes for cold startup`() {
+        // Process readiness is covered below; a short shell sleep cannot prove this default policy.
         #expect(MacNodeHostWorker.defaultStartupTimeout == 300)
-
-        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
-        let script = """
-        sleep 0.1
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"}}'
-        while IFS= read -r line; do :; done
-        """
-
-        let manifest = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script]))
-        #expect(manifest.version == "test")
-        await worker.stop()
     }
 
     @Test func `worker launches in the selected checkout`() async throws {
         let checkout = try makeTempDirForTests().resolvingSymlinksInPath()
-        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
+        defer { try? FileManager.default.removeItem(at: checkout) }
+        let expectedCurrentDirectory = try #require(realpath(checkout.path, nil))
+        defer { free(expectedCurrentDirectory) }
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         printf '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"%s"}}\\n' \
           "$(/bin/pwd -P)"
@@ -123,8 +116,6 @@ struct MacNodeHostWorkerTests {
             command: ["/bin/sh", "-c", script],
             currentDirectoryURL: checkout))
 
-        let expectedCurrentDirectory = try #require(realpath(checkout.path, nil))
-        defer { free(expectedCurrentDirectory) }
         #expect(manifest.pathEnv == String(cString: expectedCurrentDirectory))
         await worker.stop()
     }
@@ -133,9 +124,10 @@ struct MacNodeHostWorkerTests {
         OpenClawSystemCommand.run.rawValue,
         "mcp.tools.call.v1",
         "codex.terminal.resume.v1",
+        "system.worker.start",
     ])
     func `Mac runtime forwards worker-owned commands to the shared worker`(command: String) async {
-        let worker = StubMacNodeHostWorker(commands: [command])
+        let worker = StubMacNodeHostWorker(commands: command == "system.worker.start" ? [] : [command])
         let runtime = MacNodeRuntime(nodeHostWorker: worker)
 
         let response = await runtime.handleInvoke(BridgeInvokeRequest(
@@ -211,12 +203,33 @@ struct MacNodeHostWorkerTests {
     }
 
     @Test(arguments: [
-        (
-            MacNodeCodexThreadCatalogContract.listCommand,
-            "UNAVAILABLE: Codex session catalog is disabled"),
-        (
-            MacNodeCodexThreadCatalogContract.turnsCommand,
-            "UNAVAILABLE: Codex session catalog is disabled"),
+        MacNodeCodexThreadCatalogContract.listCommand,
+        MacNodeCodexThreadCatalogContract.turnsCommand,
+    ])
+    func `worker owns Codex catalog commands when native catalog is disabled`(command: String) async {
+        let worker = StubMacNodeHostWorker(commands: [command])
+        let nativeCatalogEnabledReads = OSAllocatedUnfairLock(initialState: 0)
+        let runtime = MacNodeRuntime(
+            nodeHostWorker: worker,
+            codexThreadCatalogEnabled: {
+                nativeCatalogEnabledReads.withLock {
+                    $0 += 1
+                    return false
+                }
+            })
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "worker-codex-catalog",
+            command: command,
+            paramsJSON: #"{"limit":1}"#))
+
+        #expect(response.ok)
+        #expect(response.payloadJSON == #"{"owner":"cli"}"#)
+        #expect(await worker.invokedCommands() == [command])
+        #expect(nativeCatalogEnabledReads.withLock { $0 } == 1)
+    }
+
+    @Test(arguments: [
         (
             MacNodeClaudeSessionCatalogContract.listCommand,
             "UNAVAILABLE: Claude session catalog is disabled"),
@@ -374,13 +387,16 @@ struct MacNodeHostWorkerTests {
         test "$OPENCLAW_NODE_EXEC_HOST" = app || exit 42
         test "$OPENCLAW_NODE_EXEC_FALLBACK" = 0 || exit 43
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
-        printf '%s\\n' '{"type":"gateway-request","id":"gateway-1","method":"node.invoke.progress","params":{"invokeId":"terminal-1","nodeId":"node-1","seq":0,"chunk":"hello"},"timeoutMs":1000}'
-        IFS= read -r unavailable
-        printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
-        printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45
+        # Progress belongs to the invoke; ready already lets the app send that invoke.
         while IFS= read -r line; do
           case "$line" in
-            *'"type":"invoke"'*) printf '%s\\n' '{"type":"invoke-result","result":{"id":"worker-run","ok":true,"payload":{"owner":"cli"}}}' ;;
+            *'"type":"invoke"'*)
+              printf '%s\\n' '{"type":"gateway-request","generation":0,"id":"gateway-1","method":"node.invoke.progress","params":{"invokeId":"worker-run","nodeId":"","seq":0,"chunk":"hello"},"timeoutMs":1000}'
+              IFS= read -r unavailable
+              printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
+              printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45
+              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-run","ok":true,"payload":{"owner":"cli"}}}'
+              ;;
           esac
         done
         """
@@ -594,15 +610,17 @@ struct MacNodeHostWorkerTests {
             try? FileManager.default.removeItem(at: directory)
         }
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        // Shell builtins handle TERM without waiting on a sleep child. Keep cleanup
+        // pending on stdin until the owner's existing termination deadline reaps it.
         let firstScript = """
-        trap 'printf "%s\n" "$$" > "$1"; /bin/sleep 0.2; exit 0' TERM
+        trap 'printf "%s\n" "$$" > "$1"; IFS= read -r _; exit 0' TERM
         printf '%s\n' '{"type":"ready","version":"first","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
-        while :; do /bin/sleep 1; done
+        while IFS= read -r line; do :; done
         """
         let replacementScript = """
         printf '%s\n' "$$" > "$1"
         printf '%s\n' '{"type":"ready","version":"replacement","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
-        while :; do /bin/sleep 1; done
+        while IFS= read -r line; do :; done
         """
 
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: [
@@ -629,8 +647,8 @@ struct MacNodeHostWorkerTests {
         case .success:
             Issue.record("changed launch succeeded after stop returned")
             await worker.stop()
-        case .failure:
-            break
+        case let .failure(error):
+            #expect(error.localizedDescription == "worker stopped")
         }
         #expect(TestProcessSupport.pollPID(in: replacementPIDFile) == nil)
     }
@@ -681,11 +699,11 @@ struct MacNodeHostWorkerTests {
         let script = """
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         IFS= read -r first
-        printf '{"type":"invoke-result","result":{"id":"first","ok":true,"payload":{"blob":"'
+        printf '{"type":"invoke-result","generation":0,"result":{"id":"first","ok":true,"payload":{"blob":"'
         head -c 2097152 /dev/zero | tr '\\000' x
         printf '"}}}\\n'
         IFS= read -r second
-        printf '%s\\n' '{"type":"invoke-result","result":{"id":"second","ok":true,"payload":{"done":true}}}'
+        printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"second","ok":true,"payload":{"done":true}}}'
         """
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
             command: ["/bin/sh", "-c", script]))
@@ -717,5 +735,48 @@ struct MacNodeHostWorkerTests {
             await worker.stop()
             throw error
         }
+    }
+
+    // Regression: a worker that exits before its ready manifest must consume the
+    // crash retry budget and carry its stderr into the start error. Before this,
+    // startup-time CLI refusals (for example a state database schema mismatch)
+    // never notified the retry policy, so the coordinator respawned the broken
+    // CLI forever and the operator only ever saw "exited(1)" in os_log.
+    @Test func `startup exit consumes retry budget and surfaces worker stderr`() async throws {
+        let exitGate = AsyncTestGate()
+        let exitGeneration = OSAllocatedUnfairLock<UInt64?>(initialState: nil)
+        let worker = MacNodeHostWorker(
+            session: GatewayNodeSession(),
+            startupTimeout: 5,
+            onUnexpectedExit: { generation in
+                exitGeneration.withLock { $0 = generation }
+                exitGate.open()
+            })
+        let script = """
+        echo 'refused: state database uses newer schema version' >&2
+        sleep 0.2
+        exit 7
+        """
+
+        do {
+            _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+                command: ["/bin/sh", "-c", script],
+                configurationGeneration: 3))
+            Issue.record("worker start unexpectedly succeeded")
+        } catch {
+            let workerError = try #require(error as? MacNodeHostWorker.WorkerError)
+            guard case let .unavailable(reason, diagnostic) = workerError else {
+                Issue.record("worker start did not report an unavailable error")
+                return
+            }
+            #expect(reason.contains("exited"))
+            #expect(!reason.contains("state database"))
+            #expect(diagnostic?.contains("state database uses newer schema version") == true)
+            #expect(error.localizedDescription.contains("state database uses newer schema version"))
+        }
+
+        await exitGate.wait()
+        #expect(exitGeneration.withLock { $0 } == 3)
+        await worker.stop()
     }
 }

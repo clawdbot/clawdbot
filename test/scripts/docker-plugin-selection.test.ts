@@ -3,16 +3,32 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveDockerPluginSelection } from "../../scripts/lib/docker-plugin-selection.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const selectorScript = path.join(repoRoot, "scripts/lib/docker-plugin-selection.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function writePlugin(extensionsRoot: string, dirName: string, manifestId?: string) {
+function writePlugin(
+  extensionsRoot: string,
+  dirName: string,
+  manifestId?: string,
+  dependencies?: Record<string, string>,
+  requiredPlatformPackages?: string[],
+) {
   const pluginDir = path.join(extensionsRoot, dirName);
   fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(path.join(pluginDir, "package.json"), `${JSON.stringify({ name: dirName })}\n`);
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    `${JSON.stringify({
+      name: dirName,
+      ...(dependencies && { dependencies }),
+      ...(requiredPlatformPackages && {
+        openclaw: { install: { requiredPlatformPackages } },
+      }),
+    })}\n`,
+  );
   if (manifestId) {
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
@@ -21,13 +37,102 @@ function writePlugin(extensionsRoot: string, dirName: string, manifestId?: strin
   }
 }
 
-function runSelector(extensionsRoot: string, selection: string) {
-  return spawnSync(process.execPath, [selectorScript, extensionsRoot, selection], {
+function runSelector(
+  extensionsRoot: string,
+  selection: string,
+  rootPackagePath?: string,
+  requiredPlatformPackages = false,
+) {
+  const args = [selectorScript, extensionsRoot, selection];
+  if (rootPackagePath) {
+    args.push("--required-bundled", rootPackagePath);
+  } else if (requiredPlatformPackages) {
+    args.push("--required-platform-packages");
+  }
+  return spawnSync(process.execPath, args, {
     encoding: "utf8",
   });
 }
 
 describe("Docker plugin selection", () => {
+  it("adds standalone direct and Gateway provider selections to the shared live image", () => {
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts/print-live-docker-plugin-selection.mjs"), repoRoot, "twitch"],
+      {
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          OPENCLAW_LIVE_PROVIDERS: "ollama",
+          OPENCLAW_LIVE_GATEWAY_MODELS: "mistral/mistral-large-latest",
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split(",")).toEqual(
+      expect.arrayContaining(["ollama", "mistral", "twitch"]),
+    );
+  });
+
+  it("selects provider owners by manifest capability without assuming matching plugin ids", () => {
+    const extensionsRoot = tempDirs.make("openclaw-docker-provider-selection-");
+    writePlugin(extensionsRoot, "provider-source", "provider-plugin");
+    writePlugin(extensionsRoot, "other-source", "other-plugin");
+    fs.writeFileSync(
+      path.join(extensionsRoot, "provider-source", "openclaw.plugin.json"),
+      JSON.stringify({ id: "provider-plugin", providers: ["api-provider", "portal-provider"] }),
+    );
+
+    expect(
+      resolveDockerPluginSelection({
+        extensionsRoot,
+        selection: "other-plugin,provider-plugin",
+        providers: ["portal-provider", "custom-unregistered-provider"],
+      }),
+    ).toEqual(["other-source", "provider-source"]);
+    expect(resolveDockerPluginSelection({ extensionsRoot, providers: ["api-provider"] })).toEqual([
+      "provider-source",
+    ]);
+  });
+
+  it("includes required core-bundled dependencies without changing optional plugin selections", () => {
+    const fixtureRoot = tempDirs.make("openclaw-docker-required-bundled-plugins-");
+    const extensionsRoot = path.join(fixtureRoot, "extensions");
+    const rootPackagePath = path.join(fixtureRoot, "package.json");
+    fs.mkdirSync(extensionsRoot);
+    fs.writeFileSync(
+      rootPackagePath,
+      `${JSON.stringify({ files: ["dist/", "!dist/extensions/optional-provider/**"] })}\n`,
+    );
+    writePlugin(extensionsRoot, "bundled-provider", "bundled", { "provider-sdk": "1.0.0" });
+    writePlugin(extensionsRoot, "bundled-without-deps", "without-deps");
+    writePlugin(extensionsRoot, "optional-provider", "optional", { "optional-sdk": "1.0.0" }, [
+      "optional-native-linux-arm64",
+      "optional-native-darwin-arm64",
+      "optional-native-linux-arm64",
+    ]);
+
+    const required = runSelector(extensionsRoot, "", rootPackagePath);
+    expect(required.status).toBe(0);
+    expect(required.stderr).toBe("");
+    expect(required.stdout).toBe("bundled-provider\n");
+
+    const install = runSelector(extensionsRoot, "optional", rootPackagePath);
+    expect(install.status).toBe(0);
+    expect(install.stdout).toBe("bundled-provider\noptional-provider\n");
+
+    const selected = runSelector(extensionsRoot, "optional");
+    expect(selected.status).toBe(0);
+    expect(selected.stdout).toBe("optional-provider\n");
+
+    const platformPackages = runSelector(extensionsRoot, "optional", undefined, true);
+    expect(platformPackages.status).toBe(0);
+    expect(platformPackages.stdout).toBe(
+      "optional-native-darwin-arm64\noptional-native-linux-arm64\n",
+    );
+    expect(runSelector(extensionsRoot, "", undefined, true).stdout).toBe("");
+  });
+
   it("resolves manifest ids and source directory names deterministically", () => {
     const extensionsRoot = tempDirs.make("openclaw-docker-plugin-selection-");
     writePlugin(extensionsRoot, "source-only");

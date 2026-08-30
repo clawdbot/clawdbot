@@ -4,6 +4,7 @@ import type { DispatchReplyWithDispatcher } from "../../auto-reply/reply/provide
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { createDirectPendingFinalCustody } from "./direct-delivery-custody.js";
 import { dispatchRoutedChannelTurn } from "./lifecycle.js";
 
 const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
@@ -67,6 +68,50 @@ describe("channel turn failed-send custody", () => {
     settlePendingFinalDelivery.mockImplementation(async (_completion, state: string) => ({
       state,
     }));
+  });
+
+  it("serializes and revalidates pending-final custody before every provider post", async () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "reply" },
+      { pendingFinalDeliveryCompletion: completion },
+    );
+    const custody = createDirectPendingFinalCustody(payload);
+    if (!custody) {
+      throw new Error("expected pending-final custody");
+    }
+    let resolveFirstCheck: ((result: { state: "unknown" }) => void) | undefined;
+    const firstCheck = new Promise<{ state: "unknown" }>((resolve) => {
+      resolveFirstCheck = resolve;
+    });
+    let checkCount = 0;
+    settlePendingFinalDelivery.mockImplementation(async () => {
+      if (checkCount++ === 0) {
+        return firstCheck;
+      }
+      return { state: "suppressed" };
+    });
+
+    const firstDispatch = custody.onPlatformSendDispatch();
+    const secondDispatch = custody.onPlatformSendDispatch();
+    await Promise.resolve();
+    expect(settlePendingFinalDelivery).toHaveBeenCalledOnce();
+    resolveFirstCheck?.({ state: "unknown" });
+
+    await expect(firstDispatch).resolves.toBeUndefined();
+    await expect(secondDispatch).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+
+    expect(settlePendingFinalDelivery).toHaveBeenNthCalledWith(
+      1,
+      { kind: "pending-final", ...completion },
+      "unknown",
+      ["prepared", "queued"],
+    );
+    expect(settlePendingFinalDelivery).toHaveBeenNthCalledWith(
+      2,
+      { kind: "pending-final", ...completion },
+      "unknown",
+      ["unknown"],
+    );
   });
 
   const run = (error: Error) => {

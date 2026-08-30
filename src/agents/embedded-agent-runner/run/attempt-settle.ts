@@ -38,6 +38,7 @@ import type { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import type { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import type { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
+import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { buildPromptImageFailureNotice } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -72,6 +73,7 @@ type StreamCleanupInput = {
   queueHandle: PreparedStreamRuntime["stream"]["queueHandle"];
   state: EmbeddedAttemptExecutionState;
   unsubscribe: () => void;
+  deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
 };
 
 function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error | undefined {
@@ -90,10 +92,12 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
   // Every release belongs to this owner; one broken callback must not strand
   // the active run or mask the prompt failure that caused teardown.
   let firstCleanupError: Error | undefined;
-  for (const [name, cleanup] of [
+  const cleanups: Array<readonly [string, () => void]> = [
     ["unsubscribe", input.unsubscribe],
     ["backend detach", () => attempt.replyOperation?.detachBackend(input.queueHandle)],
-    [
+  ];
+  if (!input.deferredLifecycleOwner) {
+    cleanups.push([
       "active run cleanup",
       () =>
         clearActiveEmbeddedRun(
@@ -102,8 +106,9 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
           attempt.sessionKey,
           attempt.sessionFile,
         ),
-    ],
-  ] as const) {
+    ]);
+  }
+  for (const [name, cleanup] of cleanups) {
     try {
       cleanup();
     } catch (error) {
@@ -130,7 +135,7 @@ export async function runEmbeddedAttemptSettledPhase(
       activeSession,
       clientToolCallSlots,
       coreReadAuthorized,
-      getCodeModeReconciliationCandidate,
+      getCodeModeRecoveryCandidate,
       hasDeliveredSourceReply,
       hookRunner,
       setCodeModeReconciliationReadAuthorized,
@@ -159,7 +164,7 @@ export async function runEmbeddedAttemptSettledPhase(
   const { bootstrapPromptWarning, shouldRecordCompletedBootstrapTurn } = bootstrap;
   const { effectiveTools, emptyExplicitToolAllowlistError, toolSearch } = toolCatalog;
   const { tools, uncompactedEffectiveTools } = bundleTools;
-  const { toolSearchTargetTranscriptProjections } = toolBase;
+  const { nestedToolActivities } = toolBase;
   const hookAgentId = input.setup.sessionAgentId;
   let yieldAborted = false;
   const preparedStreamRuntime = input.preparedStreamRuntime;
@@ -291,6 +296,7 @@ export async function runEmbeddedAttemptSettledPhase(
       },
       preflight: {
         ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
+        compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
         contextEngineAssemblySucceeded,
         contextEnginePromptAuthority,
         includeBoundaryTimestamp,
@@ -465,7 +471,7 @@ export async function runEmbeddedAttemptSettledPhase(
           onBlockReplyFlush,
           abortable,
           prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
-          toolSearchTargetTranscriptProjections,
+          nestedToolActivities,
           cache: {
             observabilityEnabled: cacheObservabilityEnabled,
             changesForTurn: promptCacheChangesForTurn,
@@ -546,6 +552,7 @@ export async function runEmbeddedAttemptSettledPhase(
         sessionIdUsed: settledStream.sessionIdUsed,
         sessionFileUsed,
         messagesSnapshot: settledStream.messagesSnapshot,
+        nestedToolActivities,
         prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
         contextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint(),
         lastCallUsage: settledStream.lastCallUsage,
@@ -601,6 +608,7 @@ export async function runEmbeddedAttemptSettledPhase(
       queueHandle,
       state,
       unsubscribe,
+      deferredLifecycleOwner: preparedStreamRuntime.stream.deferredLifecycleOwner,
     });
   }
 
@@ -625,7 +633,7 @@ export async function runEmbeddedAttemptSettledPhase(
       lastAssistant,
       currentAttemptAssistant,
       currentAttemptCompletedAssistant,
-      codeModeReconciliationCandidate: getCodeModeReconciliationCandidate(),
+      codeModeRecoveryCandidate: getCodeModeRecoveryCandidate(),
       successfulNestedToolNames,
       attemptUsage,
       promptCache: sessionRuntimeState.promptCache,
@@ -646,6 +654,7 @@ export async function runEmbeddedAttemptSettledPhase(
       streamStrategy,
     },
     trajectoryRecorder,
+    deferredLifecycleOwner: preparedStreamRuntime.stream.deferredLifecycleOwner,
   });
   state.trajectoryEndRecorded = true;
   if (attempt.sessionKey && result.acceptedSessionSpawns?.length) {

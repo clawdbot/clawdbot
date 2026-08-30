@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 
@@ -174,7 +175,7 @@ function createFixture() {
       activeSession,
       clientToolCallSlots: [],
       coreReadAuthorized: true,
-      getCodeModeReconciliationCandidate: vi.fn(() => false),
+      getCodeModeRecoveryCandidate: vi.fn(() => undefined),
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
       setCodeModeReconciliationReadAuthorized: vi.fn(),
@@ -245,7 +246,7 @@ function createFixture() {
         runtimeInfo: { model: { id: "model" } },
         systemPromptReport: { chars: 13 },
       },
-      toolBase: { toolSearchTargetTranscriptProjections: [] },
+      toolBase: { nestedToolActivities: [] },
       toolCatalog: {
         effectiveTools: [{ name: "read" }],
         emptyExplicitToolAllowlistError: undefined,
@@ -417,6 +418,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
       }),
     );
+    expect(fixture.sessionManager.appendMessage.mock.calls[0]?.[0]).not.toHaveProperty(
+      "excludeFromContext",
+    );
     expect(mocks.completeResult).toHaveBeenCalledWith(
       expect.objectContaining({
         state: expect.objectContaining({
@@ -430,8 +434,12 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
   it("carries a successful hidden target through settlement into the terminal receipt", async () => {
     const fixture = createFixture();
-    fixture.input.prepared.toolBase.toolSearchTargetTranscriptProjections.push(
-      {
+    fixture.input.prepared.toolBase.nestedToolActivities.push(
+      createNestedToolActivity({
+        runId: "run-test",
+        scopeId: "scope-test",
+        afterEntryId: null,
+        startOrder: 0,
         parentToolCallId: "outer-exec",
         toolCallId: "tool_search_code:outer-exec:read:1",
         toolName: "read",
@@ -441,8 +449,14 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           details: {},
         },
         isError: false,
-      },
-      {
+        startedAt: 1,
+        timestamp: 2,
+      }),
+      createNestedToolActivity({
+        runId: "run-test",
+        scopeId: "scope-test",
+        afterEntryId: null,
+        startOrder: 0,
         parentToolCallId: "outer-exec",
         toolCallId: "tool_search_code:outer-exec:write:2",
         toolName: "write",
@@ -452,7 +466,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           details: {},
         },
         isError: true,
-      },
+        startedAt: 3,
+        timestamp: 4,
+      }),
     );
     const actualStreamSettle = await vi.importActual<typeof import("./attempt-stream-settle.js")>(
       "./attempt-stream-settle.js",

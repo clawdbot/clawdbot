@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.ui.agentPickerLabel
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -94,19 +95,7 @@ class ChatScreenTest {
   }
 
   @Test
-  fun agentChipUsesEmojiAndFallsBackToId() {
-    assertEquals(
-      "🦾 Scout",
-      chatAgentChipText(GatewayAgentSummary(id = "scout", name = "Scout", emoji = " 🦾 ")),
-    )
-    assertEquals(
-      "ops",
-      chatAgentChipText(GatewayAgentSummary(id = "ops", name = " ", emoji = null)),
-    )
-  }
-
-  @Test
-  fun sessionChipUsesTheSharedDashboardTitlePrecedence() {
+  fun sessionPickerUsesTheSharedDashboardTitlePrecedence() {
     val dashboardKey = "agent:main:dashboard:fresh"
 
     assertEquals(
@@ -132,9 +121,69 @@ class ChatScreenTest {
   }
 
   @Test
+  fun sessionPickerKeepsTheActiveSessionAndSignalsAdditionalChoices() {
+    val now = 1_700_000_000_000L
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "main", updatedAtMs = now),
+        ChatSessionEntry(key = "active", updatedAtMs = now - 1),
+        ChatSessionEntry(key = "recent-1", updatedAtMs = now - 2),
+        ChatSessionEntry(key = "recent-2", updatedAtMs = now - 3),
+        ChatSessionEntry(key = "recent-3", updatedAtMs = now - 4),
+        ChatSessionEntry(key = "recent-4", updatedAtMs = now - 5),
+      )
+
+    val state =
+      chatSessionPickerState(
+        sessionKey = "active",
+        sessions = sessions,
+        mainSessionKey = "main",
+        nowMs = now,
+      )
+
+    assertEquals("active", state.selected?.key)
+    assertEquals(listOf("main", "active", "recent-1", "recent-2", "recent-3"), state.choices.map { it.key })
+    assertTrue(state.hasMore)
+  }
+
+  @Test
   fun agentSelectorUsesCanonicalMainSession() {
     assertEquals("scout", selectedChatAgentId("agent:scout:node-phone", "main"))
     assertEquals("main", selectedChatAgentId("main", "main"))
+  }
+
+  @Test
+  fun agentSelectorDoesNotReplaceMissingActiveAgentWithRosterFallback() {
+    val state =
+      chatAgentPickerState(
+        activeAgentId = "missing",
+        agents =
+          listOf(
+            GatewayAgentSummary(id = "main", name = "main", emoji = null, kind = null),
+            GatewayAgentSummary(id = "ops", name = "ops", emoji = null, kind = null),
+          ),
+      )
+
+    assertNull(state.selected)
+    assertEquals("missing", state.selectedAgentId)
+    assertEquals("missing", agentPickerLabel(state))
+    assertTrue(shouldShowChatAgentPicker(state))
+    assertEquals(
+      listOf("main", "ops"),
+      state.agents.map(GatewayAgentSummary::id),
+    )
+  }
+
+  @Test
+  fun agentSelectorKeepsUnknownSelectionSwitchableWithOneAvailableAgent() {
+    val state =
+      chatAgentPickerState(
+        activeAgentId = "missing",
+        agents = listOf(GatewayAgentSummary(id = "main", name = "main", emoji = null, kind = null)),
+      )
+
+    assertTrue(shouldShowChatAgentPicker(state))
+    assertEquals("missing", agentPickerLabel(state))
   }
 
   @Test

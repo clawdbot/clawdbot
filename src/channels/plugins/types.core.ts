@@ -17,6 +17,7 @@ import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
+import type { IdentifierAuthentication } from "../message-access/identifier-authentication.js";
 import type {
   ChannelMessageSendPollContext,
   MessageReceipt,
@@ -310,6 +311,7 @@ export type ChannelSecurityDmPolicy = {
   allowFromPath: string;
   approveHint: string;
   normalizeEntry?: (raw: string) => string;
+  classifyEntryAuthentication?: (raw: string) => IdentifierAuthentication | undefined;
 };
 
 export type ChannelSecurityContext<ResolvedAccount = unknown> = {

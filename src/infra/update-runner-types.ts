@@ -27,7 +27,12 @@ export type UpdateRunResult = {
   root?: string;
   reason?: string;
   before?: { sha?: string | null; version?: string | null };
-  after?: { sha?: string | null; version?: string | null; upstreamRef?: string };
+  after?: {
+    sha?: string | null;
+    version?: string | null;
+    buildId?: string | null;
+    upstreamRef?: string;
+  };
   steps: UpdateStepResult[];
   durationMs: number;
   recovery?:
@@ -39,6 +44,7 @@ export type UpdateRunResult = {
           | "manager-unavailable"
           | "deps-install-failed"
           | "build-failed"
+          | "rollback-checkout-dirty"
           | "runtime-verification-failed";
       };
   postUpdate?: {

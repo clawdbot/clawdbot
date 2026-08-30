@@ -57,8 +57,8 @@ import {
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
-import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
+import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { notifyGatewayPluginMetadataChanged } from "./plugins-update-gateway-signal.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
@@ -181,7 +181,7 @@ type RunPluginUpdateCommandParams = {
   id?: string;
   opts: {
     all?: boolean;
-    acknowledgeClawHubRisk?: boolean;
+    acceptCapabilities?: boolean;
     acknowledgeInstallPolicyWarning?: boolean;
     dryRun?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
@@ -281,6 +281,12 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     return defaultRuntime.exit(1);
   }
   const packageUpdateSnapshot = packageUpdateSnapshotResult.value;
+  const packagePluginIds = Object.fromEntries(
+    pluginSelection.pluginIds.flatMap((pluginId) => {
+      const ownership = resolveInstalledPluginPackageOwnership(installedPluginIndex, pluginId);
+      return ownership.ok ? [[ownership.value.installOwner, ownership.value.pluginIds]] : [];
+    }),
+  );
   const selectedHooks = readHookInstalls();
   const hookSelection = resolveHookPackUpdateSelection({
     installs: selectedHooks,
@@ -407,6 +413,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
               {
                 config: cfgWithPluginInstallRecords,
                 pluginIds: pluginSelection.pluginIds,
+                packagePluginIds,
                 specOverrides: pluginSelection.specOverrides,
                 dryRun: params.opts.dryRun,
                 updateChannel: params.opts.all ? undefined : configuredUpdateChannel,
@@ -414,9 +421,9 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
                 syncOfficialPluginInstalls: params.opts.all ? true : undefined,
                 coreVersion: VERSION,
                 ...installPolicyWarningAcknowledgement,
-                ...resolveClawHubRiskAcknowledgementCliOptions({
-                  acknowledgeClawHubRisk: params.opts.acknowledgeClawHubRisk,
-                  action: "updating",
+                ...resolvePluginCapabilityConsentCliOptions({
+                  acceptCapabilities: params.opts.acceptCapabilities,
+                  action: "update",
                   allowPrompt: !params.opts.dryRun,
                 }),
                 logger,
@@ -588,7 +595,8 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
 
     const outcomeSummary = logPluginUpdateOutcomes({
       outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
-      log: (message) => defaultRuntime.log(message),
+      log: defaultRuntime.log,
+      error: defaultRuntime.error,
     });
     if (outcomeSummary.hasErrors) {
       defaultRuntime.exit(1);

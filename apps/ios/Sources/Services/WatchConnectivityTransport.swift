@@ -11,27 +11,6 @@ private struct WatchConnectivityTransportCallbacks {
     var appCommandHandler: (@Sendable (WatchAppCommandEvent) -> Void)?
 }
 
-private func sendReachableWatchMessage(_ payload: [String: Any], with session: WCSession) async throws {
-    // WatchConnectivity replies arrive on its own queue. Keep this continuation explicitly
-    // nonisolated so Swift 6 does not inherit a caller actor (for example MainActor) into the
-    // Objective-C callback boundary and trap on the reply callback executor check.
-    try await withCheckedThrowingContinuation(isolation: nil) { (continuation: CheckedContinuation<Void, Error>) in
-        session.sendMessage(
-            payload,
-            replyHandler: { reply in
-                do {
-                    try requireAcceptedWatchMessageReply(reply)
-                    continuation.resume(returning: ())
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            },
-            errorHandler: { error in
-                continuation.resume(throwing: error)
-            })
-    }
-}
-
 final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     private nonisolated static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "watch.messaging")
 

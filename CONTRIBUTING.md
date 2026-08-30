@@ -49,6 +49,7 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 
 - Use **Node 24.15+** for source checkouts when possible. OpenClaw also supports Node 22.22.3+ and Node 25.9+, but Node 23, Node 22 before 22.22.3, and Node 24 before 24.15 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.
 - Test locally with your OpenClaw instance
+- Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and get the design accepted. See the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
 - When ClawSweeper, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **Why This Change Was Made**, **User Impact**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.
 - Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes, changelog entries, or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
@@ -78,6 +79,34 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 - Use American English spelling and grammar in code, comments, docs, and UI strings
 - Do not edit files covered by `CODEOWNERS` security ownership unless a listed owner authored or explicitly requested the change, or is already reviewing it with you. For governance changes to ownership/review policy itself, explicit direction from an organization owner is also sufficient only when live GitHub organization membership shows `state: active` and `role: admin`; repository `ADMIN`, `viewerCanAdminister`, or bypass permission alone never qualifies. Neither route waives a GitHub-enforced approval rule. Treat those paths as restricted review surfaces, not opportunistic cleanup targets.
 
+## Local commit hook
+
+The normal `pnpm install` setup automatically enables the repository's pre-commit
+formatting hook. Its optional content guard reads a private UTF-8 file selected by
+the native Git setting `hooks.blockedLiteralsFile`. Keep one literal per nonempty
+line in a file outside the checkout, such as
+`~/.config/openclaw/blocked-literals.txt`, then configure this checkout:
+
+```bash
+git config --local hooks.blockedLiteralsFile "$HOME/.config/openclaw/blocked-literals.txt"
+```
+
+Git metadata is another safe untracked location for the private file. Never put
+private rule contents in tracked files or PRs. With no setting, the content guard
+is disabled and formatting runs normally; a configured empty path or missing,
+unreadable, empty, or invalid file blocks the commit.
+
+When configured, the guard checks case-sensitive literal substrings before
+formatting and again after formatting restages files. Each scan checks the full
+staged contents of added, modified, and type-changed files, including rename
+destinations and unchanged lines within modified files. Docs, tests, generated
+files, and binary files are included; no tracked file is exempt.
+
+If the hook blocks a commit, remove the matching content and restage the reported
+files. Unchanged historical files and deletions are not scanned. Submodule contents
+and symlink targets are not searched. This is a local safeguard, not CI or server
+enforcement: bypassing or disabling hooks also bypasses this check.
+
 ## Review Conversations Are Author-Owned
 
 After your PR receives Barnacle, ClawSweeper, or maintainer feedback, read the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) for how to interpret rank-up moves, proof guidance, re-review requests, and review conversation follow-up.
@@ -99,18 +128,16 @@ build tooling to support standard decorators.
 
 ## AI/Vibe-Coded PRs Welcome! 🤖
 
-Built with Codex, Claude, or other AI tools? **Awesome - just mark it!**
+Built with Codex, Claude, or other AI tools? **Welcome!** No AI-assistance label or disclosure is required.
 
 Please include in your PR:
 
-- [ ] Mark as AI-assisted in the PR title or description
 - [ ] Include a concise **Evidence** section with the most useful validation. Reviewers will inspect the code, tests, and CI rather than relying on the PR body alone.
-- [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
 - [ ] Run the `autoreview` skill when available and address accepted/actionable findings
 - [ ] Follow the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) after Barnacle, ClawSweeper, or maintainer feedback
 
-AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
+AI PRs are first-class citizens here and follow the same quality and review standards as any other PR.
 
 ## Current Focus & Roadmap 🗺
 

@@ -1,10 +1,6 @@
-import {
-  isDefaultAgentRuntimeId,
-  OPENCLAW_AGENT_RUNTIME_ID,
-} from "../../agents/agent-runtime-id.js";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
-import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -17,10 +13,6 @@ export function resolveWorkerPlacementSessionRuntime(params: {
   agentId: string;
   sessionKey: string;
 }): string {
-  const persistedRuntime = resolvePersistedSessionRuntimeId(params.entry);
-  if (persistedRuntime && !isDefaultAgentRuntimeId(persistedRuntime)) {
-    return persistedRuntime;
-  }
   const selectedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   return resolveEffectiveAgentRuntime({
     cfg: params.cfg,
@@ -28,6 +20,7 @@ export function resolveWorkerPlacementSessionRuntime(params: {
     modelId: selectedModel.model,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
   });
 }
 

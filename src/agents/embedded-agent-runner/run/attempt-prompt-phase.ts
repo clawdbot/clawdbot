@@ -19,7 +19,6 @@ import {
 } from "./attempt-prompt-preflight.js";
 import {
   handleEmbeddedAttemptPromptError,
-  prepareEmbeddedAttemptPromptExecution,
   submitEmbeddedAttemptPrompt,
 } from "./attempt-prompt-submit.js";
 import {
@@ -28,6 +27,7 @@ import {
 } from "./attempt-prompt-support.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
 type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
@@ -235,8 +235,10 @@ export async function runEmbeddedAttemptPromptPhase(input: {
   input.lifecycle.setPromptCacheChangesForTurn(promptAssembly.promptCacheChangesForTurn);
 
   try {
+    const canClaimHeartbeatOutcome =
+      attempt.trigger === "user" && attempt.sessionPersistence !== "detached";
     const heartbeatOutcomeContext =
-      attempt.trigger === "user" && attempt.sessionKey
+      canClaimHeartbeatOutcome && attempt.sessionKey
         ? buildHeartbeatOutcomeContext(
             claimHeartbeatOutcomeForRun({
               agentId: input.context.sessionAgentId,

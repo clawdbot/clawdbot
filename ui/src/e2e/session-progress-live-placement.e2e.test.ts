@@ -1,7 +1,12 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import {
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -35,6 +40,7 @@ const suite = createChatFlowE2eSuite();
 suite.define(() => {
   it("keeps one live card placement and a compact transcript receipt", async () => {
     const sessionKey = "agent:main:progress-placement";
+    const updatedAt = Date.now() - 5 * 60_000;
     const plan = [
       { step: "Inspect", status: "completed" },
       { step: "Implement", status: "in_progress" },
@@ -79,7 +85,7 @@ suite.define(() => {
                 revision: 2,
                 sessionKey,
                 steps: plan,
-                updatedAt: 2,
+                updatedAt,
               },
             },
             "sessions.list": chatSessionListResponse([
@@ -87,7 +93,10 @@ suite.define(() => {
                 key: sessionKey,
                 kind: "direct",
                 label: "Progress placement",
-                updatedAt: 2,
+                hasActiveRun: true,
+                activeRunIds: ["stale-run"],
+                status: "completed",
+                updatedAt,
               },
             ]),
           },
@@ -98,12 +107,72 @@ suite.define(() => {
         await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
 
         const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-        await openChatSidePanelType(page, "Side chat");
-        await expect
-          .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
-          .toBe(1);
+        const expectVisibleLastActivity = async (placement: "composer") => {
+          const card = visiblePane.locator(`[data-progress-card-placement="${placement}"]`);
+          const timestamp = card.locator("time");
+          await expect
+            .poll(() => timestamp.getAttribute("datetime"))
+            .toBe(new Date(updatedAt).toISOString());
+          await expect.poll(() => timestamp.getAttribute("aria-label")).toMatch(/^Updated /);
+          await expect.poll(() => timestamp.textContent()).toMatch(/^Updated /);
+          await expect.poll(() => timestamp.isVisible()).toBe(true);
+          const accessibleCard = placement === "composer" ? card.locator("summary") : card;
+          await expect
+            .poll(() => accessibleCard.getAttribute("aria-label"))
+            .not.toContain("Updated");
+          const timestampBounds = await timestamp.boundingBox();
+          const cardBounds = await card.boundingBox();
+          if (!timestampBounds || !cardBounds) {
+            throw new Error("The progress card and last activity time must both remain visible");
+          }
+          expect(timestampBounds.x + timestampBounds.width).toBeLessThanOrEqual(
+            cardBounds.x + cardBounds.width,
+          );
+        };
+        await page.setViewportSize({ height: 900, width: 1600 });
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
+          .toBe(1);
+        const pausedStep = visiblePane.locator(".session-progress-card__step--paused");
+        await expect
+          .poll(() =>
+            visiblePane.locator('[data-progress-card-placement="composer"]').getAttribute("open"),
+          )
+          .toBe("");
+        await page.evaluate(
+          ({ gatewayUrl, settingsKey }) => {
+            localStorage.setItem(
+              settingsKey,
+              JSON.stringify({ gatewayUrl, chatCollapseTaskProgress: true }),
+            );
+          },
+          {
+            gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+            settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+          },
+        );
+        await page.reload();
+        const composerCard = visiblePane.locator('[data-progress-card-placement="composer"]');
+        await expect.poll(() => composerCard.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => composerCard.locator(".session-progress-card__current").textContent())
+          .toBe("Implement");
+        await composerCard.locator("summary").click();
+        await expect.poll(() => composerCard.getAttribute("open")).toBe("");
+        await expect.poll(() => pausedStep.getAttribute("aria-label")).toBe("Implement, paused");
+        await expect
+          .poll(() => visiblePane.locator(".session-progress-card .session-run-spinner").count())
+          .toBe(0);
+        await expectVisibleLastActivity("composer");
+        await captureProof(page, "composer-attached-wide.png");
+
+        await page.setViewportSize({ height: 900, width: 1280 });
+        await openChatSidePanelType(page, "Side chat");
+        await expect
+          .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
+          .toBe(1);
+        await expect
+          .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
 
@@ -115,7 +184,18 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator(".chat-thread").textContent())
           .not.toContain("Implementation is moving.");
-        await captureProof(page, "rail-visible.png");
+        await expectVisibleLastActivity("composer");
+        await captureProof(page, "composer-with-side-chat.png");
+
+        const sidePanel = visiblePane.locator(".sidebar-region__right-runtime .side-panel");
+        await sidePanel.locator(".side-panel__expand").click();
+        await expect
+          .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
+          .toBe(1);
+        await expect
+          .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
+          .toBe(0);
+        await sidePanel.locator(".side-panel__expand").click();
 
         await page.setViewportSize({ height: 900, width: 560 });
         await expect
@@ -124,21 +204,19 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        await visiblePane.locator(".side-panel__minimize").evaluate((button) => {
-          if (button instanceof HTMLElement) {
-            button.click();
-          }
-        });
+        await sidePanel.locator(".side-panel__minimize").click();
+        await sidePanel.waitFor({ state: "hidden" });
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').isVisible())
           .toBe(true);
+        await expectVisibleLastActivity("composer");
         await captureProof(page, "composer-adjacent.png");
       },
     );
   });
 
-  it("dismisses a completed card across rerender and reload", async () => {
+  it("presents completed disclosure states and dismisses the card across reload", async () => {
     const sessionKey = "agent:main:progress-complete";
     const plan = [
       { step: "Inspected owner", status: "completed" },
@@ -188,11 +266,51 @@ suite.define(() => {
           await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
           const card = page.locator('[data-progress-card-placement="composer"]');
           await expect.poll(() => card.isVisible()).toBe(true);
+          const expectMarkerCentered = async () => {
+            await expect
+              .poll(async () => {
+                const summaryBounds = await card.locator("summary").boundingBox();
+                const markerBounds = await card
+                  .locator('.session-progress-card__current-marker[data-status="completed"]')
+                  .boundingBox();
+                if (!summaryBounds || !markerBounds) {
+                  return Number.POSITIVE_INFINITY;
+                }
+                const summaryCenterY = summaryBounds.y + summaryBounds.height / 2;
+                const markerCenterY = markerBounds.y + markerBounds.height / 2;
+                return Math.abs(summaryCenterY - markerCenterY);
+              })
+              .toBeLessThanOrEqual(0.5);
+          };
+          await expectMarkerCentered();
           await card.locator("summary").click();
+          await expect
+            .poll(() => card.locator(".session-progress-card__summary-title").isVisible())
+            .toBe(true);
+          await expect
+            .poll(() => card.locator(".session-progress-card__current-marker").isVisible())
+            .toBe(false);
           await captureProof(page, `completed-${colorScheme}-before.png`);
 
+          await gateway.setMethodResponse("progressCard.put", {
+            card: {
+              revision: 4,
+              sessionKey,
+              steps: plan,
+              updatedAt: MAX_DATE_TIMESTAMP_MS + 1,
+            },
+          });
           await card.getByRole("button", { name: "Dismiss progress card" }).click();
-          const dismissRequest = await gateway.waitForRequest("progressCard.put");
+          await expect.poll(() => gateway.getRequests("progressCard.put")).toHaveLength(1);
+          await page.getByText("Could not dismiss the progress card. Try again.").waitFor();
+          await expect.poll(() => card.isVisible()).toBe(true);
+          await expect
+            .poll(() => card.locator("time").getAttribute("datetime"))
+            .toBe(new Date(3).toISOString());
+
+          await gateway.setMethodResponse("progressCard.put", { card: null });
+          await card.getByRole("button", { name: "Dismiss progress card" }).click();
+          const dismissRequest = await gateway.waitForRequest("progressCard.put", { after: 1 });
           expect(dismissRequest.params).toEqual({ sessionKey, expectedRevision: 3 });
           await expect.poll(() => card.count()).toBe(0);
 

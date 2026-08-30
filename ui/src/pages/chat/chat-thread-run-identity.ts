@@ -7,8 +7,9 @@ import {
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { userTurnSendIdentity, type TurnInsertionBounds } from "./chat-thread-items.ts";
-import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
+import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
 export function transcriptRunId(message: unknown): string | undefined {
   const identity = readSessionMessageIdentity(message);
@@ -23,13 +24,20 @@ export function transcriptRunId(message: unknown): string | undefined {
   );
 }
 
-export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
+export function readAssistantStreamSegmentIdentity(
+  message: unknown,
+): { itemId: string; runId?: string } | undefined {
   const record = asRecord(message);
   if (normalizeLowercaseStringOrEmpty(record?.role) !== "assistant") {
-    return false;
+    return undefined;
   }
   const fallback = asRecord(record?.openclawStreamFallback);
-  return typeof fallback?.itemId === "string" && fallback.itemId.trim().length > 0;
+  const itemId = normalizeOptionalString(fallback?.itemId);
+  return itemId ? { itemId, ...optionalRunIdentity(transcriptRunId(message)) } : undefined;
+}
+
+export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
+  return readAssistantStreamSegmentIdentity(message) !== undefined;
 }
 
 export function optionalRunIdentity(value: unknown): { runId: string } | undefined {
@@ -104,4 +112,45 @@ export function resolveRunInsertionBounds(
   // Legacy rows may lack the user-run identity needed for exact bounds. Keep
   // them ordered before the current prompt instead of attaching them to it.
   return currentTurnBounds?.afterKey ? { beforeKey: currentTurnBounds.afterKey } : null;
+}
+
+/** A persisted invocation owns its live echo's interval even without a user send key. */
+export function applyPersistedToolInvocationBounds(
+  items: ChatItem[],
+  tools: Array<{ key: string; message: unknown }>,
+  insertionBounds: Map<string, TurnInsertionBounds>,
+): void {
+  const invocations = new Map<string, TurnInsertionBounds | null>();
+  let bounds: TurnInsertionBounds = {};
+  for (const item of items) {
+    if (item.kind === "divider") {
+      invocations.clear();
+    }
+    if (chatItemStartsUserTurn(item) || item.kind === "divider") {
+      bounds.beforeKey = item.key;
+      bounds = { afterKey: item.key };
+    } else if (item.kind === "message") {
+      for (const ref of extractToolMessageRefs(item.message)) {
+        if (!ref.runId) {
+          continue;
+        }
+        const key = buildToolStreamIdentity(ref.runId, ref.id);
+        // Reused identities on opposite sides of a user/reset remain ambiguous.
+        invocations.set(
+          key,
+          invocations.has(key) && invocations.get(key) !== bounds ? null : bounds,
+        );
+      }
+    }
+  }
+  for (const tool of tools) {
+    const refs = extractToolMessageRefs(tool.message);
+    const matching = refs.map((ref) =>
+      ref.runId ? invocations.get(buildToolStreamIdentity(ref.runId, ref.id)) : undefined,
+    );
+    const [first] = matching;
+    if (first && matching.every((candidate) => candidate === first)) {
+      insertionBounds.set(tool.key, first);
+    }
+  }
 }

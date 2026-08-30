@@ -108,6 +108,7 @@ async function resolveBrowserHatchTarget(
           sshHint: formatControlUiSshHint({
             port: shared.port,
             ...(shared.basePath ? { basePath: shared.basePath } : {}),
+            tlsEnabled: shared.tlsConfig?.enabled === true,
           }),
         }
       : {}),
@@ -258,13 +259,19 @@ export async function runBrowserHatchHandoff(
 
   let opened = false;
   if (canOpenBrowser) {
+    let browserUrl: string;
     try {
       const browserHandoff = await (deps.issueBrowserHandoff ?? issueControlUiBrowserHandoff)(
         target.dashboardUrl,
       );
-      opened = await (deps.openBrowser ?? openUrl)(browserHandoff.browserUrl);
+      browserUrl = browserHandoff.browserUrl;
     } catch {
       return { handedOff: false, reason: "target-unavailable" };
+    }
+    try {
+      opened = await (deps.openBrowser ?? openUrl)(browserUrl);
+    } catch {
+      opened = false;
     }
   }
   if (opened) {
@@ -275,11 +282,18 @@ export async function runBrowserHatchHandoff(
   } else {
     const bind = target.config.gateway?.bind;
     const remoteBind = bind === "lan" || bind === "tailnet" || bind === "custom";
+    const remoteSession = Boolean(
+      env.SSH_CLIENT ||
+      env.SSH_TTY ||
+      env.SSH_CONNECTION ||
+      env.REMOTE_CONTAINERS ||
+      env.CODESPACES,
+    );
     // Plain HTTP on a remote host cannot create the device identity required by
     // the Control UI. Keep those browsers on a tunneled localhost secure context.
-    const directRemoteDisplay = !canOpenBrowser && remoteBind && target.tlsConfig?.enabled === true;
+    const directRemoteDisplay = remoteBind && target.tlsConfig?.enabled === true;
     const tunnelHint =
-      !canOpenBrowser && !directRemoteDisplay
+      !directRemoteDisplay && (!canOpenBrowser || remoteSession)
         ? (target.sshHint ??
           (remoteBind
             ? formatControlUiSshHint({
@@ -287,6 +301,7 @@ export async function runBrowserHatchHandoff(
                 ...(target.config.gateway?.controlUi?.basePath
                   ? { basePath: target.config.gateway.controlUi.basePath }
                   : {}),
+                tlsEnabled: target.tlsConfig?.enabled === true,
               })
             : undefined))
         : undefined;
@@ -318,7 +333,7 @@ export async function runBrowserHatchHandoff(
   const wait = await (deps.pollForClient ?? waitForDashboardClient)({
     target,
     baselineClientKeys: new Set(baseline.clientKeys),
-    timeoutMs: canOpenBrowser ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS,
+    timeoutMs: opened ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS,
     probe: probePresence,
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.sleep ? { sleep: deps.sleep } : {}),

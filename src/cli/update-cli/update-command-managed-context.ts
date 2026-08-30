@@ -47,7 +47,7 @@ export async function captureOwnedManagedUpdateContext(params: {
   const stopState = params.stopState;
   if (
     stopState?.stopped !== true ||
-    stopState.serviceMatchesMutationRoot !== true ||
+    stopState.serviceUpdateVerdict?.kind !== "owned" ||
     !stopState.serviceEnv
   ) {
     return undefined;

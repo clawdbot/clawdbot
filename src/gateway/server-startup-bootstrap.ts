@@ -1,5 +1,5 @@
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
+import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import {
@@ -37,7 +37,8 @@ import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -97,7 +98,7 @@ export async function prepareGatewayServerBootstrap(input: {
   ] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("../state/openclaw-agent-db.js"),
-    import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-state-db-contract.js"),
   ]);
   const databaseSchemas = preflightOpenClawDatabaseSchemas({
     env: process.env,
@@ -271,7 +272,7 @@ export async function prepareGatewayServerBootstrap(input: {
     trustedProxyDeviceAutoApprove.scopes?.some((scope) => scope.trim() === ADMIN_SCOPE)
   ) {
     log.warn(
-      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin to require manual approval until per-identity roles are available.",
+      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
     );
   }
   const resolvedStartupAuthOverride = startupAuthOverride
@@ -501,18 +502,23 @@ export async function prepareGatewayServerBootstrap(input: {
     sourceConfig: startupLastGoodSnapshot.sourceConfig,
   });
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
-  const currentPluginMetadataSnapshot = completePluginMetadataSnapshot({
-    snapshot: pluginMetadataSnapshot,
-    config: startupActivationSourceConfig,
-    env: process.env,
-    workspaceDir: defaultWorkspaceDir,
-  });
-  setCurrentPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
-    config: startupActivationSourceConfig,
-    compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
-    env: process.env,
-    workspaceDir: pluginWorkspaceDir,
-  });
+  const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
+  const currentPluginMetadataSnapshot =
+    existingPluginMetadataSnapshot ??
+    completePluginMetadataSnapshot({
+      snapshot: pluginMetadataSnapshot,
+      config: startupActivationSourceConfig,
+      env: process.env,
+      workspaceDir: defaultWorkspaceDir,
+    });
+  if (!existingPluginMetadataSnapshot) {
+    setGatewayPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
+      config: startupActivationSourceConfig,
+      compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
+      env: process.env,
+      workspaceDir: pluginWorkspaceDir,
+    });
+  }
   if (pluginLookUpTable) {
     const metrics = pluginLookUpTable.metrics;
     startupTrace.detail("plugins.lookup-table", [

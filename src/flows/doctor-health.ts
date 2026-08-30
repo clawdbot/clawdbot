@@ -19,7 +19,7 @@ async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
   const [databasePreflight, agentDatabase, stateDatabase] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("../state/openclaw-agent-db.js"),
-    import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-state-db-contract.js"),
   ]);
   const databaseSchemas = databasePreflight.preflightOpenClawDatabaseSchemas({
     env: process.env,
@@ -134,6 +134,20 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
     );
     effectiveRuntime.exit(1);
     return;
+  }
+  if (options.repair === true || options.yes === true) {
+    // Migration warnings also cover optional archives; certify required runtime
+    // schemas independently before reporting success or a recoverable advisory.
+    const { assertOpenClawDatabasesReady } =
+      await import("../state/openclaw-database-preflight.js");
+    const { resolveConfiguredAgentDatabaseTargets } = await import("../config/sessions/targets.js");
+    assertOpenClawDatabasesReady({
+      env: process.env,
+      operation: "doctor",
+      configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {
+        env: process.env,
+      }),
+    });
   }
   if (ctx.postInstallDoctorResult) {
     const {

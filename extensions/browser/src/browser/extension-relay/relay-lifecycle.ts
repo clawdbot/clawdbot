@@ -8,6 +8,7 @@ import {
   getProfileLifecycle,
   getOrCreateProfileRuntime,
   isBrowserRuntimeRunning,
+  waitForProfileOperation,
   withProfileOperationLease,
 } from "../server-context.lifecycle.js";
 import type { BrowserServerState, ProfileRuntimeState } from "../server-context.types.js";
@@ -66,15 +67,17 @@ function applyInternalRelayToken(
 export async function ensureExtensionRelayForProfile(
   state: BrowserServerState,
   profile: ResolvedBrowserProfile,
+  signal?: AbortSignal,
 ): Promise<ExtensionRelayHandle> {
   for (;;) {
+    signal?.throwIfAborted();
     if (!isBrowserRuntimeRunning(state)) {
       throw new Error("Browser runtime is stopping");
     }
     // The host-local HMAC key can rotate while Browser control stays up.
     // Resolve one canonical desired profile after adopting the live key.
-    const { ensureExtensionRelayToken, readExtensionRelayToken } = await import("./relay-auth.js");
-    const token = readExtensionRelayToken() ?? (await ensureExtensionRelayToken());
+    const { ensureExtensionRelayToken } = await import("./relay-auth.js");
+    const token = await ensureExtensionRelayToken();
     if (state.resolved.extensionRelayToken !== token) {
       state.resolved = { ...state.resolved, extensionRelayToken: token };
     }
@@ -104,7 +107,7 @@ export async function ensureExtensionRelayForProfile(
         pending.token === token &&
         pending.allowLegacyAuth === state.resolved.extensionRelay.allowLegacyAuth
       ) {
-        const handle = await pending.promise;
+        const handle = await waitForProfileOperation(pending.promise, signal);
         const current = resolveProfile(state.resolved, profile.name);
         if (current) {
           Object.assign(profile, current);
@@ -112,8 +115,9 @@ export async function ensureExtensionRelayForProfile(
         return handle;
       }
       try {
-        await pending.promise;
+        await waitForProfileOperation(pending.promise, signal);
       } catch (err) {
+        signal?.throwIfAborted();
         if (getProfileLifecycle(runtime).blockedReason) {
           throw err;
         }
@@ -129,18 +133,18 @@ export async function ensureExtensionRelayForProfile(
       promise,
     };
     pendingRelayEnsures.set(runtime, owned);
-    try {
-      const handle = await promise;
-      const current = resolveProfile(state.resolved, profile.name);
-      if (current) {
-        Object.assign(profile, current);
-      }
-      return handle;
-    } finally {
+    const settlePending = () => {
       if (pendingRelayEnsures.get(runtime) === owned) {
         pendingRelayEnsures.delete(runtime);
       }
+    };
+    void promise.then(settlePending, settlePending);
+    const handle = await waitForProfileOperation(promise, signal);
+    const current = resolveProfile(state.resolved, profile.name);
+    if (current) {
+      Object.assign(profile, current);
     }
+    return handle;
   }
 }
 
@@ -155,6 +159,7 @@ async function ensureDesiredRelay(params: {
     state,
     runtime,
     configRevision: getProfileLifecycle(runtime).configRevision,
+    ownership: "lifecycle",
     run: async (signal) => {
       const map = relays(state);
       const actor = getProfileLifecycle(runtime);

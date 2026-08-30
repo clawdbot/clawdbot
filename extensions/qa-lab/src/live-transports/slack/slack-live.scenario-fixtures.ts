@@ -74,7 +74,7 @@ export function renderSlackTableAccessibleText(summaryText: string) {
 
 type SlackProgressCommentaryExpectation = {
   commentary: "headline" | "lane" | "standalone";
-  toolProgress: "absent" | "draft" | "standalone";
+  toolProgress: "absent" | "draft" | "standalone" | "standalone-redacted";
 };
 
 function observedSlackText(message: { blockText?: string[]; text: string }) {
@@ -85,14 +85,70 @@ function hasSlackCommentaryLaneMarker(
   message: { blockText?: string[]; text: string },
   marker: string,
 ) {
-  if (message.text.includes(`💬 ${marker}`) || message.text.trim() === `_${marker}_`) {
+  // A progress card can contain several authored rows within one Slack message.
+  if (
+    message.text
+      .split(/\r?\n/u)
+      .some((line) =>
+        [`💬 ${marker}`, `:speech_balloon: ${marker}`, `_${marker}_`].includes(line.trim()),
+      )
+  ) {
     return true;
   }
   const blockText = message.blockText ?? [];
-  return (
-    blockText.some((text) => text.trim() === "Update") &&
-    blockText.some((text) => text.includes(marker))
+  return blockText.some((text) =>
+    text.split(/\r?\n/u).some((line) => line.trim() === `• *Commentary* — _${marker}_`),
   );
+}
+
+function isSlackSafeExecSummary(message: { text: string }) {
+  // Slack history converts Unicode emoji to colon names; captured writes retain Unicode.
+  return /^(?:🛠️|:hammer_and_wrench:) Exec$/u.test(message.text.trim());
+}
+
+function hasSlackExecHeader(message: { text: string }) {
+  // Full output includes the runtime's command-derived label after the Exec glyph.
+  return /^(?:🛠️|:hammer_and_wrench:) \S.*$/u.test(message.text.split(/\r?\n/u)[0]?.trim() ?? "");
+}
+
+function slackMarkerEnvelope(text: string, marker: string) {
+  const line = text.split(/\r?\n/u).find((value) => value.includes(marker));
+  if (line === undefined) {
+    return "missing";
+  }
+  const index = line.indexOf(marker);
+  const classify = (value: string) => {
+    const edge = value.trim();
+    if (!edge) {
+      return "none";
+    }
+    if (/^(?:•\s+)?\*Commentary\*\s+—\s*_?$/u.test(edge)) {
+      return "commentary-row";
+    }
+    if (/^(?:•\s+)?\*Update\*\s+—\s*$/u.test(edge)) {
+      return "update-row";
+    }
+    if (/^(?:💬|:speech_balloon:)$/u.test(edge)) {
+      return "emoji";
+    }
+    if (edge === "\\_") {
+      return "escaped-italic";
+    }
+    if (edge === "_") {
+      return "italic";
+    }
+    if (/^\*{1,2}$/u.test(edge)) {
+      return "bold";
+    }
+    if (/^`{1,3}$/u.test(edge)) {
+      return "code";
+    }
+    if (/^>+$/u.test(edge)) {
+      return "quote";
+    }
+    return /^[•+-]$/u.test(edge) ? "bullet" : "other";
+  };
+  return `${classify(line.slice(0, index))}/${classify(line.slice(index + marker.length))}`;
 }
 
 export function buildSlackProgressCommentaryRun(
@@ -104,23 +160,65 @@ export function buildSlackProgressCommentaryRun(
   // stay byte-identical across draft edits and final-message reads.
   const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
   const toolMarker = `SLACK-QA-TOOL-${suffix}`;
+  const outputMarker = `SLACK-QA-OUTPUT-${suffix}`;
   const finalMarker = `SLACK-QA-COMMENTARY-DONE-${suffix}`;
   return {
     expectReply: true,
     input: [
       `<@${sutUserId}> This is a Slack progress protocol test. First, emit an assistant commentary message whose entire text is exactly ${commentaryMarker}.`,
       "Do not call any tool until that commentary message is complete.",
-      `Then use the exec tool exactly once to run: grep '${toolMarker}' /dev/null || sleep 5.`,
+      `Then use the exec tool exactly once to run this exact command: \`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}\`.`,
       `After the command finishes, reply with only this exact marker: ${finalMarker}`,
     ].join(" "),
     matchText: finalMarker,
     settleObservedMs: 3_000,
     verifyObserved: ({ finalMessage, messages }) => {
+      function fail(reason: string): never {
+        const identities = new Map<string, number>();
+        // Failure artifacts may be public. Emit only closed presentation facts,
+        // never message text, platform ids, command text, or credential fields.
+        const presentation = new Set<string>();
+        for (const message of messages) {
+          if (message.ts && !identities.has(message.ts)) {
+            identities.set(message.ts, identities.size + 1);
+          }
+          const texts = [message.text, (message.blockText ?? []).join("\n")];
+          const observedText = observedSlackText(message);
+          const facts = JSON.stringify({
+            identity: message.ts ? identities.get(message.ts) : 0,
+            final: observedText.includes(finalMarker),
+            lane: hasSlackCommentaryLaneMarker(message, commentaryMarker),
+            text: slackMarkerEnvelope(texts[0]!, commentaryMarker),
+            block: slackMarkerEnvelope(texts[1]!, commentaryMarker),
+            lines: texts.map((text) => (text ? Math.min(9, text.split(/\r?\n/u).length) : 0)),
+            occurrences: texts.map((text) => Math.min(2, text.split(commentaryMarker).length - 1)),
+            output: texts.map((text) =>
+              text.split(/\r?\n/u).some((line) => line.trim() === outputMarker),
+            ),
+            execHeader: hasSlackExecHeader(message),
+            tool: observedText.includes(toolMarker)
+              ? "command-marker"
+              : isSlackSafeExecSummary(message)
+                ? "safe-exec"
+                : /\bsleep\s+5\b/u.test(observedText)
+                  ? "sleep-without-marker"
+                  : "other",
+          });
+          // Repeated history polls must not crowd the distinct captured writes
+          // out of the bounded failure artifact. Assertions still see every write.
+          presentation.delete(facts);
+          presentation.add(facts);
+          if (presentation.size > 16) {
+            presentation.delete(presentation.values().next().value!);
+          }
+        }
+        throw new Error(`${reason}; presentation=[${[...presentation].join(",")}]`);
+      }
       if (!finalMessage.ts) {
-        throw new Error("Slack progress commentary final message had no ts");
+        fail("Slack progress commentary final message had no ts");
       }
       if ((finalMessage.text ?? "").trim() !== finalMarker) {
-        throw new Error("expected the Slack final answer to contain only the final marker");
+        fail("expected the Slack final answer to contain only the final marker");
       }
       const progressMessages = messages.filter(
         (message) => !observedSlackText(message).includes(finalMarker),
@@ -131,12 +229,12 @@ export function buildSlackProgressCommentaryRun(
       const commentaryTimestamps = new Set(commentaryMessages.map((message) => message.ts));
       const [commentaryTs] = commentaryTimestamps;
       if (commentaryTimestamps.size !== 1 || commentaryTs === undefined) {
-        throw new Error(
+        fail(
           `expected exactly one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
         );
       }
       if (commentaryTs === finalMessage.ts) {
-        throw new Error("expected Slack progress commentary to stay separate from the fresh final");
+        fail("expected Slack progress commentary to stay separate from the fresh final");
       }
       // Slack prefixes durable standalone commentary with the same glyph used by
       // draft-lane rendering, so message identity—not that marker—owns dedupe proof.
@@ -150,30 +248,80 @@ export function buildSlackProgressCommentaryRun(
           expectation.commentary === "lane" &&
           (commentaryLaneTimestamps.size !== 1 || !commentaryLaneTimestamps.has(commentaryTs))
         ) {
-          throw new Error("expected commentary in the Slack progress commentary lane");
+          fail("expected commentary in the Slack progress commentary lane");
         }
         if (expectation.commentary === "headline" && commentaryLaneTimestamps.size !== 0) {
-          throw new Error("expected the preamble as the Slack progress status headline");
+          fail("expected the preamble as the Slack progress status headline");
         }
       }
       const toolTimestamps = new Set(
         progressMessages
-          .filter((message) => observedSlackText(message).includes(toolMarker))
+          .filter(
+            (message) =>
+              [toolMarker, outputMarker].some((marker) =>
+                observedSlackText(message).includes(marker),
+              ) || hasSlackExecHeader(message),
+          )
           .map((message) => message.ts),
       );
-      if (expectation.toolProgress === "draft") {
+      if (expectation.toolProgress === "standalone-redacted") {
+        if (
+          messages.some(
+            (message) =>
+              [toolMarker, outputMarker].some((marker) =>
+                observedSlackText(message).includes(marker),
+              ) ||
+              (hasSlackExecHeader(message) && !isSlackSafeExecSummary(message)),
+          )
+        ) {
+          fail("command details and output must stay hidden in verbose-on progress");
+        }
+        const safeToolTimestamps = new Set(
+          progressMessages.filter(isSlackSafeExecSummary).map((message) => message.ts),
+        );
+        if (
+          safeToolTimestamps.size !== 1 ||
+          safeToolTimestamps.has(commentaryTs) ||
+          safeToolTimestamps.has(finalMessage.ts)
+        ) {
+          fail("expected one safe Exec summary in a standalone verbose message");
+        }
+      } else if (expectation.toolProgress === "draft") {
         if (toolTimestamps.size !== 1 || toolTimestamps.has(finalMessage.ts)) {
-          throw new Error("expected tool progress on the draft separate from the fresh final");
+          fail("expected tool progress on the draft separate from the fresh final");
         }
         if (expectation.commentary !== "standalone" && !toolTimestamps.has(commentaryTs)) {
-          throw new Error("expected commentary and tool progress on one Slack draft identity");
+          fail("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {
-        if (toolTimestamps.size === 0 || toolTimestamps.has(finalMessage.ts)) {
-          throw new Error("expected tool progress only in standalone verbose messages");
+        const toolMessages = progressMessages.filter(hasSlackExecHeader);
+        const hasOutputLine = (message: (typeof toolMessages)[number]) =>
+          observedSlackText(message)
+            .split(/\r?\n/u)
+            .some((line) => line.trim() === outputMarker);
+        // Slack's delivery transform can strip command headers while retaining output.
+        const outputTimestamps = new Set(
+          progressMessages.filter(hasOutputLine).map((message) => message.ts),
+        );
+        // The built-in runtime sends a summary at tool start and output at completion.
+        const summaryTimestamps = new Set(
+          toolMessages
+            .filter((message) => !hasOutputLine(message) && !/[\r\n]/u.test(message.text.trim()))
+            .map((message) => message.ts),
+        );
+        if (
+          outputTimestamps.size !== 1 ||
+          summaryTimestamps.size > 1 ||
+          toolTimestamps.size !== new Set([...outputTimestamps, ...summaryTimestamps]).size ||
+          toolTimestamps.has(commentaryTs) ||
+          toolTimestamps.has(finalMessage.ts)
+        ) {
+          fail(
+            "expected exact tool output in one standalone verbose message and at most one summary",
+          );
         }
       } else if (toolTimestamps.size !== 0) {
-        throw new Error("expected tool progress to stay out of Slack progress messages");
+        fail("expected tool progress to stay out of Slack progress messages");
       }
       const finalTimestamps = new Set(
         messages
@@ -181,9 +329,7 @@ export function buildSlackProgressCommentaryRun(
           .map((message) => message.ts),
       );
       if (finalTimestamps.size !== 1 || !finalTimestamps.has(finalMessage.ts)) {
-        throw new Error(
-          "expected one final-marker Slack message identity matching the final answer",
-        );
+        fail("expected one final-marker Slack message identity matching the final answer");
       }
       const commentaryDetails =
         expectation.commentary === "lane"

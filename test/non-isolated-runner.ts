@@ -1,24 +1,28 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
 import path from "node:path";
+import type {
+  EvaluatedModuleNode as ViteEvaluatedModuleNode,
+  EvaluatedModules as ViteEvaluatedModules,
+} from "vite/module-runner";
 import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
+import { resetGatewayWorkAdmission } from "../src/process/gateway-work-admission.js";
+import { drainGlobalSingletonLifecycleState } from "../src/shared/global-singleton.js";
 import {
   type CustomElementTracking,
   dropRepoOwnedCustomElements,
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
 
-type EvaluatedModuleNode = {
-  promise?: unknown;
-  exports?: unknown;
-  evaluated?: boolean;
-  importers: Set<string>;
+type EvaluatedModuleNode = ViteEvaluatedModuleNode & {
+  mockedExports?: unknown;
 };
 
 type EvaluatedModules = {
   idToModuleMap: Map<string, EvaluatedModuleNode>;
+  invalidateModule: ViteEvaluatedModules["invalidateModule"];
 };
 
 type SerializableMocker = {
@@ -69,21 +73,23 @@ function getSharedTestHome(): string | undefined {
   return globalState[SHARED_TEST_SETUP]?.tempHome ?? process.env.OPENCLAW_TEST_HOME;
 }
 
-function resetEvaluatedModules(modules: EvaluatedModules, resetMocks: boolean) {
-  const skipPaths = [
-    /\/vitest\/dist\//,
-    /vitest-virtual-\w+\/dist/u,
-    /@vitest\/dist/u,
-    ...(resetMocks ? [] : [/^mock:/u]),
-  ];
+function resetEvaluatedModules(modules: EvaluatedModules) {
+  const skipPaths = [/\/vitest\/dist\//, /vitest-virtual-\w+\/dist/u, /@vitest\/dist/u];
 
   modules.idToModuleMap.forEach((node, modulePath) => {
     if (skipPaths.some((pattern) => pattern.test(modulePath))) {
       return;
     }
-    node.promise = undefined;
-    node.exports = undefined;
-    node.evaluated = false;
+    // Mock metadata owns factories and cached exports after the registry resets.
+    // Retire those nodes while preserving ordinary transformed-code metadata.
+    if (modulePath.startsWith("mock:") || (node.meta && "mockedModule" in node.meta)) {
+      modules.invalidateModule(node);
+      node.mockedExports = undefined;
+    } else {
+      node.promise = undefined;
+      node.exports = undefined;
+      node.evaluated = false;
+    }
     node.importers.clear();
   });
 }
@@ -100,6 +106,7 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
   delete process.env.OPENCLAW_CONFIG_PATH;
   delete process.env.OPENCLAW_STATE_DIR;
   delete process.env.OPENCLAW_AGENT_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
   process.env.XDG_CONFIG_HOME = path.join(testHome, ".config");
   process.env.XDG_DATA_HOME = path.join(testHome, ".local", "share");
   process.env.XDG_STATE_HOME = path.join(testHome, ".local", "state");
@@ -146,6 +153,11 @@ function resetSharedDocumentBody(): void {
   for (const attribute of body.getAttributeNames()) {
     body.removeAttribute(attribute);
   }
+  // jsdom can retain detached shadow focus even after the fixture removes its DOM.
+  // Native body focus clears that state; blur cannot reach an already-detached target.
+  body.tabIndex = -1;
+  body.focus();
+  body.removeAttribute("tabindex");
 }
 
 function restoreRealTimers(): void {
@@ -374,15 +386,20 @@ export function serializeMockerResolveMocks(mocker: SerializableMocker): void {
   const original = mocker.resolveMocks.bind(mocker);
   const statics = mocker.constructor as { pendingIds?: unknown[] };
   const runPass = async (): Promise<void> => {
-    const queue = statics.pendingIds;
-    const processedCount = queue?.length ?? 0;
-    await original();
-    // Upstream snapshots the queue contents at pass start and reassigns the
-    // pendingIds static to [] at the end, so ids queued during the pass's RPC
-    // window land in the abandoned array. Requeue them so the next chained
-    // pass registers them instead of silently dropping the registration.
-    if (queue && queue !== statics.pendingIds && queue.length > processedCount) {
-      statics.pendingIds?.push(...queue.slice(processedCount));
+    while (true) {
+      const queue = statics.pendingIds;
+      const processedCount = queue?.length ?? 0;
+      await original();
+      // Upstream snapshots the queue contents at pass start and reassigns the
+      // pendingIds static to [] at the end, so ids queued during the pass's RPC
+      // window land in the abandoned array. Requeue and drain them before this
+      // caller proceeds so a later module fetch cannot invalidate mocks mid-import.
+      if (queue && queue !== statics.pendingIds && queue.length > processedCount) {
+        statics.pendingIds?.push(...queue.slice(processedCount));
+      }
+      if ((statics.pendingIds?.length ?? 0) === 0) {
+        return;
+      }
     }
   };
   mocker.resolveMocks = () => {
@@ -470,6 +487,12 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     resetAgentEventsForTest();
     resetOpenClawGlobalDiagnosticState();
     resetOpenClawSessionSuspensionState();
+    // Lifecycle-owned singletons survive module resets; close them before the next file
+    // can observe a previous file's sessions, caches, or registered resources.
+    await drainGlobalSingletonLifecycleState();
+    // Finish file-owned teardown before retiring its admission leases and
+    // reopening the shared worker for the next file.
+    resetGatewayWorkAdmission();
     // Named plugin runtimes intentionally survive duplicate module evaluation in production.
     // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
     clearNamedPluginRuntimeStoresForTest();
@@ -477,6 +500,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     resetSharedDocumentBody();
     vi.resetModules();
     internals.moduleRunner?.mocker?.reset?.();
-    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules, true);
+    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules);
   }
 }

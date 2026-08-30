@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isCommandJsonOutputMode } from "../program/json-mode.js";
 
 const callGatewayFromCli = vi.fn();
 
@@ -106,6 +107,18 @@ describe("cron machine-output help", () => {
 
   it("keeps registered command output declarations aligned with early stdout routing", () => {
     const cron = createRegisteredCronCommand();
+    const gatewayOptions = [
+      [],
+      ["--url", "ws://127.0.0.1:18789"],
+      ["--port", "18789"],
+      ["--token", "test-token"],
+      ["--password", "test-password"],
+      ["--timeout", "250"],
+      ["--expect-final"],
+      ["--port=18789"],
+      ["--timeout", "250", "--expect-final"],
+      ["--log-level", "debug", "--port", "18789"],
+    ];
     for (const command of cron.commands) {
       const jsonOption = command.options.find((option) => option.long === "--json");
       const alwaysJson =
@@ -113,10 +126,43 @@ describe("cron machine-output help", () => {
         "Explicit machine-output spelling (command results are JSON by default)";
       const reservesMachineOutput = command.name() === "scratch" || alwaysJson;
       for (const commandName of [command.name(), ...command.aliases()]) {
-        expect(isCronMachineOutput(["node", "openclaw", "cron", commandName]), commandName).toBe(
-          reservesMachineOutput,
-        );
+        for (const root of ["cron", "automations"]) {
+          for (const parentOptions of gatewayOptions) {
+            const argv = ["node", "openclaw", root, ...parentOptions, commandName];
+            expect(isCronMachineOutput(argv), argv.join(" ")).toBe(reservesMachineOutput);
+          }
+        }
       }
+    }
+  });
+
+  it.each([
+    { root: "cron", option: "--timeout", value: "250" },
+    { root: "automations", option: "--port", value: "18789" },
+    { root: "automations", option: "--url", value: "ws://127.0.0.1:18789" },
+    { root: "cron", option: "--token", value: "test-token" },
+    { root: "cron", option: "--password", value: "test-password" },
+  ])("preserves JSON mode for $root $option before status", async ({ root, option, value }) => {
+    const program = new Command().name("openclaw");
+    registerCronCli(program);
+    const argv = ["node", "openclaw", root, option, value, "status"];
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    callGatewayFromCli.mockResolvedValueOnce({ enabled: true });
+    program.hook("preAction", (_parent, command) => {
+      expect(isCommandJsonOutputMode(command, argv)).toBe(true);
+    });
+
+    try {
+      await program.parseAsync(argv);
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "cron.status",
+        expect.objectContaining({ [option.slice(2)]: value }),
+        {},
+      );
+      expect(writeJson).toHaveBeenCalledWith({ enabled: true });
+    } finally {
+      callGatewayFromCli.mockReset();
+      writeJson.mockRestore();
     }
   });
 });

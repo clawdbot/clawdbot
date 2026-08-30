@@ -4,12 +4,12 @@
 import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parse, type Node as AcornNode } from "acorn";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
 const WORKER_DEPLOY_ENTRYPOINTS = [
@@ -41,10 +41,6 @@ type CliBootstrapCheckParams = {
   fs?: typeof fs;
   logger?: { error(message: string): void };
 };
-
-function isMainModule() {
-  return process.argv[1] ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
-}
 
 function isBuiltinSpecifier(specifier: string) {
   return specifier.startsWith("node:") || module.isBuiltin(specifier);
@@ -449,7 +445,7 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
   throw new Error("CLI bootstrap static graph imports external packages.");
 }
 
-if (isMainModule()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     checkCliBootstrapExternalImports();
     console.log("CLI bootstrap import guard passed.");

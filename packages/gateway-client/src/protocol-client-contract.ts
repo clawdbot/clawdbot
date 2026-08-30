@@ -84,6 +84,7 @@ export type GatewayProtocolClientOptions<TPlan> = {
   notifyStoppedClose?: boolean;
   onConnectError?: (error: Error) => void;
   onSocketFactoryError?: (error: Error) => void;
+  onReconnectStopped?: (error: Error) => void;
   onParseError?: (error: unknown) => void;
   onEvent?: (event: EventFrame) => void;
   onGap?: (info: { expected: number; received: number }) => void;

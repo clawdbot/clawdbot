@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as appServerPolicy from "./app-server-policy.js";
 import { applyCodexAppServerAuthProfile } from "./auth-bridge.js";
 import * as bindingConnection from "./binding-connection.js";
+import * as codexRequirements from "./config-requirements.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import {
   createCodexRuntimePlanFixture,
@@ -354,7 +355,7 @@ describe("prepareCodexAttemptConnection", () => {
     expect(resolveModelPolicy).toHaveBeenCalledTimes(2);
   });
 
-  it("does not give OpenClaw ownership of an explicit operator approval policy", async () => {
+  it("rejects the retired explicit untrusted approval policy with Doctor remediation", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
@@ -364,18 +365,20 @@ describe("prepareCodexAttemptConnection", () => {
     params.agentDir = path.join(tempDir, "agent");
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: {
-        bindingStore: testCodexAppServerBindingStore,
-        pluginConfig: { appServer: { approvalPolicy: "untrusted" } },
-      },
-    });
-
-    expect(connection.appServer.approvalPolicy).toBe("untrusted");
+    await expect(
+      prepareCodexAttemptConnection({
+        params,
+        options: {
+          bindingStore: testCodexAppServerBindingStore,
+          pluginConfig: { appServer: { approvalPolicy: "untrusted" } },
+        },
+      }),
+    ).rejects.toThrow(
+      'plugins.entries.codex.config.appServer.approvalPolicy="untrusted" is retired; run "openclaw doctor --fix" to migrate it to "on-request".',
+    );
   });
 
-  it("lets a workspace session mode override explicitly configured full exec", async () => {
+  it("defaults a rootless workspace session boundary while overriding full exec", async () => {
     const sessionFile = path.join(tempDir, "workspace-session-policy.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-session-policy");
     const params = createParams(sessionFile, workspaceDir);
@@ -384,7 +387,6 @@ describe("prepareCodexAttemptConnection", () => {
     // Dispatch owns mode→exec preparation; connection consumes the prepared override.
     params.execOverrides = { ...params.execOverrides, mode: "auto" };
     params.permissionMode = "workspace";
-    params.sessionRoot = workspaceDir;
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
     const resolveConnection = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
@@ -423,6 +425,46 @@ describe("prepareCodexAttemptConnection", () => {
 
     // Upstream 28f10c00b4e keeps YOLO approvals disabled despite generic tool hooks.
     expect(connection.appServer.approvalPolicy).toBe("never");
+  });
+
+  it("prepares one Guardian policy when requirements clamp an explicitly full session", async () => {
+    vi.mocked(codexRequirements.readCodexRequirementsToml).mockReturnValue(
+      [
+        'allowed_sandbox_modes = ["workspace-write"]',
+        'allowed_approval_policies = ["on-request"]',
+        'allowed_approvals_reviewers = ["auto_review"]',
+      ].join("\n"),
+    );
+    const workspaceDir = path.join(tempDir, "requirements-clamped-workspace");
+    const sessionFile = path.join(tempDir, "requirements-clamped-session.jsonl");
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = path.join(tempDir, "agent");
+    params.provider = "openai";
+    params.permissionMode = "full";
+    params.sessionRoot = workspaceDir;
+    params.execOverrides = { ...params.execOverrides, mode: "full" };
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: { bindingStore: testCodexAppServerBindingStore },
+    });
+
+    expect(connection.appServer).toMatchObject({
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+    });
+    expect(connection.sessionPermissionPolicy).toEqual({
+      mode: "workspace",
+      root: workspaceDir,
+      execMode: "auto",
+    });
+    expect(params).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: workspaceDir,
+      execOverrides: { mode: "auto" },
+    });
   });
 
   it.each([

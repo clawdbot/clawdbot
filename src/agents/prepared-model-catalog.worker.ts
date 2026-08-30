@@ -1,6 +1,13 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
+import {
+  copyConfigResolutionFacts,
+  restoreConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -20,6 +27,7 @@ import {
   type PreparedModelWorkerRequest,
   type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
+import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 function refreshAuthStore(params: {
@@ -74,14 +82,36 @@ function refreshAuthStore(params: {
 }
 
 async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
+  // Restore the captured pair before discovery, including known-empty facts and shared identity.
+  // Without loader facts, decoded literal strings can be reparsed as references.
+  restoreConfigResolutionFacts(value.input.config, value.configResolutionFacts);
+  if (value.sourceConfigResolutionFacts === value.configResolutionFacts) {
+    copyConfigResolutionFacts(value.input.config, value.sourceConfigForSecrets);
+  } else {
+    restoreConfigResolutionFacts(value.sourceConfigForSecrets, value.sourceConfigResolutionFacts);
+  }
+  setRuntimeConfigSnapshot(value.input.config, value.sourceConfigForSecrets);
   const { prepareWorkspaceBuildGroup } = await import("./prepared-model-runtime.facts.js");
-  const prepared = await prepareWorkspaceBuildGroup([value.input], "live");
+  // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
+  // metadata generation. Transfer its facts and restore only process-local behavior.
+  const metadata = restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
+  const prepared = await prepareWorkspaceBuildGroup(
+    [value.input],
+    "live",
+    {},
+    undefined,
+    undefined,
+    metadata,
+  );
   const agentFacts = prepared.agentFacts[0];
   if (!agentFacts) {
     throw new Error("prepared model catalog worker produced no agent facts");
   }
   const reconstructedFingerprint = fingerprintPreparedModelCatalogGeneration({
     input: value.input,
+    sourceConfigForSecrets: value.sourceConfigForSecrets,
+    configResolutionFacts: value.configResolutionFacts,
+    sourceConfigResolutionFacts: value.sourceConfigResolutionFacts,
     authStore: value.authStore,
     providerIds: value.providerIds,
     pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
@@ -145,6 +175,12 @@ export async function runPreparedModelCatalogWorkerRequest(
         resolveAmbientAgentCredentialsForDiscovery({
           config: value.input.config,
           env: value.input.env,
+          authoritativeSyntheticAuthProviderRefs:
+            prepared.pluginGeneration.pluginMetadataSnapshot.owners.cliBackends.keys(),
+          syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
+            resolveRuntimeSyntheticAuthProviderRefs(),
+            value.providerIds,
+          ),
           ...(value.input.workspaceDir ? { workspaceDir: value.input.workspaceDir } : {}),
         }),
     );

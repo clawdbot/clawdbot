@@ -2,7 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -89,6 +90,26 @@ describe("gateway caller context wrapper", () => {
     }
 
     expect(seen).toEqual([identity, identity]);
+  });
+
+  it("pins caller identity to the Gateway present at admission", async () => {
+    const admitted = {} as GatewayRequestContext;
+    const replacement = {} as GatewayRequestContext;
+    let current = admitted;
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "agent-a",
+        sessionKey: "agent-a:session",
+        gatewayContextResolver: () => current,
+      },
+      () => {
+        const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
+        expect(resolveGatewayContext?.()).toBe(admitted);
+        current = replacement;
+        expect(resolveGatewayContext?.()).toBeUndefined();
+      },
+    );
   });
 
   it("scopes nested approval ownership without replacing the native runtime owner", async () => {

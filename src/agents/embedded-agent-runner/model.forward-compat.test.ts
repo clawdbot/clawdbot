@@ -1,11 +1,32 @@
 // Coverage for registry-backed model forward-compatibility fallbacks.
-import { describe, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
 import {
   buildForwardCompatTemplate,
   expectResolvedForwardCompatFallbackWithRegistryResult,
 } from "./model.forward-compat.test-support.js";
 import { resolveModelWithRegistry } from "./model.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+
+let state: OpenClawTestState;
+let auth: ReturnType<typeof guardModelFixtureAuth>;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "model-forward-compat" });
+  auth = guardModelFixtureAuth(state.root);
+});
+afterEach(async () => {
+  try {
+    auth.verify();
+    expect(auth.spy).toHaveBeenCalled();
+  } finally {
+    auth.spy.mockRestore();
+    await state.cleanup();
+  }
+});
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
@@ -105,7 +126,7 @@ function runAnthropicOpusForwardCompatFallback() {
     result: resolveModelWithRegistry({
       provider: "anthropic",
       modelId: "claude-opus-4-6",
-      agentDir: "/tmp/agent",
+      agentDir: state.agentDir(),
       modelRegistry: createRegistry([
         {
           provider: "anthropic",
@@ -124,7 +145,7 @@ function runAnthropicSonnetForwardCompatFallback() {
     result: resolveModelWithRegistry({
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
-      agentDir: "/tmp/agent",
+      agentDir: state.agentDir(),
       modelRegistry: createRegistry([
         {
           provider: "anthropic",
@@ -145,7 +166,7 @@ function runClaudeCliSonnetForwardCompatFallback() {
     result: resolveModelWithRegistry({
       provider: "claude-cli",
       modelId: "claude-sonnet-4-6",
-      agentDir: "/tmp/agent",
+      agentDir: state.agentDir(),
       modelRegistry: createRegistry([
         {
           provider: "anthropic",
@@ -166,7 +187,7 @@ function runZaiForwardCompatFallback() {
   const result = resolveModelWithRegistry({
     provider: ZAI_GLM5_CASE.provider,
     modelId: ZAI_GLM5_CASE.id,
-    agentDir: "/tmp/agent",
+    agentDir: state.agentDir(),
     modelRegistry: createRegistry(
       ZAI_GLM5_CASE.registryEntries.map((entry) => ({
         provider: entry.provider,

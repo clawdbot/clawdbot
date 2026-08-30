@@ -24,6 +24,7 @@ import {
   reorderPanel,
   setSidebarDock,
   setSidebarExpanded,
+  setSidebarOpen,
   sidebarDock,
   type SidebarLayout,
   type SidebarSlotId,
@@ -59,7 +60,10 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
 
 const lazyRuntimes = new Map<LazyElementKey, LazyPanelRuntime>();
 
-function ensureLazyElement(key: LazyElementKey, requestUpdate: () => void) {
+function ensureLazyElement(
+  key: LazyElementKey,
+  requestUpdate: () => void,
+): TemplateResult | null | undefined {
   const element = LAZY_SIDEBAR_ELEMENTS[key];
   if (!element) {
     return undefined;
@@ -76,7 +80,7 @@ function ensureLazyElement(key: LazyElementKey, requestUpdate: () => void) {
   }
   runtime.listeners.add(requestUpdate);
   if (runtime.pending) {
-    return undefined;
+    return null;
   }
   runtime.pending = ensureCustomElementDefined(tagName, loadModule)
     .catch((error: unknown) => {
@@ -91,7 +95,7 @@ function ensureLazyElement(key: LazyElementKey, requestUpdate: () => void) {
       runtime.listeners.forEach((listener) => listener());
       runtime.listeners.clear();
     });
-  return undefined;
+  return null;
 }
 
 /**
@@ -101,6 +105,7 @@ function ensureLazyElement(key: LazyElementKey, requestUpdate: () => void) {
  */
 export function sidebarRegionCallbacks(params: {
   state: ChatPageHost;
+  layout: SidebarLayout;
   closePanelSlot: (slot: SidebarSlotId) => void;
   openPanelSlot: (slot: SidebarSlotId) => void;
   hideBoard: () => void;
@@ -108,10 +113,10 @@ export function sidebarRegionCallbacks(params: {
   resizePanel: (columnId: string, size: number) => void;
   setPanelOpen: (open: boolean) => void;
 }): SidebarRegionCallbacks {
-  const { state } = params;
+  const { layout, state } = params;
   return {
     activatePanel: (panelId) => {
-      state.updateSidebarLayout(activatePanel(state.sidebarLayout, panelId));
+      state.updateSidebarLayout(activatePanel(layout, panelId));
       state.updateSidebarActivePanel(panelId);
     },
     closeSlot: (slot) => {
@@ -126,13 +131,10 @@ export function sidebarRegionCallbacks(params: {
     },
     openSlot: params.openPanelSlot,
     reorderPanel: (panelId, targetPanelId, placement) =>
-      state.updateSidebarLayout(
-        reorderPanel(state.sidebarLayout, panelId, targetPanelId, placement),
-      ),
+      state.updateSidebarLayout(reorderPanel(layout, panelId, targetPanelId, placement)),
     resizePanel: params.resizePanel,
-    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(state.sidebarLayout, dock)),
-    setExpanded: (expanded) =>
-      state.updateSidebarLayout(setSidebarExpanded(state.sidebarLayout, expanded)),
+    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(layout, dock)),
+    setExpanded: (expanded) => state.updateSidebarLayout(setSidebarExpanded(layout, expanded)),
     setOpen: params.setPanelOpen,
   };
 }
@@ -149,19 +151,28 @@ export function renderSidebarRegion(params: {
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
+  const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const panelOpen = params.layout.open === true;
   const regionError = panelOpen ? ensureLazyElement("region", params.requestUpdate) : undefined;
   let panelTemplates: SidebarPanelTemplates | null = null;
   for (const panel of params.layout.columns[0]?.panels ?? []) {
-    const error = ensureLazyElement(panel.slot, params.requestUpdate);
-    if (error !== undefined) {
+    const lazyState = ensureLazyElement(panel.slot, params.requestUpdate);
+    if (lazyState !== undefined) {
       panelTemplates ??= { ...params.panelTemplates };
-      panelTemplates[panel.slot] = error;
+      panelTemplates[panel.slot] =
+        lazyState ?? panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading;
     }
   }
   const availableWidth =
     params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
   const collapsed = params.narrow || isSidebarRegionCollapsed(params.layout, availableWidth);
+  const activePanelId = params.layout.columns[0]?.activePanelId;
+  const activePanelSlot = params.layout.columns[0]?.panels.find(
+    (panel) => panel.id === activePanelId,
+  )?.slot;
+  const regionLoading = panelDefinitions.find(
+    (definition) => definition.slot === activePanelSlot,
+  )?.loading;
   return html`<div
     class="sidebar-region ${collapsed && panelOpen ? "sidebar-region--narrow" : ""} ${panelOpen &&
     params.layout.expanded
@@ -169,10 +180,12 @@ export function renderSidebarRegion(params: {
       : ""} ${panelOpen && sidebarDock(params.layout) === "bottom" ? "sidebar-region--bottom" : ""}"
   >
     ${regionError !== undefined
-      ? null
+      ? regionError === null
+        ? (regionLoading ?? null)
+        : null
       : html`<openclaw-chat-sidebar-region
           .layout=${params.layout}
-          .panelDefinitions=${params.panelDefinitions ?? sidebarPanelDefinitions()}
+          .panelDefinitions=${panelDefinitions}
           .panelTemplates=${panelTemplates ?? params.panelTemplates}
           .panelActions=${params.panelActions}
           .availableSlots=${params.availableSlots}
@@ -199,6 +212,16 @@ export function resolveSidebarLayoutForBoard(params: {
       : null;
   if (!chatSide) {
     layout = closeSlot(layout, "chat");
+    if (
+      params.board.hasBoard &&
+      params.board.face === "dashboard" &&
+      params.board.dock === "hidden" &&
+      params.board.provider.canMutate
+    ) {
+      // Dashboard is the board-only mode. Preserve the stored tabs for the
+      // next explicit Split transition, but never render them over the board.
+      layout = setSidebarOpen(layout, false);
+    }
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
   const explicitlyClosed = layout.columns.length > 0 && layout.open === false;

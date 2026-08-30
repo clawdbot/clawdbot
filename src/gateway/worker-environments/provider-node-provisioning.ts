@@ -1,78 +1,120 @@
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { WorkerLease, WorkerProvider } from "../../plugins/types.js";
+import type { WorkerLease, WorkerNodeEnrollment, WorkerProvider } from "../../plugins/types.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
-import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
+import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import type { WorkerEnvironmentRecord, WorkerEnvironmentTransitionPatch } from "./store.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 type NodeLease = Extract<WorkerLease, { node: { deviceId: string } }>;
 
-type WorkerNodeProvisioningOptions = {
-  store: WorkerEnvironmentStore;
-  tunnels?: Pick<WorkerTunnelManager, "stop">;
-  ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
+type WorkerNodeProvisioningOptions = Pick<
+  WorkerProviderLifecycleOptions,
+  | "store"
+  | "isStopping"
+  | "prepareNodeBootstrap"
+  | "prepareNodeEnrollment"
+  | "closeNodeEnrollment"
+  | "ensureNodeWorkerBundle"
+  | "move"
+  | "serviceError"
+> & {
   commitReady: WorkerCredentialBroker["commitReady"];
-  move: (
-    record: WorkerEnvironmentRecord,
-    to: "draining" | "destroying",
-    patch?: Parameters<WorkerEnvironmentStore["transition"]>[0]["patch"],
-  ) => WorkerEnvironmentRecord;
-  destroyProviderLease: (
+  failBootstrap: (
     record: WorkerEnvironmentRecord,
     leaseId: string,
-    provider: WorkerProvider<"internal">,
-  ) => Promise<void>;
-  finishProvenDestroy: (record: WorkerEnvironmentRecord) => Promise<WorkerEnvironmentRecord>;
-  saveError: (record: WorkerEnvironmentRecord, error: unknown) => WorkerEnvironmentRecord;
-  serviceError: (code: "bootstrap_failure", message: string) => Error;
+    provider: WorkerProvider,
+    error: unknown,
+    patch: WorkerEnvironmentTransitionPatch,
+  ) => Promise<never>;
 };
 
 export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOptions) {
-  const fail = async (
-    record: WorkerEnvironmentRecord,
-    lease: NodeLease,
-    provider: WorkerProvider<"internal">,
-    error: unknown,
-  ): Promise<never> => {
-    const detail = boundedError(error);
-    const requested = options.store.requestDestroy({
-      environmentId: record.environmentId,
-      state: record.state,
-      terminalState: "failed",
-      lastError: detail,
-    });
-    const draining = options.move(requested, "draining", {
-      leaseId: lease.leaseId,
-      nodeDeviceId: lease.node.deviceId,
-      sshEndpoint: null,
-      sharedHost: lease.sharedHost === true,
-      desktop: lease.desktop ?? null,
-      lastError: detail,
-    });
-    await options.tunnels?.stop(record.environmentId);
-    const destroying = options.move(draining, "destroying", { lastError: detail });
+  const prepare = async (record: WorkerEnvironmentRecord, provider: WorkerProvider) => {
+    if (
+      record.state !== "requested" ||
+      !provider.requiresNodeEnrollment ||
+      !options.prepareNodeBootstrap
+    ) {
+      return;
+    }
+    // Preparing the immutable runtime must finish before a fresh paid allocation.
     try {
-      await options.destroyProviderLease(record, lease.leaseId, provider);
-    } catch (cleanupError: unknown) {
-      options.saveError(
-        destroying,
-        new Error(`${detail}; provider teardown pending: ${boundedError(cleanupError)}`),
-      );
+      await options.prepareNodeBootstrap(record);
+    } catch (error) {
+      const current = options.store.get(record.environmentId);
+      if (
+        current?.state === "requested" &&
+        current.provisionOperationId === record.provisionOperationId
+      ) {
+        options.move(current, "failed", { lastError: boundedError(error) });
+      }
       throw options.serviceError(
         "bootstrap_failure",
-        `Worker node bootstrap failed; teardown is pending: ${detail}`,
+        `Worker node bootstrap preparation failed: ${boundedError(error)}`,
       );
     }
-    await options.finishProvenDestroy(destroying);
-    throw options.serviceError("bootstrap_failure", `Worker node bootstrap failed: ${detail}`);
+    const current = options.store.get(record.environmentId);
+    if (
+      options.isStopping() ||
+      !current ||
+      current.state !== record.state ||
+      current.provisionOperationId !== record.provisionOperationId ||
+      current.destroyRequestedAtMs !== null
+    ) {
+      throw options.serviceError(
+        "invalid_state",
+        "Worker provisioning changed during bootstrap preparation",
+      );
+    }
   };
 
-  return async (
+  const createEnrollmentOperation = (record: WorkerEnvironmentRecord, provider: WorkerProvider) => {
+    if (provider.requiresNodeEnrollment !== true) {
+      return undefined;
+    }
+    const prepareNodeEnrollment = options.prepareNodeEnrollment;
+    if (!prepareNodeEnrollment) {
+      throw new Error("Worker node enrollment runtime is unavailable");
+    }
+    let open = true;
+    let enrollment: WorkerNodeEnrollment | undefined;
+    let pending: Promise<WorkerNodeEnrollment> | undefined;
+    return {
+      begin: async () => {
+        if (!open || options.isStopping()) {
+          throw new Error("Worker provisioning operation is closed");
+        }
+        pending ??= prepareNodeEnrollment(record).then((prepared) => {
+          // A provider timeout can close this operation during artifact preparation.
+          if (!open || options.isStopping()) {
+            options.closeNodeEnrollment?.(prepared);
+            throw new Error("Worker provisioning operation is closed");
+          }
+          enrollment = prepared;
+          return prepared;
+        });
+        return await pending;
+      },
+      close: () => {
+        open = false;
+        if (enrollment) {
+          options.closeNodeEnrollment?.(enrollment);
+        }
+      },
+    };
+  };
+
+  const finish = async (
     record: WorkerEnvironmentRecord,
     lease: NodeLease,
-    provider: WorkerProvider<"internal">,
+    provider: WorkerProvider,
     patch: { leaseId: string; sharedHost: boolean; desktop: WorkerLease["desktop"] | null },
   ): Promise<WorkerEnvironmentRecord> => {
+    const nodePatch = {
+      ...patch,
+      nodeDeviceId: lease.node.deviceId,
+      sshEndpoint: null,
+    };
     let nodeBuild: WorkerAdmissionHandshake;
     try {
       if (!options.ensureNodeWorkerBundle) {
@@ -80,16 +122,10 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       }
       nodeBuild = await options.ensureNodeWorkerBundle(lease.node.deviceId);
     } catch (error) {
-      return await fail(record, lease, provider, error);
+      return await options.failBootstrap(record, lease.leaseId, provider, error, nodePatch);
     }
-    return options.commitReady(
-      record,
-      { ...nodeBuild, installKind: "bundle" },
-      {
-        ...patch,
-        nodeDeviceId: lease.node.deviceId,
-        sshEndpoint: null,
-      },
-    );
+    return options.commitReady(record, { ...nodeBuild, installKind: "bundle" }, nodePatch);
   };
+
+  return { prepare, createEnrollmentOperation, finish };
 }

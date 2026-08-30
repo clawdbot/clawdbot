@@ -58,14 +58,6 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
   return kysely;
 }
 
-/** Register the lifecycle owner's handler for synchronous Kysely query failures. */
-export function registerNodeSqliteKyselyQueryErrorHandler(
-  db: DatabaseSync,
-  handler: (error: unknown) => void,
-): void {
-  queryErrorHandlerByDatabase.set(db, handler);
-}
-
 function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {
   try {
     queryErrorHandlerByDatabase.get(db)?.(error);

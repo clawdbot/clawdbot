@@ -55,6 +55,9 @@ describe("cron edit command", () => {
     expect(help).toContain("--best-effort-deliver");
     expect(help).toContain("--display-name <name>");
     expect(help).toContain("--clear-display-name");
+    expect(help).toContain("--on-exit <shell>");
+    expect(help).toContain("--on-exit-cwd <path>");
+    expect(help).toContain("main|isolated|current|session:<id>");
     expect(help).toMatch(/also\s+implies --announce when used alone/);
   });
 
@@ -67,6 +70,23 @@ describe("cron edit command", () => {
       id: "job-1",
       patch: { enabled: true },
     });
+  });
+
+  it("rethrows contradictory options in JSON mode without accessing the Gateway", async () => {
+    const originalArgv = process.argv;
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+    process.argv = ["node", "openclaw", "cron", "edit", "job-1", "--json"];
+    try {
+      await expect(
+        createCronProgram()
+          .parseAsync(["edit", "job-1", "--enable", "--disable", "--json"], { from: "user" })
+          .then(() => undefined),
+      ).rejects.toThrow("Choose --enable or --disable, not both");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      process.argv = originalArgv;
+      exitSpy.mockRestore();
+    }
   });
 
   it("updates the human-readable display name without changing the job name", async () => {

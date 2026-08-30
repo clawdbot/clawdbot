@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
-import { html } from "lit";
-import { state } from "lit/decorators.js";
+import { html, type PropertyValues } from "lit";
+import { property, state } from "lit/decorators.js";
 import type { AgentsListResult, CronJob } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -44,18 +44,23 @@ import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { buildCronSuggestions, THINKING_SUGGESTIONS } from "./form-suggestions.ts";
+import { resolveCronRouteData } from "./route-model.ts";
 import { renderCron, type CronDetailTab, type CronListTab } from "./view.ts";
 
 class CronPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
+  @property({ attribute: false }) routeSearch = "";
   @state() private cron = createInitialCronState();
   @state() private agentsList: AgentsListResult | null = null;
   @state() private cronModelSuggestions: string[] = [];
   @state() private listTab: CronListTab = "tasks";
   @state() private detailTab: CronDetailTab = "settings";
 
+  private pendingRouteData: ReturnType<typeof resolveCronRouteData> | null = null;
+  private highlightedRunId: string | null = null;
+  private pendingRunScroll = false;
   private modelSuggestionsState: CronState | null = null;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -163,6 +168,15 @@ class CronPage extends OpenClawLightDomElement {
 
   private lastPanelKey: string | null = null;
 
+  override willUpdate(changed: PropertyValues) {
+    if (changed.has("routeSearch")) {
+      const routeData = resolveCronRouteData(this.routeSearch);
+      this.pendingRouteData = routeData.jobId ? routeData : null;
+      this.highlightedRunId = null;
+      this.pendingRunScroll = false;
+    }
+  }
+
   override updated() {
     // Switching between list and detail (or between two jobs) keeps the same
     // page scroller alive, so reset scroll and the detail tab per target.
@@ -171,10 +185,26 @@ class CronPage extends OpenClawLightDomElement {
     const panelKey = `${mode}:${editingJobId ?? ""}`;
     if (panelKey !== this.lastPanelKey) {
       this.lastPanelKey = panelKey;
-      this.detailTab = "settings";
+      this.detailTab = editingJobId && this.highlightedRunId ? "history" : "settings";
       const scroller = this.closest(".content");
       if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
         scroller.scrollTo({ top: 0 });
+      }
+    }
+    if (this.pendingRouteData && !this.cron.cronLoading && this.cron.cronJobsSnapshotRevision) {
+      // Consume the link only after its inventory arrives so later clicks cannot re-adopt it.
+      const routeData = this.pendingRouteData;
+      this.pendingRouteData = null;
+      const job = this.cron.cronJobs.find((entry) => entry.id === routeData.jobId);
+      if (job) {
+        this.selectJob(job, routeData.runId);
+      }
+    }
+    if (this.pendingRunScroll) {
+      const run = this.querySelector<HTMLElement>(".cron-run-entry--highlighted");
+      if (run) {
+        run.scrollIntoView?.({ block: "nearest" });
+        this.pendingRunScroll = false;
       }
     }
   }
@@ -243,12 +273,17 @@ class CronPage extends OpenClawLightDomElement {
     if (!this.canManageCron) {
       return;
     }
-    this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch });
+    this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch }, patch);
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
     this.requestCronUpdate();
   }
 
-  private selectJob(job: CronJob) {
+  private selectJob(job: CronJob, runId: string | null = null) {
+    this.highlightedRunId = runId;
+    this.pendingRunScroll = Boolean(runId);
+    if (runId) {
+      this.detailTab = "history";
+    }
     this.cron.cronCreateOpen = false;
     startCronEdit(this.cron, job);
     this.requestCronUpdate();
@@ -398,6 +433,8 @@ class CronPage extends OpenClawLightDomElement {
           basePath: this.context.basePath,
           agentId: fallbackAgentId,
           loading: this.cron.cronLoading,
+          hasLoaded: this.cron.cronJobsSnapshotRevision !== null,
+          listError: this.cron.cronJobsError,
           canManage,
           status: this.cron.cronStatus,
           failingCount: this.cron.cronFailingCount,
@@ -428,6 +465,7 @@ class CronPage extends OpenClawLightDomElement {
           channelLabels: channels.channelsSnapshot?.channelLabels ?? {},
           channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
           runs: this.cron.cronRuns,
+          highlightedRunId: this.highlightedRunId,
           runsTotal: this.cron.cronRunsTotal,
           runsHasMore: this.cron.cronRunsHasMore,
           runsLoadingMore: this.cron.cronRunsLoadingMore,
@@ -506,8 +544,12 @@ class CronPage extends OpenClawLightDomElement {
   }
 }
 
-export const header = true,
-  render = () => html`<openclaw-cron-page></openclaw-cron-page>`;
+export const cronPageComponent = {
+  header: true,
+  render: (search: unknown) => html`<openclaw-cron-page
+    .routeSearch=${typeof search === "string" ? search : ""}
+  ></openclaw-cron-page>`,
+};
 
 // Module re-evaluation can retain the shared registry (for example, in Vitest).
 if (!customElements.get("openclaw-cron-page")) {

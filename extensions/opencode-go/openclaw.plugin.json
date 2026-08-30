@@ -91,6 +91,20 @@
             }
           },
           {
+            "id": "kimi-k2.6",
+            "name": "Kimi K2.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": { "input": 0.95, "output": 4, "cacheRead": 0.16, "cacheWrite": 0 },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsDeveloperRole": false,
+              "supportsStrictMode": false
+            }
+          },
+          {
             "id": "gpt-5.6-luna",
             "name": "GPT-5.6 Luna",
             "api": "openai-responses",
@@ -130,6 +144,21 @@
             "compat": {
               "thinkingFormat": "qwen",
               "codeMode": "capable"
+            }
+          },
+          {
+            "id": "hy3-preview",
+            "name": "HY3 Preview",
+            "status": "preview",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsDeveloperRole": false,
+              "supportsStrictMode": false
             }
           }
         ]

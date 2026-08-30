@@ -21,6 +21,7 @@ import {
   safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
@@ -82,6 +83,7 @@ const completeRequesterSettleWakeBatch = (
     delivery: structuredClone(entry.delivery),
     requesterSettleWake: structuredClone(entry.requesterSettleWake),
     retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
+    suppressCompletionDelivery: entry.suppressCompletionDelivery,
   }));
   const settledDeliveries: SubagentRunRecord[] = [];
   for (const [runId, entry] of entries) {
@@ -105,10 +107,11 @@ const completeRequesterSettleWakeBatch = (
         delivery.lastError = outcome.error ?? outcome.reason ?? "requester settle wake failed";
         delivery.deliveredAt = undefined;
         delivery.announcedAt = undefined;
+        entry.suppressCompletionDelivery = true;
       }
       settledDeliveries.push(entry);
     }
-    if (entry.requesterTurnRunId) {
+    if (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) {
       entry.retireAfterRequesterTurn =
         entry.retireAfterRequesterTurn === true ||
         entry.requesterSettleWake?.retireAfterSettle === true
@@ -130,8 +133,14 @@ const completeRequesterSettleWakeBatch = (
       entry.delivery = previous?.delivery;
       entry.requesterSettleWake = previous?.requesterSettleWake;
       entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
+      entry.suppressCompletionDelivery = previous?.suppressCompletionDelivery;
     });
     throw error;
+  }
+  for (const [runId, entry] of entries) {
+    if (!params.runs.has(runId)) {
+      subagentRuns.confirmRetirement(entry);
+    }
   }
   for (const entry of settledDeliveries) {
     if (outcome?.delivered) {
@@ -509,6 +518,7 @@ export function completeCleanupBookkeeping(
         params.runs.set(cleanupParams.runId, cleanupParams.entry);
         throw error;
       }
+      subagentRuns.confirmRetirement(cleanupParams.entry);
       clearGatewayContextResolver(cleanupParams.entry);
       scheduleCleanupTails({ allowRetiredRow: true, isDeleteCleanup });
       retryDeferredCompletedAnnounces(cleanupParams.runId);

@@ -62,6 +62,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveCwd,
     sandboxSessionKey,
     sandbox,
+    sessionPermissionPolicy,
     runAbortController,
     sessionAgentId,
     pluginConfig,
@@ -139,6 +140,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
   const cronCreatorToolAllowlistCaptureRef: {
     value?: { version: 1; source: "final-executable-surface" };
@@ -197,6 +199,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveCwd,
     sandboxSessionKey,
     sandbox,
+    sessionPermissionPolicy,
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,
     runAbortController,
@@ -247,6 +250,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   };
   const tools = await buildDynamicTools({
     ...commonToolParams,
+    registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     onPersistentWebSearchPolicyResolved: (allowed) => {
@@ -553,6 +557,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       dynamicToolParams,
       compactionPlanState,
       computerContextEpoch,
+      runCleanups,
       toolBridge,
       toolState,
       toolOutcomeOrdinals,

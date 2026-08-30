@@ -1,12 +1,14 @@
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
+import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
-import { isRuntimeToolAllowed } from "../../tool-policy-match.js";
+import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
@@ -71,46 +73,67 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     !params.attempt.disableTools &&
     !params.isRawModelRun &&
     !params.attempt.forceRestartSafeTools &&
-    !params.attempt.forceCodeModeReconciliationTools
+    params.attempt.codeModeRecovery?.kind !== "inspect"
       ? params.attempt.clientTools
       : undefined;
   // Client functions share the attempt's authority; filter before their names
   // can reserve bundled tools or enter deferred catalogs and provider requests.
-  const clientTools =
-    providedClientTools && effectiveToolsAllow
-      ? providedClientTools.filter((definition) =>
-          isRuntimeToolAllowed(definition.function.name, effectiveToolsAllow),
-        )
-      : providedClientTools;
-  const bundleMcpEnabled =
-    !params.attempt.forceRestartSafeTools &&
-    !params.attempt.forceCodeModeReconciliationTools &&
-    shouldCreateBundleMcpRuntimeForAttempt({
-      toolsEnabled,
-      disableTools: params.attempt.disableTools || params.isRawModelRun,
-      toolsAllow: params.attempt.toolsAllow,
-    });
+  let clientTools = providedClientTools;
+  if (providedClientTools && effectiveToolsAllow) {
+    clientTools = [];
+    if (providedClientTools.length > 0) {
+      const matchesRuntime = createRuntimeToolMatcher(effectiveToolsAllow);
+      clientTools = providedClientTools.filter((definition) =>
+        matchesRuntime(definition.function.name),
+      );
+    }
+  }
   const bundleMetadataSnapshot = params.getCurrentAttemptPluginMetadataSnapshot();
   // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.
   const bundleManifestRegistry =
     bundleMetadataSnapshot?.pluginIds === undefined
       ? bundleMetadataSnapshot?.manifestRegistry
       : undefined;
+  const mcpConfig = {
+    workspaceDir: params.effectiveWorkspace,
+    cfg: params.attempt.config,
+    manifestRegistry: bundleManifestRegistry,
+    toolOverrides: params.attempt.toolOverrides,
+  };
+  const bundleMcpEnabled =
+    !params.attempt.forceRestartSafeTools &&
+    params.attempt.codeModeRecovery?.kind !== "inspect" &&
+    shouldCreateBundleMcpRuntimeForAttempt({
+      toolsEnabled,
+      disableTools: params.attempt.disableTools || params.isRawModelRun,
+      toolsAllow: params.attempt.toolsAllow,
+      resolveConfiguredMcpNamespaces: () => {
+        const configuredNames = Object.keys(params.attempt.config?.mcp?.servers ?? {});
+        if (configuredNames.length === 0) {
+          return [];
+        }
+        const { loaded } = loadSessionMcpConfig({ ...mcpConfig, logDiagnostics: false });
+        // Use the complete merged declaration order: bundled peers can own a
+        // collision suffix before a configured server. This does not connect MCP.
+        const safeNames = assignSafeServerNames(Object.keys(loaded.mcpServers));
+        return configuredNames.flatMap((name) => {
+          const safeName = safeNames.get(name);
+          return safeName ? [`${safeName}${TOOL_NAME_SEPARATOR}`] : [];
+        });
+      },
+    });
   const bundleMcpSessionRuntime = bundleMcpEnabled
     ? await getOrCreateSessionMcpRuntime({
+        ...mcpConfig,
         sessionId: params.attempt.sessionId,
         sessionKey: params.attempt.sessionKey,
-        workspaceDir: params.effectiveWorkspace,
         agentDir: params.agentDir,
-        cfg: params.attempt.config,
-        manifestRegistry: bundleManifestRegistry,
         // senderId is only set from the verified inbound sender (sessionCtx.SenderId
         // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
         // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
         requesterSenderId: params.attempt.senderId,
         agentAccountId: params.attempt.agentAccountId,
         messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
-        toolOverrides: params.attempt.toolOverrides,
       })
     : undefined;
   const bundleMcpRuntime = bundleMcpSessionRuntime
@@ -127,7 +150,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   try {
     const bundleLspEnabled =
       !params.attempt.forceRestartSafeTools &&
-      !params.attempt.forceCodeModeReconciliationTools &&
+      params.attempt.codeModeRecovery?.kind !== "inspect" &&
       shouldCreateBundleLspRuntimeForAttempt({
         toolsEnabled,
         disableTools: params.attempt.disableTools || params.isRawModelRun,

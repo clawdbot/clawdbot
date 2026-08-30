@@ -1,3 +1,4 @@
+import { t } from "../i18n/index.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -42,6 +43,11 @@ export type OptionalCustomElement = {
 type UpdatingHost = {
   requestUpdate: () => unknown;
   readonly updateComplete?: Promise<unknown>;
+  /**
+   * Render-root lookup used to gate action replay on the element actually
+   * being rendered. Hosts without it replay unconditionally.
+   */
+  queryRenderedElement?: (tagName: string) => Element | null;
 };
 
 type LazyCustomElementRequestState =
@@ -67,7 +73,8 @@ export class LazyCustomElementRequestController {
   constructor(
     private readonly host: UpdatingHost,
     private readonly onClose?: () => void,
-    private readonly retryStale = retryStaleChunkReloadWhenReachable,
+    private readonly retryStale = (canReload: () => boolean) =>
+      retryStaleChunkReloadWhenReachable({ canReload }),
   ) {}
 
   get visibleState(): LazyCustomElementRequestState | undefined {
@@ -137,7 +144,8 @@ export class LazyCustomElementRequestController {
     } satisfies LazyCustomElementRequest;
     this.current = retryRequest;
     this.host.requestUpdate();
-    void (request.stale ? this.retryStale() : Promise.resolve(false)).then((reloading) => {
+    const canReload = () => this.current === retryRequest;
+    void (request.stale ? this.retryStale(canReload) : Promise.resolve(false)).then((reloading) => {
       if (!reloading && this.current === retryRequest) {
         this.load(retryRequest);
       }
@@ -182,7 +190,19 @@ export class LazyCustomElementRequestController {
         this.host.requestUpdate();
         await this.host.updateComplete;
         if (this.current === request) {
-          request.action?.();
+          // Replay only once the host has actually rendered the element.
+          // During boot the shell can still be splash-gated after this update;
+          // replaying then re-dispatches an event nothing handles, which
+          // re-enters this controller in a microtask cycle that starves the
+          // render (and the Gateway socket) forever. The skipped action stays
+          // persisted as the pending lazy shell action and replays through
+          // restorePendingLazyAction on a later context update.
+          const replayable =
+            !this.host.queryRenderedElement ||
+            this.host.queryRenderedElement(request.element.tagName) !== null;
+          if (replayable) {
+            request.action?.();
+          }
           if (this.current === request) {
             this.abandon();
           }
@@ -217,6 +237,28 @@ export const DEBUG_OVERLAY_ELEMENT = {
   tagName: DEBUG_OVERLAY_TAG,
   label: DEBUG_OVERLAY_TAG,
   loadModule: () => import("../pages/debug/debug-overlay.ts"),
+} satisfies OptionalCustomElement;
+
+const KEYBOARD_SHORTCUTS_TAG = "openclaw-keyboard-shortcuts-dialog";
+
+export const KEYBOARD_SHORTCUTS_ELEMENT = {
+  tagName: KEYBOARD_SHORTCUTS_TAG,
+  label: KEYBOARD_SHORTCUTS_TAG,
+  loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
+} satisfies OptionalCustomElement;
+
+const MACOS_TITLEBAR_TAG = "openclaw-macos-titlebar-controls";
+
+export const MACOS_TITLEBAR_ELEMENT = {
+  tagName: MACOS_TITLEBAR_TAG,
+  label: MACOS_TITLEBAR_TAG,
+  loadModule: () => import("../components/macos-titlebar-controls.runtime.ts"),
+} satisfies OptionalCustomElement;
+
+export const SIDEBAR_ATTENTION_ELEMENT = {
+  tagName: "openclaw-sidebar-attention",
+  label: t("attention.issues"),
+  loadModule: () => import("../components/sidebar-attention.ts"),
 } satisfies OptionalCustomElement;
 
 export const TERMINAL_PANEL_ELEMENT = {
@@ -255,6 +297,14 @@ export const APPROVAL_PAGE_ELEMENT = {
   tagName: "openclaw-approval-page",
   label: "approval page",
   loadModule: () => import("../pages/approval/approval-page-registration.ts"),
+} satisfies OptionalCustomElement;
+
+const QUESTION_PAGE_TAG = "openclaw-question-page";
+
+export const QUESTION_PAGE_ELEMENT = {
+  tagName: QUESTION_PAGE_TAG,
+  label: QUESTION_PAGE_TAG,
+  loadModule: () => import("../pages/question/question-page-registration.ts"),
 } satisfies OptionalCustomElement;
 
 // The card is in the chat graph, but modal-only queue controls stay off the

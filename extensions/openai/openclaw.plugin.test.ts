@@ -128,7 +128,7 @@ describe("OpenAI plugin manifest", () => {
 
     expect(openAiLogin?.choiceLabel).toBe("ChatGPT Login");
     expect(openAiLogin?.choiceHint).toBe("Sign in with your ChatGPT or Codex subscription");
-    expect(openAiLogin?.assistantVisibility).toBeUndefined();
+    expect(openAiLogin && "assistantVisibility" in openAiLogin).toBe(false);
     expect(openAiLogin?.groupId).toBe("openai");
     expect(openAiLogin?.groupLabel).toBe("OpenAI");
     expect(openAiLogin?.groupHint).toBe("ChatGPT/Codex sign-in or API key");
@@ -136,7 +136,8 @@ describe("OpenAI plugin manifest", () => {
     expect(openAiDeviceCode?.choiceHint).toBe(
       "Pair your ChatGPT account in browser with a device code",
     );
-    expect(openAiDeviceCode?.assistantVisibility).toBe("manual-only");
+    expect(openAiDeviceCode && "assistantVisibility" in openAiDeviceCode).toBe(false);
+    expect(openAiDeviceCode?.onboardingFeatured).not.toBe(true);
     expect(openAiDeviceCode?.groupId).toBe("openai");
     expect(openAiDeviceCode?.groupLabel).toBe("OpenAI");
     expect(openAiDeviceCode?.groupHint).toBe("ChatGPT/Codex sign-in or API key");

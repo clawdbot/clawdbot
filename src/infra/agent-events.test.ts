@@ -668,20 +668,26 @@ describe("agent-events sequencing", () => {
     expect(seen.get("new-run")?.keys).not.toContain("lifecycleGeneration");
   });
 
-  test("stamps session lifecycle projection policy without serializing it", () => {
+  test("stamps private session lifecycle facts without serializing them", () => {
     registerAgentRunContext("maintenance-run", {
+      mainSessionRestartRecovery: true,
       projectSessionLifecycle: false,
+      projectSessionMessages: false,
       sessionKey: "main",
     });
     let received:
       | {
           projectSessionLifecycle?: boolean;
+          projectSessionMessages?: boolean;
+          mainSessionRestartRecovery?: true;
           keys: string[];
         }
       | undefined;
     const stop = onAgentRuntimeEvent((evt) => {
       received = {
         projectSessionLifecycle: evt.projectSessionLifecycle,
+        projectSessionMessages: evt.projectSessionMessages,
+        mainSessionRestartRecovery: evt.mainSessionRestartRecovery,
         keys: Object.keys(evt),
       };
     });
@@ -694,7 +700,11 @@ describe("agent-events sequencing", () => {
     stop();
 
     expect(received?.projectSessionLifecycle).toBe(false);
+    expect(received?.projectSessionMessages).toBe(false);
+    expect(received?.mainSessionRestartRecovery).toBe(true);
     expect(received?.keys).not.toContain("projectSessionLifecycle");
+    expect(received?.keys).not.toContain("projectSessionMessages");
+    expect(received?.keys).not.toContain("mainSessionRestartRecovery");
   });
 
   test("lets a newly admitted retry claim an explicit lifecycle generation", () => {

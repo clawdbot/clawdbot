@@ -2,7 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { ExitError } from "../runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
@@ -68,6 +70,9 @@ const createHealthSummary = (params: {
 };
 
 const callGatewayMock = vi.fn();
+const listReadOnlyChannelPluginsForConfigMock = vi.fn(
+  (_config: unknown, _options?: unknown): unknown[] => [],
+);
 const isGatewayCredentialsRequiredErrorMock = vi.fn((_value: unknown) => false);
 const isGatewaySecretRefUnavailableErrorMock = vi.fn((_value: unknown) => false);
 const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -113,7 +118,8 @@ vi.mock("../cli/daemon-cli/probe.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: () => [],
+  listReadOnlyChannelPluginsForConfig: (config: unknown, options?: unknown) =>
+    listReadOnlyChannelPluginsForConfigMock(config, options),
 }));
 
 function requireFirstRuntimeLog(): string {
@@ -166,7 +172,7 @@ describe("healthCommand", () => {
     probeGatewayStatusMock.mockReset();
   });
 
-  it("renders the gateway session path identically in JSON and text", async () => {
+  it("preserves plugin health in JSON while surfacing activated failures in text", async () => {
     const agentSessions = {
       path: "/tmp/sessions.json",
       count: 1,
@@ -190,6 +196,24 @@ describe("healthCommand", () => {
       },
       sessions: agentSessions,
     });
+    snapshot.plugins = {
+      loaded: ["calendar"],
+      errors: [
+        {
+          id: "calendar",
+          origin: "workspace",
+          activated: true,
+          failurePhase: "service",
+          error: "service scheduler: address already in use",
+        },
+        {
+          id: "inactive",
+          origin: "workspace",
+          activated: false,
+          error: "inactive plugin load failed",
+        },
+      ],
+    };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
     await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
@@ -200,6 +224,7 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+    expect(parsed.plugins).toEqual(snapshot.plugins);
 
     runtime.log.mockClear();
     callGatewayMock.mockResolvedValueOnce(snapshot);
@@ -207,6 +232,10 @@ describe("healthCommand", () => {
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain(`Session store (main): ${parsed.sessions.path}`);
+    expect(output).toContain(
+      "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
+    );
+    expect(output).not.toContain("inactive plugin load failed");
   });
 
   it("prints the gateway probe duration in text output", async () => {
@@ -223,41 +252,116 @@ describe("healthCommand", () => {
     expect(output).toContain("Gateway probe duration: 5ms");
   });
 
-  it("shows every agent when an explicit fleet has no default owner", async () => {
-    const sessions = (agentId: string) => ({
-      path: `/tmp/${agentId}/sessions.json`,
-      count: 0,
-      recent: [],
-    });
-    const snapshot = {
-      ...createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} }),
-      defaultAgentId: undefined,
-      agents: [
-        { ...createMainAgentSummary(sessions("alpha")), agentId: "alpha", isDefault: false },
-        { ...createMainAgentSummary(sessions("beta")), agentId: "beta", isDefault: false },
-      ],
+  it("surfaces unhealthy secondary accounts without an explicit account binding", async () => {
+    const primary = {
+      accountId: "main",
+      enabled: true,
+      configured: true,
+      linked: true,
+      healthState: "healthy",
+      probe: { ok: true, elapsedMs: 12 },
     };
-    callGatewayMock.mockResolvedValueOnce(snapshot);
-
-    await healthCommand(
-      {
-        json: false,
-        timeoutMs: 1000,
-        config: {
-          agents: {
-            ownership: "explicit",
-            entries: { alpha: {}, beta: {} },
+    const snapshot = createHealthSummary({
+      channels: {
+        matrix: {
+          ...primary,
+          accounts: {
+            main: primary,
+            alerts: {
+              accountId: "alerts",
+              enabled: true,
+              configured: true,
+              linked: true,
+              healthState: "blocked",
+            },
           },
         },
       },
-      runtime as never,
-    );
+      channelOrder: ["matrix"],
+      channelLabels: { matrix: "Matrix" },
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+    listReadOnlyChannelPluginsForConfigMock.mockReturnValueOnce([
+      { id: "matrix", config: { listAccountIds: () => ["main", "alerts"] } },
+    ]);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
-    expect(output).toContain("Session store (alpha): /tmp/alpha/sessions.json");
-    expect(output).toContain("Session store (beta): /tmp/beta/sessions.json");
-    expect(output).not.toContain("(default)");
+    expect(output).toContain("Matrix: blocked");
+    expect(output).not.toContain("Matrix: ok");
   });
+
+  it.each(["remote", "empty", "missing"] as const)(
+    "shows each explicit fleet owner's sessions with %s agent summaries",
+    async (agentSummaries) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const storePath = state.statePath("shared.sqlite");
+        const updatedAt = Date.now();
+        for (const [agentId, key] of [
+          ["alpha", "first"],
+          ["alpha", "second"],
+          ["beta", "only"],
+        ] as const) {
+          await replaceSessionEntry(
+            { agentId, storePath, sessionKey: `agent:${agentId}:${key}` },
+            { sessionId: `${agentId}-${key}`, updatedAt },
+          );
+        }
+        const agent = (agentId: string, keys: string[]) => ({
+          ...createMainAgentSummary({
+            path: storePath,
+            count: keys.length,
+            recent: keys.map((key) => ({
+              key: `agent:${agentId}:${key}`,
+              updatedAt,
+              age: 0,
+            })),
+          }),
+          agentId,
+          isDefault: false,
+        });
+        const { agents: _agents, ...snapshot } = createHealthSummary({
+          channels: {},
+          channelOrder: [],
+          channelLabels: {},
+        });
+        callGatewayMock.mockResolvedValueOnce({
+          ...snapshot,
+          defaultAgentId: undefined,
+          ...(agentSummaries === "missing"
+            ? {}
+            : {
+                agents:
+                  agentSummaries === "empty"
+                    ? []
+                    : [agent("alpha", ["first", "second"]), agent("beta", ["only"])],
+              }),
+        });
+
+        await healthCommand(
+          {
+            json: false,
+            timeoutMs: 1_000,
+            config: {
+              session: { store: storePath },
+              agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+            },
+          },
+          runtime as never,
+        );
+
+        const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+        expect(output).toContain(
+          `Session store (alpha): ${storePath} (2 entries)\n- agent:alpha:first`,
+        );
+        expect(output).toContain(
+          `Session store (beta): ${storePath} (1 entries)\n- agent:beta:only`,
+        );
+        expect(output).not.toContain("(default)");
+      });
+    },
+  );
 
   it("prints persistent event-loop degradation duration in text output", async () => {
     const snapshot = {

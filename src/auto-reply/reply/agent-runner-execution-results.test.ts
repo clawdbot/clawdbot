@@ -7,6 +7,7 @@ import {
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   requireRecord,
   expectRecordFields,
   requireMockCall,
@@ -163,7 +164,11 @@ describe("executeAgentTurn: result and tool delivery", () => {
       },
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const first = (await params.run("openai", "gpt-5.4")) as {
+      const first = (await params.run(
+        "openai",
+        "gpt-5.4",
+        initialFallbackAttemptOptions(params),
+      )) as {
         payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
       };
       const classification = await params.classifyResult?.({
@@ -243,7 +248,11 @@ describe("executeAgentTurn: result and tool delivery", () => {
       return { payloads: [], meta: {} };
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = (await params.run("openai", "gpt-5.4")) as {
+      const result = (await params.run(
+        "openai",
+        "gpt-5.4",
+        initialFallbackAttemptOptions(params),
+      )) as {
         payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
       };
       expect(
@@ -359,7 +368,11 @@ describe("executeAgentTurn: result and tool delivery", () => {
     const activeSessionStore = { main: sessionEntry };
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const failedResult = await params.run("openai", "gpt-5.4");
+      const failedResult = await params.run(
+        "openai",
+        "gpt-5.4",
+        initialFallbackAttemptOptions(params),
+      );
       expect(sessionEntry.providerOverride).toBeUndefined();
       expect(sessionEntry.modelOverride).toBeUndefined();
       const classification = await params.classifyResult?.({

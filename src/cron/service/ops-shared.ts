@@ -25,6 +25,7 @@ export function markManualCronJobActive(
   const jobId = job.id;
   state.activeManualRunJobIds.add(jobId);
   return markCronJobActive(jobId, {
+    payloadKind: job.payload.kind,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
   });
 }

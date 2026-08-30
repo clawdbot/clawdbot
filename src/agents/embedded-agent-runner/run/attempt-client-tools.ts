@@ -1,4 +1,7 @@
-import { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../../../plugins/tools.js";
+import {
+  getPluginToolMeta,
+  getPluginToolSideEffectOwnerKey,
+} from "../../../plugins/tool-metadata.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
@@ -6,6 +9,7 @@ import {
 } from "../../agent-tool-definition-adapter.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
+import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
@@ -24,6 +28,7 @@ import {
 } from "../tool-name-allowlist.js";
 import { splitSdkTools } from "../tool-split.js";
 import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
+import { applyCodeModeRecoveryPreparedToolSurface } from "./code-mode-reconciliation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
@@ -83,6 +88,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
     params.uncompactedEffectiveTools,
     params.replaySafetyOptions,
   );
+  // Only the marked Code Mode exec owns a resumable run; a plain shell exec of
+  // the same name must never be mistaken for one at tool completion. The marked
+  // controls exist only on the post-catalog `effectiveTools` surface.
+  const codeModeExecToolNames = new Set(
+    params.effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
+  );
   const clientConflictToolNames = params.deferredDirectoryToolsCallable
     ? builtinToolNames
     : coreBuiltinToolNames;
@@ -137,6 +148,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
         },
       )
     : [];
+  if (params.attempt.codeModeRecovery?.kind === "resume") {
+    clientToolDefs = applyCodeModeRecoveryPreparedToolSurface({
+      tools: clientToolDefs,
+      state: params.attempt.codeModeRecovery,
+    });
+  }
   // Terminal observations are name-only, so ownership is valid only when one
   // concrete OpenClaw or client tool owns the normalized name.
   const sideEffectToolOwners = collectSideEffectToolOwners(
@@ -153,8 +170,8 @@ export function prepareEmbeddedAttemptClientTools(params: {
     : addClientToolsToToolSearchCatalog;
   const clientToolSearch = addClientToolsToCatalog({
     tools: clientToolDefs,
-    // Mirrors applyAgentToolSurfaceCatalog: code mode reads the base config,
-    // tool search reads the run's resolved tool-search runtime config.
+    // Activation was resolved for this attempt; only Tool Search still needs
+    // its runtime configuration to choose the catalog layout.
     config: params.codeModeControlsEnabledForRun
       ? params.attempt.config
       : params.toolSearchRuntimeConfig,
@@ -187,9 +204,9 @@ export function prepareEmbeddedAttemptClientTools(params: {
     coreReadAuthorized,
     clientToolCallSlots,
     clientToolDefs,
-    clientToolLoopDetection,
     replaySafeToolNames,
     replaySafeTools,
+    codeModeExecToolNames,
     sideEffectToolOwners,
     sessionToolAllowlist,
   };

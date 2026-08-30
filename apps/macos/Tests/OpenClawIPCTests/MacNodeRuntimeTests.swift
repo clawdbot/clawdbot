@@ -37,7 +37,7 @@ struct MacNodeRuntimeTests {
             true
         }
 
-        func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) {}
+        func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) {}
         func stop() {}
     }
 

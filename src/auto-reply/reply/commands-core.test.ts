@@ -335,4 +335,23 @@ describe("handleCommands send policy", () => {
       },
     });
   });
+
+  it.each([true, false])(
+    "preserves literal input when command interpretation is suppressed (%s)",
+    async (suppressed) => {
+      const { handleCommands } = await import("./commands-core.js");
+      const { maybeHandleResetCommand } = await import("./commands-reset.js");
+      const handler = vi.fn<CommandHandler>(async () => ({ shouldContinue: false }));
+      loadCommandHandlersMock.mockReturnValue([handler]);
+      const params = makeParams();
+      params.ctx.CommandInterpretationSuppressed = suppressed;
+      params.command.commandBodyNormalized = "/stop";
+      params.command.rawBodyNormalized = "/stop";
+
+      expect(await handleCommands(params)).toEqual({ shouldContinue: suppressed });
+      expect(maybeHandleResetCommand).toHaveBeenCalledTimes(suppressed ? 0 : 1);
+      expect(handler).toHaveBeenCalledTimes(suppressed ? 0 : 1);
+      expect(params.command.commandBodyNormalized).toBe("/stop");
+    },
+  );
 });

@@ -2,6 +2,10 @@ import path from "node:path";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -16,6 +20,7 @@ import {
 } from "../agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import {
   attachInternalToolExecutionPreparer,
@@ -31,6 +36,8 @@ import {
 } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import { registerAgentHarnessScheduledToolProjectionCapability } from "./host-private-capabilities.js";
+import { createSessionNodeInvocation } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
@@ -157,8 +164,16 @@ function createBoundCallerIdentity(params: AgentHarnessHostAttempt, receiptAutho
 export function createAgentHarnessHostCapabilities(params: {
   attempt: AgentHarnessHostAttempt;
   pluginId: string;
-}): { capabilities: AgentHarnessHostCapabilities; close: () => void } {
+  requiredNodeCommands?: readonly string[];
+}): {
+  capabilities: AgentHarnessHostCapabilities;
+  close: () => void;
+  runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
+} {
   const attempt = params.attempt;
+  // Capture the selected harness declaration before plugin code can mutate it.
+  // Full must not cover other commands merely because the same plugin owns them.
+  const requiredNodeCommands = new Set(params.requiredNodeCommands);
   const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
   if (!delegatedAuthority) {
@@ -168,16 +183,18 @@ export function createAgentHarnessHostCapabilities(params: {
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
   const capabilityAbortController = new AbortController();
-  const assertActive = () => {
+  const callerIdentity = createBoundCallerIdentity(attempt, assertActive);
+  function assertActive() {
     if (
       !active ||
       attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
-      getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority
+      getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority ||
+      (callerIdentity?.gatewayContextResolver !== undefined &&
+        callerIdentity.gatewayContextResolver() === undefined)
     ) {
       throw new Error("agent harness host capability is no longer active");
     }
-  };
-  const callerIdentity = createBoundCallerIdentity(attempt, assertActive);
+  }
   const requester = {
     ...((attempt.messageChannel ?? attempt.messageProvider)
       ? { channel: attempt.messageChannel ?? attempt.messageProvider ?? undefined }
@@ -276,7 +293,9 @@ export function createAgentHarnessHostCapabilities(params: {
     const assertRecoveryActive = () => {
       if (
         attempt.abortSignal?.aborted ||
-        attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance
+        attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
+        (callerIdentity?.gatewayContextResolver !== undefined &&
+          callerIdentity.gatewayContextResolver() === undefined)
       ) {
         throw new Error("agent harness retained host policy is no longer active");
       }
@@ -291,6 +310,10 @@ export function createAgentHarnessHostCapabilities(params: {
   });
 
   const trajectoryRecorder = attempt.trajectoryRecorder;
+  const scheduledToolSources = new WeakMap<
+    AnyAgentTool,
+    Readonly<{ targetTool: "exec" | "process"; execute: AnyAgentTool["execute"] }>
+  >();
   const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) => {
     assertActive();
     const boundAbortSignal = attempt.abortSignal
@@ -342,10 +365,19 @@ export function createAgentHarnessHostCapabilities(params: {
     bindToolSurface,
     createToolSurface: (options, bindingOptions) => {
       assertActive();
-      return bindToolSurface(
+      const tools = bindToolSurface(
         createOpenClawCodingTools({ ...options, operationalRunInstance }),
         bindingOptions,
       );
+      for (const tool of tools) {
+        if (tool.name === "exec" || tool.name === "process") {
+          scheduledToolSources.set(
+            tool,
+            Object.freeze({ targetTool: tool.name, execute: tool.execute }),
+          );
+        }
+      }
+      return tools;
     },
     prepareMutableFileApproval: async (request) => {
       assertActive();
@@ -420,8 +452,46 @@ export function createAgentHarnessHostCapabilities(params: {
       };
     },
   });
+  registerAgentHarnessScheduledToolProjectionCapability({
+    hostCapabilities: capabilities,
+    ownerPluginId: params.pluginId,
+    create: (sourceTool, projection) => {
+      assertActive();
+      const source = scheduledToolSources.get(sourceTool);
+      if (
+        !source ||
+        sourceTool.name !== source.targetTool ||
+        sourceTool.execute !== source.execute
+      ) {
+        throw new Error("scheduled tool projection source was not created by this host capability");
+      }
+      return createCronScheduledToolProjection(
+        sourceTool,
+        assertActive,
+        source.targetTool,
+        projection,
+      );
+    },
+  });
   return {
     capabilities,
+    runWithScope: (run) =>
+      withPluginRuntimeGatewayRequestScope(
+        {
+          isWebchatConnect: () => false,
+          ...getPluginRuntimeGatewayRequestScope(),
+          invokeWithSessionNodeAuthority: createSessionNodeInvocation(
+            attempt,
+            params.pluginId,
+            requiredNodeCommands,
+            assertActive,
+            attempt.abortSignal
+              ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
+              : capabilityAbortController.signal,
+          ),
+        },
+        run,
+      ),
     close: () => {
       if (!active) {
         return;

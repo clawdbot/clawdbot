@@ -52,6 +52,8 @@ type DurableFinalDeliveryPayloadShape = {
 
 /** Raw platform result shape normalized into a message receipt. */
 export type MessageReceiptSourceResult = {
+  /** Provider-confirmed intentional omission before dispatch, never an ambiguous send. */
+  outcome?: "not_sent";
   channel?: string;
   messageId?: string;
   target?: {
@@ -238,6 +240,7 @@ export type ChannelMessageSendPollContext<TConfig = OpenClawConfig> = Omit<
 
 /** Adapter send result normalized to a receipt plus optional legacy message id. */
 export type ChannelMessageSendResult = {
+  outcome?: MessageReceiptSourceResult["outcome"];
   receipt: MessageReceipt;
   messageId?: string;
   target?: MessageReceiptSourceResult["target"];

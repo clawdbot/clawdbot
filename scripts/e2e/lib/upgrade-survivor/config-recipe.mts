@@ -16,6 +16,7 @@ type ConfigStep = {
   id: string;
   intent: string;
   argv: string[];
+  prepublishPluginPackages?: string[];
 };
 
 type BaselineAdaptationSummary = { skippedIntents: string[] };
@@ -131,6 +132,8 @@ function configSetJsonFile(
 
 const representativeConfigSteps: ConfigStep[] = [
   configSetJsonFile("models-openai", "models", "models.providers.openai", "models-openai.json"),
+  // Keep the migration specimen idle while baseline and candidate services run:
+  // a heartbeat refreshes its skills snapshot before inference, even when auth fails.
   configSetJsonFile("agents", "agents", "agents", "agents.json"),
   configSetJsonFile("skills", "skills", "skills", "skills.json"),
   configSetJsonFile("plugins", "plugins", "plugins", "plugins.json"),
@@ -178,12 +181,16 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
     "acpx-openclaw-tools-bridge",
     [
-      configSetJsonFile(
-        "plugins-acpx-openclaw-tools-bridge",
-        "acpx-openclaw-tools-bridge",
-        "plugins",
-        "plugins-acpx-openclaw-tools-bridge.json",
-      ),
+      {
+        ...configSetJsonFile(
+          "plugins-acpx-openclaw-tools-bridge",
+          "acpx-openclaw-tools-bridge",
+          "plugins",
+          "plugins-acpx-openclaw-tools-bridge.json",
+        ),
+        // The candidate externalizes this runtime even when the baseline bundles it.
+        prepublishPluginPackages: ["@openclaw/acpx"],
+      },
     ],
   ],
   [
@@ -232,12 +239,7 @@ export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
   return scenarioConfigSteps.get(scenario) ?? [];
 }
 
-const recipe: ConfigStep[] = [
-  {
-    id: "update-channel",
-    intent: "update",
-    argv: ["config", "set", "update.channel", "stable"],
-  },
+const sharedRecipe: ConfigStep[] = [
   configSetJsonFile("gateway", "gateway", "gateway", "gateway.json"),
   ...representativeConfigSteps,
   {
@@ -247,10 +249,23 @@ const recipe: ConfigStep[] = [
   },
 ];
 
-export function resolveUpgradeSurvivorConfigSteps(scenario = "base"): ConfigStep[] {
-  const validateStep = recipe.at(-1);
+export function resolveUpgradeSurvivorConfigSteps(
+  scenario = "base",
+  configuredUpdateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL,
+): ConfigStep[] {
+  const validateStep = sharedRecipe.at(-1);
+  const updateChannel =
+    configuredUpdateChannel || (scenario === "prerelease-plugin-registry" ? "beta" : "stable");
+  if (updateChannel !== "stable" && updateChannel !== "beta") {
+    throw new Error(`invalid upgrade survivor update channel: ${updateChannel}`);
+  }
   return [
-    ...recipe.slice(0, -1),
+    {
+      id: "update-channel",
+      intent: "update",
+      argv: ["config", "set", "update.channel", updateChannel],
+    },
+    ...sharedRecipe.slice(0, -1),
     ...resolveScenarioConfigSteps(scenario),
     ...(validateStep ? [validateStep] : []),
   ];

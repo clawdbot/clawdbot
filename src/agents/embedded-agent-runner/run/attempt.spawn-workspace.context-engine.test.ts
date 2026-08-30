@@ -2234,10 +2234,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(sawPrompt).toBe(true);
     expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
-    expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
+    expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toBeUndefined();
   });
 
-  it("skips the generic precheck when the context engine owns compaction", async () => {
+  it("defers ordinary admission when the context engine owns compaction", async () => {
     let sawPrompt = false;
     const hugeHistory = "large raw history ".repeat(2_000);
 
@@ -2274,7 +2275,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(sawPrompt).toBe(true);
     expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
-    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
+    expect(result.contextBudgetStatus).toBeUndefined();
+    expect(result.preflightRecovery).toBeUndefined();
   });
 
   it("preserves pipeline history when owning context engine assembly mutates then fails", async () => {
@@ -2323,7 +2325,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
-    expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
+    expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toBeUndefined();
   });
 
   it("repairs tool-result pairing after context engine assembly", async () => {
@@ -2398,7 +2400,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
-    expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
+    expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toEqual([
+      expect.objectContaining({ role: "user", content: expect.stringContaining(hugeHistory) }),
+    ]);
+    expect(result.contextBudgetStatus?.overflowTokens).toBeGreaterThan(0);
   });
 
   it("submits owning context-engine preassembly pressure to the provider once", async () => {
@@ -2441,7 +2446,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
-    expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
+    expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toEqual([
+      expect.objectContaining({ role: "user", content: expect.stringContaining(hugeHistory) }),
+    ]);
+    expect(result.contextBudgetStatus?.overflowTokens).toBeGreaterThan(0);
   });
 
   it("snapshots pre-assembly messages before assemble even when the engine windows in place", async () => {

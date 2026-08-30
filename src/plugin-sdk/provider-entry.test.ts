@@ -137,6 +137,65 @@ describe("defineSingleProviderPluginEntry", () => {
     ]);
   });
 
+  it("gates generated catalogs by canonical and alias provider identities before auth", async () => {
+    const entry = defineSingleProviderPluginEntry({
+      id: "demo",
+      name: "Demo Provider",
+      description: "Demo provider plugin",
+      manifest: createProviderManifest(),
+      provider: {
+        label: "Demo",
+        docsPath: "/providers/demo",
+        aliases: ["demo-alias"],
+        catalog: {},
+      },
+    });
+    const provider = capturePluginRegistration(entry).providers[0];
+    let resolveProviderApiKeyCalls = 0;
+    const resolveProviderApiKey = () => {
+      resolveProviderApiKeyCalls += 1;
+      return { apiKey: "test-key" };
+    };
+    const context = { ...createCatalogContext(), resolveProviderApiKey };
+
+    await expect(
+      provider?.catalog?.run({ ...context, providerIds: ["demo-alias"] }),
+    ).resolves.toMatchObject({ provider: { apiKey: "test-key" } });
+
+    resolveProviderApiKeyCalls = 0;
+    await expect(
+      provider?.catalog?.run({ ...context, providerIds: ["other"] }),
+    ).resolves.toBeNull();
+    await expect(provider?.catalog?.run({ ...context, providerIds: [] })).resolves.toBeNull();
+    expect(resolveProviderApiKeyCalls).toBe(0);
+  });
+
+  it("accepts an alias scope for generated live model discovery", async () => {
+    const entry = defineSingleProviderPluginEntry({
+      id: "demo",
+      name: "Demo Provider",
+      description: "Demo provider plugin",
+      provider: {
+        label: "Demo",
+        docsPath: "/providers/demo",
+        aliases: ["demo-alias"],
+        catalog: {
+          liveModelDiscovery: true,
+          buildProvider: () => ({
+            baseUrl: "not-a-url",
+            api: "openai-completions",
+            models: [],
+          }),
+        },
+      },
+    });
+    const provider = capturePluginRegistration(entry).providers[0];
+
+    await expect(
+      provider?.catalog?.run({ ...createCatalogContext(), providerIds: ["demo-alias"] }),
+    ).resolves.toMatchObject({ provider: { apiKey: "test-key" } });
+  });
+
   it("preserves manifest-owned onboarding scope and assistant metadata", () => {
     const manifest = createProviderManifest();
     const entry = defineSingleProviderPluginEntry({

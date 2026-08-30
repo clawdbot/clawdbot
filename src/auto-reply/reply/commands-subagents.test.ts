@@ -1,6 +1,6 @@
 /**
  * Tests subagent command output: status lines, info, log routing, shared text
- * extraction, and focus resolution. Grouped in one file because each command
+ * extraction. Grouped in one file because each command
  * test file pays the full auto-reply module graph on import; keep sibling
  * subagent command assertions here instead of new per-action files.
  */
@@ -27,7 +27,6 @@ import { extractSubagentMessageText } from "./commands-subagents-text.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
 import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
 import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
-import { resolveFocusTargetSession } from "./commands-subagents/shared.js";
 import {
   baseCommandTestConfig,
   configureInMemoryTaskRegistryStoreForTests,
@@ -168,7 +167,6 @@ describe("subagents info", () => {
         cfg: params.cfg,
         sessionKey: "agent:main:main",
       },
-      handledPrefix: "/subagents",
       requesterKey: "agent:main:main",
       runs: params.runs,
       restTokens: params.restTokens,
@@ -433,7 +431,6 @@ describe("subagents info", () => {
         cfg,
         sessionKey: "agent:main:slash-session",
       },
-      handledPrefix: "/subagents",
       requesterKey: "agent:main:target",
       runs: [run],
       restTokens: ["1"],
@@ -469,7 +466,6 @@ describe("subagents log", () => {
         cfg: {} as OpenClawConfig,
         sessionKey: "agent:main:main",
       },
-      handledPrefix: "/subagents",
       requesterKey: "agent:main:main",
       runs,
       restTokens,
@@ -492,6 +488,79 @@ describe("subagents log", () => {
       method: "chat.history",
       params: { sessionKey: "agent:main:subagent:log", limit: 20 },
     });
+  });
+
+  it.each([
+    {
+      name: "hides signed commentary while retaining the final answer",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "PRIVATE_COMMENTARY",
+              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+            },
+            {
+              type: "output_text",
+              text: "Visible final answer",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+      expectedText: "Assistant: Visible final answer",
+      unexpectedText: "PRIVATE_COMMENTARY",
+    },
+    {
+      name: "omits commentary-only history messages",
+      messages: [{ role: "assistant", phase: "commentary", content: "PRIVATE_COMMENTARY" }],
+      expectedText: "(no messages)",
+      unexpectedText: "PRIVATE_COMMENTARY",
+    },
+    {
+      name: "does not revive legacy text when the signed final answer is empty",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "PRIVATE_LEGACY" },
+            {
+              type: "text",
+              text: "   ",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+      expectedText: "(no messages)",
+      unexpectedText: "PRIVATE_LEGACY",
+    },
+    {
+      name: "renders persisted Responses output text",
+      messages: [
+        { role: "assistant", content: [{ type: "output_text", text: "Persisted output" }] },
+      ],
+      expectedText: "Assistant: Persisted output",
+      unexpectedText: "(no messages)",
+    },
+    {
+      name: "renders persisted assistant input text",
+      messages: [
+        { role: "assistant", content: [{ type: "input_text", text: "Persisted assistant input" }] },
+      ],
+      expectedText: "Assistant: Persisted assistant input",
+      unexpectedText: "(no messages)",
+    },
+  ])("$name", async ({ messages, expectedText, unexpectedText }) => {
+    callGatewayMock.mockResolvedValue({ messages });
+
+    const result = await handleSubagentsLogAction(buildLogContext(["1"], [makeRun()]));
+    const text = requireReplyText(result.reply);
+
+    expect(text).toContain(expectedText);
+    expect(text).not.toContain(unexpectedText);
   });
 
   it("uses the numeric token after the target as the history limit", async () => {
@@ -539,32 +608,5 @@ describe("extractSubagentMessageText", () => {
       const result = extractSubagentMessageText(testCase.message);
       expect(result?.text).toBe(testCase.expectedText);
     }
-  });
-});
-
-describe("resolveFocusTargetSession", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-  });
-
-  it("restricts gateway fallback resolution to a subagent requester's children", async () => {
-    callGatewayMock.mockResolvedValue({
-      key: "agent:main:subagent:child",
-    });
-
-    const result = await resolveFocusTargetSession({
-      runs: [],
-      token: "child",
-      requesterKey: "agent:main:subagent:parent",
-    });
-
-    expect(result?.targetSessionKey).toBe("agent:main:subagent:child");
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "sessions.resolve",
-      params: {
-        key: "child",
-        spawnedBy: "agent:main:subagent:parent",
-      },
-    });
   });
 });

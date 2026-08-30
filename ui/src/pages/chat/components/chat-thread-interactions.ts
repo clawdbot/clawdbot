@@ -2,12 +2,14 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import type { SessionsListResult } from "../../../api/types.ts";
+import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import { copyMarkdownLabel } from "../../../components/copy-button.ts";
+import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
+import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -21,15 +23,16 @@ import {
   buildMoreDetailsCompanionQuestion,
 } from "../../../lib/chat/companion-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
-import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
@@ -59,28 +62,35 @@ export type ReplyMessageAccess = {
   open: (messageId: string) => void;
 };
 
-export type ChatThreadProps = {
+export type ChatThreadProps = ChatSendStatusActions & {
   paneId: string;
+  /** Routing for peer sender names in a shared session. */
+  personActivity?: PersonActivityRouting;
   sessionKey: string;
+  selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
-  historyLoading?: boolean;
+  /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
+  historyPagination?: ChatHistoryBoundaryProps;
   messages: unknown[];
   toolMessages: unknown[];
+  browserTabPreviewsActive?: boolean;
   guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
   runId?: string | null;
   runOutputTokens?: number | null;
+  runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
+  pendingInputs?: ChatPendingInputsPage["items"];
   showThinking: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
   runActive?: boolean;
   runWorking?: boolean;
-  startupStatus?: ChatRunStartupStatus | null;
+  startupLabel?: string;
   waitingApproval?: boolean;
   questionPrompts?: readonly QuestionPrompt[];
   sessions: SessionsListResult | null;
@@ -96,6 +106,7 @@ export type ChatThreadProps = {
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
   localMediaPreviewRoots?: string[];
+  connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
@@ -109,9 +120,9 @@ export type ChatThreadProps = {
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
-  onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
@@ -167,7 +178,7 @@ export function getTranscriptState(paneId: string): ChatThreadState {
   return state;
 }
 
-function dismissThreadPortals(paneId?: string, owner?: ParentNode): void {
+export function dismissThreadPortals(paneId?: string, owner?: ParentNode): void {
   removeReplyContextMenu(paneId);
   if (owner) {
     dismissConfirmedActionPopovers(owner);
@@ -348,14 +359,16 @@ function createMessageActionContextButton(params: {
   label: string;
   disabled: boolean;
   tooltip: string;
-  onClick: () => void;
+  onClick: (event: Event) => void;
 }): { element: HTMLElement; button: HTMLButtonElement } {
   const button = document.createElement("button");
   button.type = "button";
   button.disabled = params.disabled;
   button.setAttribute("role", "menuitem");
-  button.setAttribute("aria-label", params.label);
-  button.textContent = params.label;
+  const label = document.createElement("span");
+  label.dataset.copyLabel = "";
+  label.textContent = params.label;
+  button.append(label);
   button.addEventListener("click", params.onClick);
   const tooltip = document.createElement("openclaw-tooltip");
   tooltip.content = params.tooltip;
@@ -487,9 +500,14 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
       label: t("chat.messages.copySelection"),
       disabled: false,
       tooltip: t("chat.messages.copySelection"),
-      onClick: () => {
-        void copyToClipboard(selectedText);
-        removeReplyContextMenu();
+      onClick: (copyEvent) => {
+        void handleCopyButton(copyEvent, selectedText, t("chat.messages.copySelection")).then(
+          (copied) => {
+            if (copied) {
+              removeReplyContextMenu(props.paneId);
+            }
+          },
+        );
       },
     });
     menu.append(action.element);

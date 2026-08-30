@@ -3,6 +3,7 @@ import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
   IMAGE_ONLY_USER_MESSAGE,
+  renderConversationToolCall,
 } from "./agent-prompt.js";
 import type { ContentPart, ItemParam } from "./open-responses.schema.js";
 
@@ -98,6 +99,14 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
       conversationEntries.push({
         role: normalizedRole,
         entry: { sender, body },
+      });
+    } else if (item.type === "function_call") {
+      conversationEntries.push({
+        role: "assistant",
+        entry: {
+          sender: "Assistant",
+          body: renderConversationToolCall({ ...item, id: item.call_id ?? item.id }),
+        },
       });
     } else if (item.type === "function_call_output") {
       conversationEntries.push({

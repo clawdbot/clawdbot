@@ -14,7 +14,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   protected replyMessageRevision = 0;
   private readonly replyMessages = new Map<
     string,
-    { client: object; settled?: boolean; message?: unknown }
+    { client: object; generation: number; message?: unknown }
   >();
 
   protected abstract loadOlderMessages(): Promise<boolean>;
@@ -24,7 +24,10 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     if (!state) {
       return undefined;
     }
-    return this.replyMessages.get(this.replyMessageCacheKey(state.sessionKey, messageId))?.message;
+    const cached = this.replyMessages.get(this.replyMessageCacheKey(state.sessionKey, messageId));
+    return cached?.client === state.client && cached.generation === this.connectionGeneration
+      ? cached.message
+      : undefined;
   };
 
   protected readonly requestReplyMessage = (messageId: string): void => {
@@ -50,42 +53,36 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     const agentId = scopedAgentParamsForSession(scope.state, sessionKey).agentId;
     const cacheKey = this.replyMessageCacheKey(sessionKey, messageId);
     const cached = this.replyMessages.get(cacheKey);
-    if (cached && (cached.client === scope.client || cached.settled)) {
+    if (cached?.client === scope.client && cached.generation === scope.generation) {
       return;
     }
     while (this.replyMessages.size >= 256) {
       this.replyMessages.delete(this.replyMessages.keys().next().value!);
     }
-    this.replyMessages.set(cacheKey, { client: scope.client });
+    const attempt = { client: scope.client, generation: scope.generation };
+    this.replyMessages.set(cacheKey, attempt);
+    let result: ChatMessageGetResult;
     try {
-      const result = await scope.client.request<ChatMessageGetResult>("chat.message.get", {
+      result = await scope.client.request<ChatMessageGetResult>("chat.message.get", {
         sessionKey,
         ...(agentId ? { agentId } : {}),
         messageId,
         maxChars: 500,
       });
-      const pending = this.replyMessages.get(cacheKey);
-      if (pending?.client !== scope.client || pending.settled) {
-        return;
-      }
-      this.replyMessages.set(
-        cacheKey,
-        result.ok && result.message
-          ? { client: scope.client, settled: true, message: result.message }
-          : { client: scope.client, settled: true },
-      );
     } catch {
-      const pending = this.replyMessages.get(cacheKey);
-      if (pending?.client !== scope.client || pending.settled) {
-        return;
-      }
-      this.replyMessages.delete(cacheKey);
+      // Retain the failed attempt so rendering cannot retry it in a loop.
+      // A new logical connection owns a fresh attempt, even with the same client.
+      return;
     }
+    if (!this.isConnectionScopeCurrent(scope) || this.replyMessages.get(cacheKey) !== attempt) {
+      return;
+    }
+    if (!result.ok || !result.message) {
+      return;
+    }
+    this.replyMessages.set(cacheKey, { ...attempt, message: result.message });
     this.replyMessageRevision += 1;
-    if (
-      this.isConnectionScopeCurrent(scope) &&
-      areUiSessionKeysEquivalent(scope.state.sessionKey, sessionKey)
-    ) {
+    if (areUiSessionKeysEquivalent(scope.state.sessionKey, sessionKey)) {
       this.requestUpdate();
     }
   }

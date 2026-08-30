@@ -9,6 +9,7 @@ import type {
   CommandInteraction,
   StringSelectMenuInteraction,
 } from "../internal/discord.js";
+import type { DiscordDispatchReplyFromConfig } from "./native-command.types.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
@@ -26,6 +27,7 @@ type DispatchDiscordCommandInteractionParams = {
   threadBindings: ThreadBindingManager;
   responseEphemeral?: boolean;
   suppressReplies?: boolean;
+  dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   pluginCommandDispatch: PluginCommandCatalogDecision;
 };
 

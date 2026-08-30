@@ -8,7 +8,7 @@ import type {
   SessionDiffFile,
   SessionsDiffResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { runGit } from "../agents/worktrees/git.js";
+import { gitEnvironment, runGit } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { runCommandBuffered } from "../process/exec.js";
 import {
@@ -587,6 +587,7 @@ async function gitOutForBaseline(cwd: string, args: string[]): Promise<string | 
     ["git", "-C", cwd, "-c", "core.quotePath=false", ...args],
     {
       timeoutMs: 30_000,
+      env: gitEnvironment(),
       maxOutputBytes: {
         stdout: MAX_BASELINE_GIT_OUTPUT_BYTES,
         stderr: 32 * 1024,

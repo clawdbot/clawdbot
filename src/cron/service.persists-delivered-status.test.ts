@@ -24,6 +24,7 @@ import {
 } from "./service.test-harness.js";
 import { abortActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import type { CronServiceDeps } from "./service/state.js";
+import type { CronDeliveryTrace } from "./types.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
@@ -136,22 +137,11 @@ function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   status?: "ok" | "error";
   delivered?: boolean;
+  delivery?: CronDeliveryTrace;
   error?: string;
   deliveryError?: string;
   sendCronWebhook?: CronServiceDeps["sendCronWebhook"];
-  onFinished?: (evt: {
-    jobId: string;
-    error?: string;
-    delivered?: boolean;
-    deliveryStatus?: string;
-    deliveryError?: string;
-    completionStatus?: string;
-    failureNotificationDelivery?: {
-      delivered?: boolean;
-      status: string;
-      error?: string;
-    };
-  }) => void;
+  onFinished?: (evt: CronEvent) => void;
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
@@ -166,19 +156,12 @@ function createIsolatedCronWithFinishedBarrier(params: {
       ...(params.error === undefined ? {} : { error: params.error }),
       ...(params.deliveryError === undefined ? {} : { deliveryError: params.deliveryError }),
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
+      ...(params.delivery === undefined ? {} : { delivery: params.delivery }),
     })),
     sendCronWebhook: params.sendCronWebhook,
     onEvent: (evt) => {
       if (evt.action === "finished") {
-        params.onFinished?.({
-          jobId: evt.jobId,
-          error: evt.error,
-          delivered: evt.delivered,
-          deliveryStatus: evt.deliveryStatus,
-          deliveryError: evt.deliveryError,
-          completionStatus: evt.completionStatus,
-          failureNotificationDelivery: evt.failureNotificationDelivery,
-        });
+        params.onFinished?.(evt);
       }
       finished.onEvent(evt);
     },
@@ -244,21 +227,11 @@ async function runIsolatedJobAndReadState(params: {
   job: CronAddInput;
   status?: "ok" | "error";
   delivered?: boolean;
+  delivery?: CronDeliveryTrace;
   error?: string;
   deliveryError?: string;
   sendCronWebhook?: CronServiceDeps["sendCronWebhook"];
-  onFinished?: (evt: {
-    jobId: string;
-    error?: string;
-    delivered?: boolean;
-    deliveryStatus?: string;
-    deliveryError?: string;
-    failureNotificationDelivery?: {
-      delivered?: boolean;
-      status: string;
-      error?: string;
-    };
-  }) => void;
+  onFinished?: (evt: CronEvent) => void;
 }) {
   const store = await makeStorePath();
   const finishedEvents = new Map<string, (evt: unknown) => void>();
@@ -266,6 +239,7 @@ async function runIsolatedJobAndReadState(params: {
     storePath: store.storePath,
     ...(params.status !== undefined ? { status: params.status } : {}),
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
+    ...(params.delivery !== undefined ? { delivery: params.delivery } : {}),
     ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.deliveryError !== undefined ? { deliveryError: params.deliveryError } : {}),
     ...(params.sendCronWebhook !== undefined ? { sendCronWebhook: params.sendCronWebhook } : {}),
@@ -313,11 +287,27 @@ describe("CronService persists delivered status", () => {
   });
 
   it.each([
-    { name: "successful endpoint", responseStatus: 204, expectedStatus: "delivered" },
-    { name: "failing endpoint", responseStatus: 503, expectedStatus: "not-delivered" },
+    {
+      name: "successful endpoint",
+      responseStatus: 204,
+      expectedStatus: "delivered",
+      clockJumpMs: 0,
+    },
+    {
+      name: "failing endpoint",
+      responseStatus: 503,
+      expectedStatus: "not-delivered",
+      clockJumpMs: 0,
+    },
+    {
+      name: "forward wall-clock jump",
+      responseStatus: 204,
+      expectedStatus: "delivered",
+      clockJumpMs: 86_400_000,
+    },
   ])(
     "records command webhook delivery through a real HTTP server: $name",
-    async ({ responseStatus, expectedStatus }) => {
+    async ({ responseStatus, expectedStatus, clockJumpMs }) => {
       const requests: string[] = [];
       const server = createServer((request, response) => {
         let body = "";
@@ -338,6 +328,8 @@ describe("CronService persists delivered status", () => {
       const webhookUrl = `http://127.0.0.1:${address.port}/hook`;
       const store = await makeStorePath();
       const finished = createFinishedBarrier();
+      const started = createDeferred();
+      const finish = createDeferred();
       let finishedEvent: CronEvent | undefined;
       const cron = new CronService({
         storePath: store.storePath,
@@ -346,9 +338,16 @@ describe("CronService persists delivered status", () => {
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        runCommandJob: async ({ job, abortSignal }) =>
-          await runCronCommandJob({ job, abortSignal, nowMs: Date.now }),
+        runCommandJob: async ({ job, abortSignal }) => {
+          if (clockJumpMs > 0) {
+            started.resolve();
+            await finish.promise;
+            return { status: "ok", summary: "HOOKSCHED_PAYLOAD" };
+          }
+          return await runCronCommandJob({ job, abortSignal, nowMs: Date.now });
+        },
         sendCronWebhook: async ({ event, abortSignal }) => {
+          expect(abortSignal.aborted).toBe(false);
           const response = await fetch(webhookUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -378,11 +377,18 @@ describe("CronService persists delivered status", () => {
           payload: {
             kind: "command",
             argv: [process.execPath, "-e", "process.stdout.write('HOOKSCHED_PAYLOAD')"],
+            ...(clockJumpMs > 0 ? { timeoutSeconds: 1 } : {}),
           },
           delivery: { mode: "webhook", to: webhookUrl },
         });
         const finishedPromise = finished.waitForOk(job.id);
-        await cron.run(job.id, "force");
+        const run = cron.run(job.id, "force");
+        if (clockJumpMs > 0) {
+          await started.promise;
+          vi.setSystemTime(Date.now() + clockJumpMs);
+          finish.resolve();
+        }
+        await run;
         await finishedPromise;
 
         expect(requests).toHaveLength(1);
@@ -694,17 +700,29 @@ describe("CronService persists delivered status", () => {
     }
   });
 
-  it("persists lastDelivered=true when isolated job reports delivered", async () => {
+  it("persists and emits verified mode-none message-tool delivery", async () => {
+    let finishedEvent: { delivered?: boolean; deliveryStatus?: string } | undefined;
     const updated = await runIsolatedJobAndReadState({
-      job: buildAnnounceIsolatedAgentTurnJob("delivered-true"),
+      job: {
+        ...buildIsolatedAgentTurnJob("mode-none-verified-delivery"),
+        delivery: { mode: "none", channel: "forum", to: "123" },
+      },
       delivered: true,
+      delivery: {
+        delivered: true,
+        resolved: { ok: true, channel: "forum", to: "123" },
+        messageToolSentTo: [{ channel: "forum", to: "123" }],
+      },
+      onFinished: (event) => (finishedEvent = event),
     });
+
     expectSuccessfulCronRun(updated);
-    expect(updated?.state.lastDelivered).toBe(true);
-    expect(updated?.state.lastDeliveryStatus).toBe("delivered");
-    expect(updated?.state.lastDeliveryError).toBeUndefined();
-    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
-    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+    expect(updated?.state).toMatchObject({
+      lastDelivered: true,
+      lastDeliveryStatus: "delivered",
+      lastFailureNotificationDeliveryStatus: "not-requested",
+    });
+    expect(finishedEvent).toMatchObject({ delivered: true, deliveryStatus: "delivered" });
   });
 
   it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
@@ -718,6 +736,33 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDeliveryError).toBeUndefined();
     expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
     expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+  });
+
+  it("preserves verified primary delivery when the isolated run later fails", async () => {
+    let capturedEvent: { completionStatus?: string; deliveryError?: string } | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceIsolatedAgentTurnJob("verified-primary-before-error"),
+      status: "error",
+      delivered: true,
+      delivery: {
+        delivered: true,
+        resolved: { ok: true, channel: "forum", to: "123" },
+        messageToolSentTo: [{ channel: "forum", to: "123" }],
+      },
+      error: "provider failed after verified delivery",
+      onFinished: (event) => (capturedEvent = event),
+    });
+
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.consecutiveErrors).toBeGreaterThan(0);
+    expect(updated?.state.lastDelivered).toBe(true);
+    expect(updated?.state.lastDeliveryStatus).toBe("delivered");
+    expect(capturedEvent).toMatchObject({
+      completionStatus: "failed",
+      delivered: true,
+      deliveryStatus: "delivered",
+    });
+    expect(updated?.state.lastDeliveryError ?? capturedEvent?.deliveryError).toBeUndefined();
   });
 
   it("does not infer scheduler alert delivery from a failed run result", async () => {
@@ -861,20 +906,6 @@ describe("CronService persists delivered status", () => {
     cron.stop();
   });
 
-  it("emits delivered in the finished event", async () => {
-    let capturedEvent: { jobId: string; delivered?: boolean; deliveryStatus?: string } | undefined;
-    await runIsolatedJobAndReadState({
-      job: buildAnnounceIsolatedAgentTurnJob("event-test"),
-      delivered: true,
-      onFinished: (evt) => {
-        capturedEvent = evt;
-      },
-    });
-
-    expect(capturedEvent?.delivered).toBe(true);
-    expect(capturedEvent?.deliveryStatus).toBe("delivered");
-  });
-
   it("surfaces a successful run's delivery error on the finished event", async () => {
     // Regression for https://github.com/openclaw/openclaw/issues/95419:
     // when an isolated turn succeeds but post-run delivery fails, the run keeps
@@ -931,7 +962,13 @@ describe("CronService persists delivered status", () => {
       name: "default to required",
       admittedBestEffort: undefined,
       edits: [false],
-      expectedCompletionStatus: "succeeded",
+      expectedCompletionStatus: "failed",
+    },
+    {
+      name: "default to best-effort",
+      admittedBestEffort: undefined,
+      edits: [true],
+      expectedCompletionStatus: "failed",
     },
     {
       name: "best-effort to required",

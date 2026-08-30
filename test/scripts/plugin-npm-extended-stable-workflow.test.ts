@@ -310,6 +310,8 @@ describe("plugin npm extended-stable workflow", () => {
     );
     const readback = step(verify, "Validate npm preflight artifact readback");
     expect(readback.run).toContain('git show "${SOURCE_SHA}:${PACKAGE_DIR}/package.json"');
+    expect(readback.run).toContain("unique_by(.id)");
+    expect(readback.run).not.toContain("unique_by(.name)");
     expect(readback.run).toContain("Expected exactly one live package artifact named");
     expect(readback.run).toContain('crypto.createHash("sha256")');
     expect(readback.run).toContain('crypto.createHash("sha512")');

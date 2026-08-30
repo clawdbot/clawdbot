@@ -27,29 +27,8 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
-import { registerWorkerInferenceSessionDrain } from "./worker-environments/inference-control-internal.js";
+import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
-
-const sessionAuditGate = vi.hoisted(() => ({
-  entered: vi.fn(),
-  wait: undefined as Promise<void> | undefined,
-}));
-
-vi.mock("./server-methods/session-audit.js", async () => {
-  const actual = await vi.importActual<typeof import("./server-methods/session-audit.js")>(
-    "./server-methods/session-audit.js",
-  );
-  return {
-    ...actual,
-    appendSessionAudit: async (...args: Parameters<typeof actual.appendSessionAudit>) => {
-      if (sessionAuditGate.wait) {
-        sessionAuditGate.entered();
-        await sessionAuditGate.wait;
-      }
-      await actual.appendSessionAudit(...args);
-    },
-  };
-});
 
 const {
   createConfiguredGlobalAgentSessionStore,
@@ -227,7 +206,7 @@ async function archiveLifecycleRequestContext(
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     getRuntimeConfig,
     loadGatewayModelCatalog,
-    readPreparedGatewayModelCatalog: loadGatewayModelCatalog,
+    readPreparedGatewayModelCatalog: async () => ({ entries: await loadGatewayModelCatalog() }),
     ...overrides,
   } as unknown as GatewayRequestContext;
 }
@@ -380,7 +359,8 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
   await writeSessionStore({
     entries: {
       [sessionKey]: sessionStoreEntry(sessionId, {
-        createdActor: { type: "human", id: "archive-owner" },
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: "archive-owner" },
         visibility: "shared",
       }),
     },
@@ -419,28 +399,39 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     throw new Error("expected resolved sharing target");
   }
 
-  const releaseAudit = createDeferredCore();
-  sessionAuditGate.entered.mockClear();
-  sessionAuditGate.wait = releaseAudit.promise;
+  const sharingCommitted = createDeferredCore();
+  const releaseSharingMutation = createDeferredCore();
   let sharing: Promise<LifecycleHandlerResponse> | undefined;
   let archive: Promise<LifecycleHandlerResponse> | undefined;
 
   try {
     let sharingSettled = false;
-    sharing = invokeVisibilityHandler({
-      client: owner,
-      context: requestContext,
-      sessionKey,
-      visibility: "draft",
+    sharing = runExclusiveSessionLifecycleMutation({
+      scope: sharingTarget.storePath,
+      identities: [
+        sharingTarget.canonicalKey,
+        sharingTarget.storeKey,
+        ...sharingTarget.storeKeys,
+        sharingTarget.entry.sessionId,
+      ],
+      run: async () => {
+        const response = await invokeVisibilityHandler({
+          client: owner,
+          context: requestContext,
+          sessionKey,
+          visibility: "draft",
+        });
+        sharingCommitted.resolve();
+        await releaseSharingMutation.promise;
+        return response;
+      },
     }).finally(() => {
       sharingSettled = true;
     });
-    await vi.waitFor(() => {
-      expect(sessionAuditGate.entered).toHaveBeenCalledOnce();
-      expect(
-        isSessionLifecycleMutationActive(sharingTarget.storePath, [sessionKey, sessionId]),
-      ).toBe(true);
-    });
+    await sharingCommitted.promise;
+    expect(isSessionLifecycleMutationActive(sharingTarget.storePath, [sessionKey, sessionId])).toBe(
+      true,
+    );
     expect(sharingSettled).toBe(false);
     expect(loadSessionEntry({ storePath, sessionKey })?.visibility).toBe("draft");
 
@@ -462,7 +453,7 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     expect(reclaim).not.toHaveBeenCalled();
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 
-    releaseAudit.resolve();
+    releaseSharingMutation.resolve();
     expect(await sharing).toMatchObject({ ok: true });
     expect(loadSessionEntry({ storePath, sessionKey })?.visibility).toBe("draft");
 
@@ -473,10 +464,10 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
     expect(interrupted).toBe(false);
     expect(active.controller.signal.aborted).toBe(false);
     expectNoSessionQueueCleanup();
+    expect(reclaim).not.toHaveBeenCalled();
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
   } finally {
-    sessionAuditGate.wait = undefined;
-    releaseAudit.resolve();
+    releaseSharingMutation.resolve();
     admission.release();
     await Promise.allSettled([...(sharing ? [sharing] : []), ...(archive ? [archive] : [])]);
     active.unsubscribe();
@@ -492,7 +483,8 @@ test("archive retains the lifecycle fence until drain and commit before sharing 
   await writeSessionStore({
     entries: {
       [sessionKey]: sessionStoreEntry(sessionId, {
-        createdActor: { type: "human", id: "archive-owner" },
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: "archive-owner" },
         visibility: "shared",
       }),
     },
@@ -658,12 +650,7 @@ test("sessions.patch rechecks authoritative worker work before projection and re
   const sessionId = "session-archive-worker-recheck";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   const release = vi.fn();
-  const workerEnvironmentService = {
-    cancelInferenceForSession: vi.fn(() => []),
-    hasInferenceForSession: vi.fn(() => false),
-    resolveInferenceSessionForRunId: vi.fn(),
-  };
-  registerWorkerInferenceSessionDrain(workerEnvironmentService, () => ({
+  const workerEnvironmentService = createWorkerInferenceDrainService(() => ({
     drained: Promise.resolve(),
     hasWork: () => true,
     release,
@@ -724,16 +711,13 @@ test("sessions.patch releases the archive drain without appending a transcript m
       {
         client: identifiedClient("archive-reviewer"),
         context: {
-          workerEnvironmentService: {
-            beginInferenceSessionDrain: vi.fn(() => ({
+          workerEnvironmentService: createWorkerInferenceDrainService(
+            vi.fn(() => ({
               drained: Promise.resolve(),
               hasWork: () => false,
               release,
             })),
-            cancelInferenceForSession: vi.fn(() => []),
-            hasInferenceForSession: vi.fn(() => false),
-            resolveInferenceSessionForRunId: vi.fn(),
-          },
+          ),
         },
       },
     );
@@ -877,12 +861,7 @@ test("sessions.patchMany prepares independent archive drains concurrently and re
     },
     {
       context: {
-        workerEnvironmentService: {
-          beginInferenceSessionDrain,
-          cancelInferenceForSession: vi.fn(() => []),
-          hasInferenceForSession: vi.fn(() => false),
-          resolveInferenceSessionForRunId: vi.fn(),
-        },
+        workerEnvironmentService: createWorkerInferenceDrainService(beginInferenceSessionDrain),
       },
     },
   );
@@ -935,16 +914,13 @@ test("sessions.patchMany attempts every archive drain release without masking su
     },
     {
       context: {
-        workerEnvironmentService: {
-          beginInferenceSessionDrain: vi.fn((sessionId: string) => ({
+        workerEnvironmentService: createWorkerInferenceDrainService(
+          vi.fn((sessionId: string) => ({
             drained: Promise.resolve(),
             hasWork: () => false,
             release: sessionId === firstSessionId ? firstRelease : secondRelease,
           })),
-          cancelInferenceForSession: vi.fn(() => []),
-          hasInferenceForSession: vi.fn(() => false),
-          resolveInferenceSessionForRunId: vi.fn(),
-        },
+        ),
       },
     },
   );

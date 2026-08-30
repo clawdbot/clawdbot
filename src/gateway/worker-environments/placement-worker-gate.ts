@@ -22,6 +22,7 @@ export type WorkerSessionPlacementGate = {
   getExecutionIdentityCapability?(
     claim: WorkerSessionTurnClaim,
   ): WorkerTurnExecutionIdentityCapability | undefined;
+  readWorkerTurnLiveAckCursor(claim: WorkerSessionTurnClaim): number;
   validateWorkerTurn(claim: WorkerSessionTurnClaim): boolean;
   isWorkerTurnToolAuthorized(claim: WorkerSessionTurnClaim, toolName: string): boolean;
   updateAckCursors(input: {
@@ -72,6 +73,17 @@ export function createWorkerSessionPlacementGate(
     getExecutionIdentityCapability: (claim) =>
       getWorkerTurnExecutionIdentityCapability(store, claim),
     validateWorkerTurn,
+
+    readWorkerTurnLiveAckCursor(claim): number {
+      if (!validateWorkerTurn(claim)) {
+        throw new Error(`Cannot read ACK cursor for stale worker turn ${claim.sessionId}`);
+      }
+      const placement = store.get(claim.sessionId);
+      if (!placement) {
+        throw new Error(`Worker placement disappeared for session ${claim.sessionId}`);
+      }
+      return placement.lastLiveEventAckCursor ?? 0;
+    },
 
     isWorkerTurnToolAuthorized(claim, toolName): boolean {
       return validateWorkerTurn(claim) && store.isWorkerTurnToolAuthorized(claim, toolName);

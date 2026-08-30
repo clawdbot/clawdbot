@@ -130,7 +130,7 @@ openclaw-debug-overlay {
 
 .debug-overlay__vitals {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 8px;
 }
 
@@ -151,13 +151,6 @@ openclaw-debug-overlay {
 .debug-overlay__vital[data-degraded] {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
-}
-
-.debug-overlay__head {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  justify-content: space-between;
 }
 
 .debug-vital__label {

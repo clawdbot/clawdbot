@@ -1,4 +1,7 @@
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  ChatSendIntent,
+  QueueMode,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
@@ -19,22 +22,26 @@ export async function requestChatSend(
     sessionKey?: string;
     agentId?: string;
     queueMode?: QueueMode;
+    intent?: ChatSendIntent;
+    sessionId?: string;
     replyToId?: string;
     expectedLeafEntryId?: string | null;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
+  const sessionId = params.intent ? params.sessionId : routing.sessionId;
   const controlUiReconnectResume = Boolean(
-    routing.sessionId && state.reconnectResumeSessionId === routing.sessionId,
+    !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
   const payload = await state.client!.request("chat.send", {
     sessionKey: routing.sessionKey,
     ...(isUiGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
       ? { agentId: routing.selectedAgentId }
       : {}),
-    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+    ...(sessionId ? { sessionId } : {}),
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
+    ...(params.intent ? { intent: params.intent } : {}),
     deliver: false,
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.queueMode ? { queueMode: params.queueMode } : {}),

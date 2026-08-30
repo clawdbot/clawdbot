@@ -20,6 +20,19 @@ export function normalizeSpeechProviderId(
   return normalizeCapabilityProviderId(providerId);
 }
 
+/** Order speech providers by priority and provider ID for deterministic equal-priority fallback. */
+export function compareSpeechProviderOrder(
+  left: SpeechProviderPlugin,
+  right: SpeechProviderPlugin,
+): number {
+  const leftOrder = left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+  return left.id.localeCompare(right.id);
+}
+
 /** Create a registry facade with canonical listing, alias lookup, and ID canonicalization. */
 export function createSpeechProviderRegistry(resolver: SpeechProviderRegistryResolver) {
   const buildResolvedProviderMaps = (cfg?: OpenClawConfig) =>

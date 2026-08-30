@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,39 @@ function collectPages(entry: unknown, pages: string[] = []): string[] {
 }
 
 describe("docs-sync-publish", () => {
+  it("executes the copied MDX checker runtime closure", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-runtime-"));
+    const publishRoot = path.join(tempRoot, "publish");
+    const clawhubRoot = path.join(tempRoot, "clawhub");
+    const minimalMdx = path.join(tempRoot, "valid.mdx");
+
+    fs.mkdirSync(publishRoot, { recursive: true });
+    fs.mkdirSync(path.join(clawhubRoot, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(publishRoot, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(clawhubRoot, "docs", "index.md"), "# ClawHub\n");
+    fs.writeFileSync(minimalMdx, "# Valid MDX\n\nThis file is valid.\n");
+    fs.symlinkSync(
+      path.resolve("node_modules"),
+      path.join(publishRoot, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    try {
+      execFileSync(
+        process.execPath,
+        ["scripts/docs-sync-publish.mjs", "--target", publishRoot, "--clawhub-repo", clawhubRoot],
+        { stdio: "pipe" },
+      );
+      execFileSync(
+        process.execPath,
+        [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
+        { cwd: publishRoot, stdio: "pipe" },
+      );
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("materializes the public docs map only in the publish tree", () => {
     const targetDocsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-map-publish-"));
     try {

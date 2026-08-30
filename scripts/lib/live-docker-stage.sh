@@ -32,6 +32,36 @@ openclaw_live_stage_mounted_auth() {
   fi
 }
 
+openclaw_live_stage_gemini_auth() {
+  local auth_type="gemini-api-key"
+  if [ -z "${GEMINI_API_KEY:-}" ]; then
+    [ -n "${GOOGLE_API_KEY:-}" ] || return 0
+    auth_type="vertex-ai"
+    export GOOGLE_GENAI_USE_VERTEXAI="${GOOGLE_GENAI_USE_VERTEXAI:-true}"
+  fi
+
+  # Staged user settings override Gemini's env-based auth selection. Align only
+  # the disposable container home with the credentials supplied for this run.
+  GEMINI_CLI_AUTH_TYPE="$auth_type" node <<'NODE'
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const settingsPath = path.join(os.homedir(), ".gemini", "settings.json");
+let settings = {};
+try {
+  settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+} catch {}
+settings.security = settings.security && typeof settings.security === "object" ? settings.security : {};
+settings.security.auth =
+  settings.security.auth && typeof settings.security.auth === "object" ? settings.security.auth : {};
+settings.security.auth.selectedType = process.env.GEMINI_CLI_AUTH_TYPE;
+settings.security.auth.enforcedType = process.env.GEMINI_CLI_AUTH_TYPE;
+fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+NODE
+  echo "Using Gemini CLI auth type $auth_type"
+}
+
 openclaw_live_run_setup_command() {
   local timeout_seconds="${1:?setup timeout seconds required}"
   local label="${2:?setup label required}"
@@ -50,6 +80,23 @@ openclaw_live_run_setup_command() {
     "$timeout_bin" --kill-after=30s "${timeout_seconds}s" "$@"
   else
     "$timeout_bin" "${timeout_seconds}s" "$@"
+  fi
+}
+
+openclaw_live_prepare_cli_backend() {
+  local command_path="${1:?CLI command required}"
+  local package="${2:-}"
+  local timeout_seconds="${3:?setup timeout required}"
+  local pinned=0
+  case "$package" in
+    @*/*@* | [!@]*@*) pinned=1 ;;
+  esac
+  if [[ -n "$package" ]] && { [[ ! -x "$(command -v "$command_path" || true)" ]] || ((pinned)); }; then
+    openclaw_live_run_setup_command "$timeout_seconds" "live CLI backend setup" npm install -g "$package" || return $?
+  fi
+  if [[ ! -x "$(command -v "$command_path" || true)" ]]; then
+    echo "ERROR: CLI backend executable was not provisioned: $command_path (package=${package:-none})." >&2
+    return 127
   fi
 }
 
@@ -135,7 +182,7 @@ try {
   db = new DatabaseSync(dbPath);
   try {
     db.exec("PRAGMA secure_delete = ON;");
-    db.prepare("DELETE FROM installed_plugin_index WHERE index_key = ?").run("installed-plugin-index");
+    db.prepare("DELETE FROM config_machine_state WHERE state_key = ?").run("plugins.installedIndex");
     db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
     db.exec("VACUUM;");
   } catch (err) {
@@ -158,7 +205,7 @@ openclaw_live_stage_state_dir() {
     # Sandbox workspaces can accumulate root-owned artifacts from prior Docker
     # runs. Persisted plugin registry state contains host-absolute paths that
     # are not portable into Linux containers. Live-test auth/config staging does
-    # not need the old JSON source or the SQLite installed_plugin_index row.
+    # not need the old JSON source or the SQLite plugins.installedIndex machine-state row.
     set +e
     tar -C "$source_dir" \
       --warning=no-file-changed \

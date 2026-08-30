@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   extractWorkerBundleArchive,
@@ -93,5 +93,56 @@ describe("worker bundle archive", () => {
         limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
       }),
     ).rejects.toThrow("archive manifest does not match");
+  });
+
+  it("preserves the v1 bundle hash when Windows cannot retain Unix artifact modes", async () => {
+    const source = path.join(root, "source");
+    const archive = path.join(root, "unix-mode-bundle.tgz");
+    const destination = path.join(root, "destination");
+    await fs.mkdir(source);
+    for (const artifact of ["worker.mjs", "workspace-rsync-receiver.mjs"]) {
+      await fs.writeFile(
+        path.join(source, artifact),
+        `export const name = ${JSON.stringify(artifact)};\n`,
+      );
+      await fs.chmod(path.join(source, artifact), 0o700);
+    }
+    await tar.create({ cwd: source, file: archive, gzip: true, noDirRecurse: true }, [
+      "worker.mjs",
+      "workspace-rsync-receiver.mjs",
+    ]);
+    const bundleHash = hashWorkerBundleManifest(
+      await readWorkerBundleArchiveManifest(archive, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS),
+    );
+    const readStats = fs.lstat.bind(fs);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stats = await readStats(...args);
+      if (stats.isFile()) {
+        stats.mode = (Number(stats.mode) & ~0o777) | 0o666;
+      }
+      return stats;
+    });
+
+    try {
+      await expect(
+        extractWorkerBundleArchive({
+          tarballPath: archive,
+          destination,
+          expectedBundleHash: bundleHash,
+          limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+        }),
+      ).resolves.toBeUndefined();
+      expect(
+        hashWorkerBundleManifest(
+          await readWorkerBundleDirectoryManifest({
+            root: destination,
+            limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+          }),
+        ),
+      ).toBe(bundleHash);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

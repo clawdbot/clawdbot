@@ -59,7 +59,9 @@ describe("optional custom element requests", () => {
   function createRequestHarness() {
     const requestUpdate = vi.fn();
     const host = { requestUpdate, updateComplete: Promise.resolve(true) };
-    const retryStale = vi.fn(async () => false);
+    const retryStale = vi
+      .fn<(canReload: () => boolean) => Promise<boolean>>()
+      .mockResolvedValue(false);
     const requests = new LazyCustomElementRequestController(host, undefined, retryStale);
     return { requests, retryStale };
   }
@@ -98,6 +100,38 @@ describe("optional custom element requests", () => {
     expect(requests.visibleState).toMatchObject({ status: "loading", element });
     await waitForFast(() => expect(continuation).toHaveBeenCalledOnce());
     expect(element.loadModule).toHaveBeenCalledTimes(2);
+    expect(requests.visibleState).toBeUndefined();
+  });
+
+  it("skips the action replay while the host has not rendered the element", async () => {
+    // Regression: replaying while the shell is still splash-gated re-dispatches
+    // an event nothing handles, which re-enters the controller in a microtask
+    // cycle that starves the boot (Gateway socket included).
+    const requestUpdate = vi.fn();
+    const rendered = new Map<string, Element>();
+    const host = {
+      requestUpdate,
+      updateComplete: Promise.resolve(true),
+      queryRenderedElement: (tagName: string) => rendered.get(tagName) ?? null,
+    };
+    const requests = new LazyCustomElementRequestController(host, undefined, async () => false);
+    const action = vi.fn();
+    const tagName = uniqueTag();
+    const element = {
+      tagName,
+      label: "test panel",
+      loadModule: async () => {
+        customElements.define(tagName, class extends HTMLElement {});
+      },
+    };
+
+    requests.request(element, action);
+    await waitForFast(() => expect(requests.visibleState).toBeUndefined());
+    expect(action).not.toHaveBeenCalled();
+
+    rendered.set(tagName, document.createElement(tagName));
+    requests.request(element, action);
+    await waitForFast(() => expect(action).toHaveBeenCalledOnce());
     expect(requests.visibleState).toBeUndefined();
   });
 
@@ -196,9 +230,11 @@ describe("optional custom element requests", () => {
     expect(requests.visibleState).toMatchObject({ stale: true });
 
     requests.retry();
+    expect(retryStale.mock.calls[0]?.[0]?.()).toBe(true);
 
     await waitForFast(() => expect(continuation).toHaveBeenCalledOnce());
     expect(retryStale).toHaveBeenCalledOnce();
+    expect(retryStale.mock.calls[0]?.[0]?.()).toBe(false);
     expect(element.loadModule).toHaveBeenCalledTimes(2);
   });
 

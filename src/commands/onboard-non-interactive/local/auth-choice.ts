@@ -104,6 +104,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       agentDir: params.target.agentDir,
       workspaceDir: params.target.workspaceDir,
       secretInputMode: requestedSecretInputMode,
+      json: opts.json,
     });
   const toApiKeyCredential = (paramsLocal: {
     provider: string;

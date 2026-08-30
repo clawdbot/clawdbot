@@ -18,6 +18,18 @@ describe("PluginLoaderCacheState", () => {
     expect(cache.get("c")).toBe("charlie");
   });
 
+  it("bounds open-allowlist warning suppression by loader cache capacity", () => {
+    const cache = new PluginLoaderCacheState<string>(2);
+
+    cache.recordOpenAllowlistWarning("first");
+    cache.recordOpenAllowlistWarning("second");
+    cache.recordOpenAllowlistWarning("third");
+
+    expect(cache.hasOpenAllowlistWarning("first")).toBe(false);
+    expect(cache.hasOpenAllowlistWarning("second")).toBe(true);
+    expect(cache.hasOpenAllowlistWarning("third")).toBe(true);
+  });
+
   it("clears registry, in-flight, and warning state together", () => {
     const cache = new PluginLoaderCacheState<string>(2);
 

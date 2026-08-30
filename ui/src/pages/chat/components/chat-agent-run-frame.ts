@@ -16,6 +16,7 @@ import {
   renderWorkGroupSummary,
   type StreamGroupOptions,
 } from "./chat-message.ts";
+import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 
 type MessageGroupRenderOptions = Parameters<typeof renderMessageGroup>[1];
 
@@ -69,6 +70,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
           expanded,
           onToggle: () => opts.onToggleWork(part.key, expanded),
           presentation: "continuation",
+          browserTabPreviews: renderBrowserTabPreviews(part.groups, opts.renderGroupOptions(shell)),
         })}
         ${expanded ? part.groups.map(renderFrameGroup) : nothing}
       `;

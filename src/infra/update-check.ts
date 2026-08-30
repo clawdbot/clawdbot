@@ -485,6 +485,7 @@ async function fetchNpmRegistryVersionForChannel(params: {
   return {
     latestVersion: res.version,
     tag: res.tag,
+    error: res.error,
     ...(res.reason ? { error: res.reason, reason: res.reason } : {}),
   };
 }
@@ -521,11 +522,7 @@ export async function resolveNpmChannelTag(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   runCommand?: NpmMetadataCommandRunner;
-}): Promise<{
-  tag: string;
-  version: string | null;
-  reason?: ExtendedStableFailureReason;
-}> {
+}): Promise<NpmTagStatus & { reason?: ExtendedStableFailureReason }> {
   const channelTag = channelToNpmTag(params.channel);
   if (params.channel === "extended-stable") {
     const resolved = await resolveExtendedStablePackage({
@@ -545,7 +542,7 @@ export async function resolveNpmChannelTag(params: {
     runCommand: params.runCommand,
   });
   if (params.channel !== "beta") {
-    return { tag: channelTag, version: channelStatus.version };
+    return channelStatus;
   }
 
   const latestStatus = await fetchNpmTagVersion({
@@ -557,16 +554,16 @@ export async function resolveNpmChannelTag(params: {
     runCommand: params.runCommand,
   });
   if (!latestStatus.version) {
-    return { tag: channelTag, version: channelStatus.version };
+    return channelStatus;
   }
   if (!channelStatus.version) {
-    return { tag: "latest", version: latestStatus.version };
+    return latestStatus;
   }
   const cmp = compareSemverStrings(channelStatus.version, latestStatus.version);
   if (cmp != null && cmp < 0) {
-    return { tag: "latest", version: latestStatus.version };
+    return latestStatus;
   }
-  return { tag: channelTag, version: channelStatus.version };
+  return channelStatus;
 }
 
 export function compareSemverStrings(a: string | null, b: string | null): number | null {
