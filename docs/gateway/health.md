@@ -26,6 +26,12 @@ read stored conversation state. A provider can reconnect and show healthy channe
 status before any new session row is materialized. Use the channel status and
 health commands above for live connectivity checks.
 
+Per-agent session counts and recent activity include only that agent's sessions,
+even when agents share a SQLite session store. Status counts each physical store
+once in its aggregate. The top-level health session summary represents the
+default agent, or the first configured agent when there is no default; it is not
+a fleet total.
+
 ## Deep diagnostics
 
 - Creds on disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).

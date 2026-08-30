@@ -11,12 +11,10 @@ import {
   hasSessionActiveAutoModelFallback,
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
+  type SessionEntrySummary,
 } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
@@ -45,6 +43,7 @@ import {
 } from "../tasks/task-registry.audit.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { readStatusSessionStores } from "./session-stores.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./types.js";
 
 const RECENT_SESSION_LIMIT = 10;
@@ -128,21 +127,18 @@ function discountRetainedLostTaskFailures(
   };
 }
 
-type SessionCandidate = {
-  key: string;
-  entry: SessionEntry;
-  updatedAt: number | null;
-};
-
-function compareSessionCandidatesByUpdatedAt(left: SessionCandidate, right: SessionCandidate) {
-  return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+function compareSessionCandidatesByUpdatedAt(
+  left: SessionEntrySummary,
+  right: SessionEntrySummary,
+) {
+  return (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0);
 }
 
 function selectRecentSessionCandidates(
-  candidates: SessionCandidate[],
+  candidates: SessionEntrySummary[],
   limit: number,
-): SessionCandidate[] {
-  const selected: SessionCandidate[] = [];
+): SessionEntrySummary[] {
+  const selected: SessionEntrySummary[] = [];
   for (const candidate of candidates) {
     const insertAt = selected.findIndex(
       (selectedCandidate) => compareSessionCandidatesByUpdatedAt(candidate, selectedCandidate) < 0,
@@ -157,22 +153,6 @@ function selectRecentSessionCandidates(
     }
   }
   return selected;
-}
-
-function listSessionCandidates(storePath: string, agentId?: string) {
-  return (
-    listSessionEntriesReadOnly({
-      ...(agentId ? { agentId } : {}),
-      storePath,
-    })
-      // Compatibility aggregate buckets are not real user sessions.
-      .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
-      .map(({ sessionKey, entry }) => ({
-        key: sessionKey,
-        entry,
-        updatedAt: entry?.updatedAt ?? null,
-      }))
-  );
 }
 
 async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
@@ -246,15 +226,12 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
-  const buildSessionRows = async (
-    candidates: SessionCandidate[],
-    opts: { agentIdOverride?: string } = {},
-  ) =>
+  const buildSessionRows = async (candidates: SessionEntrySummary[]) =>
     Promise.all(
-      candidates.map(async ({ key, entry, updatedAt }) => {
+      candidates.map(async ({ sessionKey: key, entry }) => {
+        const agentId = parseAgentSessionKey(key)?.agentId;
+        const updatedAt = entry.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
-        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
-        const agentId = opts.agentIdOverride ?? parsedAgentId;
         const configuredForSession = resolveConfiguredStatusModelRef({
           cfg,
           defaultProvider: DEFAULT_PROVIDER,
@@ -481,70 +458,24 @@ export async function getStatusSummary(
 
   const sessionDetails = includeSensitive ? await prepareSessionStatusDetails(cfg, now) : undefined;
 
-  const candidateCache = new Map<string, SessionCandidate[]>();
-  const loadSessionCandidates = (storePath: string, agentId?: string) => {
-    const cacheKey = `${storePath}\0${agentId ?? ""}`;
-    const cached = candidateCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const candidates = listSessionCandidates(storePath, agentId);
-    candidateCache.set(cacheKey, candidates);
-    return candidates;
-  };
-  const storeSources = agentList.agents.map((agent) => {
-    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id });
-    return {
-      agentId: agent.id,
-      databasePath: resolveSqliteTargetFromSessionStorePath(storePath, {
-        agentId: agent.id,
-      }).path,
-      storePath,
-    };
-  });
-  const paths = new Set<string>();
-  const pathCounts = new Map<string, number>();
-  for (const source of storeSources) {
-    paths.add(source.databasePath);
-    pathCounts.set(source.databasePath, (pathCounts.get(source.databasePath) ?? 0) + 1);
-  }
-
+  const sessionStores = readStatusSessionStores(cfg, agentList.agents);
   const byAgent = await Promise.all(
-    storeSources.map(async ({ agentId, databasePath, storePath }) => {
-      const candidates = loadSessionCandidates(storePath, agentId);
-      const sessions = sessionDetails
+    sessionStores.byAgent.map(async ({ agent, path, sessions }) => ({
+      agentId: agent.id,
+      path: includeSensitive ? path : "[redacted]",
+      count: sessions.length,
+      recent: sessionDetails
         ? await sessionDetails.buildSessionRows(
-            selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
-            { agentIdOverride: agentId },
+            selectRecentSessionCandidates(sessions, RECENT_SESSION_LIMIT),
           )
-        : [];
-      return {
-        agentId,
-        path: includeSensitive ? databasePath : "[redacted]",
-        count: candidates.length,
-        recent: sessions,
-      };
-    }),
+        : [],
+    })),
   );
-
-  const allSessions = storeSources
-    .filter((source, index, sources) => {
-      return (
-        sources.findIndex((candidate) => candidate.databasePath === source.databasePath) === index
-      );
-    })
-    .flatMap((source) =>
-      loadSessionCandidates(
-        source.storePath,
-        pathCounts.get(source.databasePath) === 1 ? source.agentId : undefined,
-      ),
-    );
   const recent = sessionDetails
     ? await sessionDetails.buildSessionRows(
-        selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
+        selectRecentSessionCandidates(sessionStores.sessions, RECENT_SESSION_LIMIT),
       )
     : [];
-  const totalSessions = allSessions.length;
   const hostDesktopStatus =
     options.hostDesktopStatus ??
     (
@@ -591,8 +522,8 @@ export async function getStatusSummary(
     taskAudit,
     ...(taskAuditRetainedLost.count > 0 ? { taskAuditRetainedLost } : {}),
     sessions: {
-      paths: includeSensitive ? Array.from(paths) : [],
-      count: totalSessions,
+      paths: includeSensitive ? sessionStores.paths : [],
+      count: sessionStores.sessions.length,
       defaults: sessionDetails?.defaults ?? { model: null, contextTokens: null },
       recent,
       byAgent,
