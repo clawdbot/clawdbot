@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { hasOptionalMissingPluginManifestFile } from "../plugins/installed-plugin-index-manifest.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../plugins/package-entry-resolution.js";
@@ -22,6 +23,8 @@ type InstalledPluginRecord = {
   packageJson?: { path: string };
   manifestPath?: string;
   manifestHash?: string;
+  format?: string;
+  bundleFormat?: string;
 };
 
 type InstallsJson = { plugins: InstalledPluginRecord[] };
@@ -91,7 +94,9 @@ function isInstalledPluginRecord(value: unknown): value is InstalledPluginRecord
     isOptionalString(record.origin) &&
     isPackageJsonRef(record.packageJson) &&
     isOptionalString(record.manifestPath) &&
-    isOptionalString(record.manifestHash)
+    isOptionalString(record.manifestHash) &&
+    isOptionalString(record.format) &&
+    isOptionalString(record.bundleFormat)
   );
 }
 
@@ -142,15 +147,6 @@ async function resolvePackageJsonRelPath(
     return "package.json";
   } catch {
     return undefined;
-  }
-}
-
-async function sha256OfFile(absPath: string): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(absPath);
-    return crypto.createHash("sha256").update(raw).digest("hex");
-  } catch {
-    return null;
   }
 }
 
@@ -229,8 +225,32 @@ export async function runPostUpgradeProbes(params: {
     }
 
     if (record.manifestPath && record.manifestHash) {
-      const currentHash = await sha256OfFile(record.manifestPath);
-      if (currentHash && currentHash !== record.manifestHash) {
+      let currentHash: string;
+      try {
+        const raw = await fs.readFile(record.manifestPath);
+        currentHash = crypto.createHash("sha256").update(raw).digest("hex");
+      } catch (err) {
+        if (
+          record.format === "bundle" &&
+          record.bundleFormat === "claude" &&
+          hasOptionalMissingPluginManifestFile({
+            format: record.format,
+            bundleFormat: record.bundleFormat,
+            manifestPath: record.manifestPath,
+          })
+        ) {
+          continue;
+        }
+        const reason = err instanceof Error ? err.message : String(err);
+        findings.push({
+          level: "error",
+          code: "plugin.manifest_unavailable",
+          message: `Plugin ${record.pluginId}: could not read indexed manifest (${record.manifestPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+          plugin: record.pluginId,
+        });
+        continue;
+      }
+      if (currentHash !== record.manifestHash) {
         findings.push({
           level: "warn",
           code: "plugin.manifest_drift",

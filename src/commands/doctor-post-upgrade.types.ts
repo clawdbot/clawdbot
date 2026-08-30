@@ -20,5 +20,6 @@ export type PostUpgradeReport = {
 export const POST_UPGRADE_PROBE_CODES = [
   "plugin.index_unavailable",
   "plugin.entry_unresolved",
+  "plugin.manifest_unavailable",
   "plugin.manifest_drift",
 ] as const;
