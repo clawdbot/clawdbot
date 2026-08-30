@@ -39,6 +39,10 @@ function createToolTitleFixture(count: number, options: { separateMessages?: boo
       role: "assistant",
       content: [
         {
+          type: "text",
+          text: `Search marker ${String(index + 1).padStart(3, "0")}`,
+        },
+        {
           type: "toolCall",
           id: item.callId,
           name: "demo__show",
@@ -231,6 +235,11 @@ suite.define(() => {
         await page.getByText("Inspect tool-title queue entry 048", { exact: true }).count(),
       ).toBe(0);
 
+      await page.locator(".agent-chat__composer-combobox > textarea").focus();
+      await page.keyboard.press("Control+f");
+      const search = page.locator(".agent-chat__search-bar input");
+      await search.waitFor();
+      await search.fill("Search marker 001");
       await page.clock.setFixedTime(new Date(initialTime.getTime() + 5 * 60_000 + 1));
       await gateway.setHistoryMessages(fixture.historyMessages);
       const historyCount = (await gateway.getRequests("chat.history")).length;
@@ -241,6 +250,8 @@ suite.define(() => {
         updatedAt: initialTime.getTime() + 5 * 60_000 + 1,
       });
       await gateway.waitForRequest("chat.history", { after: historyCount });
+      await expectRequestCountStable(gateway, "chat.toolTitles", 2, 500);
+      await page.locator(".agent-chat__search-bar button").click();
       await waitForRequests(gateway, "chat.toolTitles", 4);
 
       const requests = await gateway.getRequests("chat.toolTitles");

@@ -177,7 +177,7 @@ export function projectChatTranscript(
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
   });
-  if (props.showToolCalls) {
+  if (props.showToolCalls && !searchFiltering) {
     scheduleToolTitlesForTranscript(collectToolTitleCandidates(chatItems));
   }
   const latestBrowserTabs =
