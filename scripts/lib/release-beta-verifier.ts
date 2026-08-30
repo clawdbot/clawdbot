@@ -667,8 +667,8 @@ function verifyWorkflowRun(params: {
     );
   }
   if (
-    !params.advisory &&
-    (status !== "completed" || conclusion !== "success" || failedJobs.length > 0)
+    status !== "completed" ||
+    (!params.advisory && (conclusion !== "success" || failedJobs.length > 0))
   ) {
     const failedNames = failedJobs
       .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")

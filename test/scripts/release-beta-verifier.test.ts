@@ -162,7 +162,6 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1] ==
     { status: "completed", conclusion: "failure" },
     { status: "completed", conclusion: "cancelled" },
     { status: "completed", conclusion: "skipped" },
-    { status: "in_progress", conclusion: null },
     { status: "completed", conclusion: "success" },
   ])(
     "records optional Telegram as advisory without relabeling $status/$conclusion",
@@ -187,6 +186,14 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1] ==
       ]);
     },
   );
+
+  it("requires a terminal Telegram attempt before recording advisory evidence", async () => {
+    const fixture = workflowFixture({ status: "in_progress", conclusion: null });
+
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+      "NPM Telegram Beta E2E: run 44 is in_progress/<missing>",
+    );
+  });
 
   it("preserves a failed Telegram job even when its advisory workflow concludes success", async () => {
     const fixture = workflowFixture({
