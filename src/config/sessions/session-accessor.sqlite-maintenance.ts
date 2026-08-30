@@ -1,9 +1,14 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import {
   materializeSessionStateDeletePlans,
@@ -65,6 +70,52 @@ import type { SessionEntry } from "./types.js";
 const MAX_SESSION_MAINTENANCE_BATCH_ENTRIES = 64;
 const MAX_SESSION_MAINTENANCE_BATCH_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const SESSION_TRANSCRIPT_BYTE_QUERY_BATCH = MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
+const SESSION_PLANNER_ANALYSIS_LIMIT = 1_000;
+const plannerMaintenanceByStore = new Map<string, Promise<void>>();
+
+/** Coalesce bounded planner-statistics refreshes behind the per-store writer lane. */
+export async function refreshSqliteSessionPlannerStatisticsBestEffort(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+): Promise<void> {
+  const storePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
+  const active = plannerMaintenanceByStore.get(storePath);
+  if (active) {
+    await active;
+    return;
+  }
+  const completion = runExclusiveSqliteSessionWrite(scope, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
+    // Planner maintenance must not inherit the normal 5s writer wait: a competing
+    // process skips this best-effort pass instead of blocking the Gateway event loop.
+    runWithSqliteBusyTimeout(database.db, 0, () => {
+      // SAFETY: SQLite returns this fixed numeric column for PRAGMA analysis_limit.
+      const row = database.db.prepare("PRAGMA analysis_limit").get() as
+        | { analysis_limit?: unknown }
+        | undefined;
+      const previousLimit = Number(row?.analysis_limit ?? 0);
+      try {
+        // The explicit limit bounds older supported SQLite builds; 0x10000 examines
+        // every table after bulk deletion, independent of connection query history.
+        database.db.exec(
+          `PRAGMA analysis_limit = ${SESSION_PLANNER_ANALYSIS_LIMIT}; PRAGMA optimize = 0x10002;`,
+        );
+      } finally {
+        database.db.exec(`PRAGMA analysis_limit = ${previousLimit};`);
+      }
+    });
+  })
+    .catch((error: unknown) => {
+      getChildLogger({ subsystem: "session-sqlite" }).warn(
+        "SQLite session planner-statistics refresh failed",
+        { agentId: scope.agentId, error, path: storePath },
+      );
+    })
+    .finally(() => {
+      plannerMaintenanceByStore.delete(storePath);
+    });
+  plannerMaintenanceByStore.set(storePath, completion);
+  await completion;
+}
 
 type SessionMaintenanceBatch = {
   archiveBytes: number;
@@ -549,6 +600,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     return { archivedTranscripts: [], ...committedCounts };
   }
   const publishedTranscripts: SessionLifecycleArchivedTranscript[] = [];
+  let deletedRows = false;
   for (const batch of buildSessionMaintenanceBatches({
     archiveBytesBySessionId,
     entryRemovals,
@@ -582,6 +634,8 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
       warn("SQLite session maintenance cleanup failed", error, batch.stateDeletePlans);
       break;
     }
+    deletedRows =
+      deletedRows || batch.entryRemovals.length > 0 || batch.stateDeletePlans.length > 0;
     emitCommittedSessionEntryRemovals(batch.entryRemovals);
     for (const removal of batch.entryRemovals) {
       if (removal.maintenanceReason === "model-run-pruned") {
@@ -597,6 +651,9 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     } catch (error) {
       warn("SQLite session maintenance archive publication failed", error, batch.stateDeletePlans);
     }
+  }
+  if (deletedRows) {
+    await refreshSqliteSessionPlannerStatisticsBestEffort(scope);
   }
   return { archivedTranscripts: publishedTranscripts, ...committedCounts };
 }

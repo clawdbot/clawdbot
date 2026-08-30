@@ -1,13 +1,17 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   replaceSessionEntrySync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => void) | undefined,
@@ -89,4 +93,44 @@ it("releases the store writer before maintenance archive sizing completes", asyn
     label: "progressed",
   });
   expect(writerCompletedBeforeMaterialization).toBe(true);
+});
+
+it("refreshes planner statistics after bulk session maintenance", async () => {
+  const tempDir = tempDirs.make("openclaw-session-maintenance-planner-");
+  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+  for (let index = 0; index < 66; index += 1) {
+    replaceSessionEntrySync(
+      { sessionKey: `agent:main:planner-${index}`, storePath },
+      { sessionId: `planner-${index}`, updatedAt: index + 1 },
+    );
+  }
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: "main",
+  }).path;
+  if (!databasePath) {
+    throw new Error("expected planner maintenance database path");
+  }
+  const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+  database.db.exec("ANALYZE");
+  expect(
+    database.db
+      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+      .get("idx_agent_session_nodes_updated_at"),
+  ).toEqual({ stat: expect.stringMatching(/^66\b/u) });
+
+  const result = await applySessionEntryLifecycleMutation({
+    storePath,
+    maintenanceOverride: {
+      maxEntries: 1,
+      mode: "enforce",
+      pruneAfterMs: Number.MAX_SAFE_INTEGER,
+    },
+  });
+
+  expect(result).toMatchObject({ afterCount: 1, capped: 65 });
+  expect(
+    database.db
+      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+      .get("idx_agent_session_nodes_updated_at"),
+  ).toEqual({ stat: expect.stringMatching(/^1\b/u) });
 });
