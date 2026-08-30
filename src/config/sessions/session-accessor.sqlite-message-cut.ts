@@ -417,13 +417,16 @@ function validateBranchTip(
 function summarizeSessionBranches(events: readonly TranscriptEvent[]): SessionBranchSummary[] {
   const tree = scanSessionTranscriptTree(events);
   const pathSummaries = new Map<string, SessionBranchPathSummary>();
-  return sessionBranchTipNodes(tree)
-    .toSorted(
-      (left, right) =>
-        Number(right.id === tree.leafId) - Number(left.id === tree.leafId) ||
-        right.index - left.index,
-    )
-    .map((node) => summarizeSessionBranch(tree, node, pathSummaries));
+  return (
+    sessionBranchTipNodes(tree)
+      .toSorted(
+        (left, right) =>
+          Number(right.id === tree.leafId) - Number(left.id === tree.leafId) ||
+          right.index - left.index,
+      )
+      // SAFETY: scanSessionTranscriptTree inserts every returned node into byId.
+      .map((node) => summarizeSessionBranch(tree, tree.byId.get(node.id)!, pathSummaries))
+  );
 }
 
 function sessionBranchTipNodes(tree: SessionTranscriptTree<TranscriptEvent>) {

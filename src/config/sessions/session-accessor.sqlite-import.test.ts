@@ -8,6 +8,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { listSessionBranches } from "./session-accessor.js";
 import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
 import {
   importSqliteSessionRows,
@@ -197,10 +198,16 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
   await withOpenClawTestState({ label: "import-exact" }, async (state) => {
     const params = target(state, "exact");
     const owner = { actor: { type: "human" as const, id: "owner" }, assignedAt: 40 };
+    const firstMessage = { ...message, timestamp: "2026-08-30T00:00:01.000Z" };
+    const canonicalMessage = {
+      ...message,
+      timestamp: "2026-08-30T00:00:02.000Z",
+      message: { role: "user", content: "canonical duplicate" },
+    };
     const rows = [
       { createdAt: 41, eventJson: '{ "type": "session", "id": "exact", "version": 3 }' },
-      { createdAt: 43, eventJson: JSON.stringify(message, null, 2) },
-      { createdAt: 45, eventJson: JSON.stringify(message) },
+      { createdAt: 43, eventJson: JSON.stringify(firstMessage, null, 2) },
+      { createdAt: 45, eventJson: JSON.stringify(canonicalMessage) },
     ];
     await importSqliteSessionRows({
       ...params,
@@ -231,6 +238,16 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
       }),
     ).toMatchObject({ skippedExisting: true, transcriptEvents: 0 });
     expect(loadTranscriptEventsSync({ ...params, sessionId: "exact" })).toHaveLength(3);
+    await expect(listSessionBranches(params)).resolves.toEqual({
+      status: "ok",
+      branches: Array.from({ length: 2 }, () => ({
+        leafEntryId: "one",
+        headline: "canonical duplicate",
+        messageCount: 1,
+        updatedAt: canonicalMessage.timestamp,
+        active: true,
+      })),
+    });
   });
 });
 
