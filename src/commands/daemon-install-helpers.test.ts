@@ -991,6 +991,11 @@ describe("buildGatewayInstallPlan", () => {
             },
           },
         },
+        channels: {
+          discord: {
+            token: { source: "exec", provider: "onepassword", id: "value" },
+          },
+        },
       },
     });
 

@@ -412,7 +412,6 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
     if (!execProvider) {
       continue;
     }
-    console.log("RIG_DEBUG execProvider:", JSON.stringify(execProvider));
     for (const rawKey of execProvider.passEnv ?? []) {
       const key = normalizeEnvVarKey(rawKey, { portable: true });
       if (!key) {
