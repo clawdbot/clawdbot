@@ -15,7 +15,7 @@ const CODE_PLACEHOLDER = "\u0000p";
 
 // Quoted attribute values may contain `>`; normalize convertible openers without leaking attribute text.
 const CONVERTIBLE_HTML_OPEN_TAG_RE =
-  /<(b|strong|i|em|s|strike|del|code|h[1-6]|li)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
+  /<(b|strong|i|em|s|strike|del|code|h[1-6]|li|p|div)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
 // br, p, and div own line structure, so they stay outside the inert-tree removal pass.
 const EMPTY_HTML_ELEMENT_RE =
   /<((?!(?:br|p|div)(?=[\s>]))[a-z][a-z0-9_.:-]*)(?=[\s>])(?:[^"'<>]|"[^"]*"|'[^']*')*>(?:[^\S\r\n\u2028\u2029]|<(?!\/?(?:br|p|div)(?=[\s/>]))\/?[a-z][a-z0-9_.:-]*(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>)*<\/\1\s*>/gi;
@@ -43,8 +43,9 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
     EMPTY_HTML_ELEMENT_RE,
   )
     .replace(/<br\s*\/?>/gi, "\n")
-    // Block elements → newlines (attributed openers included)
-    .replace(/<\/?(?:p|div)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi, "\n")
+    // Block elements → newlines; attributed openers were normalized to bare
+    // tags by CONVERTIBLE_HTML_OPEN_TAG_RE above.
+    .replace(/<\/?(p|div)>/gi, "\n")
     // Bold → selected lightweight markup
     .replace(/<(b|strong)>(.*?)<\/\1>/gi, `${boldMarker}$2${boldMarker}`)
     .replace(/<(i|em)>(.*?)<\/\1>/gi, "_$2_")
