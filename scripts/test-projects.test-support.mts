@@ -2395,7 +2395,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
   [
-    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner)\/|workflows\/workflow-sanity\.yml$)/u,
+    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner)\/|workflows\/(?:workflow-sanity|qa-profile-evidence)\.yml$)/u,
     ["ci-git-owner", "ci-linux-git", "ci-platform-checkout"],
   ],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],

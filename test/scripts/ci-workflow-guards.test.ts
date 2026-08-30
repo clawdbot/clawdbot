@@ -1202,14 +1202,13 @@ function createQaProtocolTopology() {
   runGit(origin, ["checkout", "-q", "main"]);
 
   runGit(root, ["clone", "-q", "--no-local", origin, checkout]);
-  const fakeBin = path.join(root, "bin");
-  mkdirSync(fakeBin);
-  writeExecutable(path.join(fakeBin, "timeout"), ["#!/usr/bin/env bash", "shift 3", 'exec "$@"']);
+  const gitOwner = path.join(root, "ci-git-owner.py");
+  writeFileSync(gitOwner, readFileSync(".github/actions/git-owner/owner.py"));
 
   return {
     checkout,
     compatibilityHead,
-    fakeBin,
+    gitOwner,
     featureHead,
     invalidCompatibilityHead,
     mainBase,
@@ -1261,7 +1260,7 @@ function runQaSelectedRefValidation(
       GITHUB_OUTPUT: githubOutput,
       GITHUB_STEP_SUMMARY: path.join(topology.checkout, "github-summary"),
       INPUT_REF: inputRef,
-      PATH: `${topology.fakeBin}:${process.env.PATH ?? ""}`,
+      CI_GIT_OWNER: topology.gitOwner,
     },
   });
   return { ...result, outputs: readWorkflowOutputs(githubOutput) };
@@ -9708,7 +9707,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             cwd: checkout,
             env: {
               ...process.env,
-              PATH: `${topology.fakeBin}:${process.env.PATH ?? ""}`,
+              CI_GIT_OWNER: topology.gitOwner,
               PROTOCOL_SINCE_BASE_SHA: baseSha,
               QA_SENTINEL: sentinel,
             },
@@ -9729,24 +9728,93 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   );
 
-  it("bounds QA profile selected-ref fetches", () => {
+  it("pins the QA Git owner before checkouts and preserves all ten terminal fetch contracts", () => {
+    const workflow = readQaProfileEvidenceWorkflow();
+    const gitJobs = [
+      "validate_selected_ref",
+      "plan_qa_profile",
+      "run_qa_profile_shard",
+      "aggregate_qa_profile",
+    ];
+    const calls: string[] = [];
+    for (const job of gitJobs) {
+      const steps = workflow.jobs[job].steps as WorkflowStep[];
+      const ownerIndex = steps.findIndex((step) => step.name === "Prepare Git owner");
+      expect(steps.filter((step) => step.name === "Prepare Git owner")).toHaveLength(1);
+      expect(steps[ownerIndex]).toEqual({
+        name: "Prepare Git owner",
+        uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+      });
+      expect(steps[ownerIndex - 1]?.name).toBe(
+        job === "validate_selected_ref"
+          ? "Resolve job workflow identity"
+          : "Require authorized workflow actor",
+      );
+      expect(steps[ownerIndex + 1]?.name).toBe(
+        job === "validate_selected_ref" ? "Checkout selected ref" : "Checkout trusted QA harness",
+      );
+      expect(steps.some((step) => step.uses?.startsWith("actions/setup-python@"))).toBe(false);
+      for (const step of steps) {
+        const run = (step.run ?? "").replace(/[ \t]*\\\n[ \t]*/gu, " ");
+        const fetches = run
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => /\bfetch\b/u.test(line));
+        if (fetches.length === 0) {
+          continue;
+        }
+        expect(run.startsWith("set -euo pipefail\n")).toBe(true);
+        for (const fetch of fetches) {
+          expect(fetch).toMatch(/^python3 -I -S "\$CI_GIT_OWNER" --checkout-git (?:0|120) fetch /u);
+          expect(fetch).not.toMatch(/\|\||&&|;|\$\?/u);
+        }
+        expect(run).not.toMatch(/^\s*(?:timeout|for|while|until)\b|\$\?/mu);
+        calls.push(...fetches);
+      }
+    }
+    expect(calls).toHaveLength(10);
+    expect(calls.filter((call) => call.includes("--checkout-git 120 fetch"))).toHaveLength(4);
+    expect(calls.filter((call) => call.includes("--checkout-git 0 fetch"))).toHaveLength(6);
     const validateSelectedRef = expectDefined(
-      readQaProfileEvidenceWorkflow().jobs.validate_selected_ref.steps.find(
+      workflow.jobs.validate_selected_ref.steps.find(
         (step: WorkflowStep) => step.name === "Validate selected ref",
       ),
       "QA profile selected-ref validation step",
     );
-    const gitFetchLines = validateSelectedRef.run
-      .split("\n")
-      .filter((line: string) => line.includes("git fetch"));
-
-    expect(gitFetchLines).toHaveLength(3);
-    expect(
-      gitFetchLines.every((line: string) =>
-        line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
-      ),
-    ).toBe(true);
-    expect(gitFetchLines.some((line: string) => line.includes("+refs/tags/"))).toBe(true);
+    expect(validateSelectedRef["working-directory"]).toBeUndefined();
+    expect(calls.slice(0, 3)).toEqual([
+      'python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main',
+      'python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin "+refs/tags/${tag_candidate}:refs/tags/${tag_candidate}"',
+      'python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin "+refs/heads/${branch_candidate}:refs/remotes/origin/${branch_candidate}"',
+    ]);
+    expect(validateSelectedRef.run).toContain(
+      'release_tag_sha="$(git rev-parse "refs/tags/${tag_candidate}^{commit}")"',
+    );
+    expect(validateSelectedRef.run).toContain(
+      'release_branch_sha="$(git rev-parse "refs/remotes/origin/${branch_candidate}")"',
+    );
+    for (const name of ["Restore trusted QA harness revision", "Checkout selected ref"]) {
+      const bodies = gitJobs
+        .slice(1)
+        .map(
+          (job) => workflow.jobs[job].steps.find((step: WorkflowStep) => step.name === name)?.run,
+        );
+      expect(bodies[0]).toBeTypeOf("string");
+      expect(new Set(bodies).size).toBe(1);
+    }
+    const protocolFetch = workflow.jobs.run_qa_profile_shard.steps.find(
+      (step: WorkflowStep) => step.name === "Fetch protocol comparison base",
+    );
+    expect(protocolFetch["working-directory"]).toBe("selected");
+    expect(calls[7]).toBe(
+      'python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags --no-recurse-submodules --depth=1 origin "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/qa-protocol-base"',
+    );
+    expect(protocolFetch.run).toContain(
+      'test "$(git rev-parse refs/remotes/origin/qa-protocol-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"',
+    );
+    expect(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8")).not.toMatch(
+      /\bgit(?: -C selected)? fetch\b/u,
+    );
   });
 
   it.skipIf(process.platform !== "linux")(
@@ -10053,9 +10121,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         },
         shell: "bash",
       });
+      expect(restoreTrusted["working-directory"]).toBeUndefined();
       expect(restoreTrusted.run).toContain("^[0-9a-f]{40}$");
       expect(restoreTrusted.run).toContain(
-        'git fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"',
+        'python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"',
       );
       expect(restoreTrusted.run).toContain('git checkout --detach "$EXPECTED_WORKFLOW_SHA"');
       expect(restoreTrusted.run).toContain(
@@ -10073,6 +10142,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         shell: "bash",
       });
       expect(selectedCheckout).not.toHaveProperty("uses");
+      expect(selectedCheckout["working-directory"]).toBeUndefined();
       expect(selectedCheckout.run).toContain("^[0-9a-f]{40}$");
       expect(selectedCheckout.run).toContain("[[ ! -e selected ]]");
       expect(selectedCheckout.run).toContain("git init selected");
@@ -10080,12 +10150,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         'git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"',
       );
       expect(selectedCheckout.run).toContain(
-        'git -C selected fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"',
+        'cd selected\npython3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"',
       );
-      expect(selectedCheckout.run).toContain("git -C selected checkout --detach FETCH_HEAD");
-      expect(selectedCheckout.run).toContain(
-        'test "$(git -C selected rev-parse HEAD)" = "$EXPECTED_SHA"',
-      );
+      expect(selectedCheckout.run).toContain("git checkout --detach FETCH_HEAD");
+      expect(selectedCheckout.run).toContain('test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"');
       expect(
         job.steps.some((step: WorkflowStep) => step.name === "Verify selected checkout SHA"),
       ).toBe(false);
@@ -10104,6 +10172,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }
       const securitySequence = [
         "Require authorized workflow actor",
+        "Prepare Git owner",
         "Checkout trusted QA harness",
         "Restore trusted QA harness revision",
         "Setup Node environment",

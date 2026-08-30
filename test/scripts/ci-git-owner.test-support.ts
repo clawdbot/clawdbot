@@ -9,7 +9,13 @@ import {
   withCiCheckoutFixture,
 } from "./ci-checkout.test-support.js";
 
-type Step = { name?: string; run?: string; env?: Record<string, string | number> };
+type Step = {
+  name?: string;
+  run?: string;
+  env?: Record<string, string | number>;
+  "working-directory"?: string;
+};
+type WorkflowTarget = { file: string; job: string; step: string };
 export type FetchResult = number | "hang" | "cleanup-failure";
 
 const candidate = "a".repeat(40);
@@ -61,19 +67,19 @@ function stepEnvironment(step: Step, supplied: Record<string, string>) {
   return resolved;
 }
 
-function readWorkflowStep(workflow: string, job: string, name: string): Step & { run: string } {
-  const parsed = parse(readFileSync(`.github/workflows/${workflow}.yml`, "utf8")) as {
+function readWorkflowStep({ file, job, step: name }: WorkflowTarget): Step & { run: string } {
+  const parsed = parse(readFileSync(file, "utf8")) as {
     jobs: Record<string, { steps: Step[] }>;
   };
   const step = parsed.jobs[job]?.steps.find((entry) => entry.name === name);
   if (!step?.run) {
-    throw new Error(`Missing executable workflow step ${workflow}/${job}/${name}`);
+    throw new Error(`Missing executable workflow step ${file}/${job}/${name}`);
   }
   return { ...step, run: step.run };
 }
 
 export async function runCiGitStep(options: {
-  workflow?: "workflow-sanity";
+  workflow?: "workflow-sanity" | WorkflowTarget;
   job?: string;
   action?: "ensure-base-commit" | "git-owner";
   policy?: string;
@@ -87,6 +93,7 @@ export async function runCiGitStep(options: {
   cancelDuringCleanup?: boolean;
   startupDelay?: { tree: number };
   revisions?: Record<string, string>;
+  mergeBase?: { ancestor: boolean; revision: string };
   poisonPython?: boolean;
   baseAvailableAfter?: number;
   invalidRef?: boolean;
@@ -104,14 +111,22 @@ export async function runCiGitStep(options: {
     realDrain:
       options.realDrain || options.cancelDuringCleanup || options.scenario?.startsWith("cancel-"),
   };
-  const step = options.action
+  const step: (Step & { run: string }) | undefined = options.action
     ? (
         parse(readFileSync(`.github/actions/${options.action}/action.yml`, "utf8")) as {
           runs: { steps: (Step & { run: string })[] };
         }
       ).runs.steps[0]
     : options.workflow
-      ? readWorkflowStep(options.workflow, "actionlint", "Prepare trusted workflow audit configs")
+      ? readWorkflowStep(
+          options.workflow === "workflow-sanity"
+            ? {
+                file: ".github/workflows/workflow-sanity.yml",
+                job: "actionlint",
+                step: "Prepare trusted workflow audit configs",
+              }
+            : options.workflow,
+        )
       : readCiCheckoutStep(
           options.job ?? "security-fast",
           options.step ?? (options.job ? "Checkout" : "Prepare Git owner"),
@@ -133,6 +148,17 @@ export async function runCiGitStep(options: {
         ...options.env,
       });
       const workspace = path.join(root, "workspace");
+      if (options.workflow) {
+        // Workflow bodies follow actions/checkout; selected-source bootstrap must
+        // still create its own directory, while later selected steps inherit one.
+        for (const directory of [
+          workspace,
+          ...(step["working-directory"] ? [path.join(workspace, step["working-directory"])] : []),
+        ]) {
+          mkdirSync(path.join(directory, ".git"), { recursive: true });
+          writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
+        }
+      }
       if (options.startupDelay?.tree) {
         writeFileSync(
           path.join(root, "tree-start-delay-1.json"),
@@ -179,6 +205,8 @@ export async function runCiGitStep(options: {
         JSON.stringify({
           env,
           revisions,
+          mergeBase: options.mergeBase,
+          workingDirectory: step["working-directory"],
           fetchResults: options.fetchResults,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
@@ -208,6 +236,7 @@ export async function runCiGitStep(options: {
 export CI_GIT_OWNER
 CI_GIT_OWNER="$(sed -n 's/^CI_GIT_OWNER=//p' "$GITHUB_ENV")"
 : > "$GITHUB_ENV"
+: > "$GITHUB_OUTPUT"
 ${options.setupFailure === "owner" ? 'rm "$CI_GIT_OWNER"' : ""}
 ${run}`;
       }
@@ -235,11 +264,23 @@ ${run}`;
       );
       const actions = path.join(root, "trusted-actions");
       console.log(
-        `${options.workflow ?? options.action ?? options.job}/${options.step ?? "Checkout"}: ${JSON.stringify(report)}`,
+        `${typeof options.workflow === "object" ? `${options.workflow.file}/${options.workflow.job}/${options.workflow.step}` : `${options.workflow ?? options.action ?? options.job}/${options.step ?? "Checkout"}`}: ${JSON.stringify(report)}`,
       );
       expect(result, stderr).toEqual({ code: 0, signal: null });
       expect(report.error, stderr).toBeUndefined();
       expectCiCheckoutCleanup(report);
+      if (options.workflow) {
+        for (const directory of new Set([
+          workspace,
+          ...report.commands
+            .filter(({ tool, args }) => tool === "git" && args[0] === "fetch")
+            .map(({ cwd }) => cwd),
+        ])) {
+          expect(readFileSync(path.join(directory, ".git/preexisting.lock"), "utf8")).toBe(
+            "not invocation-owned\n",
+          );
+        }
+      }
       expect(readFileSync(protectedFile, "utf8")).toBe("not checkout-owned\n");
       expect(
         existsSync(path.join(root, "python-injected")),
@@ -265,6 +306,8 @@ ${run}`;
         workspace,
         githubOutput: readOutput("github-output"),
         githubEnv: readOutput("github-env"),
+        githubSummary: readOutput("github-summary"),
+        githubPath: readOutput("github-path"),
         trustedConfig: readOutput("temp/pre-commit-base.yaml"),
         trustedZizmor: readOutput("temp/zizmor-base.yml"),
         runnerTemp: path.join(root, "temp"),

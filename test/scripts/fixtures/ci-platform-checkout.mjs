@@ -458,6 +458,12 @@ async function command() {
       );
     }
     fs.writeSync(1, `${args.map((ref) => resolveRef(cwd, ref)).join("\n")}\n`);
+  } else if (operation === "merge-base" && options.mergeBase) {
+    boundary("merge-base");
+    if (args[0] === "--is-ancestor") {
+      process.exit(options.mergeBase.ancestor ? 0 : 1);
+    }
+    fs.writeSync(1, `${options.mergeBase.revision}\n`);
   } else if (operation === "check-ref-format") {
     boundary("check-ref-format");
     fs.writeSync(1, "fixture quiet probe stdout\n");
@@ -695,7 +701,7 @@ async function supervise() {
           ]
         : [checkoutScript];
     shell = spawn("bash", ["--noprofile", "--norc", "-eo", "pipefail", ...shellArgs], {
-      cwd: workspace,
+      cwd: path.join(workspace, options.workingDirectory ?? ""),
       detached: true,
       stdio: ["ignore", output, output],
       env: {
@@ -709,6 +715,8 @@ async function supervise() {
         RUNNER_TEMP: shellPath(runnerTemp),
         GITHUB_OUTPUT: path.join(root, "github-output"),
         GITHUB_ENV: path.join(root, "github-env"),
+        GITHUB_STEP_SUMMARY: path.join(root, "github-summary"),
+        GITHUB_PATH: path.join(root, "github-path"),
         RUNNER_OS: linux ? "Linux" : process.platform === "win32" ? "Windows" : "macOS",
         PATHEXT: process.env.PATHEXT,
         CHECKOUT_REPO: "fixture/checkout",
