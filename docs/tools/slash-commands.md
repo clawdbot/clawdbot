@@ -133,6 +133,10 @@ command handling is enabled for the surface.
   Enables `/restart` and external `SIGUSR1` restart requests.
 </ParamField>
 
+<ParamField path="commands.update" type="boolean" default="true">
+  Enables the owner-only `/update` chat command. Independent of `commands.restart`.
+</ParamField>
+
 <ParamField path="commands.ownerAllowFrom" type="string[]">
   Explicit owner allowlist for owner-only command surfaces. Separate from
   `commands.allowFrom` and DM pairing access.
@@ -299,6 +303,7 @@ plugins.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
+    | `/update` | `commands.update: true` (default) | Update OpenClaw in the background, then restart |
     | `/send on\|off\|inherit` | owner | Set send policy |
   </Accordion>
 

@@ -30,3 +30,8 @@ export function isCommandFlagEnabled(
 export function isRestartEnabled(config?: { commands?: unknown }): boolean {
   return getOwnCommandFlagValue(config, "restart") !== false;
 }
+
+/** Returns the public /update command state; update defaults on and is disabled only by false. */
+export function isUpdateEnabled(config?: { commands?: unknown }): boolean {
+  return getOwnCommandFlagValue(config, "update") !== false;
+}
