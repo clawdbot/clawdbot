@@ -307,6 +307,8 @@ curl -sS http://127.0.0.1:18789/v1/embeddings \
 
 `/v1/embeddings` supports `input` as a string or array of strings.
 
+For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size.
+
 ## Related
 
 - [Configuration reference](/gateway/configuration-reference)
