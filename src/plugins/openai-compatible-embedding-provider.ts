@@ -356,10 +356,8 @@ async function createOpenAICompatibleEmbeddingClient(
         ? undefined
         : { allowPrivateNetwork: configuredProvider.request.allowPrivateNetwork },
   });
-  const trustConfiguredBaseUrlOrigin =
-    !requestPolicy.privateNetworkExplicitlyDenied &&
-    (requestPolicy.policy.endpointClass === "custom" ||
-      requestPolicy.policy.endpointClass === "local");
+  const privateNetworkExplicitlyDenied = configuredProvider?.request?.allowPrivateNetwork === false;
+  const trustConfiguredBaseUrlOrigin = requestPolicy.trustConfiguredBaseUrlOrigin;
   const configuredEndpointSsrFPolicy = resolveProviderTransportSsrFPolicy({
     baseUrl: configuredProvider?.baseUrl ?? baseUrl,
     url: baseUrl,
@@ -400,9 +398,7 @@ async function createOpenAICompatibleEmbeddingClient(
     headers,
     ssrfPolicy: mergeSsrFPolicies(configuredEndpointSsrFPolicy, remoteOverrideFakeIpPolicy),
     model,
-    ...(configuredProvider?.localService &&
-    !requestPolicy.privateNetworkExplicitlyDenied &&
-    !remoteBaseUrl
+    ...(configuredProvider?.localService && !privateNetworkExplicitlyDenied && !remoteBaseUrl
       ? {
           localServiceTarget: {
             providerId,
