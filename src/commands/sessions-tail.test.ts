@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -147,6 +148,85 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("openai/gpt-5.2 done");
     expect(output).not.toContain("SECRET");
   });
+
+  it.each([
+    ["ASCII", "incident", "incident"],
+    ["CJK", "中文", "中文"],
+    ["combining accent", "e\u0301", "e\u0301"],
+    ["joined emoji", "👩🏽‍💻", "👩🏽‍💻"],
+    ["truncated emoji", `${"a".repeat(17)}👩🏽‍💻-incident`, `${"a".repeat(17)}…`],
+  ])("keeps progress columns aligned with %s session keys", async (_name, suffix, displayed) => {
+    const runtime = makeRuntime();
+    const key = `agent:main:${suffix}`;
+    await writeSessionEntry(key);
+    await appendEvents(
+      [
+        makeEvent({
+          type: "tool.result",
+          ts: "2026-05-18T12:04:21.000Z",
+          data: { name: "proof", success: true },
+        }),
+      ],
+      { key },
+    );
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: key }, runtime);
+
+    const line = runtimeOutput(runtime);
+    expect(line.split("\n")).toHaveLength(1);
+    expect(line).toContain(` agent:main:${displayed} `);
+    expect(line).toContain("tool.result");
+    expect(line.endsWith("proof ok")).toBe(true);
+    const previewOffset = line.indexOf("proof ok");
+    expect(visibleWidth(line.slice(0, previewOffset))).toBe(57);
+  });
+
+  it.each([
+    ["CSI inside", "a\u001b[31mb", "custom\u001b[31m", "ab", "custom"],
+    [
+      "OSC inside",
+      "a\u001b]8;;https://example.invalid/\u0007b",
+      "custom\u001b]8;;https://example.invalid/\u0007",
+      "ab",
+      "custom",
+    ],
+    [
+      "CSI beyond cutoff",
+      `${"a".repeat(30)}\u001b[31m`,
+      "custom.progress-long\u001b[31m",
+      `${"a".repeat(18)}…`,
+      "custom.progress…",
+    ],
+    [
+      "OSC beyond cutoff",
+      `${"a".repeat(30)}\u001b]8;;https://example.invalid/\u0007`,
+      "custom.progress-long\u001b]8;;https://example.invalid/\u0007",
+      `${"a".repeat(18)}…`,
+      "custom.progress…",
+    ],
+  ])(
+    "renders %s as plain progress labels",
+    async (_name, suffix, type, displayed, displayedType) => {
+      const runtime = makeRuntime();
+      const key = `agent:main:${suffix}`;
+      await writeSessionEntry(key);
+      await appendEvents(
+        [makeEvent({ type, ts: "2026-05-18T12:04:21.000Z", data: { name: "proof" } })],
+        { key },
+      );
+
+      await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: key }, runtime);
+
+      const line = runtimeOutput(runtime);
+      expect(line.split("\n")).toHaveLength(1);
+      expect(line).not.toContain("\u001b");
+      expect(line).not.toContain("\u0007");
+      expect(line).toContain(` ${displayedType} `);
+      expect(line).toContain(` agent:main:${displayed} `);
+      expect(line.endsWith(" proof")).toBe(true);
+      expect(visibleWidth(line.slice(0, line.lastIndexOf(" proof") + 1))).toBe(57);
+    },
+  );
 
   it("honors the tail count before rendering existing trajectory events", async () => {
     const runtime = makeRuntime();

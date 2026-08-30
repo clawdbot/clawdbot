@@ -6,6 +6,7 @@ import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/numb
  * and can follow newly appended SQLite trajectory rows.
  */
 import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
@@ -17,7 +18,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
-import { shortenText } from "./text-format.js";
+import { formatTextCell } from "./text-format.js";
 
 type SessionsTailOptions = {
   store?: string;
@@ -146,10 +147,9 @@ function safePreview(event: TrajectoryEvent): string {
 }
 
 function formatProgressLine(event: TrajectoryEvent): string {
-  const sessionLabel = shortenText(event.sessionKey ?? event.sessionId, SESSION_KEY_PAD).padEnd(
-    SESSION_KEY_PAD,
-  );
-  const typeLabel = shortenText(event.type, EVENT_TYPE_PAD).padEnd(EVENT_TYPE_PAD);
+  const sessionKey = event.sessionKey ?? event.sessionId;
+  const sessionLabel = formatTextCell(sanitizeTerminalText(sessionKey), SESSION_KEY_PAD);
+  const typeLabel = formatTextCell(sanitizeTerminalText(event.type), EVENT_TYPE_PAD);
   const preview = safePreview(event);
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
