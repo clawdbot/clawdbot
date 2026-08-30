@@ -1,5 +1,7 @@
 // QA Lab Matrix plugin module implements scenario runtime room behavior.
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MATRIX_QA_BLOCK_ROOM_KEY,
   MATRIX_QA_MEMBERSHIP_ROOM_KEY,
@@ -55,6 +57,130 @@ export {
   runToolProgressPreviewOptOutScenario,
   runToolProgressPreviewScenario,
 } from "./scenario-runtime-tool-progress.js";
+
+const MATRIX_QA_ASK_USER_QUESTION = "Where should this deploy?";
+const MATRIX_QA_ASK_USER_ANSWER = "Production 🚀";
+
+function requireMatrixQaGatewayCall(context: MatrixQaScenarioContext) {
+  if (!context.gatewayCall) {
+    throw new Error("Matrix presentation QA requires Gateway RPC access");
+  }
+  return context.gatewayCall;
+}
+
+function readPendingMatrixQaQuestion(value: unknown) {
+  if (!isRecord(value) || !Array.isArray(value.questions)) {
+    return undefined;
+  }
+  return value.questions.find((entry) => {
+    if (!isRecord(entry) || entry.status !== "pending" || !Array.isArray(entry.questions)) {
+      return false;
+    }
+    return entry.questions.some(
+      (question) => isRecord(question) && question.question === MATRIX_QA_ASK_USER_QUESTION,
+    );
+  });
+}
+
+async function waitForPendingMatrixQaQuestion(context: MatrixQaScenarioContext) {
+  const gatewayCall = requireMatrixQaGatewayCall(context);
+  const deadline = Date.now() + context.timeoutMs;
+  while (Date.now() < deadline) {
+    const pending = readPendingMatrixQaQuestion(await gatewayCall("question.list", {}));
+    if (pending && typeof pending.id === "string") {
+      return pending.id;
+    }
+    await sleep(100);
+  }
+  throw new Error("Matrix presentation QA did not observe a pending ask_user question");
+}
+
+async function runMatrixPresentationReplyScenario(context: MatrixQaScenarioContext) {
+  const gatewayCall = requireMatrixQaGatewayCall(context);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const triggerBody = `${context.sutUserId} tool search qa check target=ask_user ask_user_fixture=single. Ask the question.`;
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId: context.roomId,
+  });
+  const [pendingQuestionId, presentationEvent] = await Promise.all([
+    waitForPendingMatrixQaQuestion(context),
+    client.waitForRoomEvent({
+      observedEvents: context.observedEvents,
+      predicate: (event) =>
+        event.roomId === context.roomId &&
+        event.sender === context.sutUserId &&
+        isMatrixQaMessageLikeKind(event.kind) &&
+        (event.body ?? "").includes(MATRIX_QA_ASK_USER_QUESTION) &&
+        event.presentation?.type === "message.presentation" &&
+        event.presentation.version === 1 &&
+        Boolean(event.presentation.blockTypes?.includes("buttons")) &&
+        Boolean(event.presentation.buttonLabels?.includes("Staging (Recommended)")) &&
+        Boolean(event.presentation.buttonLabels?.includes(MATRIX_QA_ASK_USER_ANSWER)),
+      roomId: context.roomId,
+      since: startSince,
+      timeoutMs: context.timeoutMs,
+    }),
+  ]);
+  if (presentationEvent.event.replacesEventId) {
+    throw new Error("Matrix presentation QA unexpectedly replaced a draft while streaming was off");
+  }
+  const resolution = await gatewayCall(
+    "question.resolve",
+    {
+      id: pendingQuestionId,
+      answers: { answers: { deploy_target: [MATRIX_QA_ASK_USER_ANSWER] } },
+      resolvedBy: "matrix-qa",
+    },
+    { expectFinal: false, timeoutMs: 5_000 },
+  );
+  if (!isRecord(resolution) || resolution.status !== "answered") {
+    throw new Error(
+      `Matrix presentation QA question resolution failed: ${JSON.stringify(resolution)}`,
+    );
+  }
+  const expectedFinal = `ASK-USER-SINGLE-OK | deploy=${MATRIX_QA_ASK_USER_ANSWER}`;
+  const finalReply = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      event.roomId === context.roomId &&
+      event.sender === context.sutUserId &&
+      isMatrixQaMessageLikeKind(event.kind) &&
+      event.body === expectedFinal,
+    roomId: context.roomId,
+    since: presentationEvent.since,
+    timeoutMs: context.timeoutMs,
+  });
+  advanceMatrixQaActorCursor({
+    actorId: "driver",
+    syncState: context.syncState,
+    nextSince: finalReply.since,
+    startSince,
+  });
+  const reply = buildMatrixReplyArtifact(presentationEvent.event);
+  return {
+    artifacts: {
+      driverEventId,
+      reply,
+      triggerBody,
+    },
+    details: [
+      `driver event: ${driverEventId}`,
+      `presentation event: ${reply.eventId}`,
+      `presentation replacement target: ${reply.replacesEventId ?? "<none>"}`,
+      `presentation blocks: ${reply.presentation?.blockTypes?.join(",") ?? "<none>"}`,
+      `presentation buttons: ${reply.presentation?.buttonLabels?.join(",") ?? "<none>"}`,
+      `final reply event: ${finalReply.event.eventId}`,
+      `final reply body: ${finalReply.event.body ?? "<none>"}`,
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runDirectPresentationReplyScenario(context: MatrixQaScenarioContext) {
+  return await runMatrixPresentationReplyScenario(context);
+}
+
 export async function runBlockStreamingScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_BLOCK_ROOM_KEY);
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);

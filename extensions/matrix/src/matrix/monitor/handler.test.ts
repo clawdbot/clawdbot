@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   testing as sessionBindingTesting,
@@ -3057,6 +3058,7 @@ describe("matrix monitor handler draft streaming", () => {
       audioAsVoice?: boolean;
       spokenText?: string;
       ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
+      presentation?: MessagePresentation;
       isCompactionNotice?: boolean;
       isError?: boolean;
       replyToId?: string;
@@ -3285,6 +3287,137 @@ describe("matrix monitor handler draft streaming", () => {
       visibleReplySent: true,
       content: "Single block",
       receipt: { primaryPlatformMessageId: "$draft1" },
+    });
+    await finish();
+  });
+
+  it("finalizes streamed Matrix presentations with structured metadata", async () => {
+    const presentation: MessagePresentation = {
+      title: "Environment",
+      blocks: [
+        {
+          type: "select",
+          placeholder: "Environment",
+          options: [
+            {
+              label: "Production",
+              action: { type: "command", command: "/deploy production" },
+            },
+          ],
+        },
+      ],
+    };
+    const finalText = "Choose\n\nEnvironment\n\nEnvironment:\n- Production: `/deploy production`";
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: finalText });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    await deliver({ text: "Choose", presentation }, { kind: "final" });
+
+    const editCall = findMockCall(
+      editMessageMatrixMock,
+      "streamed presentation edit",
+      ([, eventId]) => eventId === "$draft1",
+    );
+    expect(String(editCall[2])).toContain("Production");
+    expect(editCall[3]).toMatchObject({
+      live: false,
+      extraContent: {
+        "com.openclaw.presentation": {
+          version: 1,
+          type: "message.presentation",
+          title: "Environment",
+        },
+      },
+    });
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("does not drop controls-only streamed finals", async () => {
+    const presentation: MessagePresentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Deploy", action: { type: "command", command: "/deploy" } }],
+        },
+      ],
+    };
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Working" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    await deliver({ presentation }, { kind: "final" });
+
+    const editCall = findMockCall(
+      editMessageMatrixMock,
+      "controls-only streamed edit",
+      ([, eventId]) => eventId === "$draft1",
+    );
+    expect(String(editCall[2]).trim()).not.toBe("");
+    expect(editCall[3]).toMatchObject({
+      extraContent: {
+        "com.openclaw.presentation": {
+          version: 1,
+          type: "message.presentation",
+        },
+      },
+    });
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("keeps presentation metadata on the media delivery after reusing a draft", async () => {
+    const presentation: MessagePresentation = {
+      title: "Environment",
+      blocks: [
+        {
+          type: "select",
+          options: [{ label: "Production", value: "/deploy production" }],
+        },
+      ],
+    };
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Choose" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    await deliver(
+      { text: "Choose", mediaUrl: "https://example.com/image.png", presentation },
+      { kind: "final" },
+    );
+
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledOnce();
+    const delivery = requireRecord(
+      callArg(deliverMatrixRepliesMock, 0, 0, "media presentation delivery"),
+      "media presentation delivery",
+    );
+    const deliveredPayload = requireRecord(
+      requireArray(delivery.replies, "media presentation replies")[0],
+      "media presentation payload",
+    );
+    expect(deliveredPayload.presentation).toBeUndefined();
+    expect(deliveredPayload.channelData).toMatchObject({
+      matrix: {
+        extraContent: {
+          "com.openclaw.presentation": {
+            version: 1,
+            type: "message.presentation",
+            title: "Environment",
+          },
+        },
+      },
     });
     await finish();
   });

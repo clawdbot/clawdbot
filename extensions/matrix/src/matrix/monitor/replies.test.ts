@@ -501,4 +501,142 @@ describe("deliverMatrixReplies", () => {
     expect(sendCall(0)[1]).toBe("caption");
     expect(sendOptions(0).mediaUrl).toBe("https://example.com/a.jpg");
   });
+
+  it("renders presentation metadata for direct Matrix replies", async () => {
+    const presentation = {
+      title: "Environment",
+      blocks: [
+        {
+          type: "select" as const,
+          placeholder: "Environment",
+          options: [
+            {
+              label: "Production",
+              action: { type: "command" as const, command: "/deploy production" },
+            },
+          ],
+        },
+      ],
+    };
+
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "Choose", presentation }],
+      roomId: "room:7",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(sendCall(0)[1]).toContain("Production");
+    expect(sendCall(0)[1]).toContain("/deploy production");
+    expect(sendCall(0)[1]).not.toBe("Choose");
+    expect(sendOptions(0).extraContent).toEqual({
+      "com.openclaw.presentation": {
+        ...presentation,
+        version: 1,
+        type: "message.presentation",
+      },
+    });
+  });
+
+  it("does not drop controls-only Matrix replies", async () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Deploy", action: { type: "command" as const, command: "/deploy" } }],
+        },
+      ],
+    };
+
+    const result = await deliverMatrixReplies({
+      cfg,
+      replies: [{ presentation }],
+      roomId: "room:8",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      replyToMode: "off",
+    });
+
+    expect(result.visibleReplySent).toBe(true);
+    expect(sendMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(String(sendCall(0)[1]).trim()).not.toBe("");
+    expect(runtimeEnv.error).not.toHaveBeenCalledWith("matrix reply missing text/media");
+    expect(sendOptions(0).extraContent).toMatchObject({
+      "com.openclaw.presentation": {
+        version: 1,
+        type: "message.presentation",
+      },
+    });
+  });
+
+  it("preserves authored fallback when Matrix drops unsupported data blocks", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        {
+          text: "Authored table fallback",
+          presentationTextMode: "fallback",
+          presentation: {
+            title: "Status",
+            blocks: [
+              {
+                type: "table",
+                caption: "Session status",
+                headers: ["Item", "Value"],
+                rows: [["Model", "example/model"]],
+              },
+            ],
+          },
+        },
+      ],
+      roomId: "room:9",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledOnce();
+    expect(sendCall(0)[1]).toBe("Authored table fallback");
+    expect(sendOptions(0).extraContent).toBeUndefined();
+  });
+
+  it("attaches presentation metadata only to the first Matrix media event", async () => {
+    const presentation = {
+      title: "Environment",
+      blocks: [
+        {
+          type: "select" as const,
+          options: [{ label: "Production", value: "/deploy production" }],
+        },
+      ],
+    };
+
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        {
+          text: "Choose",
+          mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+          presentation,
+        },
+      ],
+      roomId: "room:9",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(2);
+    expect(sendOptions(0).extraContent).toMatchObject({
+      "com.openclaw.presentation": {
+        version: 1,
+        type: "message.presentation",
+        title: "Environment",
+      },
+    });
+    expect(sendOptions(1).extraContent).toBeUndefined();
+  });
 });

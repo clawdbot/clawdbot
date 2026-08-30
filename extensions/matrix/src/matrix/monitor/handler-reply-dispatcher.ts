@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
+import { prepareMatrixReplyPayload, resolveMatrixExtraContent } from "../presentation.js";
 import type { MatrixClient } from "../sdk.js";
 import type { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
@@ -150,7 +151,6 @@ export function createMatrixReplyDispatcher(config: {
         return replacement;
       };
       if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
-        const { hasMedia } = resolveSendableOutboundReplyParts(payload);
         const ttsSupplement = getReplyPayloadTtsSupplement(payload);
         const fallbackPayload =
           ttsSupplement &&
@@ -158,13 +158,15 @@ export function createMatrixReplyDispatcher(config: {
           !payload.text?.trim()
             ? { ...payload, text: ttsSupplement.spokenText }
             : payload;
+        const preparedPayload = prepareMatrixReplyPayload(fallbackPayload);
+        const { hasMedia } = resolveSendableOutboundReplyParts(preparedPayload);
 
         if (draftController.draftDisposition() !== "active") {
           await draftStream.discardPending();
           return await completeDelivery(
             await deliverMatrixReplies({
               cfg,
-              replies: [fallbackPayload],
+              replies: [preparedPayload],
               roomId,
               client,
               runtime,
@@ -180,12 +182,12 @@ export function createMatrixReplyDispatcher(config: {
 
         const payloadReplyMismatch =
           !threadTarget &&
-          (replyToMode !== "off" || payload.replyToTag || payload.replyToCurrent) &&
-          normalizeOptionalString(payload.replyToId) !== draftController.currentReplyToId();
+          (replyToMode !== "off" || preparedPayload.replyToTag || preparedPayload.replyToCurrent) &&
+          normalizeOptionalString(preparedPayload.replyToId) !== draftController.currentReplyToId();
         let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
         const canPotentiallyFinalizeDraft =
-          Boolean(payload.text?.trim()) &&
-          !payload.isError &&
+          Boolean(preparedPayload.text?.trim()) &&
+          !preparedPayload.isError &&
           !payloadReplyMismatch &&
           !mustDeliverFinalNormally;
 
@@ -198,23 +200,27 @@ export function createMatrixReplyDispatcher(config: {
         const draftEventId = draftStream.eventId();
         const draftFinalTextNeedsNormalMentionDelivery =
           Boolean(draftEventId) &&
-          typeof payload.text === "string" &&
-          Boolean(payload.text.trim()) &&
-          !payload.isError &&
+          typeof preparedPayload.text === "string" &&
+          Boolean(preparedPayload.text.trim()) &&
+          !preparedPayload.isError &&
           !payloadReplyMismatch &&
           !mustDeliverFinalNormally &&
-          (await matrixTextWouldActivateMentions(client, payload.text));
+          (await matrixTextWouldActivateMentions(client, preparedPayload.text));
 
         if (
           draftEventId &&
-          payload.text &&
-          !payload.isError &&
+          preparedPayload.text &&
+          !preparedPayload.isError &&
           !hasMedia &&
           !payloadReplyMismatch &&
           !mustDeliverFinalNormally &&
           !draftFinalTextNeedsNormalMentionDelivery
         ) {
-          const finalPreviewText = payload.text;
+          const finalPreviewText = preparedPayload.text;
+          const presentationExtraContent = resolveMatrixExtraContent(preparedPayload);
+          const finalEditExtraContent = quietDraftStreaming
+            ? buildMatrixFinalizedPreviewContent(presentationExtraContent)
+            : presentationExtraContent;
           const { prepareMatrixSingleText } = await loadMatrixSendModule();
           const preparedFinalPreviewContent = prepareMatrixSingleText(finalPreviewText, {
             cfg,
@@ -233,7 +239,7 @@ export function createMatrixReplyDispatcher(config: {
             }
           >({
             kind: "final",
-            payload,
+            payload: preparedPayload,
             adapter: defineFinalizableLivePreviewAdapter({
               draft: {
                 flush: async () => {},
@@ -246,13 +252,11 @@ export function createMatrixReplyDispatcher(config: {
                 finalizeLive: !(
                   quietDraftStreaming || !draftStream.matchesPreparedText(finalPreviewText)
                 ),
-                ...(quietDraftStreaming
-                  ? { extraContent: buildMatrixFinalizedPreviewContent() }
-                  : {}),
+                ...(finalEditExtraContent ? { extraContent: finalEditExtraContent } : {}),
               }),
               editFinal: async (_draftEventId, edit) => {
                 if (edit.finalizeLive) {
-                  if (!(await draftStream.finalizeLive())) {
+                  if (!(await draftStream.finalizeLive({ extraContent: edit.extraContent }))) {
                     throw new Error("Matrix draft live finalize failed");
                   }
                   finalizedDraftContent = draftStream.content() ?? preparedFinalPreviewContent;
@@ -284,7 +288,7 @@ export function createMatrixReplyDispatcher(config: {
                 deliver: async () =>
                   await deliverMatrixReplies({
                     cfg,
-                    replies: [fallbackPayload],
+                    replies: [preparedPayload],
                     roomId,
                     client,
                     runtime,
@@ -312,7 +316,7 @@ export function createMatrixReplyDispatcher(config: {
           return await completeDelivery(settledResult);
         } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
           let textEditOk = !mustDeliverFinalNormally;
-          const payloadText = payload.text ?? ttsSupplement?.spokenText;
+          const payloadText = preparedPayload.text ?? ttsSupplement?.spokenText;
           const preparedPayloadContent =
             typeof payloadText === "string"
               ? (await loadMatrixSendModule()).prepareMatrixSingleText(payloadText, {
@@ -363,15 +367,10 @@ export function createMatrixReplyDispatcher(config: {
           const draftContent = draftStream.content();
           const mediaPayload =
             ttsSupplement && reusesDraftAsFinalText
-              ? buildTtsSupplementMediaPayload(payload)
+              ? buildTtsSupplementMediaPayload(preparedPayload)
               : {
-                  ...payload,
-                  text: reusesDraftAsFinalText
-                    ? undefined
-                    : (payload.text ??
-                      (ttsSupplement?.visibleTextAlreadyDelivered === true
-                        ? undefined
-                        : ttsSupplement?.spokenText)),
+                  ...preparedPayload,
+                  text: reusesDraftAsFinalText ? undefined : preparedPayload.text,
                 };
           const providerDraftContent = finalizedDraftContent ?? preparedPayloadContent;
           const previewDelivery =
@@ -419,14 +418,14 @@ export function createMatrixReplyDispatcher(config: {
         }
         const shouldRedactDraft =
           Boolean(draftEventId) &&
-          (payload.isError ||
+          (preparedPayload.isError ||
             payloadReplyMismatch ||
             mustDeliverFinalNormally ||
             draftFinalTextNeedsNormalMentionDelivery);
         const deliverFallback = async () =>
           await deliverMatrixReplies({
             cfg,
-            replies: [fallbackPayload],
+            replies: [preparedPayload],
             roomId,
             client,
             runtime,

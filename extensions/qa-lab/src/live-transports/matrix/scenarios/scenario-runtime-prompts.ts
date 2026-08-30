@@ -21,6 +21,11 @@ export function buildMatrixPartialStreamingPrompt(sutUserId: string, text: strin
   return `${sutUserId} Partial streaming QA check: reply exactly \`${text}\`.`;
 }
 
+// The mock provider pauses after separate preview deltas so Matrix must create a draft.
+export function buildMatrixFinalOnlyStreamingPrompt(sutUserId: string, text: string) {
+  return `${sutUserId} Final-only marker streaming QA check: reply exactly \`${text}\`.`;
+}
+
 export const MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME = "QA_KICKOFF_TASK.md";
 const MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME =
   "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt";

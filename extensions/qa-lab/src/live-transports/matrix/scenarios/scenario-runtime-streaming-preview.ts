@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   advanceMatrixQaActorCursor,
+  buildMatrixFinalOnlyStreamingPrompt,
   buildMatrixPartialStreamingPrompt,
   buildMatrixQuietStreamingPrompt,
   buildMatrixReplyArtifact,
@@ -59,7 +60,7 @@ export async function runStreamingReplacementRetentionScenario(
   });
   try {
     const firstDriverEventId = await client.sendTextMessage({
-      body: buildMatrixReplacementPrompt(context.sutUserId, firstText),
+      body: buildMatrixFinalOnlyStreamingPrompt(context.sutUserId, firstText),
       mentionUserIds: [context.sutUserId],
       roomId: context.roomId,
     });
@@ -101,7 +102,7 @@ export async function runStreamingReplacementRetentionScenario(
     const secondText = `@room ${buildMatrixStreamingPreviewFinalText("MATRIX_QA_SUPERSEDED_DRAFT")}`;
     const secondToken = secondText.split(" ")[1]!;
     const secondDriverEventId = await client.sendTextMessage({
-      body: buildMatrixReplacementPrompt(context.sutUserId, secondText),
+      body: buildMatrixFinalOnlyStreamingPrompt(context.sutUserId, secondText),
       mentionUserIds: [context.sutUserId],
       roomId: context.roomId,
     });
@@ -215,12 +216,6 @@ export async function runStreamingReplacementRetentionScenario(
   } finally {
     faultRule.remove();
   }
-}
-
-function buildMatrixReplacementPrompt(sutUserId: string, finalText: string) {
-  // This fixture emits a short preview separately before the oversized final;
-  // generic partial streaming can finish before Matrix creates any draft.
-  return `${sutUserId} Final-only marker streaming QA check: reply exactly \`${finalText}\`.`;
 }
 
 function buildMatrixStreamingPreviewFinalText(prefix: string) {

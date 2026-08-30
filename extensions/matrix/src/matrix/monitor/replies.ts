@@ -12,6 +12,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { getMatrixRuntime } from "../../runtime.js";
+import { prepareMatrixReplyPayload, resolveMatrixExtraContent } from "../presentation.js";
 import type { MatrixClient } from "../sdk.js";
 import { sendMessageMatrix } from "../send.js";
 import type { MatrixSendResult } from "../send/types.js";
@@ -131,14 +132,18 @@ export async function deliverMatrixReplies(params: {
   const acceptedResults: MatrixSendResult[] = [];
   try {
     for (const reply of params.replies) {
-      const visibleText = resolveVisibleMatrixReplyText(reply.text);
-      const { hasMedia, hasText, mediaUrls } = resolveSendableOutboundReplyParts(reply);
-      if (reply.isReasoning === true || (!hasMedia && reply.text && visibleText === undefined)) {
+      const preparedReply = prepareMatrixReplyPayload(reply);
+      const visibleText = resolveVisibleMatrixReplyText(preparedReply.text);
+      const { hasMedia, hasText, mediaUrls } = resolveSendableOutboundReplyParts(preparedReply);
+      if (
+        preparedReply.isReasoning === true ||
+        (!hasMedia && preparedReply.text && visibleText === undefined)
+      ) {
         logVerbose("matrix reply suppressed as reasoning-only");
         continue;
       }
       if (!hasText && !hasMedia) {
-        if (reply?.audioAsVoice) {
+        if (preparedReply.audioAsVoice) {
           logVerbose("matrix reply has audioAsVoice without media/text; skipping");
           continue;
         }
@@ -146,14 +151,17 @@ export async function deliverMatrixReplies(params: {
         continue;
       }
       const explicitReplyToId =
-        reply.replyToTag || reply.replyToCurrent ? reply.replyToId?.trim() : undefined;
+        preparedReply.replyToTag || preparedReply.replyToCurrent
+          ? preparedReply.replyToId?.trim()
+          : undefined;
       const rawText = visibleText ?? "";
+      const extraContent = resolveMatrixExtraContent(preparedReply);
 
       const replyToIdForReply =
         explicitReplyToId ||
         (params.threadId ||
         (params.replyToMode !== "off" && (params.replyToMode === "all" || !hasRepliedRef.value))
-          ? (reply.replyToId ?? params.replyToId)?.trim()
+          ? (preparedReply.replyToId ?? params.replyToId)?.trim()
           : undefined);
       const onDeliveryResult = (result: MatrixSendResult) => {
         // A concrete event consumes the first-reply slot even when a later event fails.
@@ -171,6 +179,7 @@ export async function deliverMatrixReplies(params: {
           replyToId: replyToIdForReply,
           threadId: params.threadId,
           accountId: params.accountId,
+          extraContent,
           onDeliveryResult,
         });
         continue;
@@ -186,8 +195,9 @@ export async function deliverMatrixReplies(params: {
           mediaLocalRoots: params.mediaLocalRoots,
           replyToId: replyToIdForReply,
           threadId: params.threadId,
-          audioAsVoice: reply.audioAsVoice,
+          audioAsVoice: preparedReply.audioAsVoice,
           accountId: params.accountId,
+          extraContent: first ? extraContent : undefined,
           onDeliveryResult,
         });
         first = false;

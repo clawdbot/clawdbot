@@ -77,7 +77,7 @@ describe("Matrix QA Lab scenario flows", () => {
 
   it("expands every Matrix module call through the shared flow host", () => {
     const bindings = new Set<string>();
-    expect(scenarios).toHaveLength(83);
+    expect(scenarios).toHaveLength(84);
     for (const scenario of scenarios) {
       expect(scenario.execution.kind, scenario.id).toBe("flow");
       if (scenario.execution.kind !== "flow") {
@@ -97,7 +97,7 @@ describe("Matrix QA Lab scenario flows", () => {
         "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)",
       );
     }
-    expect(bindings.size).toBe(83);
+    expect(bindings.size).toBe(84);
   });
 
   it("prepares the shared canary only for canary-dependent scenarios", () => {

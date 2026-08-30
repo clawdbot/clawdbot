@@ -1,0 +1,29 @@
+title: Matrix direct agent reply preserves presentation
+scenario:
+  id: matrix-presentation-agent-reply-direct
+  surface: channels
+  coverage:
+    primary:
+      - matrix.message-presentation-metadata
+    secondary:
+      - agent-runtime.tool-ask-user
+  objective: Matrix direct agent reply preserves presentation
+  successCriteria:
+    - Matrix direct agent reply preserves presentation completes successfully.
+  execution:
+    kind: flow
+    channel: matrix
+    providerMode: mock-openai
+    timeoutMs: 75000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        streaming:
+          mode: off
+        toolProfile: coding
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runDirectPresentationReplyScenario
+  args:
+    - expr: "scenarioContext"

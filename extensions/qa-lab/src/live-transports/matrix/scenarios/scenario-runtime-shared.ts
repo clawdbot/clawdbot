@@ -100,6 +100,7 @@ export function resolveMatrixQaNoReplyWindowMs(timeoutMs: number) {
 export {
   buildExactMarkerPrompt,
   buildMatrixBlockStreamingPrompt,
+  buildMatrixFinalOnlyStreamingPrompt,
   buildMatrixPartialStreamingPrompt,
   buildMatrixQaToken,
   buildMatrixQuietStreamingPrompt,
@@ -146,7 +147,9 @@ export function buildMatrixReplyArtifact(
     bodyPreview: truncateMatrixQaPreview(replyBody),
     eventId: event.eventId,
     mentions: event.mentions,
+    presentation: event.presentation,
     relatesTo: event.relatesTo,
+    replacesEventId: event.replacesEventId,
     sender: event.sender,
     ...(token ? { tokenMatched: doesMatrixQaReplyBodyMatchToken(event, token) } : {}),
   };

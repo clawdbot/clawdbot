@@ -7,96 +7,21 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
-  renderMessagePresentationFallbackText,
-  type MessagePresentation,
-} from "openclaw/plugin-sdk/interactive-runtime";
-import {
   resolveSendableOutboundReplyParts,
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import {
+  MATRIX_PRESENTATION_CAPABILITIES,
+  renderMatrixPresentationPayload,
+  resolveMatrixExtraContent,
+  resolveMatrixPayloadText,
+} from "./matrix/presentation.js";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
-import type { MatrixExtraContentFields } from "./matrix/send/types.js";
-
-const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
-const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
-const MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT = "---";
-
-type MatrixChannelData = {
-  extraContent?: MatrixExtraContentFields;
-};
 
 function toMatrixOutboundResult<T extends { roomId: string }>(result: T) {
   const { roomId, ...delivery } = result;
   return { ...delivery, target: { kind: "room" as const, id: roomId } };
-}
-
-function resolveMatrixChannelData(payload: ReplyPayload): MatrixChannelData {
-  const raw = asOptionalRecord(payload.channelData)?.matrix;
-  return (asOptionalRecord(raw) as MatrixChannelData | undefined) ?? {};
-}
-
-function buildMatrixPresentationContent(presentation: MessagePresentation) {
-  return {
-    ...presentation,
-    version: 1,
-    type: MATRIX_OPENCLAW_PRESENTATION_TYPE,
-  };
-}
-
-function resolveMatrixPresentationContent(
-  payload: ReplyPayload,
-): Record<string, unknown> | undefined {
-  const extraContent = asOptionalRecord(resolveMatrixChannelData(payload).extraContent);
-  const presentation = asOptionalRecord(extraContent?.[MATRIX_OPENCLAW_PRESENTATION_KEY]);
-  if (
-    !presentation ||
-    presentation.version !== 1 ||
-    presentation.type !== MATRIX_OPENCLAW_PRESENTATION_TYPE
-  ) {
-    return undefined;
-  }
-  return presentation;
-}
-
-function renderMatrixPresentationPayload(params: {
-  payload: ReplyPayload;
-  presentation: MessagePresentation;
-}): ReplyPayload {
-  const matrixData = resolveMatrixChannelData(params.payload);
-  const fallbackText = renderMessagePresentationFallbackText({
-    text: params.payload.text,
-    presentation: params.presentation,
-    emptyFallback: MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT,
-  });
-  return {
-    ...params.payload,
-    text: fallbackText,
-    channelData: {
-      ...params.payload.channelData,
-      matrix: {
-        ...matrixData,
-        extraContent: {
-          [MATRIX_OPENCLAW_PRESENTATION_KEY]: buildMatrixPresentationContent(params.presentation),
-        },
-      },
-    },
-  };
-}
-
-function resolveMatrixPayloadText(payload: ReplyPayload): string {
-  const text = payload.text ?? "";
-  if (text.trim() || !resolveMatrixPresentationContent(payload)) {
-    return text;
-  }
-  return MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT;
-}
-
-function resolveMatrixExtraContent(payload: ReplyPayload): MatrixExtraContentFields | undefined {
-  const presentation = resolveMatrixPresentationContent(payload);
-  return presentation ? { [MATRIX_OPENCLAW_PRESENTATION_KEY]: presentation } : undefined;
 }
 
 function resolveMatrixDeliveryProgress(
@@ -116,19 +41,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  presentationCapabilities: {
-    supported: true,
-    buttons: true,
-    selects: true,
-    context: true,
-    divider: true,
-    limits: {
-      text: {
-        markdownDialect: "markdown",
-        supportsEdit: true,
-      },
-    },
-  },
+  presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
   renderPresentation: ({ payload, presentation }) =>
     renderMatrixPresentationPayload({ payload, presentation }),
   sendPayload: async ({

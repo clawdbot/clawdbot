@@ -114,6 +114,53 @@ describe("matrix observed event normalization", () => {
     });
   });
 
+  it("summarizes presentation metadata from replacement content", () => {
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$replace",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "* Where should this deploy?",
+          msgtype: "m.text",
+          "m.new_content": {
+            body: "Where should this deploy?",
+            msgtype: "m.text",
+            "com.openclaw.presentation": {
+              version: 1,
+              type: "message.presentation",
+              title: "Deploy",
+              blocks: [
+                { type: "text", text: "Where should this deploy?" },
+                {
+                  type: "buttons",
+                  buttons: [
+                    { label: "Staging", action: { type: "question" } },
+                    { label: "Production", action: { type: "question" } },
+                  ],
+                },
+              ],
+            },
+          },
+          "m.relates_to": {
+            rel_type: "m.replace",
+            event_id: "$draft",
+          },
+        },
+      }),
+    ).toMatchObject({
+      body: "Where should this deploy?",
+      presentation: {
+        blockTypes: ["text", "buttons"],
+        buttonLabels: ["Staging", "Production"],
+        title: "Deploy",
+        type: "message.presentation",
+        version: 1,
+      },
+      replacesEventId: "$draft",
+    });
+  });
+
   it.each([
     { name: "initial preview", content: { "org.matrix.msc4357.live": {} }, live: true },
     {

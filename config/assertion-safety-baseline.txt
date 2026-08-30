@@ -717,7 +717,6 @@ extensions/matrix/src/matrix/send/client.ts	1
 extensions/matrix/src/matrix/send/formatting.ts	1
 extensions/matrix/src/matrix/thread-bindings.ts	2
 extensions/matrix/src/onboarding.ts	10
-extensions/matrix/src/outbound.ts	1
 extensions/matrix/src/profile-update.ts	2
 extensions/matrix/src/setup-config.ts	6
 extensions/matrix/src/setup-contract.ts	1

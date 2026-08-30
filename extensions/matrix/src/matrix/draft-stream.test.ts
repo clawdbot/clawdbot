@@ -89,6 +89,7 @@ const sendModuleMocks = vi.hoisted(() => {
         };
         msgtype?: string;
         live?: boolean;
+        extraContent?: Record<string, unknown>;
       } = {},
     ) => {
       const convertedText = convertMarkdownTablesMock(newText);
@@ -418,6 +419,31 @@ describe("createMatrixDraftStream", () => {
 
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
     expect(sendMessageMock.mock.calls.at(1)?.[1]).not.toHaveProperty("org.matrix.msc4357.live");
+  });
+
+  it("forwards extra Matrix content when finalizing a live draft", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "partial",
+    });
+    const extraContent = {
+      "com.openclaw.presentation": {
+        version: 1,
+        type: "message.presentation",
+      },
+    };
+
+    stream.update("Hello");
+    await stream.stop();
+    await stream.finalizeLive({ extraContent });
+
+    expect(sendModuleMocks.editMessageMatrix).toHaveBeenCalledTimes(1);
+    expect(sendModuleMocks.editMessageMatrix.mock.calls[0]?.[3]).toMatchObject({
+      extraContent,
+      live: false,
+    });
   });
 
   it("marks live finalize failures for normal final delivery fallback", async () => {

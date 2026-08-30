@@ -3,7 +3,7 @@ import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sd
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";
 import { editMessageMatrix, prepareMatrixSingleText, sendSingleTextMessageMatrix } from "./send.js";
-import { MsgType } from "./send/types.js";
+import { MsgType, type MatrixExtraContentFields } from "./send/types.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
 type MatrixDraftPreviewMode = "partial" | "quiet";
@@ -36,7 +36,7 @@ type MatrixDraftStream = {
   /** Cancel pending draft updates without creating a new preview event. */
   discardPending: () => Promise<void>;
   /** Clear the MSC4357 live marker in place when the draft is kept as final text. */
-  finalizeLive: () => Promise<boolean>;
+  finalizeLive: (opts?: { extraContent?: MatrixExtraContentFields }) => Promise<boolean>;
   /** Reset state for the next text block (after tool calls). */
   reset: () => void;
   /** The event ID of the current draft message, if any. */
@@ -162,7 +162,9 @@ export function createMatrixDraftStream(params: {
 
   log?.(`draft-stream: ready (throttleMs=${DEFAULT_THROTTLE_MS})`);
 
-  const finalizeLive = async (): Promise<boolean> => {
+  const finalizeLive = async (
+    opts: { extraContent?: MatrixExtraContentFields } = {},
+  ): Promise<boolean> => {
     // Send a final edit without the MSC4357 live marker to signal that
     // the stream is complete. Supporting clients will stop the streaming
     // animation and display the final content.
@@ -177,6 +179,7 @@ export function createMatrixDraftStream(params: {
           msgtype: preview.msgtype,
           includeMentions: preview.includeMentions,
           live: false,
+          extraContent: opts.extraContent,
         });
         log?.(`draft-stream: finalized ${currentEventId} (MSC4357 stream ended)`);
         return true;

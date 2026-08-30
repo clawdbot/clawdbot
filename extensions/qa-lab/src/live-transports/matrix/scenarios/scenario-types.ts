@@ -5,7 +5,9 @@ export type MatrixQaReplyArtifact = {
   bodyPreview?: string;
   eventId: string;
   mentions?: MatrixQaObservedEvent["mentions"];
+  presentation?: MatrixQaObservedEvent["presentation"];
   relatesTo?: MatrixQaObservedEvent["relatesTo"];
+  replacesEventId?: string;
   sender?: string;
   tokenMatched?: boolean;
 };

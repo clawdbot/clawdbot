@@ -1,5 +1,6 @@
 // Qa Lab Matrix module implements events behavior.
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 export type MatrixQaRoomEvent = {
   content?: Record<string, unknown>;
   event_id?: string;
@@ -39,6 +40,14 @@ type MatrixQaObservedApproval = {
   version?: number;
 };
 
+type MatrixQaObservedPresentation = {
+  blockTypes?: string[];
+  buttonLabels?: string[];
+  title?: string;
+  type?: string;
+  version?: number;
+};
+
 export type MatrixQaObservedEvent = {
   kind: MatrixQaObservedEventKind;
   roomId: string;
@@ -70,9 +79,11 @@ export type MatrixQaObservedEvent = {
   redactsEventId?: string;
   attachment?: MatrixQaObservedEventAttachment;
   approval?: MatrixQaObservedApproval;
+  presentation?: MatrixQaObservedPresentation;
 };
 
 const MATRIX_QA_APPROVAL_METADATA_KEY = "com.openclaw.approval";
+const MATRIX_QA_PRESENTATION_METADATA_KEY = "com.openclaw.presentation";
 const MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS = 160;
 
 function normalizeMentionUserIds(value: unknown) {
@@ -219,6 +230,33 @@ function normalizeMatrixQaApprovalMetadata(value: unknown): MatrixQaObservedAppr
   };
 }
 
+function normalizeMatrixQaPresentationMetadata(
+  value: unknown,
+): MatrixQaObservedPresentation | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const blocks = Array.isArray(value.blocks) ? value.blocks.filter(isRecord) : [];
+  const blockTypes = blocks
+    .map((block) => (typeof block.type === "string" ? block.type : undefined))
+    .filter((type): type is string => type !== undefined);
+  const buttonLabels = blocks.flatMap((block) =>
+    block.type === "buttons" && Array.isArray(block.buttons)
+      ? block.buttons
+          .filter(isRecord)
+          .map((button) => (typeof button.label === "string" ? button.label : undefined))
+          .filter((label): label is string => label !== undefined)
+      : [],
+  );
+  return {
+    ...(blockTypes.length ? { blockTypes } : {}),
+    ...(buttonLabels.length ? { buttonLabels } : {}),
+    ...(typeof value.title === "string" ? { title: value.title } : {}),
+    ...(typeof value.type === "string" ? { type: value.type } : {}),
+    ...(typeof value.version === "number" ? { version: value.version } : {}),
+  };
+}
+
 export function normalizeMatrixQaObservedEvent(
   roomId: string,
   event: MatrixQaRoomEvent,
@@ -272,6 +310,10 @@ export function normalizeMatrixQaObservedEvent(
   const approval = normalizeMatrixQaApprovalMetadata(
     messageContent[MATRIX_QA_APPROVAL_METADATA_KEY] ?? content[MATRIX_QA_APPROVAL_METADATA_KEY],
   );
+  const presentation = normalizeMatrixQaPresentationMetadata(
+    messageContent[MATRIX_QA_PRESENTATION_METADATA_KEY] ??
+      content[MATRIX_QA_PRESENTATION_METADATA_KEY],
+  );
   const redactsEventId =
     type === "m.room.redaction"
       ? typeof event.redacts === "string"
@@ -317,6 +359,7 @@ export function normalizeMatrixQaObservedEvent(
     ...(replacesEventId ? { replacesEventId } : {}),
     ...(attachment ? { attachment } : {}),
     ...(approval ? { approval } : {}),
+    ...(presentation ? { presentation } : {}),
   };
 }
 
