@@ -257,12 +257,12 @@ describe("scripts/test-live-shard", () => {
   });
 
   it("runs the frozen candidate's available build entrypoint and advertised profile", () => {
-    expect(resolveLiveShardBuildEntrypoint((file) => file.endsWith(".mts"))).toEqual([
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mts")).toEqual([
       "--import",
       "tsx",
       "scripts/build-all.mts",
     ]);
-    expect(resolveLiveShardBuildEntrypoint((file) => file.endsWith(".mjs"))).toEqual([
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mjs")).toEqual([
       "scripts/build-all.mjs",
     ]);
     expect(() => resolveLiveShardBuildEntrypoint(() => false)).toThrow(

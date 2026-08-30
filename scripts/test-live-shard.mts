@@ -724,8 +724,8 @@ export function resolveLiveShardBuildEntrypoint(exists = fs.existsSync): string[
   throw new Error("Live test shard cannot find scripts/build-all.{mts,mjs}");
 }
 
-export function resolveLiveShardBuildProfile(profile: string, usage: string): string {
-  return usage.split("\n").includes(`  ${profile}`) ? profile : "full";
+export function resolveLiveShardBuildProfile(profile: string, helpOutput: string): string {
+  return helpOutput.split("\n").includes(`  ${profile}`) ? profile : "full";
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
