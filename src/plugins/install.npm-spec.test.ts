@@ -1559,6 +1559,35 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "version-drift-plugin"))).toBe(false);
   });
 
+  it("rejects exact npm requests when registry metadata resolves another version", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "selector-drift-plugin";
+    const requestedVersion = "2.0.0";
+    const resolvedVersion = "1.0.0";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@${requestedVersion}`,
+      packageName,
+      version: resolvedVersion,
+      pluginId: packageName,
+      npmRoot,
+      expectedDependencySpec: resolvedVersion,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@${requestedVersion}`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain(`expected exact version ${requestedVersion}`);
+    expect(result.error).toContain(`metadata resolved ${packageName}@${resolvedVersion}`);
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
+  });
+
   it("reports the canonical package when npm metadata identity drifts", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const requestedPackageName = "identity-diagnostic-plugin";
