@@ -29,7 +29,6 @@ import {
   isResponsesApiAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
   scopeAssistantMessageToStreamBlock,
-  shouldSuppressAssistantVisibleOutput,
   shouldSuppressDeterministicApprovalOutput,
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -137,8 +136,6 @@ export function handleMessageStart(
   emitAssistantMessageStart(ctx);
 }
 
-/** Handles assistant message deltas, reasoning, directives, and block replies. */
-
 export function handleMessageEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -153,7 +150,7 @@ export function handleMessageEnd(
   ctx.state.assistantTurnCount += 1;
   const assistantMessage = preservePendingAssistantUsage(msg, ctx.state.pendingAssistantUsage);
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
-  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
+  const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
   // Provider completion can omit thinking_end; close the visible lane before final output.
@@ -174,14 +171,14 @@ export function handleMessageEnd(
         )
       : assistantMessage;
     const commentaryText = coerceChatContentText(extractAssistantCommentaryText(commentaryMessage));
-    appendRawStream({
+    appendRawStream(() => ({
       ts: Date.now(),
       event: "assistant_message_end",
       runId: ctx.params.runId,
       sessionId: (ctx.params.session as { id?: string }).id,
       rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
-    });
+    }));
     const commentaryAlreadyStreamed =
       isResponsesCommentary &&
       Boolean(ctx.state.deltaBuffer) &&
@@ -216,16 +213,18 @@ export function handleMessageEnd(
   }
   promoteThinkingTagsToBlocks(assistantMessage);
 
-  const rawText = coerceChatContentText(extractEmbeddedAssistantText(assistantMessage));
+  let rawText: string | undefined;
+  const getRawText = () =>
+    (rawText ??= coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)));
   const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
-  appendRawStream({
+  appendRawStream(() => ({
     ts: Date.now(),
     event: "assistant_message_end",
     runId: ctx.params.runId,
     sessionId: (ctx.params.session as { id?: string }).id,
-    rawText,
+    rawText: getRawText(),
     rawThinking: extractAssistantThinking(assistantMessage),
-  });
+  }));
   warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
   const visibleText =
     extractStandaloneMessageToolText(rawVisibleText, {
@@ -244,7 +243,7 @@ export function handleMessageEnd(
   const text = finalVisibleText;
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
-      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
+      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(getRawText())
       : "";
   const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();

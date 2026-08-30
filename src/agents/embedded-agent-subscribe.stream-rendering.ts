@@ -93,8 +93,8 @@ type StreamRenderingParams = {
   blockChunker: EmbeddedAgentSubscribeContext["blockChunker"];
   emitBlockReply: EmbeddedAgentSubscribeContext["emitBlockReply"];
   pendingBlockReplyTasks: Set<Promise<void>>;
-  pushAssistantText: (text: string) => void;
-  shouldSkipAssistantText: (text: string) => boolean;
+  pushAssistantText: (text: string, normalizedText?: string) => void;
+  shouldSkipAssistantText: (text: string, normalizedText?: string) => boolean;
 };
 
 export function createStreamRendering({
@@ -429,7 +429,7 @@ export function createStreamRendering({
       return;
     }
 
-    if (shouldSkipAssistantText(chunk)) {
+    if (shouldSkipAssistantText(chunk, normalizedChunk)) {
       if (slicedPrefixReplay) {
         markBlockReplyTextHandled();
       }
@@ -437,7 +437,7 @@ export function createStreamRendering({
     }
 
     if (!params.onBlockReply) {
-      pushAssistantText(chunk);
+      pushAssistantText(chunk, normalizedChunk);
       markBlockReplyTextHandled();
       return;
     }
@@ -462,7 +462,7 @@ export function createStreamRendering({
       }
       return;
     }
-    pushAssistantText(chunk);
+    pushAssistantText(chunk, normalizedChunk);
     emitBlockReply(
       {
         text: cleanedText,
