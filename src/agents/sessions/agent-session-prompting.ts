@@ -243,6 +243,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       if (
         persistedUserIdempotencyKey &&
         activeTail?.role === "user" &&
+        "idempotencyKey" in activeTail &&
         activeTail.idempotencyKey === persistedUserIdempotencyKey
       ) {
         // Compaction can restore the durable current user after the runner removed its replay.
