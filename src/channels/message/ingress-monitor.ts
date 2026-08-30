@@ -167,6 +167,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     ? AbortSignal.any([shutdown.signal, options.abortSignal])
     : shutdown.signal;
   const activeDeliveries = new Set<Promise<unknown>>();
+  // Deliveries that deferred: still live work awaited by stop, but no longer
+  // holding a start slot. Deferral already released the lane and handed the
+  // claim off, so counting them against startLimit would let a few waiting
+  // deliveries stall every other lane until they finish.
+  let deferredStartCapacity = 0;
   const deferredClaims = new Set<Promise<void>>();
   type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
   const queueFactory: () => Queue =
@@ -317,6 +322,17 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 
         let handedOff = false;
         let deferredHandoff = false;
+        let releasedStartCapacity = false;
+        let deliverySettled = false;
+        const releaseStartCapacity = () => {
+          if (releasedStartCapacity || deliverySettled) {
+            return;
+          }
+          releasedStartCapacity = true;
+          deferredStartCapacity += 1;
+          // A slot just freed; wake the pump so a waiting lane can use it.
+          requestDrain();
+        };
         let resolveDeferredClaim = () => {};
         const deferredClaim = options.deferredClaims
           ? new Promise<void>((resolve) => {
@@ -368,6 +384,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               deferredClaims.add(deferredClaim);
             }
             lifecycle.onDeferred();
+            releaseStartCapacity();
           },
           onAdoptionFinalizing: () => {
             handedOff = true;
@@ -395,7 +412,12 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           }
           throw error;
         } finally {
+          deliverySettled = true;
           activeDeliveries.delete(delivery);
+          if (releasedStartCapacity) {
+            releasedStartCapacity = false;
+            deferredStartCapacity -= 1;
+          }
           publishActivity();
         }
         if (result?.kind === "failed-retryable") {
@@ -500,7 +522,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
               !running ||
               isAborted() ||
               (options.drain?.startLimit !== undefined &&
-                activeDeliveries.size >= options.drain.startLimit),
+                activeDeliveries.size - deferredStartCapacity >= options.drain.startLimit),
           }),
         );
         if (waitForDeliveryIdleBeforeRepump) {
