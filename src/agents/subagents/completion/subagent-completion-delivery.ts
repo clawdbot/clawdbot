@@ -1,7 +1,3 @@
-import {
-  bindDeliveryQueueEntry,
-  upsertBoundDeliveryQueueEntryInDatabase,
-} from "../../../infra/delivery-queue-sqlite-bound.js";
 import { getDeliveryQueueEntryStatus } from "../../../infra/delivery-queue-sqlite.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import {
@@ -14,42 +10,28 @@ import {
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
 } from "../../../infra/session-delivery-queue-storage.js";
-import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
-import { resolveEventSessionKey } from "../../../routing/session-key.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../../state/openclaw-state-db.js";
-import {
-  findTaskByRunId,
-  getTaskById,
-  publishTaskRecordAfterAtomicStore,
-} from "../../../tasks/runtime-internal.js";
-import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
-import { formatTaskBlockedFollowupMessage } from "../../../tasks/task-executor-policy.js";
-import { readTaskRecord } from "../../../tasks/task-registry.store.sqlite.js";
+import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
+import { findTaskByRunId, getTaskById } from "../../../tasks/runtime-internal.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   safeRemoveAttachmentsDir,
 } from "../registry/subagent-registry-helpers.js";
-import {
-  loadPendingFinalDeliveryPayload,
-  markRequesterSettleWakePending,
-} from "../registry/subagent-registry-lifecycle-delivery.js";
+import { loadPendingFinalDeliveryPayload } from "../registry/subagent-registry-lifecycle-delivery.js";
 import type { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { readSubagentRun } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   admitSubagentCompletionDelivery,
+  blockSubagentCompletionDelivery,
+  publishCommittedRecords,
   settleSubagentCompletionDelivery,
+  SUSPENDED_RETENTION_MS,
 } from "./subagent-completion-admission.store.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 const CLAIM_LEASE_MS = 125_000;
-const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const MAX_DELIVERY_GENERATION = 10;
 const CANONICAL_RESULT_PROMPT =
   "A completed subagent task is ready for parent review. The canonical result follows.";
@@ -72,19 +54,6 @@ function findSubagentForTask(task: TaskRecord): SubagentRunRecord | undefined {
     }
   }
   return undefined;
-}
-
-function publishCommittedRecords(subagent: SubagentRunRecord, task: TaskRecord): void {
-  const live = subagentRuns.get(subagent.runId);
-  if (live) {
-    for (const key of Object.keys(live)) {
-      Reflect.deleteProperty(live, key);
-    }
-    Object.assign(live, subagent);
-  } else {
-    subagentRuns.set(subagent.runId, subagent);
-  }
-  publishTaskRecordAfterAtomicStore(task);
 }
 
 function projectRedrivenTask(
@@ -192,101 +161,6 @@ export function resolveCorrelatedSubagentDelivery(
     throw new SessionDeliveryDeferredError("correlated subagent delivery owner mismatch");
   }
   return { ...queued, message: canonicalResultMessage(entry) };
-}
-
-export function blockSubagentCompletionDelivery(params: {
-  subagent: SubagentRunRecord;
-  taskId: string;
-  reason: string;
-  suspendedReason?: "expiry" | "permanent_failure";
-  disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
-  databaseOptions?: OpenClawStateDatabaseOptions;
-}): boolean {
-  const generation = params.subagent.delivery?.generation ?? 1;
-  const now = Date.now();
-  return runOpenClawStateWriteTransaction((database) => {
-    const subagent = readSubagentRun(database, params.subagent.runId);
-    const task = readTaskRecord(database.db, params.taskId);
-    if (
-      !subagent ||
-      !task ||
-      task.runtime !== "subagent" ||
-      task.status !== "succeeded" ||
-      subagent.execution.status !== "terminal" ||
-      subagent.execution.outcome?.status !== "ok" ||
-      subagent.expectsCompletionMessage !== true ||
-      (subagent.taskRunId ?? subagent.runId) !== task.runId ||
-      (subagent.delivery?.generation ?? 1) !== generation
-    ) {
-      return false;
-    }
-    const delivery = ensureDeliveryState(subagent);
-    delivery.payload ??= loadPendingFinalDeliveryPayload(subagent);
-    Object.assign(delivery, {
-      status: params.suspendedReason ? ("suspended" as const) : ("failed" as const),
-      disposition: params.suspendedReason
-        ? ("permanent_failure" as const)
-        : (params.disposition ?? delivery.disposition),
-      lastError: params.reason,
-      deliveredAt: undefined,
-      announcedAt: undefined,
-      suspendedAt: params.suspendedReason ? (delivery.suspendedAt ?? now) : delivery.suspendedAt,
-      suspendedReason: params.suspendedReason ?? delivery.suspendedReason,
-      nextAttemptAt: undefined,
-      queueId: undefined,
-    });
-    Object.assign(subagent, { cleanupHandled: false, wakeOnDescendantSettle: undefined });
-    if (params.suspendedReason) {
-      markRequesterSettleWakePending(subagent);
-    } else {
-      subagent.suppressCompletionDelivery = true;
-    }
-    const terminal = resolveRequiredCompletionDeliveryFailureTerminalResult(params.reason);
-    Object.assign(task, {
-      deliveryStatus: "failed" as const,
-      ...terminal,
-      error: params.reason,
-      cleanupAfter: Math.max(task.cleanupAfter ?? 0, now + SUSPENDED_RETENTION_MS),
-      lastEventAt: now,
-    });
-    const text = task.notifyPolicy === "silent" ? null : formatTaskBlockedFollowupMessage(task);
-    const queued = text
-      ? prepareClaimedSessionDelivery(
-          {
-            kind: "systemEvent",
-            sessionKey: resolveEventSessionKey(task.requesterSessionKey),
-            ...(task.requesterAgentId ? { agentId: task.requesterAgentId } : {}),
-            text,
-            ...(subagent.requesterOrigin ? { deliveryContext: subagent.requesterOrigin } : {}),
-            idempotencyKey: `subagent-completion-blocked:${task.taskId}:generation:${generation}`,
-          },
-          0,
-          now,
-        )
-      : undefined;
-    if (queued) {
-      upsertBoundDeliveryQueueEntryInDatabase(
-        bindDeliveryQueueEntry({
-          queueName: SESSION_DELIVERY_QUEUE_NAME,
-          entry: queued,
-          insertOnly: true,
-        }),
-        database,
-      );
-    }
-    settleSubagentCompletionDelivery({
-      subagent,
-      task,
-      databaseOptions: { database },
-    });
-    deferSqlitePostCommitPublication(database.db, () => {
-      publishCommittedRecords(subagent, task);
-      if (queued) {
-        void scheduleSessionDelivery(queued.id);
-      }
-    });
-    return true;
-  }, params.databaseOptions);
 }
 
 export async function settleCorrelatedSubagentDelivery(

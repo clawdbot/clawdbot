@@ -9,7 +9,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { recordSubagentTerminalState } from "../../../sessions/session-state-events.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
-import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-delivery.js";
+import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { getDeliveryLastError } from "./subagent-delivery-state.js";
 import {

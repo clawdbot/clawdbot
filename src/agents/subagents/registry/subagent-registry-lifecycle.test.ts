@@ -171,8 +171,10 @@ vi.mock("../../../tasks/detached-task-runtime.js", () => ({
   setDetachedTaskDeliveryStatusByRunId: taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId,
 }));
 
-vi.mock("../completion/subagent-completion-delivery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../completion/subagent-completion-delivery.js")>()),
+vi.mock("../completion/subagent-completion-admission.store.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../completion/subagent-completion-admission.store.js")
+  >()),
   blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
 }));
 

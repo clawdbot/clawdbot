@@ -28,11 +28,11 @@ import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.st
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   admitSubagentCompletionDelivery,
+  blockSubagentCompletionDelivery,
   settleSubagentCompletionDelivery,
 } from "./subagent-completion-admission.store.js";
 import {
   admitCorrelatedSubagentSessionDelivery,
-  blockSubagentCompletionDelivery,
   dismissSubagentCompletionDelivery,
   resolveCorrelatedSubagentDelivery,
   retrySubagentCompletionDelivery,
