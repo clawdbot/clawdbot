@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionKeyForRequest } from "./session.runtime.js";
 
 const mocks = vi.hoisted(() => ({
-  listSessionEntriesCore: vi.fn(),
+  listSessionEntriesReadOnly: vi.fn(),
   loadExactSessionEntryReadOnly: vi.fn(),
   resolveStorePath: vi.fn(),
   listAgentIds: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock("../../config/sessions/main-session.js", async () => {
 });
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntriesCore: mocks.listSessionEntriesCore,
+  listSessionEntriesReadOnly: mocks.listSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly: mocks.loadExactSessionEntryReadOnly,
 }));
 
@@ -69,7 +69,7 @@ describe("resolveSessionKeyForRequest", () => {
         return entry ? { sessionKey, entry: structuredClone(entry) } : undefined;
       },
     );
-    mocks.listSessionEntriesCore.mockImplementation((scope?: { storePath?: string }) =>
+    mocks.listSessionEntriesReadOnly.mockImplementation((scope?: { storePath?: string }) =>
       Object.entries(stores[scope?.storePath ?? ""] ?? {}).map(([sessionKey, entry]) => ({
         sessionKey,
         entry,
@@ -197,7 +197,7 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionKey).toBe("agent:mybot:main");
     expect(result.sessionEntry).toBeUndefined();
     expect(result.storePath).toBe(SHARED_STORE_PATH);
-    expect(mocks.listSessionEntriesCore).not.toHaveBeenCalled();
+    expect(mocks.listSessionEntriesReadOnly).not.toHaveBeenCalled();
   });
 
   it("prefers the configured default-agent session over legacy main-store rows", () => {
@@ -317,8 +317,8 @@ describe("resolveSessionKeyForRequest", () => {
 
     expect(result.sessionKey).toBe("agent:mybot:explicit:target-session-id");
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
-    expect(mocks.listSessionEntriesCore).toHaveBeenCalledTimes(1);
-    expect(mocks.listSessionEntriesCore).toHaveBeenCalledWith({
+    expect(mocks.listSessionEntriesReadOnly).toHaveBeenCalledTimes(1);
+    expect(mocks.listSessionEntriesReadOnly).toHaveBeenCalledWith({
       agentId: "mybot",
       storePath: MYBOT_STORE_PATH,
       clone: false,
@@ -343,7 +343,7 @@ describe("resolveSessionKeyForRequest", () => {
 
   it("returns a deterministic explicit sessionKey when sessionId not found in any store", () => {
     setupMainAndMybotStorePaths();
-    mocks.listSessionEntriesCore.mockReturnValue([]);
+    mocks.listSessionEntriesReadOnly.mockReturnValue([]);
 
     const result = resolveSessionKeyForRequest({
       cfg: baseCfg,
@@ -394,16 +394,16 @@ describe("resolveSessionKeyForRequest", () => {
 
   it("skips already-searched primary store when iterating agents", () => {
     setupMainAndMybotStorePaths();
-    mocks.listSessionEntriesCore.mockReturnValue([]);
+    mocks.listSessionEntriesReadOnly.mockReturnValue([]);
 
     resolveSessionKeyForRequest({
       cfg: baseCfg,
       sessionId: "nonexistent-id",
     });
 
-    // listSessionEntriesCore should be called twice: once for main, once for mybot
+    // listSessionEntriesReadOnly should be called twice: once for main, once for mybot
     // (not twice for main)
-    const storePaths = mocks.listSessionEntriesCore.mock.calls.map((call) =>
+    const storePaths = mocks.listSessionEntriesReadOnly.mock.calls.map((call) =>
       String(call[0]?.storePath),
     );
     expect(storePaths).toHaveLength(2);
