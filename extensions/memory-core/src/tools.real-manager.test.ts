@@ -1,8 +1,10 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Memory Core integration tests exercise the real SQLite search manager through tools.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as generationLease from "./memory/manager-index-generation-lease.js";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
@@ -10,6 +12,7 @@ import {
 import { createMemorySearchTool, testing } from "./tools.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
+const { MemoryIndexManager } = await import("./memory/manager.js");
 
 describe("memory_search real manager", () => {
   const fixture: ManagerIndexFixture = createManagerIndexFixture({
@@ -169,5 +172,72 @@ describe("memory_search real manager", () => {
     expect(first.details).toMatchObject(expected);
     expect(replay.details).toMatchObject(expected);
     expect(fixture.provider.embedQueryCalls).toBe(0);
+  });
+
+  it("finishes one-shot cleanup when its deadline aborts a publication wait", async () => {
+    const cfg = fixture.createConfig({
+      provider: "none",
+      sources: ["memory"],
+      vectorEnabled: false,
+      minScore: 0,
+      onSearch: false,
+    });
+    const initializedManager = await fixture.getFreshManager(cfg, "cli");
+    await initializedManager.sync({ reason: "test", force: true });
+    const databasePath = initializedManager.status().dbPath;
+    if (!databasePath) {
+      throw new Error("memory search manager database path missing");
+    }
+    await initializedManager.close();
+
+    const publicationEntered = createDeferred<void>();
+    const releasePublication = createDeferred<void>();
+    const publication = generationLease.withMemoryIndexPublishGeneration(databasePath, async () => {
+      publicationEntered.resolve();
+      await releasePublication.promise;
+    });
+    await publicationEntered.promise;
+
+    const tool = createMemorySearchTool({
+      config: cfg,
+      agentId: "main",
+      oneShotCliRun: true,
+    });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+    const searchStarted = createDeferred<void>();
+    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
+    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
+      const acquired = await originalGet(params);
+      if (params.purpose !== "cli" || !acquired) {
+        return acquired;
+      }
+      const search = acquired.search.bind(acquired);
+      vi.spyOn(acquired, "search").mockImplementation(async (...args) => {
+        searchStarted.resolve();
+        return await search(...args);
+      });
+      return acquired;
+    });
+    vi.useFakeTimers();
+    let executionSettled = false;
+    const execution = tool.execute("timed-out-generation-wait", { query: "zebra" }).finally(() => {
+      executionSettled = true;
+    });
+    try {
+      await searchStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_100);
+      expect(executionSettled).toBe(true);
+      await expect(execution).resolves.toMatchObject({
+        details: { unavailable: true },
+      });
+    } finally {
+      releasePublication.resolve();
+      await vi.advanceTimersByTimeAsync(100);
+      await publication;
+      await execution.catch(() => undefined);
+      getSpy.mockRestore();
+    }
   });
 });

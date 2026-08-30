@@ -591,11 +591,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           childPath,
           [
             "const fs = require('node:fs');",
-            "fs.writeFileSync(process.argv[2], String(process.pid));",
-            "fs.writeFileSync(process.argv[3], String(process.ppid));",
             "process.on('SIGTERM', () => {});",
             "process.on('SIGHUP', () => {});",
             "setInterval(() => {}, 1000);",
+            // PID publication lets the shell signal us; install handlers first.
+            "fs.writeFileSync(process.argv[2], String(process.pid));",
+            "fs.writeFileSync(process.argv[3], String(process.ppid));",
             "",
           ].join("\n"),
         );
@@ -687,12 +688,13 @@ fi
         childPath,
         [
           "const fs = require('node:fs');",
-          "fs.writeFileSync(process.argv[2], String(process.pid));",
           "process.on('SIGTERM', () => {",
           "  fs.writeFileSync(process.argv[3], 'terminated');",
           "  process.exit(0);",
           "});",
           "setInterval(() => {}, 1000);",
+          // Both PID files announce readiness for immediate group termination.
+          "fs.writeFileSync(process.argv[2], String(process.pid));",
           "",
         ].join("\n"),
       );
@@ -701,13 +703,13 @@ fi
         [
           "const fs = require('node:fs');",
           "const { spawn } = require('node:child_process');",
-          "fs.writeFileSync(process.argv[3], String(process.pid));",
           "const child = spawn(process.execPath, [process.argv[2], process.argv[4], process.argv[5]], {",
           "  stdio: 'ignore',",
           "});",
           "child.unref();",
           "process.on('SIGTERM', () => process.exit(0));",
           "setInterval(() => {}, 1000);",
+          "fs.writeFileSync(process.argv[3], String(process.pid));",
           "",
         ].join("\n"),
       );

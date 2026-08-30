@@ -1173,6 +1173,26 @@ describe("backupVerifyCommand", () => {
             archivePath: `${stateAssetArchivePath}/memory/main.sqlite.reindex-lock.sqlite-wal`,
           },
           {
+            fileName: "generation-writer.sqlite",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-writer.sqlite`,
+          },
+          {
+            fileName: "generation-writer.sqlite-shm",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-writer.sqlite-shm`,
+          },
+          {
+            fileName: "generation-lock.sqlite",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-lock.sqlite`,
+          },
+          {
+            fileName: "generation-lock.sqlite-journal",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.generation-lock.sqlite-journal`,
+          },
+          {
             fileName: "reindex-tmp",
             contents: invalidSqlite,
             archivePath: `${stateAssetArchivePath}/memory/main.sqlite.tmp-${transientId}`,

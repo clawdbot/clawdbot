@@ -26,8 +26,8 @@ command handling is enabled for the surface.
   <Card title="Directives" icon="sliders">
     `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`,
     `/exec`, `/model`, `/queue` — stripped from the message before the model
-    sees it. Persist session settings when sent alone; act as inline hints
-    when sent with other text.
+    sees it. Most persist session settings when sent alone; `/exec` security
+    and approval options apply only to their message.
   </Card>
   <Card title="Inline shortcuts" icon="bolt">
     `/help`, `/commands`, `/status`, `/whoami` — run immediately and are
@@ -44,6 +44,10 @@ command handling is enabled for the surface.
       are removed. Text with no recognized directive is unchanged.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement.
+      `/exec security=... ask=...` is the exception: these options apply only
+      to the current message and never change later turns. Include them with
+      the task; use [session permission modes](/gateway/permission-modes) for
+      session-wide policy. `/exec host=... node=...` still persists placement.
     - In **normal chat** messages with other text, they act as inline hints and
       do **not** persist session settings.
       Model selection is the exception: an authorized inline `/model` or
@@ -207,7 +211,7 @@ plugins.
     | `/fast [status\|auto\|on\|off\|default]` | Show, set, or clear fast mode |
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
-    | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show or set exec defaults |
+    | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show resolved exec defaults; persist host/node placement, apply security/ask to this message only. See [Session permission modes](/gateway/permission-modes) |
     | `/login [codex\|openai\|openai-codex]` | Pair Codex/OpenAI login from a private chat or Web UI session. Owner/admin only |
     | `/model [name\|default\|list\|status] [-s\|--session\|-a\|--agent\|-g\|--global]` | Show or select a model. `-s` changes only this session; owner/admin `-a` and `-g` also update configured defaults |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |

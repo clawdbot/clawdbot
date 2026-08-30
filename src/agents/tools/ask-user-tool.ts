@@ -68,7 +68,12 @@ const AskUserToolSchema = Type.Object(
       ),
       { minItems: 1, maxItems: 3 },
     ),
-    timeoutSeconds: Type.Optional(Type.Integer()),
+    timeoutSeconds: Type.Optional(
+      Type.Integer({
+        description:
+          "Maximum human wait in seconds; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );

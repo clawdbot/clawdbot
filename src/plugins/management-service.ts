@@ -1389,11 +1389,13 @@ async function persistManagedSourceInstall(params: {
       try {
         await params.transaction?.rollback();
       } catch (rollbackError) {
-        throw new AggregateError(
+        // Both errors are retained; the install failure remains the primary cause.
+        const aggregate = new AggregateError(
           [error, rollbackError],
           "Plugin install failed and payload rollback failed",
-          { cause: rollbackError },
         );
+        aggregate.cause = error;
+        throw aggregate;
       }
     }
     throw error;

@@ -36,6 +36,36 @@ export function resolveInitialMemoryDirty(params: {
   );
 }
 
+export function resolveMemoryManagerSyncStatus(params: {
+  syncing: boolean;
+  memoryDirty: boolean;
+  sessionsDirty: boolean;
+  indexIdentityDirty: boolean;
+  backgroundMaintenance: boolean;
+  sources: Iterable<MemorySource>;
+}): { dirty: boolean; pendingSyncSources?: MemorySource[] } {
+  const pending = new Set<MemorySource>();
+  if (params.syncing && params.memoryDirty) {
+    pending.add("memory");
+  }
+  if (params.syncing && params.sessionsDirty) {
+    pending.add("sessions");
+  }
+  if (params.backgroundMaintenance) {
+    for (const source of params.sources) {
+      pending.add(source);
+    }
+  }
+  return {
+    dirty:
+      params.memoryDirty ||
+      params.sessionsDirty ||
+      params.indexIdentityDirty ||
+      params.backgroundMaintenance,
+    ...(pending.size > 0 ? { pendingSyncSources: Array.from(pending) } : {}),
+  };
+}
+
 export function resolveStatusProviderInfo(params: {
   provider: StatusProvider | null;
   providerInitialized: boolean;

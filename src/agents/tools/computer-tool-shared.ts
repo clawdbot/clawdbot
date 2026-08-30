@@ -15,6 +15,23 @@ export const MODEL_OBSERVATION_MAX_ELEMENTS = 200;
 
 export type ComputerToolAction = ComputerUseV2ActionName;
 
+/** The owner binds the execution target and revalidates its authority before every dispatch. */
+export type ComputerToolTransport = {
+  readonly computerUse?: ComputerUseCapabilityDescriptor;
+  resolveNode: (
+    query?: string,
+    signal?: AbortSignal,
+  ) => Promise<{ nodeId: string; computerUse?: ComputerUseCapabilityDescriptor }>;
+  invoke: (params: {
+    nodeId: string;
+    command: typeof COMPUTER_ACT_COMMAND | typeof SCREEN_SNAPSHOT_COMMAND;
+    commandParams: Record<string, unknown>;
+    timeoutMs?: number;
+    idempotencyKey?: string;
+    signal?: AbortSignal;
+  }) => Promise<unknown>;
+};
+
 export type ComputerTarget = { nodeId: string; screenIndex: number };
 
 export type ComputerFrame = {

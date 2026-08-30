@@ -458,27 +458,6 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
-  it("applies restrictive session policy even when global policy permits execution", async () => {
-    const { context } = await createExecution({
-      config: { tools: { exec: { security: "full", ask: "off" } } },
-      sessionEntry: { sessionId: "sdk-session", updatedAt: 1, execSecurity: "deny" },
-    });
-    let decision: CliBackendToolPermissionResult | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution);
-      yield SUCCESS_RESULT;
-    });
-
-    expect(decision).toEqual(
-      expect.objectContaining({
-        behavior: "deny",
-        message: expect.stringContaining("security=deny"),
-      }),
-    );
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
   it.each([
     {
       name: "full policy releases the exact original input",
@@ -572,7 +551,7 @@ describe("plugin-owned CLI execution host boundary", () => {
       config,
       nativeTools: ["WebFetch"],
       runId: "plugin-approval-restricted",
-      sessionEntry: { sessionId: "sdk-session", updatedAt: 1, execSecurity: "deny" },
+      sessionEntry: { sessionId: "sdk-session", updatedAt: 1, permissionMode: "read-only" },
     });
     await runPlugin(restricted.context, async function* (execution) {
       await expect(

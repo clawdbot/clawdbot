@@ -183,6 +183,11 @@ type GatewayKernelContext = {
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
+  approvalWebPushDelivery?: {
+    handleRequested: <TPayload>(record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
+    handleResolved: (resolved: { id: string }) => Promise<void>;
+    handleExpired: (request: { id: string }) => Promise<void>;
+  };
   pluginApprovalIosPushDelivery?: {
     handleRequested?: (
       request: PluginApprovalRequest,

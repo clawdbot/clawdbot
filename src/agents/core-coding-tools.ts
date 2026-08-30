@@ -30,6 +30,7 @@ import type {
   createWriteTool,
 } from "./sessions/tools/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
+import { resolveToolResultBudget } from "./tool-result-limits.js";
 
 function sandboxReadMounts(
   sandbox: SandboxContext,
@@ -135,6 +136,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           })
         : (options.baseToolFactories?.createReadTool ?? createReadTool)(options.codingRoot, {
             maxBytes: resolveAdaptiveReadMaxBytes(options),
+            modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
             modelHasVision: options.modelHasVision,
           });
       const guarded = options.workspaceOnly

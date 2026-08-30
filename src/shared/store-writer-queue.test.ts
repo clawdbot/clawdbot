@@ -1,7 +1,38 @@
 // Verifies queue ownership and reentrancy across separately loaded runtime chunks.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
-import type { StoreWriterQueue } from "./store-writer-queue.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "./store-writer-queue.js";
+
+it("retains each queued writer's caller context through async and reentrant work", async () => {
+  const contexts = new AsyncLocalStorage<string>();
+  const queues = new Map<string, StoreWriterQueue>();
+  const gate = createDeferred();
+  const write = (owner: string, wait: Promise<void>) =>
+    contexts.run(owner, () =>
+      runQueuedStoreWrite({
+        queues,
+        storePath: "shared-store",
+        label: owner,
+        fn: async () => {
+          await wait;
+          return runQueuedStoreWrite({
+            queues,
+            storePath: "shared-store",
+            label: "reentrant",
+            reentrant: true,
+            fn: async () => contexts.getStore(),
+          });
+        },
+      }),
+    );
+  const first = write("first-owner", gate.promise);
+  const second = write("second-owner", Promise.resolve());
+  gate.resolve();
+  expect(await Promise.all([first, second])).toEqual(["first-owner", "second-owner"]);
+  expect(queues.size).toBe(0);
+});
 
 it("shares reentrant writer context across duplicate module instances", async () => {
   const first = await importFreshModule<typeof import("./store-writer-queue.js")>(

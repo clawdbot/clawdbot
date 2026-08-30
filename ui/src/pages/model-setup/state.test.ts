@@ -21,6 +21,7 @@ describe("model setup state", () => {
         result: { ok: true, modelRef: "openai/gpt-5", latencyMs: 84, lines: [] },
         targetId: "openai",
         fallbackError: "failed",
+        restartWarning: "Restart the Gateway",
       }),
     ).toEqual({ phase: "success", modelRef: "openai/gpt-5", latencyMs: 84 });
     expect(
@@ -28,6 +29,7 @@ describe("model setup state", () => {
         result: { ok: false, status: "billing", error: "No credits" },
         targetId: "openai",
         fallbackError: "failed",
+        restartWarning: "Restart the Gateway",
       }),
     ).toEqual({ phase: "failure", targetId: "openai", status: "billing", error: "No credits" });
     expect(
@@ -35,6 +37,7 @@ describe("model setup state", () => {
         result: { ok: false },
         targetId: "openai",
         fallbackError: "failed",
+        restartWarning: "Restart the Gateway",
       }),
     ).toEqual({ phase: "failure", targetId: "openai", status: "unknown", error: "failed" });
   });

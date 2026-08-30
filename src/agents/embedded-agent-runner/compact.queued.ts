@@ -734,13 +734,8 @@ async function compactResolvedContextEngine(
             });
           }
         }
-        // Bound the plugin-owned compaction with the same finite safety
-        // timeout that protects native runtime compaction, and thread the
-        // caller's abort signal through, so a slow/hung plugin compact()
-        // cannot hang the queued /compact lane indefinitely. A timeout/abort
-        // (or any thrown error) is surfaced as a clean { ok: false } result —
-        // matching how the run-loop overflow/timeout lanes handle it — instead
-        // of throwing a raw rejection at callers that only inspect result.ok.
+        // The wrapper bounds plugin-owned engines here and lets delegating engines
+        // use the native runtime's progress-aware watchdog.
         let result: Awaited<ReturnType<typeof contextEngine.compact>>;
         try {
           const compactionSessionTarget = buildContextEngineCompactionSessionTarget(params);

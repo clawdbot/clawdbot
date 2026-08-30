@@ -66,6 +66,7 @@ export async function controlRealtimeVoiceAgentRun(
   // Provider registration consumes the shared policy without starting the agent runtime.
   const deps = providedDeps ?? {
     ...(await import("../agents/embedded-agent-runner/runs.js")),
+    ...(await import("../agents/embedded-agent-runner/active-run-projections.js")),
     getDiagnosticSessionActivitySnapshot,
   };
   const sessionKey = params.sessionKey.trim();

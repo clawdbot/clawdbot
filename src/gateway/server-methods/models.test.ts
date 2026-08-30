@@ -1813,7 +1813,16 @@ describe("models.list", () => {
     );
   });
 
-  it("uses an exact hydrated runtime snapshot as managed SecretRef proof", async () => {
+  it.each([
+    "resolved-runtime-key",
+    "ollama-local",
+    "custom-local",
+    "OPENAI_API_KEY",
+    "secretref-managed",
+    "secretref-env:UNRELATED_KEY",
+    "${UNRELATED_KEY}",
+    "$malformed-template",
+  ])("uses an exact hydrated runtime snapshot with opaque key %s", async (apiKey) => {
     const sourceConfig: OpenClawConfig = {
       secrets: {
         providers: {
@@ -1848,30 +1857,34 @@ describe("models.list", () => {
         providers: {
           vllm: {
             ...sourceProvider,
-            apiKey: "resolved-runtime-key",
+            apiKey,
           },
         },
       },
     };
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     try {
-      const { request, respond } = requestModelsList({
-        view: "all",
-        runtimeConfig: sourceConfig,
-        loadGatewayModelCatalog: vi.fn(() =>
-          Promise.resolve([{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }]),
-        ),
-        reqId: "req-models-list-secretref-runtime-proof",
-      });
-      await request;
+      for (const config of [sourceConfig, runtimeConfig]) {
+        const { request, respond } = requestModelsList({
+          view: "all",
+          runtimeConfig: config,
+          loadGatewayModelCatalog: vi.fn(() =>
+            Promise.resolve([{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }]),
+          ),
+          reqId: "req-models-list-secretref-runtime-proof",
+        });
+        await request;
 
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          models: [{ id: "llama-secure", name: "Llama Secure", provider: "vllm", available: true }],
-        },
-        undefined,
-      );
+        expect.soft(respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              { id: "llama-secure", name: "Llama Secure", provider: "vllm", available: true },
+            ],
+          },
+          undefined,
+        );
+      }
     } finally {
       clearRuntimeConfigSnapshot();
     }

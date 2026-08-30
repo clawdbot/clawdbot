@@ -190,7 +190,6 @@ const UNBOUNDED_CONFIG_ONLY_OPTIONS = [
   "--shard",
 ];
 const require = createRequire(import.meta.url);
-const repoRoot = resolveRepoRoot(import.meta.url);
 
 function parsePositiveInt(value: string | undefined): number | null {
   const text = value?.trim();
@@ -241,7 +240,7 @@ function isMissingVitestResolveError(error: unknown): error is NodeJS.ErrnoExcep
  * Builds the actionable dependency-install message when Vitest is unavailable.
  */
 export function resolveMissingVitestDependencyMessage(
-  baseDir = repoRoot,
+  baseDir = resolveRepoRoot(import.meta.url),
   fsImpl: Pick<VitestFs, "existsSync"> = fs,
 ): string {
   const hasNodeModules = fsImpl.existsSync(path.join(baseDir, "node_modules"));
@@ -355,7 +354,7 @@ function resolveHydratedVitestCliEntry({
  * Resolves the Vitest CLI entry from normal or hydrated node_modules layouts.
  */
 export function resolveVitestCliEntry({
-  baseDir = repoRoot,
+  baseDir = resolveRepoRoot(import.meta.url),
   env = process.env,
   fsImpl = fs,
   platform = process.platform,
@@ -1401,6 +1400,7 @@ async function main(
   const vitestArgs = resolveImplicitVitestArgs(argv);
   const invocations = resolveBoundedVitestInvocations(vitestArgs, { env });
   const config = resolveVitestConfigArg(vitestArgs);
+  const repoRoot = resolveRepoRoot(import.meta.url);
   const relativeConfig = config ? toRepoRelativeArg(path.resolve(config), repoRoot) : "";
   const invocationEnv =
     invocations.length > 1 && relativeConfig === E2E_VITEST_CONFIG
@@ -1429,7 +1429,7 @@ async function main(
   }
   let vitestCliEntry;
   try {
-    vitestCliEntry = resolveVitestCliEntry();
+    vitestCliEntry = resolveVitestCliEntry({ baseDir: repoRoot });
   } catch (error) {
     if (isErrorWithCode(error, "OPENCLAW_MISSING_VITEST")) {
       console.error(error.message);

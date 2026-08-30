@@ -819,6 +819,159 @@ function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSe
 }
 
 describe("upgrade survivor assertions", () => {
+  it.each([
+    {
+      name: "default-only export",
+      declaresTypes: false,
+      runtime: 'throw new Error("undeclared SDK must not be imported");\n',
+      failure: undefined,
+    },
+    {
+      name: "declared constructor missing at runtime",
+      declaresTypes: true,
+      runtime: "export {};\n",
+      failure: "declared a keyed store constructor but did not export it",
+    },
+    {
+      name: "declared SDK import failure",
+      declaresTypes: true,
+      runtime: 'throw new Error("synthetic SDK import failure");\n',
+      failure: "synthetic SDK import failure",
+    },
+  ])("classifies baseline shared state for $name", ({ declaresTypes, runtime, failure }) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-baseline-sdk-"));
+    try {
+      const packageRoot = join(root, "package");
+      const stateDir = join(root, "state");
+      const version = "1.0.0";
+      mkdirSync(packageRoot);
+      mkdirSync(stateDir);
+      writeJson(join(packageRoot, "package.json"), {
+        name: "openclaw",
+        version,
+        type: "module",
+        exports: {
+          "./plugin-sdk/runtime-doctor": {
+            ...(declaresTypes ? { types: "./runtime-doctor.d.ts" } : {}),
+            default: "./runtime-doctor.js",
+          },
+        },
+      });
+      // An undeclared sibling file must not become a guessed declaration fallback.
+      writeFileSync(
+        join(packageRoot, "runtime-doctor.d.ts"),
+        "export declare function createPluginStateSyncKeyedStore(): unknown;\n",
+      );
+      writeFileSync(join(packageRoot, "runtime-doctor.js"), runtime);
+      const baselinePath = join(stateDir, "survivor-baseline.json");
+      writeJson(baselinePath, { marker: "existing fixture" });
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs",
+          "seed-baseline-plugin-state",
+          packageRoot,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
+          },
+        },
+      );
+      const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
+      if (failure) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(failure);
+        expect(baseline).toEqual({ marker: "existing fixture" });
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(baseline).toEqual({
+          marker: "existing fixture",
+          sharedState: {
+            status: "not-applicable",
+            packageVersion: version,
+            reason: "baseline SDK does not declare createPluginStateSyncKeyedStore",
+          },
+        });
+        expect(result.stdout).toContain("not-applicable");
+      }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("verifies legacy auth import in the current shared owner without losing credentials or state", () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        "scripts/e2e/lib/upgrade-survivor/fixtures/auth-profile-v2026.7.2-beta.5.json",
+        "utf8",
+      ),
+    );
+    const verify = (corruption?: "credential" | "state" | "archive") =>
+      runSessionStateAssertion(
+        (stateDir) => {
+          writeMigratedSessionState(stateDir);
+          const sources = [
+            ["agents/main/agent/auth-profiles.json", fixture.authProfiles],
+            ["agents/main/agent/auth-state.json", fixture.authState],
+            ["agents/main/agent/auth.json", fixture.legacyAuth],
+            ["credentials/oauth.json", fixture.legacyOAuth],
+          ] as const;
+          mkdirSync(join(stateDir, "credentials"), { recursive: true });
+          for (const [source, contents] of sources) {
+            writeJson(
+              join(stateDir, `${source}.migrated-fixture`),
+              corruption === "archive" ? {} : contents,
+            );
+          }
+          const store = {
+            ...fixture.authProfiles,
+            profiles: {
+              ...fixture.authProfiles.profiles,
+              "xai:default": fixture.legacyAuth.xai,
+              "anthropic:default": {
+                type: "oauth",
+                provider: "anthropic",
+                ...fixture.legacyOAuth.anthropic,
+              },
+            },
+          };
+          if (corruption === "credential") {
+            store.profiles["anthropic:default"].access = "changed-access";
+          }
+          mkdirSync(join(stateDir, "state"), { recursive: true });
+          const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+          try {
+            db.exec(`
+              CREATE TABLE config_machine_state (state_key PRIMARY KEY, value_json);
+              CREATE TABLE migration_sources (migration_kind, status, removed_source);
+            `);
+            const insert = db.prepare("INSERT INTO config_machine_state VALUES (?, ?)");
+            insert.run("authProfiles.store", JSON.stringify(store));
+            insert.run(
+              "authProfiles.state",
+              JSON.stringify(corruption === "state" ? {} : fixture.authState),
+            );
+            for (const _source of sources) {
+              db.prepare("INSERT INTO migration_sources VALUES (?, 'completed', 1)").run(
+                "auth-profile-json-to-sqlite-v2",
+              );
+            }
+          } finally {
+            db.close();
+          }
+        },
+        { scenario: "auth-profile-v2026-7-2-beta-5" },
+      );
+    expect(() => verify()).not.toThrow();
+    for (const corruption of ["credential", "state", "archive"] as const) {
+      expect(() => verify(corruption)).toThrow(/auth (?:profile|state|archive)/);
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "rechecks migrated meeting state before materializing transcript exports",
     () => {

@@ -11,7 +11,7 @@ import {
   type OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { listSessionPendingInputs, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
   type AgentRunDelegatedAuthority,
@@ -892,21 +892,19 @@ describe("gateway server agent", () => {
     await expect(fs.stat(media?.[0]?.path ?? "")).resolves.toMatchObject({
       isFile: expect.any(Function),
     });
-    const transcript = await readSessionMessagesAsync(
-      {
-        agentId: "main",
-        sessionId: "sess-main-offloaded-media",
-        sessionKey: String(call.sessionKey),
-        storePath: gatewaySuite.sessionStorePath,
-      },
-      { mode: "full", reason: "durable agent media custody regression" },
-    );
+    const pending = listSessionPendingInputs({
+      agentId: "main",
+      sessionId: "sess-main-offloaded-media",
+      sessionKey: String(call.sessionKey),
+      storePath: gatewaySuite.sessionStorePath,
+    });
+    expect(pending.items).toHaveLength(1);
     // Inbound ids are random; compare the durable fact against its public
     // redaction contract because an id can resemble sensitive text.
     const transcriptMediaUrl = media?.[0]?.url ? redactSensitiveText(media[0].url) : undefined;
-    expect(
-      (transcript[0] as { __openclaw?: { media?: Array<{ url?: string }> } })["__openclaw"]?.media,
-    ).toEqual(expect.arrayContaining([expect.objectContaining({ url: transcriptMediaUrl })]));
+    expect(pending.items[0]?.message["__openclaw"]?.media).toEqual(
+      expect.arrayContaining([expect.objectContaining({ url: transcriptMediaUrl })]),
+    );
     const inboundAfter = await listInboundMedia();
     expect([...inboundAfter].filter((entry) => !inboundBefore.has(entry))).toHaveLength(1);
   });

@@ -18,7 +18,6 @@ import {
  */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
-import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import {
@@ -27,6 +26,7 @@ import {
   type Theme,
 } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
+import type { ToolResultBudget } from "../../tool-result-limits.js";
 import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeType } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
@@ -37,15 +37,16 @@ import {
 } from "./file-mutation-queue.js";
 import { normalizePositiveLimit } from "./limits.js";
 import { getReadPathVariants, getReadQueuePaths, resolveToCwd } from "./path-utils.js";
+import { createBoundedReadTextPage } from "./read-page.js";
 import {
   createReadToolDetails,
   readToolInputSchema,
   readToolOutputSchema,
 } from "./read-tool-contract.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
-import type { ReadToolContinuation, ReadToolDetails } from "./tool-contracts.js";
+import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
 function normalizeReadError(error: unknown, filePath: string): Error {
   if (hasErrnoCode(error, "EISDIR")) {
@@ -147,6 +148,8 @@ export interface ReadToolOptions {
   operations?: ReadOperations;
   /** Complete model-visible call budget; individual pages never exceed the session ceiling. */
   maxBytes?: number;
+  /** Prepared text budget; standalone readers retain their byte-only allowance. */
+  modelBudget?: ToolResultBudget;
   /** Prepared capability for embedded calls, which carry no extension model context. */
   modelHasVision?: boolean;
 }
@@ -362,115 +365,6 @@ function formatReadResult(
     }
   }
   return text;
-}
-
-type BoundedReadTextPage = Extract<ReadToolDetails, { kind: "text" | "truncated" }>;
-
-/** Format model-visible pagination guidance from its exact structured continuation. */
-export function formatReadContinuationNotice(
-  continuation: ReadToolContinuation,
-  maxBytes: number,
-  range?: { startLine: number; totalLines: number },
-): string {
-  const cursor = continuation.kind === "cursor" ? `, cursor=${continuation.cursor}` : "";
-  const limit = continuation.limit === undefined ? "" : `, limit=${continuation.limit}`;
-  if (!range) {
-    const budget = formatSize(maxBytes).replace(/\.0(?=KB)/, "");
-    return `\n\n[Read output capped at ${budget} for this call. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
-  }
-  const label =
-    continuation.kind === "cursor"
-      ? `part of line ${range.startLine}`
-      : `lines ${range.startLine}-${continuation.offset - 1} of ${range.totalLines}`;
-  const action = continuation.kind === "cursor" ? "Use read with" : "Use";
-  return `\n\n[Showing ${label} (${formatSize(maxBytes)} limit). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
-}
-
-/** Bound a selected text page once; legacy injected readers reuse this owner decision. */
-export function createBoundedReadTextPage(params: {
-  content: string;
-  startLine: number;
-  endLine: number;
-  totalLines: number;
-  cursor?: number;
-  limit?: number;
-  maxBytes: number;
-  pageMaxBytes?: number;
-  adaptive?: boolean;
-}): BoundedReadTextPage {
-  const maxBytes = params.pageMaxBytes ?? Math.min(DEFAULT_MAX_BYTES, params.maxBytes);
-  const remainingLines = params.totalLines - params.endLine;
-  const limitNotice =
-    params.limit !== undefined && remainingLines > 0
-      ? `\n\n[${remainingLines} more lines in file. Use offset=${params.endLine + 1} to continue.]`
-      : "";
-  const contentBytes = Buffer.byteLength(params.content, "utf8");
-  if (
-    params.endLine - params.startLine < DEFAULT_MAX_LINES &&
-    contentBytes + Buffer.byteLength(limitNotice, "utf8") <= maxBytes
-  ) {
-    return { kind: "text", content: `${params.content}${limitNotice}` };
-  }
-
-  const range = params.adaptive
-    ? undefined
-    : { startLine: params.startLine, totalLines: params.totalLines };
-  const boundedLimit = params.limit === undefined ? {} : { limit: params.limit };
-  const firstLine = params.content.split("\n", 1)[0] ?? "";
-  const cursorEstimate: ReadToolContinuation = {
-    kind: "cursor",
-    offset: params.startLine,
-    cursor: (params.cursor ?? 0) + firstLine.length,
-    ...boundedLimit,
-  };
-  const lineEstimate: ReadToolContinuation = {
-    kind: "line",
-    offset: params.totalLines + 1,
-    ...boundedLimit,
-  };
-  const reservedBytes = Math.max(
-    Buffer.byteLength(formatReadContinuationNotice(cursorEstimate, params.maxBytes, range), "utf8"),
-    Buffer.byteLength(formatReadContinuationNotice(lineEstimate, params.maxBytes, range), "utf8"),
-  );
-  const truncation = truncateHead(params.content, { maxBytes: maxBytes - reservedBytes });
-  if (!truncation.truncated) {
-    return { kind: "text", content: `${truncation.content}${limitNotice}` };
-  }
-
-  let continuation: ReadToolContinuation;
-  let content = truncation.content;
-  if (truncation.firstLineExceedsLimit) {
-    content = truncateUtf8Prefix(firstLine, maxBytes - reservedBytes);
-    continuation = {
-      kind: "cursor",
-      offset: params.startLine,
-      cursor: (params.cursor ?? 0) + content.length,
-      ...boundedLimit,
-    };
-  } else {
-    const nextOffset = params.startLine + truncation.outputLines;
-    continuation = {
-      kind: "line",
-      offset: nextOffset,
-      ...(params.limit === undefined
-        ? {}
-        : { limit: Math.max(1, params.endLine - nextOffset + 1) }),
-    };
-  }
-
-  const { content: _content, ...truncationDetails } = truncation;
-  return {
-    kind: "truncated",
-    content: `${content}${formatReadContinuationNotice(continuation, params.maxBytes, range)}`,
-    truncation: {
-      ...truncationDetails,
-      outputBytes: Buffer.byteLength(content, "utf8"),
-      firstLineExceedsLimit: false,
-      lastLinePartial: continuation.kind === "cursor",
-      totalLines: params.totalLines,
-    },
-    continuation,
-  };
 }
 
 export function createReadToolDefinition(
@@ -689,6 +583,8 @@ export function createReadToolDefinition(
                     cursor,
                     limit: userLimitedLines,
                     maxBytes,
+                    modelBudget: options?.modelBudget,
+                    prefix: note ? `${note}\n` : undefined,
                     pageMaxBytes: Math.min(DEFAULT_MAX_BYTES, maxBytes) - noteBytes,
                     adaptive: options?.maxBytes !== undefined,
                   });

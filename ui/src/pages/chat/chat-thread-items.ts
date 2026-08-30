@@ -2,6 +2,7 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
@@ -242,13 +243,7 @@ export function findNearestAssistantMessageIndex(
     const nextDelta = next.timestamp - toolTimestamp;
     return nextDelta < previousDelta ? next.index : previous.index;
   }
-  if (previous) {
-    return previous.index;
-  }
-  if (next) {
-    return next.index;
-  }
-  return assistantEntries[assistantEntries.length - 1]?.index ?? null;
+  return previous?.index ?? next?.index ?? assistantEntries.at(-1)?.index ?? null;
 }
 
 export function findCanvasInsertionIndex(
@@ -339,9 +334,10 @@ export function userTurnSendIdentity(message: unknown): string | null {
 }
 
 export function persistedMessageEntryId(message: unknown): string | null {
-  return isPendingSendMessage(message)
+  const id = readChatThreadMessageIdentity(message)?.id;
+  return isPendingSendMessage(message) || id?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
     ? null
-    : (readChatThreadMessageIdentity(message)?.id ?? null);
+    : (id ?? null);
 }
 
 function transcriptMessageSourceKey(message: unknown): string | null {

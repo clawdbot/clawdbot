@@ -65,7 +65,12 @@ const systemAgentOverviewDeps = {
 };
 
 const verifiedConfig = {
-  agents: { defaults: { model: "openai/gpt-5.5" } },
+  agents: {
+    defaults: {
+      model: "openai/gpt-5.5",
+      models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
+    },
+  },
   models: {
     providers: {
       openai: {

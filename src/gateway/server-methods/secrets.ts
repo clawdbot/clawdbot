@@ -16,7 +16,7 @@ import {
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import {
-  collectSecretStoreRefKeysInConfig,
+  collectSecretStoreRefKeysInSnapshot,
   getActiveSecretsRuntimeSnapshotState,
 } from "../../secrets/runtime-state.js";
 import {
@@ -27,6 +27,7 @@ import {
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
 import { isKnownCoreSecretTargetId, isKnownSecretTargetId } from "../../secrets/target-registry.js";
+import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -71,13 +72,6 @@ type SecretStoreLogger = {
   debug?: (message: string) => void;
 };
 
-class SecretStorePostWriteError extends Error {
-  constructor(cause: unknown) {
-    super(errorMessage(cause), { cause });
-    this.name = "SecretStorePostWriteError";
-  }
-}
-
 /** Owns redaction-first store writes and the runtime refresh shared by Gateway RPCs. */
 export function createSecretStoreWriteService(params: {
   reloadSecrets: SecretStoreReload;
@@ -93,34 +87,33 @@ export function createSecretStoreWriteService(params: {
   const reloadReference = async (
     name: string,
   ): Promise<{ reloaded: boolean; warningCount?: number }> => {
+    purgeRetention();
     const snapshot = getActiveSecretsRuntimeSnapshotState();
     const refKeys = snapshot
-      ? collectSecretStoreRefKeysInConfig(snapshot.sourceConfig, name)
+      ? collectSecretStoreRefKeysInSnapshot(snapshot, name)
       : new Set<string>();
     if (refKeys.size === 0) {
       return { reloaded: false };
     }
     // Explicit replacement must cold-refresh affected owners instead of
     // retaining an older credential from the active runtime snapshot.
-    const reload = await params.reloadSecrets({ forceColdRefKeys: refKeys, joinInFlight: false });
-    return { reloaded: true, warningCount: reload.warningCount };
+    try {
+      const reload = await params.reloadSecrets({ forceColdRefKeys: refKeys, joinInFlight: false });
+      return { reloaded: true, warningCount: reload.warningCount };
+    } catch (error) {
+      params.log?.warn?.(`secrets.store runtime refresh failed: ${errorMessage(error)}`);
+      throw error;
+    }
   };
 
   return {
     resolveUpdatedBy: storeUpdatedBy,
-    purgeRetention,
     reloadReference,
-    async write(input: Omit<Parameters<typeof writeSecretStoreEntry>[0], "scope" | "database">) {
+    write(input: Omit<Parameters<typeof writeSecretStoreEntry>[0], "scope" | "database">) {
       // Registration precedes validation and SQLite so even write failures
       // cannot disclose the submitted credential through downstream logging.
       registerSecretValueForRedaction(input.value);
       writeSecretStoreEntry({ scope: teamScope, ...input });
-      purgeRetention();
-      try {
-        return await reloadReference(input.name);
-      } catch (error) {
-        throw new SecretStorePostWriteError(error);
-      }
     },
   };
 }
@@ -318,8 +311,9 @@ export function createSecretsHandlers(params: {
       ) {
         return;
       }
+      let saved = false;
       try {
-        const reload = await params.storeWriteService.write({
+        params.storeWriteService.write({
           name: requestParams.name,
           value: requestParams.value,
           kind: requestParams.kind,
@@ -328,6 +322,8 @@ export function createSecretsHandlers(params: {
             : {}),
           updatedBy: params.storeWriteService.resolveUpdatedBy(client),
         });
+        saved = true;
+        const reload = await params.storeWriteService.reloadReference(requestParams.name);
         const result = {
           ok: true as const,
           ...reload,
@@ -337,7 +333,7 @@ export function createSecretsHandlers(params: {
         }
         respond(true, result);
       } catch (error) {
-        if (error instanceof SecretStoreValidationError) {
+        if (!saved && error instanceof SecretStoreValidationError) {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
           return;
         }
@@ -347,14 +343,14 @@ export function createSecretsHandlers(params: {
           undefined,
           errorShape(
             ErrorCodes.UNAVAILABLE,
-            error instanceof SecretStorePostWriteError
+            saved
               ? "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload."
               : "secrets.store.set failed",
           ),
         );
       }
     },
-    "secrets.store.delete": async ({ params: requestParams, respond, client }) => {
+    "secrets.store.delete": async ({ params: requestParams, respond, client, context }) => {
       if (
         !assertValidParams(
           requestParams,
@@ -371,9 +367,11 @@ export function createSecretsHandlers(params: {
         if (agentId) {
           params.log?.debug?.(`secrets.store.delete requested by agent:${agentId}`);
         }
+        if (!createAgentRuntimeAuthorityGuard(client, context, respond).ensureActive()) {
+          return;
+        }
         deleteSecretStoreEntry({ scope: teamScope, name: requestParams.name });
         deleted = true;
-        params.storeWriteService.purgeRetention();
         const reload = await params.storeWriteService.reloadReference(requestParams.name);
         const result = {
           ok: true as const,
@@ -384,7 +382,7 @@ export function createSecretsHandlers(params: {
         }
         respond(true, result);
       } catch (error) {
-        if (error instanceof SecretStoreValidationError) {
+        if (!deleted && error instanceof SecretStoreValidationError) {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
           return;
         }

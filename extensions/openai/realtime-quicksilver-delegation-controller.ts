@@ -29,6 +29,7 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   getSocket: () => OpenAIQuicksilverSocket | undefined;
   isCanceledError?: (error: unknown) => boolean;
   logger: Pick<PluginLogger, "debug" | "warn">;
+  onError?: (error: Error) => void;
   onFatalError: (error: Error) => void;
   onSessionStarted?: (expiresAt: number | undefined) => void;
   onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
@@ -111,6 +112,8 @@ export class OpenAIQuicksilverDelegationController {
       this.options.logger.warn(error.message);
       if (event.fatalAuth) {
         this.options.onFatalError(error);
+      } else {
+        this.options.onError?.(error);
       }
       return;
     }

@@ -486,13 +486,19 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       return;
     }
-    if (hydratedClient !== next.client || hydratedSelfUserId !== selfUserId) {
+    const hydrateConnection = hydratedClient !== next.client;
+    if (hydrateConnection || hydratedSelfUserId !== selfUserId) {
       const scope = connection.capture();
       if (!scope) {
         return;
       }
       hydratedClient = scope.client;
       hydratedSelfUserId = selfUserId;
+      if (!hydrateConnection) {
+        // Identity updates refresh the current roster without displacing queued picker intent.
+        roster.scheduleEvent();
+        return;
+      }
       void (async () => {
         if (connection.isCurrent(scope)) {
           const sessionKey = gateway.snapshot.sessionKey?.trim();

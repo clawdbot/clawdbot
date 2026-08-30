@@ -1751,6 +1751,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         mediaUrls: undefined,
       }),
     );
+    expect(
+      vi.mocked(appendAssistantMessageToSessionTranscript).mock.calls[0]?.[0],
+    ).not.toHaveProperty("deliveryMirror");
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Redacted cron update.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -2113,6 +2116,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("skips main-session awareness for best-effort deliveries", async () => {
+    mockResolvedOutboundRoute();
     const params = makeBaseParams({
       synthesizedText: "Best-effort cron update.",
       deliveryBestEffort: true,
@@ -2124,6 +2128,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:123456",
+        deliveryMirror: { kind: "cron-direct-delivery-context" },
+      }),
+    );
   });
 
   it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
@@ -4224,7 +4234,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
           },
         ]);
         setActivePluginRegistry(registry);
-        harness.loadAgentRuntimePluginRegistryHandleMock.mockReturnValue(registry);
+        harness.preparedRunPluginRegistryMock.mockReturnValue(registry);
         harness.runEmbeddedAgentMock.mockResolvedValue({
           payloads: partialSend
             ? [{ text: "First payload." }, { text: "Second payload." }]

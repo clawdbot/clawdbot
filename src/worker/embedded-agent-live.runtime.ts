@@ -1,4 +1,10 @@
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  mergeAgentRunAttemptTerminal,
+  normalizeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  type AgentRunAttemptTerminal,
+} from "../agents/agent-run-terminal-outcome.js";
 import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
@@ -158,10 +164,33 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
     }
   };
   const startedAt = Date.now();
-  let lifecycleFinished = false;
   // Terminal lifecycle events are deferred past the final transcript flush so the
   // gateway never sees an end/error before the authoritative transcript commit.
   let terminalLiveEvent: WorkerLiveEvent | undefined;
+  let terminalOutcome: AgentRunAttemptTerminal = { kind: "ok" };
+  const enqueueTerminal = (input: { aborted?: boolean; error?: string; stopReason?: string }) => {
+    // Cleanup can fail after agent_end. Merge through the attempt owner so it
+    // promotes success to failure without replacing an earlier cancellation.
+    terminalOutcome = mergeAgentRunAttemptTerminal(
+      terminalOutcome,
+      normalizeAgentRunAttemptTerminal({ aborted: input.aborted, promptError: input.error }),
+    );
+    const terminal = projectAgentRunAttemptTerminal(terminalOutcome);
+    const stopReason = terminal.aborted ? "aborted" : terminal.failed ? "error" : input.stopReason;
+    terminalLiveEvent = {
+      kind: "lifecycle",
+      payload: {
+        phase: "finishing",
+        startedAt,
+        endedAt: Date.now(),
+        ...(stopReason ? { stopReason } : {}),
+        ...(terminal.aborted ? { aborted: true } : {}),
+        ...(!terminal.aborted && typeof terminal.promptError === "string"
+          ? { error: redactLiveText(terminal.promptError) }
+          : {}),
+      },
+    };
+  };
   let streamedText = "";
   let streamedPhase: AssistantPhase | undefined;
   let assistantMessageIndex = 0;
@@ -269,41 +298,18 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       return;
     }
     if (event.type === "agent_end") {
-      lifecycleFinished = true;
       const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
-      const terminal = {
-        startedAt,
-        endedAt: Date.now(),
-        ...(lastAssistant ? { stopReason: lastAssistant.stopReason } : {}),
-      };
-      terminalLiveEvent = {
-        kind: "lifecycle",
-        payload: {
-          phase: "finishing",
-          ...terminal,
-          ...(lastAssistant?.stopReason === "error"
-            ? { error: redactLiveText(lastAssistant.errorMessage ?? "Worker inference failed.") }
-            : {}),
-          ...(lastAssistant?.stopReason === "aborted" ? { aborted: true } : {}),
-        },
-      };
+      enqueueTerminal({
+        stopReason: lastAssistant?.stopReason,
+        aborted: lastAssistant?.stopReason === "aborted",
+        ...(lastAssistant?.stopReason === "error"
+          ? { error: lastAssistant.errorMessage ?? "Worker inference failed." }
+          : {}),
+      });
     }
   };
   const enqueueRunFailure = (failure: { aborted: boolean; error: Error }) => {
-    if (lifecycleFinished) {
-      return;
-    }
-    terminalLiveEvent = {
-      kind: "lifecycle",
-      payload: {
-        phase: "finishing",
-        startedAt,
-        endedAt: Date.now(),
-        ...(failure.aborted
-          ? { stopReason: "aborted", aborted: true }
-          : { error: redactLiveText(failure.error.message) }),
-      },
-    };
+    enqueueTerminal({ aborted: failure.aborted, error: failure.error.message });
   };
   // Emits directly (not via the degradable preview queue): finishing is the durable
   // result fence that must reach the Gateway before post-worker reconciliation.

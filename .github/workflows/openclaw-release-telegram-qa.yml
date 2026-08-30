@@ -1425,6 +1425,36 @@ jobs:
             exec sudo -n -- "$0" --root-terminate-uid
           fi
 
+          if [[ "${1:-}" == "--cleanup-temp-root" ]]; then
+            shift
+            exec sudo -n -- "$0" --root-cleanup-temp-root "$@"
+          fi
+
+          if [[ "${1:-}" == "--root-cleanup-temp-root" ]]; then
+            [[ "$EUID" == "0" && "$#" == "2" ]]
+            source /etc/openclaw-telegram-sut.conf
+            temp_root="$2"
+            case "$(dirname "$temp_root")" in
+              "$RUNTIME_ROOT/tmp" | "$RUNTIME_ROOT/tmp/openclaw-$RUNNER_UID") ;;
+              *) echo "SUT cleanup escaped the workflow runtime root." >&2; exit 1 ;;
+            esac
+            [[ "$(basename "$temp_root")" == openclaw-qa-suite-* ]]
+            if sut_uid_processes_alive; then
+              echo "SUT runtime cleanup requires isolated UID quiescence." >&2
+              exit 1
+            fi
+            [[ ! -L "$temp_root" ]]
+            if [[ ! -e "$temp_root" ]]; then
+              exit 0
+            fi
+            [[ -d "$temp_root" && "$(realpath -e "$temp_root")" == "$temp_root" ]]
+            [[ "$(stat -c '%u' "$temp_root")" == "$RUNNER_UID" ]]
+            # Preserve SUT-private modes until final shutdown. Unlink its tree
+            # without changing ownership or following links into other roots.
+            rm -rf --one-file-system -- "$temp_root"
+            exit 0
+          fi
+
           if [[ "${1:-}" == "--verify" ]]; then
             shift
             exec sudo -n -- "$0" --root-verify "$@"

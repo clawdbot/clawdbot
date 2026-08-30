@@ -504,8 +504,26 @@ export function refreshPreparedModelRuntimeSnapshots(
   let publicationAgentIds = initialAgentIds;
   const isPublicationCurrent = () =>
     requestEpoch === refreshRequestEpoch && options.isPublicationCurrent?.() !== false;
+  const rejectReplacement = (error: Error) => {
+    if (requestEpoch === refreshRequestEpoch) {
+      // A lost external claim can leave partially built owners; fence them even without a successor.
+      updateOwnersForScopedRefresh(owners, publicationAgentIds, error, {
+        clearPending: true,
+        resetPluginGeneration: true,
+      });
+    }
+    rejectPendingPreparedModelRuntimeReplacement(replacement?.gateId, error);
+  };
   const commitReplacement = () => {
-    if (!isPublicationCurrent() || !replacement || pendingModelRuntimeReplacement !== replacement) {
+    if (!replacement || pendingModelRuntimeReplacement !== replacement) {
+      return;
+    }
+    if (!isPublicationCurrent()) {
+      rejectReplacement(
+        new PreparedModelRuntimePublicationSupersededError(
+          "prepared model runtime publication was superseded",
+        ),
+      );
       return;
     }
     const adoptedAuthTransaction = authPublication.prepareAdoptedCommit(replacement.gateId);
@@ -545,20 +563,7 @@ export function refreshPreparedModelRuntimeSnapshots(
     );
   }).then(commitReplacement, (error: unknown) => {
     const refreshError = toStringifiedError(error);
-    if (isPublicationCurrent()) {
-      // Candidate and queued auth builds may finish independently. A failed transaction must
-      // leave no owner from its partially published generation request-visible.
-      updateOwnersForScopedRefresh(owners, publicationAgentIds, refreshError, {
-        clearPending: true,
-        resetPluginGeneration: true,
-      });
-    }
-    if (isPublicationCurrent() && replacement && pendingModelRuntimeReplacement === replacement) {
-      pendingModelRuntimeReplacement = undefined;
-      authPublication.rejectAdopted(replacement.gateId, refreshError);
-      replacement.reject(refreshError);
-      notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
-    }
+    rejectReplacement(refreshError);
     throw refreshError;
   });
 }

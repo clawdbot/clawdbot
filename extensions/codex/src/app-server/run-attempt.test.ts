@@ -6486,7 +6486,7 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("retains the prepared execution model across native resume without exposing it in lifecycle events", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const runtimeModelId = "umbreon-latest";
+    const runtimeModelId = "test-runtime-model";
     const freshHarness = createStartedThreadHarness(async (method) =>
       method === "thread/start" ? { ...threadStartResult(), model: runtimeModelId } : undefined,
     );

@@ -17,6 +17,7 @@ import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-eve
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { persistAbortedPartials } from "./chat-abort-runtime.js";
 import {
   createActiveRun,
@@ -393,10 +394,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main", runId },
       respond,
@@ -412,10 +410,7 @@ describe("chat abort transcript persistence", () => {
     retryRun.deltaSentAt = Date.now();
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main", runId },
       respond,
@@ -476,10 +471,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main", runId },
       respond,
@@ -649,10 +641,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main", runId },
       respond,
@@ -689,10 +678,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main" },
       respond,
@@ -735,10 +721,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main" },
       respond,
@@ -951,10 +934,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     try {
-      await expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      )({
+      await handleChatAbortRequest({
         params: { sessionKey, ...(agentId ? { agentId } : {}) },
         respond,
         context: context as never,
@@ -989,10 +969,7 @@ describe("chat abort transcript persistence", () => {
       }),
     });
 
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: {
         sessionKey: "agent:main:main",
         agentId: "work",
@@ -1027,10 +1004,7 @@ describe("chat abort transcript persistence", () => {
       }),
     });
 
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      'chatHandlers["chat.abort"] test invariant',
-    )({
+    await handleChatAbortRequest({
       params: {
         sessionKey: "agent:work:main",
         runId: "run-work-global",
@@ -1069,10 +1043,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: {
         sessionKey: "agent:work:main",
@@ -1115,10 +1086,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main", ...(explicitRunId ? { runId: "run-hidden" } : {}) },
       client: { connId: "conn-hidden" },
@@ -1162,10 +1130,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: {
         sessionKey: "agent:work:main",
@@ -1207,10 +1172,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: {
         sessionKey: "global",
@@ -1236,10 +1198,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: {
         sessionKey: "global",
@@ -1266,10 +1225,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: {
         sessionKey: "global",
@@ -1307,10 +1263,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "global", agentId, runId: "run-main-global" },
       client: { connId: "conn-main" },
@@ -1378,10 +1331,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main", runId },
       respond,
@@ -1412,10 +1362,7 @@ describe("chat abort transcript persistence", () => {
     });
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main", runId },
       respond,
@@ -1443,10 +1390,7 @@ describe("chat.abort session identity matching", () => {
     const respond = vi.fn();
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main" },
       respond,
@@ -1472,10 +1416,7 @@ describe("chat.abort session identity matching", () => {
     const respond = vi.fn();
 
     await invokeChatAbortHandler({
-      handler: expectDefined(
-        chatHandlers["chat.abort"],
-        'chatHandlers["chat.abort"] test invariant',
-      ),
+      handler: handleChatAbortRequest,
       context,
       request: { sessionKey: "main" },
       respond,

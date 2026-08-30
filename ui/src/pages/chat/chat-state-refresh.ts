@@ -14,6 +14,7 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
+  parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
@@ -86,15 +87,40 @@ export function applySelectedChatAgent(
   if (
     !host ||
     !isUiSelectedGlobalSessionKey(host, host.sessionKey) ||
+    parseAgentSessionKey(host.sessionKey)?.agentId ||
     (host.assistantAgentId ?? null) === selectedAgentId
   ) {
     return;
   }
+  applyChatAgentOwnerTransition(host, selectedAgentId);
+}
+
+export function applyChatAgentOwnerTransition(
+  host: ChatPageHost,
+  selectedAgentId: string | null,
+): void {
+  if ((host.assistantAgentId ?? null) === selectedAgentId) {
+    return;
+  }
   retireChatModelSelectionOwnership(host);
+  host.assistantIdentityRequestVersion += 1;
   host.assistantAgentId = selectedAgentId;
-  // Global chats retain their session key across agent selection. Replace the binding now;
-  // its old agent fence correctly rejects later invalidations and cannot initiate recovery.
+  host.assistantName = "";
+  host.assistantAvatar = null;
+  host.assistantAvatarSource = null;
+  host.assistantAvatarStatus = null;
+  host.assistantAvatarReason = null;
+  host.chatAvatarUrl = null;
+  host.chatAvatarSource = null;
+  host.chatAvatarStatus = null;
+  host.chatAvatarReason = null;
+  host.modelAuthStatusResult = null;
+  host.modelAuthStatusError = null;
+  // Global chats retain their session key across agent selection. Replace agent-owned
+  // bindings now so their old fences reject later publications.
   void refreshChatMetadata(host);
+  void refreshChatModelAuthStatus(host).finally(() => host.requestUpdate?.());
+  void host.loadAssistantIdentity();
   host.requestUpdate?.();
 }
 
@@ -189,18 +215,26 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   }
   const client = host.client;
   const connectionEpoch = host.connectionEpoch;
+  const agentId = resolveChatAgentId(host);
+  const requestVersion = ++host.modelAuthStatusRequestVersion;
+  const ownsRequest = () =>
+    host.client === client &&
+    host.connected &&
+    host.connectionEpoch === connectionEpoch &&
+    host.modelAuthStatusRequestVersion === requestVersion &&
+    resolveChatAgentId(host) === agentId;
   try {
     const result = await loadModelAuthStatus(client, {
       ...opts,
-      agentId: resolveChatAgentId(host),
+      agentId,
     });
-    if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
+    if (!ownsRequest()) {
       return;
     }
     host.modelAuthStatusResult = result;
-    host.modelAuthStatusError = null;
+    host.modelAuthStatusError = result.unavailable?.message ?? null;
   } catch (err) {
-    if (host.client !== client || !host.connected || host.connectionEpoch !== connectionEpoch) {
+    if (!ownsRequest()) {
       return;
     }
     host.modelAuthStatusResult = { ts: 0, providers: [] };

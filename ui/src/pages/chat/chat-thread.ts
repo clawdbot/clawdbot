@@ -251,6 +251,7 @@ function sameChatItemsStructuralInput(
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
+    previous.pendingInputs === next.pendingInputs &&
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
@@ -384,6 +385,19 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
     }
   }
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
+}
+
+export function collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
+  return items.flatMap((item) =>
+    item.kind === "group"
+      ? item.messages.flatMap((entry) =>
+          extractToolCardsCached(entry.message, entry.key).map(({ args, name }) => ({
+            args,
+            name,
+          })),
+        )
+      : [],
+  );
 }
 
 export type AssistantMessageExpansionState =

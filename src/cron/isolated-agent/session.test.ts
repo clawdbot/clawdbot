@@ -440,10 +440,8 @@ describe("resolveCronSession", () => {
           totalTokens: 3,
           totalTokensFresh: true,
           estimatedCostUsd: 0.01,
-          execAsk: "always",
           execHost: "gateway",
           execNode: "node-1",
-          execSecurity: "allowlist",
           cacheRead: 4,
           cacheWrite: 5,
           contextTokens: 200_000,
@@ -526,10 +524,8 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.totalTokens).toBeUndefined();
       expect(result.sessionEntry.totalTokensFresh).toBeUndefined();
       expect(result.sessionEntry.estimatedCostUsd).toBeUndefined();
-      expect(result.sessionEntry.execAsk).toBeUndefined();
       expect(result.sessionEntry.execHost).toBeUndefined();
       expect(result.sessionEntry.execNode).toBeUndefined();
-      expect(result.sessionEntry.execSecurity).toBeUndefined();
       expect(result.sessionEntry.cacheRead).toBeUndefined();
       expect(result.sessionEntry.cacheWrite).toBeUndefined();
       expect(result.sessionEntry.contextTokens).toBeUndefined();

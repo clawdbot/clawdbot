@@ -203,9 +203,7 @@ function resolvePlaybackMode(
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.playbackTranscodeTestApi")] = {
     createPlaybackTranscodeCacheKey,
-    PLAYBACK_TRANSCODE_POLICY,
     readPlaybackSourceBounded,
-    resolvePlaybackMode,
     getPlaybackTranscodeJobs: (): Promise<void>[] => [...playbackJobs.values()],
   };
 }

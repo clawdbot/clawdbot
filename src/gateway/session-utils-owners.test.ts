@@ -34,14 +34,14 @@ const getUserProfileDisplay = vi.hoisted(() =>
 
 vi.mock("../state/user-profiles.js", () => ({ getUserProfileDisplay }));
 
-import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
+import { listSessionsFromStoreAsync } from "./session-utils.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   getUserProfileDisplay.mockClear();
 });
 
-it("lets configured agents win id-only owner facet collisions", () => {
+it("lets configured agents win id-only owner facet collisions", async () => {
   const actorOrders = [
     ["human", "agent"],
     ["agent", "human"],
@@ -61,7 +61,7 @@ it("lets configured agents win id-only owner facet collisions", () => {
         } satisfies SessionEntry,
       ]),
     );
-    const result = listSessionsFromStore({
+    const result = await listSessionsFromStoreAsync({
       cfg: {
         agents: { list: [{ id: "shared-id", identity: { name: "Shared agent" } }] },
       } as OpenClawConfig,
@@ -81,7 +81,7 @@ it("lets configured agents win id-only owner facet collisions", () => {
   }
 });
 
-it("returns the complete deterministic owner facet independently of pagination", () => {
+it("returns the complete deterministic owner facet independently of pagination", async () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:ada": {
       archivedAt: 3,
@@ -99,7 +99,7 @@ it("returns the complete deterministic owner facet independently of pagination",
     },
   };
 
-  const result = listSessionsFromStore({
+  const result = await listSessionsFromStoreAsync({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
@@ -138,7 +138,7 @@ it("returns the complete deterministic owner facet independently of pagination",
   });
   expect(getUserProfileDisplay).toHaveBeenCalledTimes(2);
 
-  const filtered = listSessionsFromStore({
+  const filtered = await listSessionsFromStoreAsync({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
@@ -148,7 +148,7 @@ it("returns the complete deterministic owner facet independently of pagination",
   expect(filtered.owners).toEqual(result.owners);
 });
 
-it("prepends an owner window without advancing shared-page pagination", () => {
+it("prepends an owner window without advancing shared-page pagination", async () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:foreign-newest": {
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
@@ -164,7 +164,7 @@ it("prepends an owner window without advancing shared-page pagination", () => {
     },
   };
 
-  const result = listSessionsFromStore({
+  const result = await listSessionsFromStoreAsync({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owner-first",
     store,
@@ -179,7 +179,7 @@ it("prepends an owner window without advancing shared-page pagination", () => {
   expect(result).toMatchObject({ count: 2, totalCount: 2, nextOffset: 1, hasMore: true });
 });
 
-it("projects only durable profiles and configured agents as effective owners", () => {
+it("projects only durable profiles and configured agents as effective owners", async () => {
   const cases = [
     {
       createdActor: { type: "human" as const, source: "profile" as const, id: "profile-ada" },
@@ -222,7 +222,7 @@ it("projects only durable profiles and configured agents as effective owners", (
       } satisfies SessionEntry,
     ]),
   );
-  const result = listSessionsFromStore({
+  const result = await listSessionsFromStoreAsync({
     cfg: {
       agents: {
         list: [
@@ -305,7 +305,7 @@ it("filters immutable creator and effective owner separately while preserving pr
       updatedAt: 0,
     },
   } satisfies Record<string, SessionEntry>;
-  const result = listSessionsFromStore({
+  const result = await listSessionsFromStoreAsync({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
@@ -339,7 +339,7 @@ it("filters immutable creator and effective owner separately while preserving pr
       label: "Bob",
     },
   ]);
-  const creatorFiltered = listSessionsFromStore({
+  const creatorFiltered = await listSessionsFromStoreAsync({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
@@ -355,7 +355,7 @@ it("filters immutable creator and effective owner separately while preserving pr
       owner: { actor: { id: "profile-bob", label: "Bob" } },
     },
   );
-  const ownerFiltered = listSessionsFromStore({
+  const ownerFiltered = await listSessionsFromStoreAsync({
     cfg: {} as OpenClawConfig,
     storePath: "/tmp/openclaw-session-owners",
     store,
@@ -403,7 +403,7 @@ it("filters immutable creator and effective owner separately while preserving pr
       opts: { creatorId: "profile-ada" },
     };
     expect
-      .soft(listSessionsFromStore(query).sessions.map((row) => row.key))
+      .soft((await listSessionsFromStoreAsync(query)).sessions.map((row) => row.key))
       .toEqual(["agent:main:shared", "agent:main:draft"]);
     const authorized = await listSessionsFromStoreAsync({ ...query, entryFilter });
     expect
@@ -416,7 +416,7 @@ it("filters immutable creator and effective owner separately while preserving pr
   }
 });
 
-it("deduplicates participants in order, excludes the owner, and filters sessions involving the viewer", () => {
+it("deduplicates participants in order, excludes the owner, and filters sessions involving the viewer", async () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:owned": {
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
@@ -480,7 +480,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
   const cfg: OpenClawConfig = {
     agents: { list: [{ id: "research", identity: { name: "Research" } }] },
   };
-  const result = listSessionsFromStore({
+  const result = await listSessionsFromStoreAsync({
     cfg,
     storePath: "/tmp/openclaw-session-participants",
     store,
@@ -502,7 +502,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
     participantCount: 5,
   });
 
-  const unfiltered = listSessionsFromStore({
+  const unfiltered = await listSessionsFromStoreAsync({
     cfg,
     storePath: "/tmp/openclaw-session-participants",
     store,
@@ -520,7 +520,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
     expect(participant).not.toHaveProperty("label");
     expect(participant).not.toHaveProperty("avatarUrl");
   }
-  const selected = listSessionsFromStore({
+  const selected = await listSessionsFromStoreAsync({
     cfg,
     storePath: "/tmp/openclaw-session-participants",
     store,
@@ -535,7 +535,7 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
 
 it.each(["spawn", "talk", "cron"] as const)(
   "associates a required %s creator without inventing profile contributions or promoting unqualified creators",
-  (via) => {
+  async (via) => {
     getUserProfileDisplay.mockImplementation((id) => ({
       id: id === "former" ? "current" : id,
       displayName: "Current",
@@ -593,7 +593,7 @@ it.each(["spawn", "talk", "cron"] as const)(
       store,
       opts: { archived: "all" as const, includePeople: true },
     };
-    const all = listSessionsFromStore(query);
+    const all = await listSessionsFromStoreAsync(query);
     const creator = {
       type: "human",
       id: "former",
@@ -615,7 +615,7 @@ it.each(["spawn", "talk", "cron"] as const)(
       });
       expect(row.owner).toBeUndefined();
     }
-    const involving = listSessionsFromStore({ ...query, involvingActorId: "current" });
+    const involving = await listSessionsFromStoreAsync({ ...query, involvingActorId: "current" });
     expect(involving.sessions.map((row) => row.key)).toEqual(["agent:main:historical", childKey]);
     expect(involving.sessions[0]?.participants).toEqual([
       { identity: { type: "profile", id: "current" }, label: "Current" },
@@ -623,7 +623,7 @@ it.each(["spawn", "talk", "cron"] as const)(
     expect(involving.people).toEqual([
       { identity: { type: "profile", id: "current" }, label: "Current", sessionCount: 2 },
     ]);
-    const ownerFirst = listSessionsFromStore({
+    const ownerFirst = await listSessionsFromStoreAsync({
       ...query,
       opts: { archived: "all", limit: 1 },
       ownerFirstActorId: "current",
@@ -632,7 +632,7 @@ it.each(["spawn", "talk", "cron"] as const)(
 
     // Reassignment must not erase the creator's Activity association or fabricate their input.
     child.owner = { actor: { type: "agent", id: "main" } };
-    const associated = listSessionsFromStore({
+    const associated = await listSessionsFromStoreAsync({
       ...query,
       opts: { ...query.opts, involvingProfileId: "former" },
     });
@@ -646,7 +646,7 @@ it.each(["spawn", "talk", "cron"] as const)(
   },
 );
 
-it("returns a canonical selected person and orders merged owners without borrowing remote identities", () => {
+it("returns a canonical selected person and orders merged owners without borrowing remote identities", async () => {
   getUserProfileDisplay.mockImplementation((id) => ({
     id: id === "former" ? "current" : id,
     displayName: id,
@@ -674,20 +674,20 @@ it("returns a canonical selected person and orders merged owners without borrowi
     store,
     opts: { archived: "all" as const, includePeople: true, involvingProfileId: "former", limit: 1 },
   };
-  const result = listSessionsFromStore(query);
+  const result = await listSessionsFromStoreAsync(query);
   expect(result).toMatchObject({
     involvingProfileId: "current",
     totalCount: 1,
     peopleIncomplete: true,
   });
   expect(result.people?.some((person) => person.identity.id === "current")).toBe(true);
-  const ordered = listSessionsFromStore({
+  const ordered = await listSessionsFromStoreAsync({
     ...query,
     opts: { archived: "all", limit: 1 },
     ownerFirstActorId: "current",
   });
   expect(ordered.sessions[0]?.key).toBe("agent:main:owned");
-  const involved = listSessionsFromStore({
+  const involved = await listSessionsFromStoreAsync({
     ...query,
     opts: { archived: "all" },
     involvingActorId: "current",
@@ -695,8 +695,8 @@ it("returns a canonical selected person and orders merged owners without borrowi
   expect(involved.sessions.map((row) => row.key)).toEqual(["agent:main:owned"]);
 });
 
-it("reports the authoritative admission bound even when the visible participant list is smaller", () => {
-  const result = listSessionsFromStore({
+it("reports the authoritative admission bound even when the visible participant list is smaller", async () => {
+  const result = await listSessionsFromStoreAsync({
     cfg: {},
     storePath: "/tmp/openclaw-session-bound",
     store: {
@@ -811,7 +811,7 @@ it("preserves list output across visibility, scope, owner, and search filters", 
   } as GatewayClient;
   const entryFilter = createSessionListEntryFilter({ client: viewer });
 
-  const project = async (opts: Parameters<typeof listSessionsFromStore>[0]["opts"]) => {
+  const project = async (opts: Parameters<typeof listSessionsFromStoreAsync>[0]["opts"]) => {
     const result = await listSessionsFromStoreAsync({
       cfg,
       ...(entryFilter ? { entryFilter } : {}),
@@ -898,9 +898,9 @@ it("preserves list output across visibility, scope, owner, and search filters", 
   );
 });
 
-it("keeps the serialized list response deterministic for the current filter path", () => {
+it("keeps the serialized list response deterministic for the current filter path", async () => {
   vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-  const result = listSessionsFromStore({
+  const result = await listSessionsFromStoreAsync({
     cfg: {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.4" } },
@@ -930,7 +930,7 @@ it("keeps the serialized list response deterministic for the current filter path
   const expectedSerializedResponse = [
     '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"owners":[]',
     ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
-    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100}]}',
+    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"}],"thinkingOptions":["off","minimal","low","medium","high"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100}]}',
   ].join("");
 
   expect(JSON.stringify(result)).toBe(expectedSerializedResponse);

@@ -3,6 +3,7 @@ import { adoptRuntimeContextEngineRegistrations } from "../context-engine/regist
 import {
   listLoadedRuntimePluginIds,
   listRuntimePluginIdsFromRegistry,
+  registryContainsRuntimePluginIds,
 } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
@@ -30,6 +31,8 @@ type AgentRuntimePluginRegistryParams = {
   allowGatewaySubagentBinding?: boolean;
   /** Explicit base scope for hosts without a Gateway startup registry. */
   basePluginIds?: readonly string[];
+  /** Exact registry from the supplied lifecycle metadata generation. */
+  reusableRegistry?: PluginRegistry;
   selections?: readonly AgentHarnessPluginSelection[];
   /** Lifecycle-owned selection; standalone/direct generations stay source-default. */
   preferBuiltPluginArtifacts?: boolean;
@@ -114,6 +117,13 @@ export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
 ): PluginRegistry {
   const load = resolveAgentRuntimePluginRegistryLoad(params);
+  if (
+    params.reusableRegistry &&
+    load.loadOptions.onlyPluginIds !== undefined &&
+    registryContainsRuntimePluginIds(params.reusableRegistry, load.loadOptions.onlyPluginIds)
+  ) {
+    return params.reusableRegistry;
+  }
   // Discovery-only load: full mode can replace process-global sandbox backends.
   // Adopt full-only runtime capabilities from the matching composition-root owners.
   const pluginRegistry = loadPluginRegistryHandle({ ...load.loadOptions, activate: false });

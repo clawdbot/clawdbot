@@ -1,3 +1,4 @@
+import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-source.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   executeSqliteQuerySync,
@@ -642,6 +643,7 @@ export async function recordInboundSessionMeta(params: {
   groupResolution?: GroupKeyResolution | null;
   createIfMissing?: boolean;
 }): Promise<SessionEntry | null> {
+  normalizeInternalTurnContext(params.ctx);
   const createIfMissing = params.createIfMissing ?? true;
   return await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
@@ -690,6 +692,9 @@ export async function updateSessionLastRoute(params: {
   createIfMissing?: boolean;
   assertCommitAllowed?: () => void;
 }): Promise<SessionEntry | null> {
+  if (params.ctx) {
+    normalizeInternalTurnContext(params.ctx);
+  }
   const createIfMissing = params.createIfMissing ?? true;
   return await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },

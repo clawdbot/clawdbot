@@ -19,6 +19,7 @@ import {
   agentRunFrameGroups,
   assistantMessageExpansionSignature,
   buildCachedChatItems,
+  collectToolTitleCandidates,
   coalesceAgentRunFrames,
   coalesceActivityRuns,
   coalesceStreamRuns,
@@ -31,7 +32,7 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { getToolTitlesVersion } from "../tool-titles.ts";
+import { getToolTitlesVersion, scheduleToolTitlesForTranscript } from "../tool-titles.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
@@ -166,6 +167,7 @@ export function projectChatTranscript(
     stream: displayStream,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
+    pendingInputs: props.pendingInputs,
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
@@ -175,6 +177,9 @@ export function projectChatTranscript(
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
   });
+  if (props.showToolCalls && !searchFiltering) {
+    scheduleToolTitlesForTranscript(collectToolTitleCandidates(chatItems));
+  }
   const latestBrowserTabs =
     props.browserTabPreviewsActive === false
       ? latestBrowserTabCards([], [])

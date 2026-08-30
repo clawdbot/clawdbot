@@ -232,7 +232,7 @@ describe("managed plugin install transactions", () => {
       });
       if (settlement === "rollback") {
         await expect(installed).rejects.toMatchObject({
-          cause: settlementError,
+          cause: conflict,
           errors: [conflict, settlementError],
         });
         expect(transaction.commit).not.toHaveBeenCalled();

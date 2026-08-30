@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
+import { snapshotOwnCronRecord } from "./own-record.js";
 
 /** Closed, server-authored origin of an account-scoped scheduled tool cap. */
 export type CronScheduledToolCallerOrigin =
@@ -12,18 +13,19 @@ export type CronScheduledToolCallerOrigin =
 export function normalizeCronScheduledToolCallerOrigin(
   value: unknown,
 ): CronScheduledToolCallerOrigin {
-  if (!isRecord(value) || typeof value.kind !== "string") {
+  const input = isRecord(value) ? snapshotOwnCronRecord(value) : undefined;
+  if (!input || typeof input.kind !== "string") {
     return { kind: "unknown" };
   }
-  const keys = Object.keys(value);
-  if (value.kind === "local" && keys.every((key) => key === "kind")) {
+  const keys = Object.keys(input);
+  if (input.kind === "local" && keys.every((key) => key === "kind")) {
     return { kind: "local" };
   }
-  if (value.kind === "unknown" && keys.every((key) => key === "kind")) {
+  if (input.kind === "unknown" && keys.every((key) => key === "kind")) {
     return { kind: "unknown" };
   }
   const channel = normalizeOptionalString(
-    value.kind === "external" && typeof value.channel === "string" ? value.channel : undefined,
+    input.kind === "external" && typeof input.channel === "string" ? input.channel : undefined,
   )?.toLowerCase();
   return channel && keys.every((key) => key === "kind" || key === "channel")
     ? { kind: "external", channel }
@@ -61,11 +63,12 @@ export type CronToolsAllowExecTargetRequirement =
 export function normalizeCronToolsAllowExecTarget(
   value: unknown,
 ): CronToolsAllowExecTarget | undefined {
-  return isRecord(value) && value.version === 1 && value.host === "gateway"
+  const input = isRecord(value) ? snapshotOwnCronRecord(value) : undefined;
+  return input?.version === 1 && input.host === "gateway"
     ? {
         version: 1,
         host: "gateway",
-        ...(value.ask === "always" ? { ask: "always" } : {}),
+        ...(input.ask === "always" ? { ask: "always" } : {}),
       }
     : undefined;
 }
@@ -77,15 +80,13 @@ export function normalizeCronToolsAllowExecTargetRequirement(
   if (value === undefined) {
     return undefined;
   }
-  if (!isRecord(value) || value.version !== 1) {
+  const input = isRecord(value) ? snapshotOwnCronRecord(value) : undefined;
+  if (!input || input.version !== 1 || input.recoveryRequired === true) {
     return { version: 1, recoveryRequired: true };
   }
-  if (value.recoveryRequired === true) {
-    return { version: 1, recoveryRequired: true };
-  }
-  const rawTarget = value.target;
+  const rawTarget = isRecord(input.target) ? snapshotOwnCronRecord(input.target) : undefined;
   const target =
-    isRecord(rawTarget) &&
+    rawTarget &&
     rawTarget.version === 1 &&
     rawTarget.host === "gateway" &&
     (rawTarget.ask === undefined || rawTarget.ask === "always")
@@ -95,7 +96,7 @@ export function normalizeCronToolsAllowExecTargetRequirement(
           ...(rawTarget.ask === "always" ? { ask: "always" as const } : {}),
         }
       : undefined;
-  const grantIndex = value.grantIndex;
+  const grantIndex = input.grantIndex;
   return target && typeof grantIndex === "number" && Number.isInteger(grantIndex) && grantIndex >= 0
     ? { version: 1, target, grantIndex }
     : { version: 1, recoveryRequired: true };
@@ -209,25 +210,26 @@ export function createAccountCronScheduledToolPolicy(params: {
 export function normalizeCronScheduledToolPolicy(
   value: unknown,
 ): CronScheduledToolPolicy | undefined {
-  if (!isRecord(value) || value.version !== 1) {
+  const input = isRecord(value) ? snapshotOwnCronRecord(value) : undefined;
+  if (!input || input.version !== 1) {
     return undefined;
   }
-  if (value.mode === "trusted") {
-    return Object.keys(value).every((key) => key === "version" || key === "mode")
+  if (input.mode === "trusted") {
+    return Object.keys(input).every((key) => key === "version" || key === "mode")
       ? createTrustedCronScheduledToolPolicy()
       : undefined;
   }
-  if (value.mode !== "account") {
+  if (input.mode !== "account") {
     return undefined;
   }
   const policy = createAccountCronScheduledToolPolicy({
-    ownerSessionKey: typeof value.ownerSessionKey === "string" ? value.ownerSessionKey : "",
-    ownerAccountId: typeof value.ownerAccountId === "string" ? value.ownerAccountId : "",
+    ownerSessionKey: typeof input.ownerSessionKey === "string" ? input.ownerSessionKey : "",
+    ownerAccountId: typeof input.ownerAccountId === "string" ? input.ownerAccountId : "",
   });
   if (!policy) {
     return undefined;
   }
-  return Object.keys(value).every(
+  return Object.keys(input).every(
     (key) =>
       key === "version" || key === "mode" || key === "ownerSessionKey" || key === "ownerAccountId",
   )

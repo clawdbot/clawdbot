@@ -107,6 +107,8 @@ const CURRENT_TRAIN_METHODS = [
   "secrets.store.delete",
   "users.prefs.get",
   "users.prefs.set",
+  "push.web.preferences.get",
+  "push.web.preferences.set",
   "users.setRole",
   "desktop.observe",
   "desktop.launch",

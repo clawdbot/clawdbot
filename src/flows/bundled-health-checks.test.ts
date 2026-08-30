@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.js";
 import {
   registerBundledHealthChecks,
@@ -374,14 +375,32 @@ describe("registerBundledHealthChecks", () => {
     },
   };
 
-  function codexRecord(origin: "bundled" | "global", trustedOfficialInstall?: boolean) {
+  function codexRecord(
+    origin: "bundled" | "global",
+    trustedOfficialInstall?: boolean,
+    healthChecks = true,
+  ) {
+    const manifestPath = join(workspaceDir, "openclaw.plugin.json");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        id: "codex",
+        configSchema: {},
+        ...(healthChecks ? { doctorHealthChecks: true } : {}),
+      }),
+    );
+    const loaded = loadPluginManifest(workspaceDir);
+    if (!loaded.ok) {
+      throw new Error(loaded.error);
+    }
     return {
       id: "codex",
       origin,
       trustedOfficialInstall,
       rootDir: workspaceDir,
       source: join(workspaceDir, "index.js"),
-      manifestPath: join(workspaceDir, "openclaw.plugin.json"),
+      manifestPath,
+      doctorHealthChecks: loaded.manifest.doctorHealthChecks,
       channels: [],
       providers: [],
       cliBackends: [],
@@ -390,6 +409,24 @@ describe("registerBundledHealthChecks", () => {
       contracts: {},
     } satisfies PluginManifestRegistry["plugins"][number];
   }
+
+  it("continues other health checks for a retained stable Codex without a health API", () => {
+    // Published @openclaw/codex@2026.7.1-1 has neither a health declaration nor api.js.
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [codexRecord("global", true, false)],
+      diagnostics: [],
+    });
+
+    registerBundledHealthChecks({
+      cfg: { ...codexConfig, plugins: { entries: { policy: { enabled: true } } } },
+      cwd: workspaceDir,
+    });
+
+    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();
+    expect(mocks.registerPolicyDoctorChecks).toHaveBeenCalledOnce();
+    expect(getHealthCheck("codex/managed-app-server")).toBeUndefined();
+    expect(mocks.registerCodexManagedAppServerDoctorChecks).not.toHaveBeenCalled();
+  });
 
   it.each(["bundled", "global"] as const)(
     "registers and runs health from the selected %s Codex public artifact",
@@ -439,36 +476,43 @@ describe("registerBundledHealthChecks", () => {
     },
   );
 
-  it.each(["missing", "untrusted", "missing-api", "missing-export", "broken-api"])(
-    "fails visibly for a selected Codex install with %s state",
-    (state) => {
-      mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-        plugins: state === "missing" ? [] : [codexRecord("global", state !== "untrusted")],
-        diagnostics: [],
-      });
-      if (state === "untrusted") {
-        writeFileSync(
-          join(workspaceDir, "api.js"),
-          'throw new Error("untrusted artifact executed");',
-        );
-      }
-      if (state === "missing-export") {
-        writeFileSync(join(workspaceDir, "api.js"), "module.exports = {};");
-      }
-      if (state === "broken-api") {
-        writeFileSync(join(workspaceDir, "api.js"), 'throw new Error("selected artifact failed");');
-      }
-      expect(() => registerBundledHealthChecks({ cfg: codexConfig, cwd: workspaceDir })).toThrow(
-        state === "broken-api"
-          ? "selected artifact failed"
-          : state === "missing-export"
-            ? TypeError
-            : MissingPublicSurfaceError,
+  it.each([
+    "missing",
+    "untrusted",
+    "untrusted-legacy",
+    "missing-api",
+    "missing-export",
+    "broken-api",
+  ])("fails visibly for a selected Codex install with %s state", (state) => {
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins:
+        state === "missing"
+          ? []
+          : [codexRecord("global", !state.startsWith("untrusted"), state !== "untrusted-legacy")],
+      diagnostics: [],
+    });
+    if (state === "untrusted") {
+      writeFileSync(
+        join(workspaceDir, "api.js"),
+        'throw new Error("untrusted artifact executed");',
       );
-      expect(getHealthCheck("codex/managed-app-server")).toBeUndefined();
-      expect(mocks.registerCodexManagedAppServerDoctorChecks).not.toHaveBeenCalled();
-    },
-  );
+    }
+    if (state === "missing-export") {
+      writeFileSync(join(workspaceDir, "api.js"), "module.exports = {};");
+    }
+    if (state === "broken-api") {
+      writeFileSync(join(workspaceDir, "api.js"), 'throw new Error("selected artifact failed");');
+    }
+    expect(() => registerBundledHealthChecks({ cfg: codexConfig, cwd: workspaceDir })).toThrow(
+      state === "broken-api"
+        ? "selected artifact failed"
+        : state === "missing-export"
+          ? TypeError
+          : MissingPublicSurfaceError,
+    );
+    expect(getHealthCheck("codex/managed-app-server")).toBeUndefined();
+    expect(mocks.registerCodexManagedAppServerDoctorChecks).not.toHaveBeenCalled();
+  });
 
   it.each([
     { enabled: false },

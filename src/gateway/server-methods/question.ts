@@ -13,9 +13,9 @@ import {
   validateQuestionResolveParams,
   validateQuestionWaitAnswerParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { registerActiveEmbeddedRunHumanInputWait } from "../../agents/embedded-agent-runner/run-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
-import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
@@ -148,9 +148,9 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
           `question '${question.questionId}': invalid secret store entry name`,
         );
       }
-      if (binding.kind !== "secret" && binding.kind !== "env") {
+      if (binding.kind !== "secret") {
         throw new QuestionRequestValidationError(
-          `question '${question.questionId}': invalid secret store entry kind`,
+          `question '${question.questionId}': masked requests require kind "secret"; set environment values in Settings or the CLI`,
         );
       }
       if ((binding.allowedHosts?.length ?? 0) > SECRET_STORE_ALLOWED_HOSTS_MAX) {
@@ -158,21 +158,25 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
           `question '${question.questionId}': secret store allowed hosts exceed the limit`,
         );
       }
-      if (binding.kind === "env" && binding.allowedHosts !== undefined) {
-        throw new QuestionRequestValidationError("Allowed hosts apply only to secret entries.");
-      }
       const existing = listSecretStoreEntries({ scope: { kind: "team" } }).find(
         (entry) => entry.name === binding.name,
       );
-      if (existing) {
-        return {
-          ...question,
-          secretStoreExisting: {
-            updatedAtMs: existing.updatedAtMs,
-            ...(existing.updatedBy ? { updatedBy: existing.updatedBy } : {}),
-          },
-        };
-      }
+      return {
+        ...question,
+        // Save the policy shown for consent, never inherit unseen hosts at submission.
+        secretStore: {
+          ...binding,
+          allowedHosts: binding.allowedHosts ?? existing?.allowedHosts ?? [],
+        },
+        ...(existing
+          ? {
+              secretStoreExisting: {
+                updatedAtMs: existing.updatedAtMs,
+                ...(existing.updatedBy ? { updatedBy: existing.updatedBy } : {}),
+              },
+            }
+          : {}),
+      };
     }
     const optionLabels = new Set<string>();
     for (const option of question.options) {
@@ -199,22 +203,12 @@ export function createQuestionHandlers(
         validationError("question.request", validateQuestionRequestParams.errors, respond);
         return;
       }
-      const request = params as QuestionRequestParams;
+      let request = params as QuestionRequestParams;
+      const storeBound = request.questions.some((question) => question.secretStore);
       // Store-bound questions end in a secret-store write on resolve. Without
       // this gate any operator.questions client could mint and self-answer one,
       // bypassing the operator.admin requirement on secrets.store.set.
-      if (request.questions.some((question) => question.secretStore) && !request.runId) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "secret store questions must carry the requesting runId",
-          ),
-        );
-        return;
-      }
-      if (request.questions.some((question) => question.secretStore) && !isGatewayAdmin(client)) {
+      if (storeBound && !isGatewayAdmin(client)) {
         respond(
           false,
           undefined,
@@ -224,6 +218,40 @@ export function createQuestionHandlers(
           ),
         );
         return;
+      }
+      const identity = client?.internal?.agentRuntimeIdentity;
+      const validateAuthority = context.validateAgentRuntimeApprovalAuthority;
+      if (storeBound && (!identity || !validateAuthority)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "secret store questions require trusted agent runtime authority",
+          ),
+        );
+        return;
+      }
+      // Capture the admitted identity privately, not the caller's correlation fields.
+      // Revalidate this exact claim even if another execution reuses its runId.
+      const requester = identity ? structuredClone(identity) : undefined;
+      const isRequesterActive =
+        requester && validateAuthority
+          ? () => {
+              try {
+                return validateAuthority(requester);
+              } catch {
+                return false;
+              }
+            }
+          : undefined;
+      if (requester) {
+        request = {
+          ...request,
+          agentId: requester.agentId,
+          sessionKey: requester.sessionKey,
+          runId: requester.operationalRunInstance.runId,
+        };
       }
       try {
         const requestedSession = request.sessionKey
@@ -268,6 +296,12 @@ export function createQuestionHandlers(
           ...(sessionKey ? { sessionKey } : {}),
           ...(request.runId ? { runId: request.runId } : {}),
           timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
+          isRequesterActive,
+          registerHumanInputWait:
+            requester && isRequesterActive
+              ? (isPending) =>
+                  registerActiveEmbeddedRunHumanInputWait(requester.delegatedAuthority, isPending)
+              : undefined,
           onResolved: (event) => {
             handleQuestionChannelResolved(event);
             if (sessionKey && context.getRuntimeConfig().gateway?.roles) {
@@ -296,7 +330,7 @@ export function createQuestionHandlers(
           return;
         }
         if (!managerError(error, respond)) {
-          if (request.questions.some((question) => question.secretStore)) {
+          if (storeBound) {
             respond(
               false,
               undefined,
@@ -394,12 +428,6 @@ export function createQuestionHandlers(
           );
           return;
         }
-        if (question.status !== "pending") {
-          throw new QuestionManagerError(
-            QuestionManagerErrorCodes.ALREADY_TERMINAL,
-            `question '${request.id}' is already ${question.status}`,
-          );
-        }
         const submittedAnswers = request.answers.answers;
         const values = Object.hasOwn(submittedAnswers, secretQuestion.questionId)
           ? submittedAnswers[secretQuestion.questionId]
@@ -422,61 +450,46 @@ export function createQuestionHandlers(
         }
         registerSecretValueForRedaction(value);
         const allowedHosts = request.secretStoreAllowedHosts ?? binding.allowedHosts;
-        if (binding.kind === "env" && allowedHosts !== undefined) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "Allowed hosts apply only to secret entries."),
-          );
-          return;
-        }
-        // Closure-bound authority: a store write is delegated by one live agent
-        // run, so revalidate that exact run immediately before the sink. The
-        // recorded runId is provenance; a terminated or replaced requester must
-        // not reach secret-store I/O. No await may separate this from the write.
-        if (!question.runId || !getAgentRunContext(question.runId)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "the agent run that requested this credential is no longer active",
-              { details: { reason: "QUESTION_REQUESTER_INACTIVE" } },
-            ),
-          );
-          return;
-        }
+        let saved = false;
         try {
-          await storeWriteService.write({
-            name: binding.name,
-            value,
-            kind: binding.kind,
-            ...(allowedHosts !== undefined ? { allowedHosts } : {}),
-            updatedBy: storeWriteService.resolveUpdatedBy(client),
-          });
+          // Only the synthetic marker enters state, fanout, and waiting agents.
+          // The manager validates liveness and settles before refresh can yield.
+          const result = manager.resolve(
+            request.id,
+            { answers: { [secretQuestion.questionId]: ["stored"] } },
+            request.resolvedBy,
+            () => {
+              storeWriteService.write({
+                name: binding.name,
+                value,
+                kind: "secret",
+                ...(allowedHosts !== undefined ? { allowedHosts } : {}),
+                updatedBy: storeWriteService.resolveUpdatedBy(client),
+              });
+              saved = true;
+            },
+          );
+          await storeWriteService.reloadReference(binding.name);
+          respond(true, result, undefined);
         } catch (error) {
+          if (managerError(error, respond)) {
+            return;
+          }
           respond(
             false,
             undefined,
             errorShape(
-              error instanceof SecretStoreValidationError
+              !saved && error instanceof SecretStoreValidationError
                 ? ErrorCodes.INVALID_REQUEST
                 : ErrorCodes.UNAVAILABLE,
-              error instanceof SecretStoreValidationError
-                ? error.message
-                : "Secret store entry could not be saved.",
+              saved
+                ? "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."
+                : error instanceof SecretStoreValidationError
+                  ? error.message
+                  : "Secret store entry could not be saved.",
             ),
           );
-          return;
         }
-        // Only the synthetic marker may enter manager state, event fanout,
-        // waiting agent responses, and channel-rendered question outcomes.
-        const result = manager.resolve(
-          request.id,
-          { answers: { [secretQuestion.questionId]: ["stored"] } },
-          request.resolvedBy,
-        );
-        respond(true, result, undefined);
       } catch (error) {
         if (!managerError(error, respond)) {
           throw error;

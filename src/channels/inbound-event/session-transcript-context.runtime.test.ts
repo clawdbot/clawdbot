@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
@@ -28,6 +30,8 @@ function context(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgCont
 }
 
 describe("session transcript inbound context", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     readRecent.mockReset();
   });
@@ -42,7 +46,7 @@ describe("session transcript inbound context", () => {
     await runPreparedChannelTurn({
       channel: "slack",
       routeSessionKey: ctx.SessionKey!,
-      storePath: "/tmp/sessions.json",
+      storePath: path.join(tempDirs.make("openclaw-session-transcript-context-"), "sessions.json"),
       ctxPayload: ctx,
       recordInboundSession: vi.fn(async () => undefined),
       runDispatch: vi.fn(async () => ({ queuedFinal: false })),
@@ -56,6 +60,34 @@ describe("session transcript inbound context", () => {
         body: "I will remind you at 11:50",
         timestamp: 2_000,
       },
+    ]);
+  });
+
+  it("restores marked Cron delivery context when no live chat window survives", async () => {
+    readRecent.mockImplementation(async (params) =>
+      params.includeCronDirectDeliveryContext
+        ? [{ id: "cron-1", role: "assistant", text: "scheduled payload", timestamp: 2_000 }]
+        : [],
+    );
+    const ctx = context({
+      SessionTranscriptContext: { chatWindow: true, historyLimit: 3 },
+    });
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(ctx.ChannelStructuredContext).toEqual([
+      expect.objectContaining({
+        source: "session",
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [expect.objectContaining({ body: "scheduled payload" })],
+        }),
+      }),
     ]);
   });
 
@@ -132,6 +164,7 @@ describe("session transcript inbound context", () => {
       storePath: "/tmp/sessions.json",
     });
 
+    expect(readRecent.mock.calls[0]?.[0]).not.toHaveProperty("includeCronDirectDeliveryContext");
     expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
       source: "session",
       payload: {

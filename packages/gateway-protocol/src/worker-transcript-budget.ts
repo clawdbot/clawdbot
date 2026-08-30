@@ -1,7 +1,7 @@
 import type { WorkerTranscriptCommitRequestFrame } from "./schema/worker-admission.js";
 import {
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-  WORKER_PROTOCOL_MAX_TRANSCRIPT_PAYLOAD_BYTES,
+  WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
 } from "./schema/worker-protocol-primitives.js";
 
 /** Only image bytes may exceed the transcript's ordinary control budget. */
@@ -10,7 +10,7 @@ export function isWorkerTranscriptFrameWithinBudget(
 ): boolean {
   try {
     const bytes = Buffer.byteLength(JSON.stringify(frame), "utf8");
-    if (bytes > WORKER_PROTOCOL_MAX_TRANSCRIPT_PAYLOAD_BYTES) {
+    if (bytes > WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) {
       return false;
     }
     let imageBytes = 0;

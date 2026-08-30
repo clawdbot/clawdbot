@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import {
   assignSessionOwner,
+  patchSessionEntryCore,
   recordSessionParticipant,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -410,7 +411,7 @@ describe("sessionsCommand", () => {
     ]);
   });
 
-  it("exports subagent lineage metadata in JSON output", async () => {
+  it("exports session color and subagent lineage metadata in JSON output", async () => {
     const store = await writeStore({
       "agent:main:child": {
         sessionId: "child-session",
@@ -426,10 +427,22 @@ describe("sessionsCommand", () => {
         sessionStartedAt: Date.now() - 20 * 60_000,
         lastInteractionAt: Date.now() - 5 * 60_000,
         label: "research helper",
+        color: "blue",
         status: "done",
         model: "test:opus",
       },
+      "agent:main:uncolored": { sessionId: "uncolored-session", updatedAt: Date.now() },
+      "agent:main:cleared": {
+        sessionId: "cleared-session",
+        updatedAt: Date.now(),
+        color: "red",
+      },
     });
+    await patchSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:cleared", storePath: store },
+      () => ({ color: undefined }),
+      { skipMaintenance: true },
+    );
 
     const payload = await runSessionsJson<{
       sessions?: Array<{
@@ -445,6 +458,7 @@ describe("sessionsCommand", () => {
         sessionStartedAt?: number;
         lastInteractionAt?: number;
         label?: string;
+        color?: string;
         status?: string;
       }>;
     }>(sessionsCommand, store);
@@ -462,9 +476,15 @@ describe("sessionsCommand", () => {
       sessionStartedAt: Date.now() - 20 * 60_000,
       lastInteractionAt: Date.now() - 5 * 60_000,
       label: "research helper",
+      color: "blue",
       status: "done",
     });
     expect(child).not.toHaveProperty("sessionFile");
+    for (const key of ["agent:main:uncolored", "agent:main:cleared"]) {
+      const row = payload.sessions?.find((session) => session.key === key);
+      expect(row).toBeDefined();
+      expect(row).not.toHaveProperty("color");
+    }
   });
 
   it("shows preserved stale totals in JSON output", async () => {

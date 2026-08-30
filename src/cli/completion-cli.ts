@@ -7,6 +7,8 @@ import { routeLogsToStderr } from "../logging/console.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import {
   collectShellCompletionCommandTree,
+  commandNameVariants,
+  completionFlags,
   type ShellCompletionContext,
 } from "./completion-command-tree.js";
 import {
@@ -41,22 +43,12 @@ export function getCompletionScript(shell: CompletionShell, program: Command): s
   return generateFishCompletion(program);
 }
 
-function completionFlags(option: Option): string[] {
-  return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
-}
-
 function preferredCompletionFlag(option: Option): string {
   return option.long ?? option.short ?? option.flags;
 }
 
 function fishWords(values: readonly string[]): string {
   return values.join(" ");
-}
-
-// Aliases are typeable command words; every completion surface must offer them
-// alongside the canonical name or advertised commands appear nonexistent.
-function commandNameVariants(cmd: Command): string[] {
-  return [cmd.name(), ...cmd.aliases()];
 }
 
 function generateFishPathHelper(rootCmd: string, contexts: ShellCompletionContext[]): string {

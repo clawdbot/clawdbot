@@ -19,8 +19,9 @@ const MAX_PROCESS_QUIESCE_PASSES = 16;
 
 export async function terminateCodexAppServerDescendants(
   child: ContainableTransport,
-): Promise<(() => void) | undefined> {
-  return (await containDescendants(child))?.resume;
+): Promise<(() => void) | "exited" | undefined> {
+  const contained = await containDescendants(child);
+  return contained === "exited" ? contained : contained?.resume;
 }
 
 /** A durable spawn fact, never a command-line match, selects the orphan root. */
@@ -28,15 +29,18 @@ export async function terminateCodexAppServerOrphan(
   expected: CodexAppServerProcessIdentity,
 ): Promise<boolean> {
   const deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
-  const contained = await containDescendants(
+  const result = await containDescendants(
     { pid: expected.pid, kill: (signal) => signalProcess(expected.pid, signal ?? "SIGTERM") },
     expected,
     deadline,
   );
+  const contained = result === "exited" ? undefined : result;
   let gone = false;
   try {
     if (contained) {
-      const current = await readCodexAppServerProcess(expected.pid, deadline);
+      const current = await readCodexAppServerProcess(expected.pid, deadline).catch(
+        () => undefined,
+      );
       if (current && isSameLiveRoot(current, contained.root, true)) {
         // Keep the verified leader stopped until its whole group is killed;
         // a QA-owned child may share its parent's group and must use its PID.
@@ -44,7 +48,7 @@ export async function terminateCodexAppServerOrphan(
       }
     }
     while (Date.now() < deadline) {
-      const snapshot = await readCodexAppServerProcessSnapshot(deadline);
+      const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
       if (!snapshot?.some((row) => row.pid === process.pid)) {
         return false;
       }
@@ -72,16 +76,25 @@ async function containDescendants(
   child: ContainableTransport,
   expected?: CodexAppServerProcessIdentity,
   deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
-): Promise<{ root: PosixProcess; resume: () => void } | undefined> {
+): Promise<{ root: PosixProcess; resume: () => void } | "exited" | undefined> {
   const rootPid = child.pid;
-  if (process.platform === "win32" || !rootPid || !child.kill || hasExited(child)) {
+  if (hasExited(child)) {
+    return "exited";
+  }
+  if (process.platform === "win32" || !rootPid || !child.kill) {
     return undefined;
   }
-  const snapshot = await readCodexAppServerProcessSnapshot(deadline);
+  // Inspection failures never grant containment or signal authority.
+  const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
   if (!snapshot || Date.now() >= deadline) {
     return undefined;
   }
   const root = snapshot.find((row) => row.pid === rootPid);
+  // A retained direct child cannot have its PID reused before Node reaps it.
+  // Preserve an OS-observed exit even when Node's exit callback is still queued.
+  if (!expected && (!root || root.state.startsWith("Z"))) {
+    return "exited";
+  }
   if (
     !root ||
     !(expected ? isSameLiveProcess(root, expected) : root.ppid === process.pid) ||
@@ -167,7 +180,7 @@ async function quiesceDescendants(
     if (Date.now() >= deadline) {
       return undefined;
     }
-    const snapshot = await readCodexAppServerProcessSnapshot(deadline);
+    const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
     if (!snapshot || Date.now() >= deadline) {
       return undefined;
     }
@@ -315,7 +328,7 @@ async function signalSameRoot(
   signal: NodeJS.Signals,
   deadline: number,
 ): Promise<boolean> {
-  const current = await readCodexAppServerProcess(root.pid, deadline);
+  const current = await readCodexAppServerProcess(root.pid, deadline).catch(() => undefined);
   return Boolean(current && isSameLiveRoot(current, root) && signalProcess(current.pid, signal));
 }
 
@@ -348,7 +361,7 @@ async function signalSameProcess(
 ): Promise<boolean> {
   // Portable Node POSIX signals are PID-based, so never retain numeric authority:
   // take this final identity snapshot synchronously immediately before every signal.
-  const current = await readCodexAppServerProcess(expected.pid, deadline);
+  const current = await readCodexAppServerProcess(expected.pid, deadline).catch(() => undefined);
   return Boolean(
     current && isSameLiveProcess(current, expected) && signalProcess(current.pid, signal),
   );

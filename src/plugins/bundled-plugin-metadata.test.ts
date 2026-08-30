@@ -208,6 +208,7 @@ function createRepoBundledManifestRegistry(): PluginManifestRegistry {
       manifestPath: path.join(repoRoot, "extensions", dirName, "openclaw.plugin.json"),
       activation: manifest.activation,
       setup: manifest.setup,
+      modelCatalog: manifest.modelCatalog,
       hooks: [],
       contracts: manifest.contracts,
     })),
@@ -616,6 +617,33 @@ describe("bundled plugin metadata", () => {
         platform: "darwin",
       }),
     ).toContain("bonjour");
+  });
+
+  it.each([
+    { name: "before login", config: {} },
+    {
+      name: "with only an OpenAI login and chat model",
+      config: {
+        auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" as const } } },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": {} },
+          },
+        },
+      },
+    },
+  ])("starts the OpenAI browser broker $name without Talk configuration", ({ config }) => {
+    const manifestRegistry = createRepoBundledManifestRegistry();
+
+    expect(
+      resolveGatewayStartupPluginIdsFromRegistry({
+        config,
+        env: {},
+        index: createInstalledPluginIndexForManifests(manifestRegistry),
+        manifestRegistry,
+      }),
+    ).toContain("openai");
   });
 
   it("starts Bonjour when explicitly enabled", () => {

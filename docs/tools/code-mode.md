@@ -277,11 +277,20 @@ ordinary recovery from a failed `exec`; discovery does not count as a mutation.
 OpenClaw does not automatically replay a failed program. If earlier calls
 may have changed state or a failed call may have partially applied, OpenClaw
 deliberately permits one temporary read-only recovery attempt to inspect the
-current state. The internal instruction identifies OpenClaw as its source. It does
-not expose writes, sends, shell commands, or other mutations during that
-reconciliation. Cancellation, explicitly terminal tool outcomes, sandbox
-restrictions, approval requirements, and tool-policy denials retain their
-existing behavior.
+current state. The internal instruction identifies OpenClaw as its source. It
+does not expose writes, sends, shell commands, or other mutations during that
+inspection.
+
+If inspection finds unfinished work, the model can request one bounded recovery.
+Code Mode stays disabled, and OpenClaw restores the normal direct-tool or Tool
+Search surface with its real tool names and argument schemas. Host-recorded
+nested-call facts block an exact repeat whose earlier effect was committed or
+uncertain. The recovery permits one mutation attempt; reads and schema discovery
+remain available afterward, but a later mutation does not run blindly when the
+first attempt fails. If no work remains, the inspection report ends the run
+without another model turn. Cancellation, explicitly terminal tool outcomes,
+sandbox restrictions, approval requirements, and tool-policy denials retain
+their existing behavior.
 
 ### Verify the active surface
 
@@ -1029,6 +1038,24 @@ output is delivered incrementally. An unchanged cumulative summary is not repeat
 new output or a changed final-value/error reservation can produce a replacement
 summary of that same original output.
 
+Model-facing `exec` and `wait` results also fit the effective model's per-result
+context and persistence limits. OpenClaw reserves the complete result envelope,
+including status, continuation, diagnostics, telemetry, and JSON formatting,
+before projecting output from its retained original source. Network-derived
+results retain the untrusted-content wrapper and its smaller content limit.
+These limits do not reduce the nested tool's byte allowance. Headless execution
+and low-level controls without model context retain their byte-only allowance
+(with the existing security wrapper limit for network-derived control output).
+
+This protects fresh results; it is not an archival JSON guarantee. Later
+aggregate reduction, cache-TTL pruning, and replay into a smaller model may
+still shorten or replace historical tool text. Already-sent results stay
+unchanged during ordinary continuation. Conventional tools keep their own text
+and image formats: a declared output schema describes `details`, not model-visible
+text. The file-read producer reserves its exact paging footer within the same
+model limits, and oversized skill instructions are refused rather than silently
+served in part.
+
 ## Tool catalog
 
 The hidden catalog includes tools after effective policy filtering, in this
@@ -1121,10 +1148,10 @@ allow ordinary model recovery, including when `wait` resumes a suspended cell.
 This proof covers the cell's entire execution, not just the latest resume.
 Failed waits without that host proof remain terminal; serialized result fields
 cannot grant recovery. Possible nested side effects in a failed `exec` require
-authorized read-only reconciliation before any further action. Network-controlled
-tool output and errors retain their existing untrusted-content wrapping and
-sanitization; recovering from a failure does not grant new permissions or replay
-completed side effects.
+the [read-only inspection and bounded recovery](#recover-from-tool-errors) flow
+before any further action. Network-controlled tool output and errors retain
+their existing untrusted-content wrapping and sanitization; recovering from a
+failure does not grant new permissions or replay completed side effects.
 
 Parallel nested calls are allowed up to `maxPendingToolCalls`.
 

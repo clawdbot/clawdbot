@@ -3,7 +3,7 @@
  *
  * Keeps bounded display tails in memory while spilling full output to private temp files when needed.
  */
-import type { WriteStream } from "node:fs";
+import { finished } from "node:stream/promises";
 import { createPrivateTempWriteStream } from "./private-temp-file.js";
 import {
   DEFAULT_MAX_BYTES,
@@ -69,8 +69,9 @@ export class OutputAccumulator {
   private hasOpenLine = false;
   private finished = false;
 
-  private tempFilePath: string | undefined;
-  private tempFileStream: WriteStream | undefined;
+  private tempFile:
+    | (ReturnType<typeof createPrivateTempWriteStream> & { completion: Promise<void> })
+    | undefined;
 
   constructor(options: OutputAccumulatorOptions = {}) {
     this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
@@ -108,7 +109,7 @@ export class OutputAccumulator {
 
     // Decoded/transformed output must spill exactly what callers see.
     const spillChunk = lane.spillDecoded ? Buffer.from(text, "utf-8") : data;
-    if (this.tempFileStream || this.shouldUseTempFile()) {
+    if (this.tempFile || this.shouldUseTempFile()) {
       this.ensureTempFile();
     }
     this.appendSpillChunk(spillChunk);
@@ -166,31 +167,18 @@ export class OutputAccumulator {
     return {
       content: truncation.content,
       truncation,
-      fullOutputPath: this.tempFilePath,
+      fullOutputPath: this.tempFile?.path,
     };
   }
 
   async closeTempFile(): Promise<void> {
-    if (!this.tempFileStream) {
+    const tempFile = this.tempFile;
+    if (!tempFile) {
       return;
     }
 
-    const stream = this.tempFileStream;
-    this.tempFileStream = undefined;
-
-    await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => {
-        stream.off("finish", onFinish);
-        reject(error);
-      };
-      const onFinish = () => {
-        stream.off("error", onError);
-        resolve();
-      };
-      stream.once("error", onError);
-      stream.once("finish", onFinish);
-      stream.end();
-    });
+    tempFile.stream.end();
+    await tempFile.completion;
   }
 
   getLastLineBytes(): number {
@@ -271,22 +259,25 @@ export class OutputAccumulator {
     if (chunk.length === 0) {
       return;
     }
-    if (this.tempFileStream) {
-      this.tempFileStream.write(chunk);
+    if (this.tempFile) {
+      this.tempFile.stream.write(chunk);
     } else {
       this.spillChunks.push(chunk);
     }
   }
 
   private ensureTempFile(): void {
-    if (this.tempFilePath) {
+    if (this.tempFile) {
       return;
     }
     const tempFile = createPrivateTempWriteStream(this.tempFilePrefix);
-    this.tempFilePath = tempFile.path;
-    this.tempFileStream = tempFile.stream;
+    // Own stream errors before the first write, retaining finished()'s listeners.
+    // Handle early rejection now; closeTempFile still awaits the original promise.
+    const completion = finished(tempFile.stream);
+    void completion.catch(() => undefined);
+    this.tempFile = { ...tempFile, completion };
     for (const chunk of this.spillChunks) {
-      this.tempFileStream.write(chunk);
+      tempFile.stream.write(chunk);
     }
     this.spillChunks = [];
   }

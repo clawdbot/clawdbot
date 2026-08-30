@@ -70,13 +70,22 @@ export function mapActivationResult(params: {
   result: SystemAgentSetupActivateResult;
   targetId: string;
   fallbackError: string;
+  restartWarning: string;
+  refreshWarning?: string | null;
 }): ModelSetupActivationState {
   const { result } = params;
   if (result.ok && result.modelRef) {
+    const warning = [
+      result.gatewayRestartRequired ? params.restartWarning : null,
+      params.refreshWarning,
+    ]
+      .filter(Boolean)
+      .join("\n");
     return {
       phase: "success",
       modelRef: result.modelRef,
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
+      ...(warning ? { warning } : {}),
     };
   }
   return {

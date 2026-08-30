@@ -181,6 +181,15 @@ export function ensureTranscriptSessionRoot(
     );
     publishSessionEntryCacheInvalidation(database);
   }
+  upsertTranscriptSessionWindowInTransaction(database, scope, updatedAt);
+}
+
+export function upsertTranscriptSessionWindowInTransaction(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  updatedAt: number,
+): void {
+  const db = getSessionKysely(database.db);
   executeSqliteQuerySync(
     database.db,
     db

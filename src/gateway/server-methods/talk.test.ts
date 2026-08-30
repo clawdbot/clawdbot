@@ -94,6 +94,7 @@ const mocks = vi.hoisted(() => ({
   consultRealtimeVoiceAgent: vi.fn(async (_params?: unknown) => ({ text: "agent answer" })),
   closeTalkClientGatewayControlSession: vi.fn(async () => false),
   gatewayControlActivate: vi.fn(),
+  gatewayControlAdoptProvider: vi.fn(async () => undefined),
   gatewayControlClose: vi.fn(async () => undefined),
   gatewayControl: { bindBridge: vi.fn() },
   createTalkClientGatewayControlOwner: vi.fn(),
@@ -589,6 +590,7 @@ describe("talk.catalog handler", () => {
       defaultModel: "gpt-realtime-2.1",
       models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
       voices: ["alloy", "marin"],
+      capabilities: { voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] } },
       resolveConfig: vi.fn(({ rawConfig }: { rawConfig: Record<string, unknown> }) => rawConfig),
       isConfigured: vi.fn(() => false),
       createBridge: vi.fn(),
@@ -625,6 +627,7 @@ describe("talk.catalog handler", () => {
     expect(catalog.realtime.providers[0]).toMatchObject({
       models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
       voices: ["alloy", "marin"],
+      voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] },
     });
     // Catalog readiness must mirror talk.client.create: top-level
     // talk.realtime.model overrides the provider-level model and the resolved
@@ -3031,11 +3034,19 @@ describe("talk.client.create handler", () => {
     mocks.createOrResumeClientVoiceSession.mockReturnValue("voice-test");
     mocks.resolveClientVoiceAgentSessionId.mockReturnValue("session-main");
     mocks.closeTalkClientGatewayControlSession.mockResolvedValue(false);
-    mocks.createTalkClientGatewayControlOwner.mockReturnValue({
-      activate: mocks.gatewayControlActivate,
-      close: mocks.gatewayControlClose,
-      control: mocks.gatewayControl,
-    });
+    mocks.createTalkClientGatewayControlOwner.mockImplementation(
+      (params: {
+        runAgentConsult: (args: unknown, signal?: AbortSignal) => Promise<{ text: string }>;
+      }) => ({
+        activate: mocks.gatewayControlActivate,
+        adoptProvider: mocks.gatewayControlAdoptProvider,
+        close: mocks.gatewayControlClose,
+        assertOpen: vi.fn(),
+        control: mocks.gatewayControl,
+        runAgentConsult: ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>
+          params.runAgentConsult({ question: prompt }, signal),
+      }),
+    );
   });
 
   it("builds realtime launch defaults from talk.realtime", () => {
@@ -3308,7 +3319,8 @@ describe("talk.client.create handler", () => {
         transcriptCapable: true,
       }),
     );
-    expect(mocks.gatewayControlActivate).toHaveBeenCalledWith(expect.any(Function));
+    expect(mocks.gatewayControlAdoptProvider).toHaveBeenCalledWith(expect.any(Function));
+    expect(mocks.gatewayControlActivate).toHaveBeenCalledOnce();
     expectRespondOk(respond, {
       ...browserSession,
       voiceSessionId: "voice-gateway",

@@ -1,6 +1,7 @@
 // Gateway auxiliary method handlers.
 // Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import { randomUUID } from "node:crypto";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   type AgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
@@ -25,6 +26,7 @@ import {
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import { resolveApprovalSessionAudienceWithFallback } from "./approval-session-audience.js";
+import { createApprovalWebPushDelivery } from "./approval-web-push.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   createExecApprovalIosPushDelivery,
@@ -142,6 +144,15 @@ export function createGatewayAuxHandlers(
     },
   );
   const execApprovalForwarder = createExecApprovalForwarder();
+  const approvalWebPushDelivery = createApprovalWebPushDelivery({
+    getRuntimeConfig,
+    log: params.log,
+  });
+  // Startup already terminalized prior-runtime approvals above. Replay any
+  // durable request targets so their actionable browser prompts are replaced.
+  void approvalWebPushDelivery.recoverTerminalDeliveries().catch((error: unknown) => {
+    params.log.error?.(`approval Web Push restart recovery failed: ${String(error)}`);
+  });
   const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log: params.log });
   const loadExecApprovalHandlers = createLazyPromise(
     () =>
@@ -235,6 +246,7 @@ export function createGatewayAuxHandlers(
       } catch (error) {
         params.log.error?.(`plugin approvals: authority-close settlement failed: ${String(error)}`);
       }
+      questionManager.cancelClosedAuthorities();
       params.onAgentRunAuthorityClosed?.(authority);
     },
   );
@@ -260,6 +272,7 @@ export function createGatewayAuxHandlers(
       } catch (error) {
         params.log.error?.(`plugin approvals: worker-claim settlement failed: ${String(error)}`);
       }
+      questionManager.cancelClosedAuthorities();
     },
   );
   const unregisterApprovalAuthorityObserver = () => {
@@ -365,6 +378,7 @@ export function createGatewayAuxHandlers(
     execApprovalManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
+    approvalWebPushDelivery,
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
     systemAgentApprovalManager,

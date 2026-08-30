@@ -46,7 +46,13 @@ data class ChatQuestionPrompt(
 data class ChatQuestionDraft(
   val selectedOptions: Map<String, Set<String>> = emptyMap(),
   val otherText: Map<String, String> = emptyMap(),
+  val secretStoreAllowedHostsText: String? = null,
 ) {
+  fun secretStoreAllowedHosts(questions: List<Question>): List<String>? {
+    val store = questions.firstOrNull()?.secretStore?.takeIf { it.kind == "secret" } ?: return null
+    return secretStoreAllowedHostsText?.split(Regex("[,\\s]+"))?.filter { it.isNotEmpty() } ?: store.allowedHosts.orEmpty()
+  }
+
   fun toggle(
     question: Question,
     label: String,
@@ -72,7 +78,7 @@ data class ChatQuestionDraft(
     value: String,
   ): ChatQuestionDraft {
     if (question.options.isNotEmpty() && question.isOther != true) return this
-    val clearOptions = question.multiSelect != true && value.isNotBlank()
+    val clearOptions = question.multiSelect != true && (if (question.isSecret == true) value.isNotEmpty() else value.isNotBlank())
     return copy(
       selectedOptions = if (clearOptions) selectedOptions + (question.questionId to emptySet()) else selectedOptions,
       otherText = otherText + (question.questionId to value),
@@ -84,7 +90,8 @@ data class ChatQuestionDraft(
     for (question in questions) {
       val selected = selectedOptions[question.questionId].orEmpty()
       val values = question.options.mapNotNull { option -> option.label.takeIf { it in selected } }.toMutableList()
-      otherText[question.questionId]?.trim()?.takeIf { it.isNotEmpty() }?.let(values::add)
+      val text = otherText[question.questionId]?.let { if (question.isSecret == true) it else it.trim() }
+      text?.takeIf { it.isNotEmpty() }?.let(values::add)
       if (values.isEmpty()) return null
       result[question.questionId] = values
     }

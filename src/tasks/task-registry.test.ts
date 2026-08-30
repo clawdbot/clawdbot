@@ -1130,7 +1130,7 @@ describe("task-registry", () => {
   it("clears terminal errors when explicitly updated without an error", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
 
       const task = createTaskFixture("cron", {
         ownerKey: "system:cron:test",
@@ -2117,7 +2117,7 @@ describe("task-registry", () => {
   ])("delivers delegated ACP completion directly to a $name thread origin", async (origin) => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
       const runId = `run-${origin.channel}-thread-terminal`;
       hoisted.sendMessageMock.mockResolvedValue({
         channel: origin.channel,
@@ -2176,7 +2176,7 @@ describe("task-registry", () => {
   it("keeps delegated ACP completion queued when the transport does not declare thread delivery", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
       const runId = "run-guildchat-thread-terminal";
       // guildchat is deliverable but declares no thread capability, so a thread-shaped
       // origin must keep routing through the parent session instead of direct delivery.
@@ -2227,7 +2227,7 @@ describe("task-registry", () => {
   it("keeps delegated ACP completion queued when the requester origin has no thread", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
       const runId = "run-root-discord-terminal";
       const requesterOrigin = {
         channel: "discord",
@@ -2305,7 +2305,7 @@ describe("task-registry", () => {
     },
   ])("routes $name ACP completion through the parent session", async ({ id, ownerKey, target }) => {
     await withTaskRegistryTempDir(async () => {
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
       const runId = `run-group-terminal-${id}`;
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "guildchat",
@@ -2959,7 +2959,7 @@ describe("task-registry", () => {
   it("restores persisted tasks from disk on the next lookup", async () => {
     await withTaskRegistryTempDir(
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
 
         const task = createTaskFixture("subagent", {
           childSessionKey: "agent:main:subagent:child",
@@ -3243,7 +3243,7 @@ describe("task-registry", () => {
     },
   ])("$name", async ({ taskKind, sourceId, task: taskName, ageMinutes, reconciled, error }) => {
     await withTaskRegistryTempDir(async () => {
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
       const now = Date.now();
       const lastEventAt = now - ageMinutes * 60_000;
       const task = createTaskFixture("subagent", {
@@ -3270,7 +3270,7 @@ describe("task-registry", () => {
 
   it("uses normal reconcile grace for OpenClaw-owned subagent tasks", async () => {
     await withTaskRegistryTempDir(async () => {
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
       const now = Date.now();
       const task = createTaskFixture("subagent", {
         childSessionKey: "agent:main:subagent:missing",
@@ -5321,7 +5321,7 @@ describe("task-registry", () => {
     },
   ])("$name", async ({ taskKind, sourceId, task: taskName, cancellable }) => {
     await withTaskRegistryTempDir(async () => {
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
       const task = createTaskFixture("subagent", {
         taskKind,
         sourceId,

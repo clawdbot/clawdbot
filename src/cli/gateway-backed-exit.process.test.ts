@@ -12,7 +12,10 @@ import {
 } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
@@ -863,25 +866,27 @@ describe("gateway-backed CLI process exit", () => {
         "utf8",
       );
 
+      const gatewayEnv = {
+        ...process.env,
+        HOME: root,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
       const lock = gatewayOwnsLock
         ? await acquireGatewayLock({
             allowInTests: true,
-            env: {
-              ...process.env,
-              HOME: root,
-              OPENCLAW_CONFIG_PATH: configPath,
-              OPENCLAW_HOME: root,
-              OPENCLAW_STATE_DIR: stateDir,
-            },
+            env: gatewayEnv,
             port,
             role: "gateway",
             timeoutMs: 1_000,
           })
         : null;
-      if (gatewayOwnsLock) {
-        expect(lock).not.toBeNull();
-      }
       try {
+        if (gatewayOwnsLock) {
+          expect(lock).not.toBeNull();
+          openOpenClawStateDatabase({ env: gatewayEnv });
+        }
         const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
 
         expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
@@ -898,6 +903,9 @@ describe("gateway-backed CLI process exit", () => {
         expect(result.stderr).not.toContain("Stack:");
         expect(result.stderr).not.toContain("openclaw doctor");
       } finally {
+        if (gatewayOwnsLock) {
+          closeOpenClawStateDatabaseForTest();
+        }
         await lock?.release();
       }
     },

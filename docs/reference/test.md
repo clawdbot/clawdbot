@@ -100,6 +100,12 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
 | `pnpm check:changed`                              | Runs the local changed formatting/typecheck/lint/guard plan, including targeted Vitest owner tests for selected paths. Use `pnpm test:changed` or `pnpm test <target>` for additional test proof matching the touched contract.                                                                                                                       |
 
+For native app changes, `pnpm check:changed` uses platform scope to select lint:
+Android selects `pnpm android:lint` (the Gradle ktlint checks), while Apple app
+changes retain Swift lint. Android-only changes do not select Swift lint or its
+missing-tool notice. Android framework/resource lint and runtime tests remain
+separate checks; Kotlin lint does not replace them.
+
 Remote filesystem fixtures that execute GNU `stat` and `readlink` run locally
 only on Linux. The shared leading-`@` file-tool scenario
 also runs against a portable remote-only bridge on every platform. Native

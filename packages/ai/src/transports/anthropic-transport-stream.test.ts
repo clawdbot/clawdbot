@@ -4270,45 +4270,6 @@ describe("anthropic transport stream", () => {
     expect(payload.output_config).toEqual({ effort: "high" });
   });
 
-  it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      createSseResponse([
-        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } }),
-        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-      ]),
-    );
-    const streamFn = createAnthropicMessagesTransportStreamFn();
-    const acceptanceObserver = vi.fn();
-    const onResponse = vi.fn();
-    const options = withProviderAcceptanceObserver(
-      { apiKey: "sk-ant-api", onResponse } as AnthropicStreamOptions,
-      acceptanceObserver,
-    );
-    const stream = streamFn(
-      makeAnthropicTransportModel(),
-      { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
-      options,
-    );
-
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
-
-    const startIndex = eventTypes.indexOf("start");
-    expect(startIndex).toBeGreaterThanOrEqual(0);
-    expect(eventTypes.slice(0, startIndex).some((t) => t === "error")).toBe(false);
-    expect(acceptanceObserver).toHaveBeenCalledWith({
-      kind: "http_response",
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-    });
-    expect(onResponse).toHaveBeenCalledWith(
-      { status: 200, headers: { "content-type": "text/event-stream" } },
-      expect.objectContaining({ provider: "anthropic" }),
-    );
-  });
-
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createRawSseResponse(

@@ -37,6 +37,8 @@ export type PersistedUserTurnMediaInput = Pick<
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> & {
   display?: false;
+  /** Private transcript correlation; never authorizes an execution. */
+  idempotencyKey?: string;
   __openclaw?: Record<string, unknown>;
 };
 
@@ -174,6 +176,10 @@ export type CreateUserTurnTranscriptRecorderParams = {
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
+  /** Durable input custody leaves the active transcript unchanged until execution owns it. */
+  stageApproved?: (options: { runId: string; assertCurrent: () => void }) => Promise<boolean>;
+  withPendingInput?: <T>(run: () => T) => T;
+  finishPendingInput?: (disposition: "cancelled" | "interrupted") => void;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
   /** Confirms exact-run steering provenance after transcript commitment is proven. */
