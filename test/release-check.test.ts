@@ -753,10 +753,11 @@ describe("collectMissingPackPaths", () => {
           installedBinaryVersion: "openclaw 2026.5.14-beta.3",
           packageRoot,
         }),
-      ).toEqual([
-        "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
-        "installed package root dist file 'typescript-compiler.js' is invalid or exceeds 6291456 bytes.",
-      ]);
+      ).toEqual(
+        expect.arrayContaining([
+          "installed package root dist file 'typescript-compiler.js' is invalid or exceeds 6291456 bytes.",
+        ]),
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

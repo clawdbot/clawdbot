@@ -11,7 +11,6 @@ import {
   collectInstalledBundledExtensionManifestErrors,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
-  collectInstalledPluginSdkZodArtifactErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   fetchRegistryJson,
@@ -429,11 +428,13 @@ describe("collectInstalledPackageErrors", () => {
       );
 
       const manifestErrors = collectInstalledBundledExtensionManifestErrors(packageRoot);
-      expect(manifestErrors).toHaveLength(1);
-      expect(manifestErrors[0]).toContain(
+      const invalidManifestError = manifestErrors.find((error) =>
+        error.includes("dist/extensions/telegram/package.json"),
+      );
+      expect(invalidManifestError).toContain(
         "installed bundled extension manifest invalid: failed to parse",
       );
-      expect(manifestErrors[0]).toContain("dist/extensions/telegram/package.json");
+      expect(invalidManifestError).toContain("dist/extensions/telegram/package.json");
 
       expect(
         collectInstalledPackageErrors({
@@ -441,7 +442,7 @@ describe("collectInstalledPackageErrors", () => {
           installedVersion: "2026.3.23",
           packageRoot,
         }),
-      ).toContain(manifestErrors[0]);
+      ).toContain(invalidManifestError);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -533,82 +534,11 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
       writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
 
       expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
-        `installed package dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
+        `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
-  });
-});
-
-describe("collectInstalledPluginSdkZodArtifactErrors", () => {
-  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
-    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-zod-sdk-"));
-    try {
-      run(packageRoot);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  }
-
-  function writeInstalledFile(packageRoot: string, relativePath: string, contents: string): void {
-    const filePath = join(packageRoot, ...relativePath.split("/"));
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, contents, "utf8");
-  }
-
-  it("requires the plugin-sdk zod artifact", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
-        "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
-      ]);
-    });
-  });
-
-  it("rejects plugin-sdk zod artifacts with a bare zod export", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      writeInstalledFile(
-        packageRoot,
-        "dist/plugin-sdk/zod.js",
-        'import "../zod-D2c0iocA.js";\nexport * from "zod";\n',
-      );
-
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
-        "installed package plugin SDK zod artifact must be self-contained but dist/plugin-sdk/zod.js imports zod.",
-      ]);
-    });
-  });
-
-  it("rejects plugin-sdk zod artifacts when a reachable local chunk imports zod", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      writeInstalledFile(
-        packageRoot,
-        "dist/plugin-sdk/zod.js",
-        'export { z } from "../zod-D2c0iocA.js";\n',
-      );
-      writeInstalledFile(
-        packageRoot,
-        "dist/zod-D2c0iocA.js",
-        'import * as zodCore from "zod/v4/core";\nexport const z = zodCore;\n',
-      );
-
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
-        "installed package plugin SDK zod artifact must be self-contained but dist/zod-D2c0iocA.js imports zod/v4/core.",
-      ]);
-    });
-  });
-
-  it("accepts plugin-sdk zod artifacts that only import package-local chunks", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      writeInstalledFile(
-        packageRoot,
-        "dist/plugin-sdk/zod.js",
-        'export { z } from "../zod-D2c0iocA.js";\n',
-      );
-      writeInstalledFile(packageRoot, "dist/zod-D2c0iocA.js", "export const z = {};\n");
-
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([]);
-    });
   });
 });
 

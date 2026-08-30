@@ -503,7 +503,7 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(buildGauntletPrebuildEnv({ EXISTING: "1" }, { includePrivateQa: true })).toEqual({
       EXISTING: "1",
       OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab,qa-matrix",
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -540,7 +540,7 @@ describe("plugin gateway gauntlet helpers", () => {
     ).toEqual({
       EXISTING: "1",
       OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab,qa-matrix",
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -1547,7 +1547,7 @@ process.exit(7);
     expect(result.status, result.stderr).toBe(0);
     await expect(
       fs.readFile(path.join(outputDir, "qa-suite", "chunk-00", "env.txt"), "utf8"),
-    ).resolves.toBe("alpha,beta,qa-channel,qa-lab,qa-matrix");
+    ).resolves.toBe("alpha,beta,qa-channel,qa-lab");
     await expect(
       fs.readFile(path.join(outputDir, "qa-suite", "chunk-00", "args.txt"), "utf8"),
     ).resolves.toContain(["--enable-plugin", "beta", "--enable-plugin", "alpha"].join("\n"));
