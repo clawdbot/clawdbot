@@ -413,13 +413,14 @@ cannot be read, account-wide exposure fails closed.
   - `enabled`: enable the X Search provider.
   - `model`: Grok model to use for search (e.g. `"grok-4.3"`).
 - `plugins.entries.memory-core.config.dreaming`: memory dreaming settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
-  - `enabled`: master dreaming switch (default `false`).
+  - `enabled`: master dreaming switch (default `true`).
   - `frequency`: cron cadence for each full dreaming sweep (`"0 3 * * *"` by default).
   - `model`: optional Dream Diary subagent model override. Requires `plugins.entries.memory-core.subagent.allowModelOverride: true`; pair with `allowedModels` to restrict targets. Model-unavailable errors retry once with the session default model; trust or allowlist failures do not fall back silently.
   - phase policy and thresholds are implementation details (not user-facing config keys).
 - Full memory config lives in [Memory configuration reference](/reference/memory-config):
   - `memory.search.*`
   - `agents.entries.*.memory.search.*` for per-agent overrides
+  - `agents.entries.*.memory.dreaming.enabled` for per-agent automatic Dreaming exclusion
   - `memory.citations`
   - `plugins.entries.memory-core.config.dreaming`
 - Enabled Claude bundle plugins can also contribute embedded OpenClaw defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.

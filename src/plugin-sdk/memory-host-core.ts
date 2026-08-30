@@ -18,7 +18,7 @@ import {
 import { listStoredMemoryHostEvents } from "../memory-host-sdk/event-store.js";
 import type { MemoryPluginPublicArtifact } from "../plugins/memory-state.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
-import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
+import { resolveMemoryConfiguredWorkspaces } from "./memory-core-host-status.js";
 import {
   isMemoryHostEventArtifactAtIdentity,
   isRejectedWorkspaceArtifactPath,
@@ -511,7 +511,7 @@ async function listMemoryWorkspacePublicArtifacts(params: {
 export async function listMemoryHostPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
-  const workspaces = resolveMemoryDreamingWorkspaces(params.cfg);
+  const workspaces = resolveMemoryConfiguredWorkspaces(params.cfg);
   const artifacts: MemoryPluginPublicArtifact[] = [];
   for (const workspace of workspaces) {
     artifacts.push(

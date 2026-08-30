@@ -47,6 +47,17 @@ vi.mock("../../agents/agent-scope.js", () => ({
         ? cfg.agents.list
         : [{ id: "main", default: true }],
   resolveDefaultAgentId,
+  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => {
+    const keyed = cfg.agents?.entries?.[agentId];
+    if (keyed) {
+      return { ...keyed, id: agentId };
+    }
+    const listed = cfg.agents?.list?.find((entry) => entry.id === agentId);
+    if (listed) {
+      return listed;
+    }
+    return cfg.agents?.entries || cfg.agents?.list ? undefined : { id: "main" };
+  },
   resolveAgentWorkspaceDir,
 }));
 
@@ -332,6 +343,7 @@ describe("doctor.memory agent targeting", () => {
 describe("doctor.memory.status", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({});
+    listAgentIds.mockReset().mockReturnValue(["main", "research-analyst", "alpha"]);
     resolveDefaultAgentId.mockClear();
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     resolveMemorySearchConfig.mockReset().mockReturnValue({ enabled: true });
@@ -552,6 +564,7 @@ describe("doctor.memory.status", () => {
   });
 
   it("includes dreaming counts and managed cron status when workspace data is available", async () => {
+    listAgentIds.mockReturnValue(["main", "alpha"]);
     const now = Date.parse("2026-04-05T00:30:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -977,7 +990,100 @@ describe("doctor.memory.status", () => {
     }
   });
 
-  it("falls back to the manager workspace when no configured dreaming workspaces resolve", async () => {
+  it("reports an explicitly excluded agent as effectively disabled", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-excluded-"));
+    listAgentIds.mockReturnValue(["companion"]);
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        entries: {
+          companion: {
+            workspace: workspaceDir,
+            memory: { dreaming: { enabled: false } },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": { config: { dreaming: { enabled: true } } },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    useMemoryManagerFixture({
+      status: () => ({ provider: "gemini", workspaceDir }),
+    });
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemory("doctor.memory.status", respond, {
+        params: { agentId: "companion" },
+      });
+
+      const dreaming = expectRecordFields(respondPayload(respond).dreaming, {
+        configuredEnabled: true,
+        agentIncluded: false,
+        enabled: false,
+        exclusionReason: "agent-config-disabled",
+        shortTermCount: 0,
+        promotedTotal: 0,
+      });
+      const phases = expectRecordFields(dreaming.phases, {});
+      expectRecordFields(phases.light, { enabled: false });
+      expectRecordFields(phases.deep, { enabled: false });
+      expectRecordFields(phases.rem, { enabled: false });
+      expect(loadShortTermPromotionDreamingStats).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when included and excluded agents share a workspace", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-shared-"));
+    listAgentIds.mockReturnValue(["alpha", "beta"]);
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        entries: {
+          alpha: { workspace: workspaceDir },
+          beta: {
+            workspace: workspaceDir,
+            memory: { dreaming: { enabled: false } },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": { config: { dreaming: { enabled: true } } },
+        },
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    useMemoryManagerFixture({
+      status: () => ({ provider: "gemini", workspaceDir }),
+    });
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemory("doctor.memory.status", respond, { params: { agentId: "alpha" } });
+
+      const dreaming = expectRecordFields(respondPayload(respond).dreaming, {
+        configuredEnabled: true,
+        agentIncluded: false,
+        enabled: false,
+        exclusionReason: "shared-workspace-ambiguity",
+        shortTermCount: 0,
+        promotedTotal: 0,
+      });
+      const phases = expectRecordFields(dreaming.phases, {});
+      expectRecordFields(phases.light, { enabled: false });
+      expectRecordFields(phases.deep, { enabled: false });
+      expectRecordFields(phases.rem, { enabled: false });
+      expect(loadShortTermPromotionDreamingStats).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the runtime primary workspace when config omits the agent roster", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-fallback-"));
     const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
     await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -1091,6 +1197,7 @@ describe("doctor.memory.status", () => {
   });
 
   it("merges workspace store errors when multiple workspace stores are unreadable", async () => {
+    listAgentIds.mockReturnValue(["main", "alpha"]);
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-error-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
@@ -1257,6 +1364,7 @@ describe("doctor.memory dream actions", () => {
 describe("doctor.memory.dreamDiary", () => {
   beforeEach(() => {
     getRuntimeConfig.mockClear();
+    listAgentIds.mockReset().mockReturnValue(["main", "research-analyst", "alpha"]);
     resolveDefaultAgentId.mockClear();
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     previewGroundedRemMarkdown.mockReset();

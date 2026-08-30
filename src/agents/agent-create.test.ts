@@ -320,6 +320,44 @@ describe("createAgent", () => {
     expect((mocks.persisted.agents as { list?: unknown }).list).toBeUndefined();
   });
 
+  it("publishes the validated Safe Start subset with the new agent", async () => {
+    const result = await createAgent({
+      name: "Companion",
+      expectedConfigHash: null,
+      initialConfig: { memory: { dreaming: { enabled: false } } },
+    });
+
+    expect(result).toMatchObject({ status: "created", agentId: "companion" });
+    expect(mocks.persisted).toMatchObject({
+      agents: {
+        entries: {
+          companion: {
+            memory: { dreaming: { enabled: false } },
+          },
+        },
+      },
+    });
+    expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it("rejects invalid Safe Start config before mutation or workspace setup", async () => {
+    await expect(
+      createAgent({
+        name: "Companion",
+        expectedConfigHash: null,
+        initialConfig: {
+          memory: { dreaming: { enabled: "false" } },
+        },
+      } as never),
+    ).resolves.toMatchObject({
+      status: "error",
+      reason: "invalid-initial-config",
+    });
+
+    expect(mocks.withConfigMutationExclusive).not.toHaveBeenCalled();
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+  });
+
   it("publishes guided staging and its new agent in one conditional transform", async () => {
     const result = await createAgent({
       entry: {
@@ -395,7 +433,7 @@ describe("createAgent", () => {
         bootstrapFirstAgent: true,
         expectedConfigHash: "approved",
       }),
-    ).rejects.toThrow("config changed before first-agent creation");
+    ).rejects.toThrow("config changed before agent creation");
 
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });

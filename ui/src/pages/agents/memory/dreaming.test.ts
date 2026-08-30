@@ -18,6 +18,7 @@ import {
   repairDreamingArtifacts,
   resetGroundedShortTerm,
   resetDreamDiary,
+  resolveAgentDreamingParticipation,
   resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
@@ -860,7 +861,7 @@ describe("dreaming controller", () => {
     expect(state.wikiOverviewLoading).toBe(false);
   });
 
-  it("patches config to update global dreaming enablement", async () => {
+  it("patches config to update the selected agent Dreaming participation", async () => {
     const { state, request } = createState();
     state.hello = gatewayHelloForMethods(["config.patch"]);
     state.configSnapshot = {
@@ -894,13 +895,11 @@ describe("dreaming controller", () => {
       canDispatch: expect.any(Function),
     });
     expect(getConfigPatchRawPayload(config)).toEqual({
-      plugins: {
+      agents: {
         entries: {
-          "memos-local-openclaw-plugin": {
-            config: {
-              dreaming: {
-                enabled: false,
-              },
+          main: {
+            memory: {
+              dreaming: { enabled: false },
             },
           },
         },
@@ -929,7 +928,7 @@ describe("dreaming controller", () => {
     expect(config.patch).not.toHaveBeenCalled();
   });
 
-  it("falls back to memory-core when selected memory slot is blank", async () => {
+  it("keeps the per-agent path when the selected memory slot is blank", async () => {
     const { state, request } = createState();
     state.hello = gatewayHelloForMethods(["config.patch"]);
     state.configSnapshot = {
@@ -949,10 +948,10 @@ describe("dreaming controller", () => {
 
     expect(ok).toBe(true);
     expect(getConfigPatchRawPayload(config)).toEqual({
-      plugins: {
+      agents: {
         entries: {
-          "memory-core": {
-            config: {
+          main: {
+            memory: {
               dreaming: {
                 enabled: true,
               },
@@ -963,8 +962,9 @@ describe("dreaming controller", () => {
     });
   });
 
-  it("blocks dreaming patch when selected plugin config rejects unknown keys", async () => {
+  it("does not bind per-agent participation to the selected plugin schema", async () => {
     const { state } = createState();
+    state.hello = gatewayHelloForMethods(["config.patch"]);
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -989,12 +989,12 @@ describe("dreaming controller", () => {
 
     const ok = await updateDreamingEnabled(state, config, true);
 
-    expect(ok).toBe(false);
-    expect(config.lookupSchemaPath).toHaveBeenCalledWith("plugins.entries.memory-lancedb.config");
-    expect(config.patch).not.toHaveBeenCalled();
-    expect(state.dreamingStatusError).toBe(
-      'Selected memory plugin "memory-lancedb" does not support dreaming settings.',
+    expect(ok).toBe(true);
+    expect(config.lookupSchemaPath).toHaveBeenCalledWith(
+      "agents.entries.main.memory.dreaming.enabled",
     );
+    expect(config.patch).toHaveBeenCalledOnce();
+    expect(state.dreamingStatusError).toBeNull();
   });
 
   it("reads dreaming enabled state from the selected memory slot plugin", () => {
@@ -1028,6 +1028,37 @@ describe("dreaming controller", () => {
       overridden: true,
       engineOff: false,
     });
+  });
+
+  it("resolves the selected agent Dreaming participation independently of runtime status", () => {
+    expect(resolveAgentDreamingParticipation(null, "main")).toEqual({
+      enabled: true,
+      overridden: false,
+    });
+    expect(
+      resolveAgentDreamingParticipation(
+        {
+          agents: {
+            entries: {
+              MAIN: { memory: { dreaming: { enabled: false } } },
+            },
+          },
+        },
+        "main",
+      ),
+    ).toEqual({ enabled: false, overridden: true });
+    expect(
+      resolveAgentDreamingParticipation(
+        {
+          agents: {
+            entries: {
+              main: { memory: { dreaming: { enabled: true } } },
+            },
+          },
+        },
+        "main",
+      ),
+    ).toEqual({ enabled: true, overridden: true });
   });
 
   it('falls back to memory-core config but stays operationally off when the slot is "none"', () => {

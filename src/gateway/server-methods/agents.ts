@@ -76,7 +76,9 @@ import {
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
+  ConfigMutationConflictError,
   readConfigFileSnapshotForWrite,
+  resolveConfigSnapshotHash,
   withConfigMutationExclusive,
 } from "../../config/config.js";
 import { purgeAgentSessionStoreEntries } from "../../config/sessions.js";
@@ -908,19 +910,66 @@ export const agentsHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "agents.create": async ({ params, respond }) => {
+  "agents.create": async ({ params, respond, context }) => {
     if (!validateAgentsCreateParams(params)) {
       respondInvalidMethodParams(respond, "agents.create", validateAgentsCreateParams.errors);
       return;
     }
 
-    const result = await createAgent({
-      name: params.name,
-      workspace: params.workspace,
-      model: params.model,
-      emoji: params.emoji,
-      avatar: params.avatar,
-    });
+    let expectedConfigHash: string | null | undefined;
+    if (params.baseHash) {
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      const rawHash = resolveConfigSnapshotHash(snapshot);
+      if (!rawHash) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "config base hash unavailable; re-run config.get and retry",
+          ),
+        );
+        return;
+      }
+      if (params.baseHash !== context.configRevisionProjector.projectRawHash(rawHash)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "config changed since last load; re-run config.get and retry",
+          ),
+        );
+        return;
+      }
+      expectedConfigHash = rawHash;
+    }
+
+    let result: Awaited<ReturnType<typeof createAgent>>;
+    try {
+      result = await createAgent({
+        name: params.name,
+        workspace: params.workspace,
+        model: params.model,
+        emoji: params.emoji,
+        avatar: params.avatar,
+        ...(expectedConfigHash !== undefined ? { expectedConfigHash } : {}),
+        ...("initialConfig" in params ? { initialConfig: params.initialConfig } : {}),
+      });
+    } catch (error) {
+      if (error instanceof ConfigMutationConflictError) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "config changed since last load; re-run config.get and retry",
+          ),
+        );
+        return;
+      }
+      throw error;
+    }
     if (result.status === "error") {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.message));
       return;

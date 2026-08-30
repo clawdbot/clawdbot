@@ -55,6 +55,7 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "agents.entries.*.identity.emoji",
   "agents.entries.*.identity.name",
   "agents.entries.*.identity.theme",
+  "agents.entries.*.memory.dreaming.enabled",
   "agents.entries.*.memory.search.enabled",
   "agents.entries.*.memory.search.model",
   "agents.entries.*.memory.search.provider",

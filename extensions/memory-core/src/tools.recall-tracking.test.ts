@@ -22,8 +22,8 @@ vi.mock("./short-term-promotion.js", () => ({
   recordShortTermRecalls: recallTrackingMock.recordShortTermRecalls,
 }));
 
-function createSearchTool(config: OpenClawConfig) {
-  const tool = createMemorySearchTool({ config });
+function createSearchTool(config: OpenClawConfig, agentId?: string) {
+  const tool = createMemorySearchTool({ config, agentId });
   if (!tool) {
     throw new Error("memory_search tool missing");
   }
@@ -171,6 +171,80 @@ describe("memory_search recall tracking", () => {
     const details = result.details as { results: Array<{ path: string }> };
     expect(details.results).toHaveLength(1);
     expect(details.results[0]?.path).toBe("memory/2026-04-03.md");
+    expect(recallTrackingMock.recordShortTermRecalls).not.toHaveBeenCalled();
+  });
+
+  it("skips recall tracking for an agent excluded from Dreaming", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/2026-04-03.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.95,
+        snippet: "Move backups to S3 Glacier.",
+        source: "memory" as const,
+      },
+    ]);
+
+    const tool = createSearchTool(
+      asOpenClawConfig({
+        agents: {
+          entries: {
+            companion: {
+              memory: { dreaming: { enabled: false } },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "memory-core": { config: { dreaming: { enabled: true } } },
+          },
+        },
+      }),
+      "companion",
+    );
+
+    const result = await tool.execute("call_recall_agent_excluded", { query: "glacier" });
+    const details = result.details as { results: Array<{ path: string }> };
+    expect(details.results).toHaveLength(1);
+    expect(recallTrackingMock.recordShortTermRecalls).not.toHaveBeenCalled();
+  });
+
+  it("skips recall tracking when included and excluded agents share a workspace", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/2026-04-03.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.95,
+        snippet: "Move backups to S3 Glacier.",
+        source: "memory" as const,
+      },
+    ]);
+
+    const tool = createSearchTool(
+      asOpenClawConfig({
+        agents: {
+          entries: {
+            alpha: { workspace: "/workspace" },
+            beta: {
+              workspace: "/workspace",
+              memory: { dreaming: { enabled: false } },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "memory-core": { config: { dreaming: { enabled: true } } },
+          },
+        },
+      }),
+      "alpha",
+    );
+
+    const result = await tool.execute("call_recall_shared_ambiguous", { query: "glacier" });
+    const details = result.details as { results: Array<{ path: string }> };
+    expect(details.results).toHaveLength(1);
     expect(recallTrackingMock.recordShortTermRecalls).not.toHaveBeenCalled();
   });
 });

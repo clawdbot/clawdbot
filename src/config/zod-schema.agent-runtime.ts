@@ -301,6 +301,24 @@ const ToolPolicyBaseSchema = z
   })
   .strict();
 
+export const AgentMemoryDreamingSchema = z
+  .object({
+    enabled: z.boolean(),
+  })
+  .strict();
+
+export const AgentCreateInitialConfigSchema = z
+  .object({
+    memory: z
+      .object({
+        dreaming: AgentMemoryDreamingSchema,
+      })
+      .strict(),
+  })
+  .strict();
+
+export type AgentCreateInitialConfig = z.infer<typeof AgentCreateInitialConfigSchema>;
+
 export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) => {
   if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {
     ctx.addIssue({
@@ -953,6 +971,7 @@ export const AgentEntrySchema = z
     memory: z
       .object({
         search: MemorySearchSchema,
+        dreaming: AgentMemoryDreamingSchema.partial().optional(),
       })
       .strict()
       .optional(),

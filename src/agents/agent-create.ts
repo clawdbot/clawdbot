@@ -17,6 +17,10 @@ import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-ses
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  AgentCreateInitialConfigSchema,
+  type AgentCreateInitialConfig,
+} from "../config/zod-schema.agent-runtime.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
@@ -52,6 +56,7 @@ type CreateError = {
   status: "error";
   reason:
     | "invalid-name"
+    | "invalid-initial-config"
     | "reserved-id"
     | "already-exists"
     | "deletion-pending"
@@ -77,6 +82,8 @@ type CreateAgentParams = {
   bootstrapFirstAgent?: boolean;
   /** Config revision that must still own first-agent creation under the write lock. */
   expectedConfigHash?: string | null;
+  /** Strict public Safe Start subset published with the complete new entry. */
+  initialConfig?: AgentCreateInitialConfig;
   /** Full guided-flow staging based on expectedConfigHash; creation still publishes it once. */
   stagedConfig?: OpenClawConfig;
   workspace?: string;
@@ -240,6 +247,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   if (!rawName) {
     return createError("invalid-name", "agent name is required");
   }
+  const parsedInitialConfig =
+    params.initialConfig === undefined
+      ? undefined
+      : AgentCreateInitialConfigSchema.safeParse(params.initialConfig);
+  if (parsedInitialConfig && !parsedInitialConfig.success) {
+    return createError("invalid-initial-config", "invalid initial agent config");
+  }
+  const initialConfig = parsedInitialConfig?.data;
   const rawId = params.entry?.id ?? rawName;
   const validation = validateAgentIdInput(rawId, {
     displayName: rawName,
@@ -310,7 +325,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             Object.hasOwn(params, "expectedConfigHash") &&
             context.previousHash !== params.expectedConfigHash
           ) {
-            throw new ConfigMutationConflictError("config changed before first-agent creation", {
+            throw new ConfigMutationConflictError("config changed before agent creation", {
               retryable: false,
             });
           }
@@ -397,6 +412,29 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
               workspace: workspaceDir,
               agentDir,
               identity,
+            };
+            const { list: _legacyList, ...agentsConfig } = nextConfig.agents ?? {};
+            nextConfig = {
+              ...nextConfig,
+              agents: {
+                ...agentsConfig,
+                entries: toAgentEntriesRecord(list),
+              },
+            };
+          }
+          if (initialConfig) {
+            const list = listAgentEntries(nextConfig);
+            const index = findAgentEntryIndex(list, agentId);
+            const currentEntry = list[index];
+            if (index < 0 || !currentEntry) {
+              throw new Error(`agent "${agentId}" missing before initial config publication`);
+            }
+            list[index] = {
+              ...currentEntry,
+              memory: {
+                ...currentEntry.memory,
+                dreaming: initialConfig.memory.dreaming,
+              },
             };
             const { list: _legacyList, ...agentsConfig } = nextConfig.agents ?? {};
             nextConfig = {

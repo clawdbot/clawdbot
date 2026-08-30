@@ -197,6 +197,10 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Default-agent model runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
   "agents.defaults.models.*.codeMode":
     "OpenClaw Code Mode for this exact provider/model: On forces it on, Off disables it, and Default inherits tools.codeMode.enabled. Agent-specific activation settings take precedence. This does not change the selected runtime or Codex native Code Mode.",
+  "agents.entries.*.memory.dreaming":
+    "Per-agent participation in automatic Memory Dreaming. This does not change the global Dreaming schedule or memory-search availability.",
+  "agents.entries.*.memory.dreaming.enabled":
+    "Set false to exclude this agent from automatic Dreaming ingestion, promotion, cleanup, and reporting. Omit or set true to preserve the default participation behavior.",
   "memory.search": "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
   "memory.search.enabled":
     "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",

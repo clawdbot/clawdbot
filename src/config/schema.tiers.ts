@@ -35,6 +35,7 @@ agents.defaults.sandbox.workspaceRoot
 agents.defaults.thinkingDefault agents.defaults.userTimezone agents.defaults.voiceModel.primary
 agents.defaults.workspace agents.entries.*.groupChat.mentionPatterns
 agents.entries.*.groupChat.unmentionedInbound agents.entries.*.identity
+agents.entries.*.memory.dreaming.enabled
 agents.entries.*.memory.search.enabled agents.entries.*.memory.search.provider
 agents.entries.*.memory.search.rememberAcrossConversations agents.entries.*.memory.search.model
 agents.entries.*.memory.search.remote.apiKey agents.entries.*.heartbeat.model

@@ -619,6 +619,41 @@ describe("memory-host-core helpers", () => {
     }
   });
 
+  it("keeps public memory artifacts visible when Dreaming is disabled for the agent", async () => {
+    const fixtureRoot = await createFixtureRoot("memory-host-disabled-dreaming-artifacts-");
+    try {
+      const workspaceDir = path.join(fixtureRoot, "workspace");
+      await fs.mkdir(workspaceDir);
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+
+      await expect(
+        listMemoryHostPublicArtifacts({
+          cfg: {
+            agents: {
+              entries: {
+                main: {
+                  workspace: workspaceDir,
+                  memory: { dreaming: { enabled: false } },
+                },
+              },
+            },
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          kind: "memory-root",
+          workspaceDir,
+          relativePath: "MEMORY.md",
+          absolutePath: path.join(workspaceDir, "MEMORY.md"),
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+      ]);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "does not let a workspace alias overwrite a newer event export",
     async () => {

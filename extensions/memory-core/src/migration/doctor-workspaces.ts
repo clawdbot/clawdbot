@@ -2,10 +2,10 @@ export async function resolveConfiguredWorkspaces(
   config: unknown,
   env: NodeJS.ProcessEnv,
 ): Promise<string[]> {
-  const { resolveMemoryDreamingWorkspaces } =
+  const { resolveMemoryConfiguredWorkspaces } =
     await import("openclaw/plugin-sdk/memory-core-host-status");
-  return resolveMemoryDreamingWorkspaces(
-    config as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
+  return resolveMemoryConfiguredWorkspaces(
+    config as Parameters<typeof resolveMemoryConfiguredWorkspaces>[0],
     { env },
   ).map((entry) => entry.workspaceDir);
 }

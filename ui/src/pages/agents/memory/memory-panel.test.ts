@@ -337,6 +337,76 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     );
   });
 
+  it("shows configured participation and allows exclusion during shared-workspace ambiguity", () => {
+    const client = {} as GatewayBrowserClient;
+    const context = contextWithGateway(client, true, {
+      agents: {
+        entries: {
+          main: {
+            workspace: "/workspace/shared",
+            memory: { dreaming: { enabled: true } },
+          },
+        },
+      },
+    });
+    const page = document.createElement("openclaw-agent-memory-panel") as TestMemoryPanel;
+    page.context = context;
+    page.agentId = "main";
+    page.dreaming.client = client;
+    page.dreaming.connected = true;
+    page.dreaming.hello = gatewayHelloForMethods(["config.patch"]);
+    page.dreaming.selectedAgentId = "main";
+    page.dreaming.dreamingStatus = {
+      enabled: false,
+      configuredEnabled: true,
+      agentIncluded: false,
+      exclusionReason: "shared-workspace-ambiguity",
+      promotedToday: 0,
+      phases: {},
+    } as NonNullable<DreamingState["dreamingStatus"]>;
+    const container = document.createElement("div");
+
+    render(page.render(), container);
+
+    const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
+    expect(toggle?.classList.contains("dreams__phase-toggle--on")).toBe(true);
+    expect(toggle?.textContent).toContain("Agent Included");
+    expect(container.textContent).toContain(
+      "Dreaming is paused because this workspace is shared with an excluded agent.",
+    );
+
+    toggle?.click();
+    expect(page.pendingEnabled).toBe(false);
+    expect(page.toggleConfirmOpen).toBe(true);
+  });
+
+  it("separates agent participation from a globally disabled Dreaming runtime", () => {
+    const client = {} as GatewayBrowserClient;
+    const context = contextWithGateway(client, true, {
+      agents: { entries: { main: { workspace: "/workspace/main" } } },
+      plugins: {
+        entries: {
+          "memory-core": { config: { dreaming: { enabled: false } } },
+        },
+      },
+    });
+    const page = document.createElement("openclaw-agent-memory-panel") as TestMemoryPanel;
+    page.context = context;
+    page.agentId = "main";
+    page.dreaming.client = client;
+    page.dreaming.connected = true;
+    page.dreaming.hello = gatewayHelloForMethods(["config.patch"]);
+    page.dreaming.selectedAgentId = "main";
+    const container = document.createElement("div");
+
+    render(page.render(), container);
+
+    const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
+    expect(toggle?.classList.contains("dreams__phase-toggle--on")).toBe(true);
+    expect(toggle?.textContent).toContain("Agent Included");
+    expect(container.querySelector(".dreams__status-label")?.textContent).toContain("Idle");
+  });
+
   it("does not present cached runtime status after the memory engine switches Off", () => {
     const context = contextWithGateway({} as GatewayBrowserClient, true, {
       plugins: { slots: { memory: "none" } },
@@ -375,7 +445,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     render(page.render(), container);
 
     const toggle = container.querySelector<HTMLButtonElement>(".dreams__phase-toggle");
-    expect(toggle?.textContent).toContain("Off");
+    expect(toggle?.textContent).toContain("Agent Excluded");
     expect(toggle?.classList.contains("dreams__phase-toggle--on")).toBe(false);
     expect(container.querySelector(".dreams__status-label")?.textContent).toContain("Idle");
     expect(container.textContent).toContain("0 promoted");

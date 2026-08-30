@@ -3349,5 +3349,86 @@ describe("memory cli", () => {
       expect(close).toHaveBeenCalled();
     });
   });
+
+  it("does not record CLI recall entries for an agent excluded from Dreaming", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      getRuntimeConfig.mockReturnValue({
+        agents: {
+          entries: {
+            main: {
+              workspace: workspaceDir,
+              memory: { dreaming: { enabled: false } },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "memory-core": { config: { dreaming: { enabled: true } } },
+          },
+        },
+      });
+      mockManager({
+        search: vi.fn(async () => [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.91,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ]),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["search", "glacier", "--json"]);
+
+      expect(await readShortTermRecallEntries({ workspaceDir })).toHaveLength(0);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("does not record CLI recall entries for an ambiguous shared Dreaming workspace", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      getRuntimeConfig.mockReturnValue({
+        agents: {
+          entries: {
+            main: { workspace: workspaceDir },
+            excluded: {
+              workspace: workspaceDir,
+              memory: { dreaming: { enabled: false } },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "memory-core": { config: { dreaming: { enabled: true } } },
+          },
+        },
+      });
+      mockManager({
+        search: vi.fn(async () => [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.91,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ]),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["search", "glacier", "--json"]);
+
+      expect(await readShortTermRecallEntries({ workspaceDir })).toHaveLength(0);
+      expect(close).toHaveBeenCalled();
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

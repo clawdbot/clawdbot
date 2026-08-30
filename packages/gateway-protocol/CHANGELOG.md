@@ -214,6 +214,7 @@ Enhancement-only month (no new schema modules):
 
 #### Fields and payload contracts
 
+- Add optional `agents.create.baseHash` CAS and a strict, CAS-bound `initialConfig.memory.dreaming.enabled` Safe Start subset.
 - Preserve required legacy agent-default fields while adding honest `ownership` and `selectionRequired` state to agent lists and initial snapshots; carry explicit `agentId` through session, board, companion, discussion, plugin, and UI requests, and require nonempty model-list agent IDs when supplied (#114388). Add agent creation hierarchy, resolved-name provenance, and purge-failure results (#124967, #122463, #125217).
 - Project optional `defaultPermissionMode` on agent rows so clients can label the inherited session permission default; omitted whenever the effective policy cannot be stated truthfully (#132989).
 - Add session `permissionMode` (`SessionPermissionMode`) on create/patch/rows (#124909), emoji/glyph icons (#124034, #124629), and `color` on patch/row/catalog projections (#132570).

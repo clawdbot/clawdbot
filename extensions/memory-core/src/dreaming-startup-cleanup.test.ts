@@ -36,16 +36,29 @@ afterEach(async () => {
 });
 
 function createGateway(
-  params: { agentIds?: string[]; failCronReconciliation?: boolean; sessionStore?: string } = {},
+  params: {
+    agentIds?: string[];
+    excludedAgentIds?: string[];
+    failCronReconciliation?: boolean;
+    sessionStore?: string;
+  } = {},
 ) {
   const agentIds = params.agentIds ?? ["main"];
+  const excludedAgentIds = new Set(params.excludedAgentIds ?? []);
   const config = {
     agents: {
-      list: agentIds.map((id, index) => ({
-        id,
-        default: index === 0,
-        workspace: path.join(stateDir, `workspace-${id}`),
-      })),
+      list: agentIds.map((id, index) => {
+        const workspace = path.join(stateDir, `workspace-${id}`);
+        if (excludedAgentIds.has(id)) {
+          return {
+            id,
+            default: index === 0,
+            workspace,
+            memory: { dreaming: { enabled: false } },
+          };
+        }
+        return { id, default: index === 0, workspace };
+      }),
     },
     plugins: {
       entries: {
@@ -141,6 +154,33 @@ describe("dreaming gateway restart cleanup", () => {
     await expect(fs.access(path.join(stateDir, "agents"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("does not reclaim stale dreaming sessions for an excluded agent", async () => {
+    const now = Date.now();
+    const excluded = await seedSession({
+      agentId: "main",
+      suffix: "dreaming-narrative-light-interrupted",
+      pluginOwnerId: "memory-core",
+      updatedAt: now - ORPHAN_AGE_MS - 1,
+      transcriptAt: now - ORPHAN_AGE_MS - 1,
+    });
+    const included = await seedSession({
+      agentId: "researcher",
+      suffix: "dreaming-narrative-light-interrupted",
+      pluginOwnerId: "memory-core",
+      updatedAt: now - ORPHAN_AGE_MS - 1,
+      transcriptAt: now - ORPHAN_AGE_MS - 1,
+    });
+    const gateway = createGateway({
+      agentIds: ["main", "researcher"],
+      excludedAgentIds: ["main"],
+    });
+
+    await gateway.start();
+
+    expect(hasSession(excluded)).toBe(true);
+    expect(hasSession(included)).toBe(false);
   });
 
   it("reclaims every stale dreaming phase without touching active, unrelated, or other-agent sessions", async () => {
