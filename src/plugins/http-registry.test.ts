@@ -909,7 +909,7 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(0);
   });
 
-  it("does not pin a shared route open for a lease-less reuser", () => {
+  it("releases a lease-less reuser's share through its returned unregister", () => {
     const registry = createEmptyPluginRegistry();
     const first = createTrackedRouteLease();
 
@@ -927,7 +927,7 @@ describe("registerPluginHttpRoute", () => {
         }),
       first.lease,
     );
-    withPluginHttpRouteRegistry(registry, () =>
+    const releaseSecondShare = withPluginHttpRouteRegistry(registry, () =>
       registerPluginHttpRoute({
         path: "/zalo-hosted-media",
         auth: "plugin",
@@ -940,7 +940,11 @@ describe("registerPluginHttpRoute", () => {
       }),
     );
 
+    // A plain caller holds no lease, so its explicit unregister is the only
+    // handle that expires its share; the route survives until then.
     first.revoke();
+    expect(registry.httpRoutes).toHaveLength(1);
+    releaseSecondShare();
     expect(registry.httpRoutes).toHaveLength(0);
   });
 });

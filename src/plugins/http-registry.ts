@@ -172,15 +172,18 @@ export function registerPluginHttpRoute(params: {
         params.log?.(
           `plugin: reusing existing webhook path ${normalizedPath} (${routeMatch}) (${requestedOwner}/${requestedSource})`,
         );
-        // A lease-less reuser has no lifetime to pin with, so the route keeps
-        // following its creator instead of being pinned open forever.
+        // The reuser becomes a holder: its leases and the returned unregister
+        // both expire its own lifetime, so the shared route survives this
+        // holder and the creator independently.
         const leases = scope?.leases ?? [];
-        if (leases.length > 0) {
-          for (const route of canonicalMatches) {
-            attachRouteLifetimeByEntry.get(route)?.(leases);
+        const releases = canonicalMatches
+          .map((route) => attachRouteLifetimeByEntry.get(route)?.(leases))
+          .filter((release) => release !== undefined);
+        return () => {
+          for (const release of releases) {
+            release();
           }
-        }
-        return noopUnregister;
+        };
       }
       const conflictingOwner = mismatchedOwner ?? existing;
       return rejectRegistration(
@@ -264,17 +267,24 @@ export function registerPluginHttpRoute(params: {
       removeEntry();
     }
   };
+  // Every holder pins the route through one lifetime record, whether it holds a
+  // lease (task/service scope) or only an explicit unregister handle (plain
+  // callers). The entry is removed when the last holder's lifetime expires, so
+  // a shared same-owner route survives any single holder stopping — including
+  // a holder whose lease the gateway revokes at abandonment.
   const attachLifetime = (leases: readonly PluginHttpRouteRegistrationLease[]) => {
-    if (!alive || leases.length === 0) {
-      return;
+    if (!alive) {
+      return undefined;
     }
     const lifetime: PluginHttpRouteLifetime = { expired: false, releases: new Set() };
     lifetimes.add(lifetime);
     for (const lease of leases) {
       lifetime.releases.add(lease.retain(() => expireLifetime(lifetime)));
     }
+    return () => {
+      expireLifetime(lifetime);
+    };
   };
   attachRouteLifetimeByEntry.set(entry, attachLifetime);
-  attachLifetime(scope?.leases ?? []);
-  return removeEntry;
+  return attachLifetime(scope?.leases ?? []) ?? removeEntry;
 }

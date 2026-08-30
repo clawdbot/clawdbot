@@ -624,7 +624,7 @@ describe("Zalo polling media replies", () => {
     },
   );
 
-  it("registers each active registry and cleans both on final release", async () => {
+  it("registers each active registry and cleans the swapped-out one with its holder", async () => {
     const firstRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(firstRegistry);
     getUpdatesMock.mockImplementation(() => new Promise(() => {}));
@@ -669,7 +669,10 @@ describe("Zalo polling media replies", () => {
       expect(secondRegistry.httpRoutes).toHaveLength(1);
       firstAbort.abort();
       await firstRun;
-      expect(firstRegistry.httpRoutes).toHaveLength(1);
+      // The swapped-out registry's route follows its own holder: the stopped
+      // monitor was its only share, so keeping it registered would strand a
+      // holder-less route instead of tracking live ownership.
+      expect(firstRegistry.httpRoutes).toHaveLength(0);
       expect(secondRegistry.httpRoutes).toHaveLength(1);
     } finally {
       firstAbort.abort();

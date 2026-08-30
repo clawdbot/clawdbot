@@ -31,11 +31,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  canonicalizeWebhookRouteKey,
-  registerPluginHttpRoute,
-  resolveWebhookPath,
-} from "openclaw/plugin-sdk/webhook-ingress";
+import { registerPluginHttpRoute, resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiError,
@@ -122,7 +118,6 @@ type ZaloPollingLoopParams = ZaloProcessingContext & {
 type ZaloUpdateProcessingParams = ZaloProcessingContext & {
   update: ZaloUpdate;
 };
-const hostedMediaRouteRefs = new Map<string, { count: number; unregisters: Array<() => void> }>();
 
 function resolveZaloTimestampMs(date: number | undefined): number | undefined {
   if (!date) {
@@ -148,10 +143,12 @@ function registerSharedHostedMediaRoute(params: {
   path: string;
   log?: (message: string) => void;
 }): () => void {
-  const routeKey = canonicalizeWebhookRouteKey(params.path);
   // Every account attempts the account-agnostic route so the first acquire after a registry swap
   // repopulates it; exact same-owner conflicts reuse the existing route without replacement.
-  const unregister = registerPluginHttpRoute({
+  // The returned unregister releases this account's holder share only: shared-holder lifetime
+  // is one registry record per holder, so the route is removed when the last share is released —
+  // including shares the gateway revokes when it abandons a stuck account task.
+  return registerPluginHttpRoute({
     auth: "plugin",
     match: "prefix",
     path: params.path,
@@ -169,35 +166,6 @@ function registerSharedHostedMediaRoute(params: {
       }
     },
   });
-  const acquired = hostedMediaRouteRefs.get(routeKey) ?? {
-    count: 0,
-    unregisters: [],
-  };
-  if (acquired.count === 0) {
-    hostedMediaRouteRefs.set(routeKey, acquired);
-  }
-  acquired.count += 1;
-  acquired.unregisters.push(unregister);
-
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    const current = hostedMediaRouteRefs.get(routeKey);
-    if (current !== acquired) {
-      return;
-    }
-    acquired.count -= 1;
-    if (acquired.count > 0) {
-      return;
-    }
-    hostedMediaRouteRefs.delete(routeKey);
-    for (const unregisterHandle of acquired.unregisters) {
-      unregisterHandle();
-    }
-  };
 }
 
 type ZaloMessagePipelineParams = ZaloProcessingContext & {
@@ -961,11 +929,15 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 
   try {
     if (hostedMediaRoutePath) {
-      const unregisterHostedMediaRoute = registerSharedHostedMediaRoute({
-        path: hostedMediaRoutePath,
-        log: runtime.log,
-      });
-      stopHandlers.push(unregisterHostedMediaRoute);
+      // The returned unregister releases this account's holder share; the
+      // registry removes the shared route only when the last share is
+      // released, including shares revoked by the gateway at abandonment.
+      stopHandlers.push(
+        registerSharedHostedMediaRoute({
+          path: hostedMediaRoutePath,
+          log: runtime.log,
+        }),
+      );
     }
 
     if (useWebhook) {

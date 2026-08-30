@@ -2067,6 +2067,67 @@ describe("server-channels auto restart", () => {
     expect(secondAccount?.running).toBe(true);
   });
 
+  it("removes a shared account-agnostic route once every holder ends, abandoned or stopped", async () => {
+    const routeRegistry = createEmptyPluginRegistry();
+    let startCount = 0;
+    const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+      startCount += 1;
+      registerPluginHttpRoute({
+        path: "/shared/webhook",
+        handler: () => true,
+        auth: "plugin",
+        match: "prefix",
+        pluginId: "discord",
+        source: "shared-ingress",
+        reuseExistingSameOwner: true,
+        throwOnFailure: true,
+        registry: routeRegistry,
+      });
+      if (startCount === 1) {
+        // A stuck drain: this task never settles and never releases its share.
+        await new Promise<void>(() => {});
+      }
+      // Every later start settles on abort, mirroring a healthy monitor whose
+      // stop handlers release its route share before the task ends.
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => [DEFAULT_ACCOUNT_ID, "second"],
+      }),
+    );
+    const manager = createManager({ getPluginHttpRouteRegistry: () => routeRegistry });
+
+    await manager.startChannels();
+    const sharedRouteCount = () =>
+      (routeRegistry.httpRoutes ?? []).filter((route) => route.path === "/shared/webhook");
+    expect(sharedRouteCount()).toHaveLength(1);
+
+    // The timed-out stop abandons the stuck first task; its lease revocation
+    // releases that share without evicting the route the survivor serves.
+    const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await recoveryStopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(sharedRouteCount()).toHaveLength(1);
+
+    // The replacement (started above) and the second account now hold the two
+    // shares; each normal stop releases exactly one and the last one removes
+    // the route — the end-to-end holder cleanup an abandoned monitor can no
+    // longer perform through its own release callback.
+    await vi.advanceTimersByTimeAsync(0);
+    await manager.stopChannel("discord", "second");
+    expect(sharedRouteCount()).toHaveLength(1);
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(sharedRouteCount()).toHaveLength(0);
+  });
+
   it("keeps the second recovery task running when the stale task rejects", async () => {
     const releaseFirstTask = createDeferred();
     let startCount = 0;
