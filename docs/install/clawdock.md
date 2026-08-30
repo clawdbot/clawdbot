@@ -94,9 +94,9 @@ ClawDock reads two separate `.env` files, matching the split described in [Docke
 - The project `.env` next to `docker-compose.yml`: Docker-specific values like image name, ports, and `OPENCLAW_GATEWAY_TOKEN`. `clawdock-token` reads the token from here.
 - `~/.openclaw/.env` (mounted into the container): env-backed secrets OpenClaw itself manages, alongside `openclaw.json` and the shared and per-agent SQLite auth stores.
 
-`clawdock-fix-token` copies the token from the project `.env` into the container's `gateway.remote.token` and `gateway.auth.token` config values and restarts the gateway.
+`clawdock-fix-token` copies the token from the project `.env` into the container's `gateway.remote.token` and `gateway.auth.token` through the validated config setters and restarts the gateway only after both writes succeed. It reports success or failure without printing tokens or token prefixes. `clawdock-token` explicitly prints the full token when you need it.
 
-Use `clawdock-show-config` to inspect `openclaw.json` and both `.env` files quickly; it redacts `.env` values in its printed output.
+Use `clawdock-show-config` to inspect JSON5 config structure and `.env` key names with all values redacted and comments omitted. It uses Node, JSON5, and dotenv from the built OpenClaw Docker image in temporary containers without starting dependencies; no host parser or running gateway is required. If Docker, parsing, or file access fails, it returns a failure with guidance and withholds that file's contents. Ambiguous `.env` values beginning with a literal quote are also withheld to avoid exposing unterminated multiline content. Source files are unchanged.
 
 ## Related
 

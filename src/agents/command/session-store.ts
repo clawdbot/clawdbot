@@ -13,7 +13,7 @@ import { projectSessionSnapshotChanges } from "../../config/sessions/session-sna
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   clearAllCliSessions,
   clearCliSession,
@@ -30,16 +30,8 @@ import { deriveSessionTotalTokens, hasBillableUsage, hasNonzeroUsage } from "../
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
-const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
-const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
-
-async function getUsageFormatModule() {
-  return await usageFormatModuleLoader.load();
-}
-
-async function getContextModule() {
-  return await contextModuleLoader.load();
-}
+const getUsageFormatModule = createLazyPromise(() => import("../../utils/usage-format.js"));
+const getContextModule = createLazyPromise(() => import("../context.js"));
 
 export function normalizeSessionTokenCount(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -220,25 +212,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   if (!preserveUserFacingRunState) {
     const currentContextSnapshot = params.compactionAccounting?.currentContextSnapshot;
-    const totalTokens = currentContextSnapshot
-      ? currentContextSnapshot.tokens
-      : hasUsage
-        ? deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens })
-        : undefined;
-    if (totalTokens !== undefined) {
+    if (currentContextSnapshot || hasUsage) {
+      const totalTokens = currentContextSnapshot
+        ? currentContextSnapshot.tokens
+        : deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens });
       next.totalTokens = totalTokens;
-      next.totalTokensFresh = true;
-      next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-    } else if (currentContextSnapshot || hasUsage) {
-      next.totalTokens = undefined;
-      next.totalTokensFresh = false;
-      next.totalTokensVersion = undefined;
+      next.totalTokensFresh = totalTokens !== undefined;
+      next.totalTokensVersion =
+        totalTokens !== undefined ? SESSION_TOTAL_TOKENS_VERSION : undefined;
     } else if (
       typeof entry.totalTokens === "number" &&
       Number.isFinite(entry.totalTokens) &&
       entry.totalTokens > 0
     ) {
-      next.totalTokens = entry.totalTokens;
       next.totalTokensFresh = false;
       next.totalTokensVersion = undefined;
     }

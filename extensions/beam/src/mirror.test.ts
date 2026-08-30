@@ -341,10 +341,15 @@ describe("createBeamMirrorRunner", () => {
       const runtime = {
         config: { current: () => beamTestMirrorConfig({ endpoint }) },
       } as unknown as PluginRuntime;
+      let active = true;
       const createRunner = () =>
         createBeamTestRunner({
           runtime,
-          listCatalogs: () => [createBeamTestCatalog()],
+          listCatalogs: () => [
+            createBeamTestCatalog({
+              sessions: () => (active ? [{ threadId: "t1", recencyAt: beamTestNow }] : []),
+            }),
+          ],
         });
       const runner = createRunner();
 
@@ -354,8 +359,24 @@ describe("createBeamMirrorRunner", () => {
       await restartedRunner.tick();
       endpoint = `${origin}/direct`;
       await restartedRunner.tick();
-
+      await restartedRunner.tick();
+      endpoint = `${origin}/another-receiver`;
+      active = false;
+      await restartedRunner.tick();
       expect(requests).toEqual(["/redirecting", "/redirecting", "/direct"]);
+      active = true;
+      await restartedRunner.tick();
+      await restartedRunner.tick();
+      endpoint = `${origin}/direct`;
+      await restartedRunner.tick();
+
+      expect(requests).toEqual([
+        "/redirecting",
+        "/redirecting",
+        "/direct",
+        "/another-receiver",
+        "/direct",
+      ]);
     } finally {
       await closeTestServer(server);
     }

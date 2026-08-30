@@ -6181,6 +6181,36 @@ describe("grouped chat rendering", () => {
     },
   );
 
+  it("admits one full-message load for repeated source projections in a group", () => {
+    const container = document.createElement("div");
+    const previews = ["First projection", "Updated projection"];
+    let loading = false;
+    const onToggleAssistantMessageExpanded = vi.fn(() => {
+      loading = true;
+    });
+    renderAssistantMessages(
+      container,
+      previews.map((text) =>
+        createAssistantMessage(text, {
+          __openclaw: { id: "shared-source", truncated: true },
+        }),
+      ),
+      {
+        sessionKey: "global",
+        loadFullAssistantMessage: async () => null,
+        getAssistantMessageExpansion: () =>
+          loading ? { status: "loading", revision: 1 } : undefined,
+        onToggleAssistantMessageExpanded,
+      },
+    );
+
+    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledTimes(1);
+    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("shared-source");
+    expect(
+      [...container.querySelectorAll(".chat-text")].map((element) => element.textContent),
+    ).toEqual(previews);
+  });
+
   it.each([
     { state: { status: "error" as const, revision: 2 }, retries: true, label: "bounded error" },
     { state: { status: "error" as const, revision: 6 }, retries: false, label: "exhausted error" },
@@ -6271,8 +6301,9 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
   });
 
-  it("does not render Show more for mirrored message-tool replies", () => {
+  it("does not fetch full content for mirrored message-tool replies", () => {
     const container = document.createElement("div");
+    const onToggleAssistantMessageExpanded = vi.fn();
     renderAssistantMessage(
       container,
       {
@@ -6284,11 +6315,12 @@ describe("grouped chat rendering", () => {
       {
         sessionKey: "global",
         loadFullAssistantMessage: async () => null,
-        onToggleAssistantMessageExpanded: vi.fn(),
+        onToggleAssistantMessageExpanded,
       },
     );
 
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
+    expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
   });
 
   it("projects oversized history rows through regular and grouped tool bubbles", () => {

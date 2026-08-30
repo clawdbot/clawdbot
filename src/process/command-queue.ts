@@ -577,7 +577,7 @@ export function enqueueCommandInLane<T>(
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
-    enqueueLaneEntry(state, {
+    const entry: QueueEntry = {
       task: (marker) => runInAsyncContext(runWithGatewayRootWorkReadmission, () => task(marker)),
       resolve: (value) => resolve(value as T),
       reject,
@@ -593,9 +593,17 @@ export function enqueueCommandInLane<T>(
       taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
       onWait: opts?.onWait,
-    });
+    };
+    enqueueLaneEntry(state, entry);
     logLaneEnqueue(cleaned, getLaneDepth(state));
     drainReadyCommandLane(cleaned);
+    if (entry.queued) {
+      try {
+        opts?.onQueued?.();
+      } catch (err) {
+        diag.error(`lane onQueued callback failed: lane=${cleaned} error="${String(err)}"`);
+      }
+    }
   });
 }
 

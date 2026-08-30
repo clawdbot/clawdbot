@@ -799,7 +799,10 @@ export function resolveEmbeddedAgentRunProgressState(
   // A retained terminal owner must not hide a newer live owner for the session.
   if (
     handleInProgress ||
-    (replyInProgress && replyOperation && hasReplyOperationExecutionStarted(replyOperation))
+    (replyInProgress &&
+      replyOperation &&
+      replyPhase !== "waiting_for_global_lane" &&
+      hasReplyOperationExecutionStarted(replyOperation))
   ) {
     return "running";
   }

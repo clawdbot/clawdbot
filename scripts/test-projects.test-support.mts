@@ -2094,6 +2094,7 @@ const changedScope = "src/scripts/ci-changed-scope.test.ts";
 const changedScopeTests = [
   "src/scripts/ci-changed-scope.contract-fixtures.test.ts",
   "src/scripts/ci-changed-scope.control-ui.test.ts",
+  "src/scripts/ci-changed-scope.git-owner.test.ts",
   "src/scripts/ci-changed-scope.native-i18n.test.ts",
   changedScope,
   "src/scripts/ci-changed-scope.windows.test.ts",
@@ -2129,8 +2130,17 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     [packageAcceptance, workflowGuards, "release-workflow-matrix-plan", installDocker],
   ],
   [
+    ".github/workflows/plugin-clawhub-release.yml",
+    [packageAcceptance, "plugin-release-git-lifecycle", workflowGuards],
+  ],
+  [
     ".github/workflows/plugin-npm-release.yml",
-    [packageAcceptance, "plugin-npm-extended-stable-workflow", workflowGuards],
+    [
+      packageAcceptance,
+      "plugin-npm-extended-stable-workflow",
+      "plugin-release-git-lifecycle",
+      workflowGuards,
+    ],
   ],
   [".github/workflows/qa-live-transports-convex.yml", [packageAcceptance, workflowGuards]],
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
@@ -2405,8 +2415,13 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
   [
-    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
-    ["ci-git-owner", "ci-linux-git", "ci-platform-checkout"],
+    /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
+    [
+      "ci-git-owner",
+      "ci-linux-git",
+      "ci-platform-checkout",
+      "src/scripts/ci-changed-scope.git-owner.test.ts",
+    ],
   ],
   [/^\.github\/actions\/publish-generated-pr\//u, [workflowGuards]],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
@@ -3013,7 +3028,7 @@ function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
 
 function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
   if (
-    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/ci-platform-checkout\.mjs)$/u.test(
+    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/ci-platform-checkout\.mjs)$/u.test(
       changedPath,
     )
   ) {
@@ -3023,6 +3038,7 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
       "ci-platform-checkout",
       "openclaw-performance-workflow",
       "openclaw-performance-git-lifecycle",
+      "plugin-release-git-lifecycle",
       "release-workflow-git-lifecycle",
       workflowGuards,
     );

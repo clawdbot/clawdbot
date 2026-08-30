@@ -171,37 +171,28 @@ export function projectChatTranscript(
     const revision = (current?.revision ?? 0) + 1;
     expandedAssistantMessages.set(messageId, { status: "loading", revision });
     requestUpdate();
+    const completeLoad = (result: Awaited<ReturnType<typeof loader>>) => {
+      const pending = expandedAssistantMessages.get(messageId);
+      if (pending?.status !== "loading" || pending.revision !== revision) {
+        return;
+      }
+      const markdown =
+        result?.ok && result.message && typeof result.message === "object"
+          ? extractTextCached(result.message)
+          : null;
+      expandedAssistantMessages.set(
+        messageId,
+        markdown === null
+          ? { status: "error", revision: revision + 1 }
+          : { status: "loaded", markdown, revision: revision + 1 },
+      );
+      requestUpdate();
+    };
     void loader({
       sessionKey: props.sessionKey,
       ...(props.fullMessageAgentId ? { agentId: props.fullMessageAgentId } : {}),
       messageId,
-    }).then(
-      (result) => {
-        const pending = expandedAssistantMessages.get(messageId);
-        if (pending?.status !== "loading" || pending.revision !== revision) {
-          return;
-        }
-        const markdown =
-          result?.ok && result.message && typeof result.message === "object"
-            ? extractTextCached(result.message)
-            : null;
-        expandedAssistantMessages.set(
-          messageId,
-          markdown === null
-            ? { status: "error", revision: revision + 1 }
-            : { status: "loaded", markdown, revision: revision + 1 },
-        );
-        requestUpdate();
-      },
-      () => {
-        const pending = expandedAssistantMessages.get(messageId);
-        if (pending?.status !== "loading" || pending.revision !== revision) {
-          return;
-        }
-        expandedAssistantMessages.set(messageId, { status: "error", revision: revision + 1 });
-        requestUpdate();
-      },
-    );
+    }).then(completeLoad, () => completeLoad(null));
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
@@ -276,6 +267,7 @@ export function projectChatTranscript(
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
     runOutputTokens: props.runOutputTokens,
+    questionPrompts,
   } satisfies StreamGroupOptions;
   // Latest ownership crosses rows: the former owner must rerender when a
   // newer answer arrives even if its own message object stays stable.
@@ -387,10 +379,7 @@ export function projectChatTranscript(
       return renderChatNotice(item);
     }
     if (item.kind === "stream-run") {
-      return renderStreamGroup(item.parts, {
-        ...streamGroupOptions,
-        questionPrompts,
-      });
+      return renderStreamGroup(item.parts, streamGroupOptions);
     }
     if (item.kind === "work-group") {
       const workExpanded = expandedToolCards.get(item.key) ?? false;
@@ -400,10 +389,7 @@ export function projectChatTranscript(
           sessionKey: props.sessionKey,
           latestBrowserTabs,
         }),
-        onToggle: () => {
-          setExpansionState(expandedToolCards, item.key, !workExpanded);
-          requestUpdate();
-        },
+        onToggle: () => toggleToolCardExpanded(item.key, workExpanded),
       });
     }
     if (item.kind === "activity-run") {
@@ -418,17 +404,10 @@ export function projectChatTranscript(
     }
     if (item.kind === "agent-run-frame") {
       return renderAgentRunFrame(item, {
-        questionPrompts,
-        streamOptions: {
-          ...streamGroupOptions,
-          questionPrompts,
-        },
+        streamOptions: streamGroupOptions,
         renderGroupOptions,
         isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
-        onToggleWork: (key, expanded) => {
-          setExpansionState(expandedToolCards, key, !expanded);
-          requestUpdate();
-        },
+        onToggleWork: toggleToolCardExpanded,
         turnRecap: turnRecapByGroupKey.get(item.key),
       });
     }
@@ -494,18 +473,23 @@ export function projectChatTranscript(
   // Default disclosure belongs only to a settled assistant at the transcript
   // tail; any newer visible row returns the prior answer to hover/tap behavior.
   const lastTranscriptItem = transcriptItems.at(-1);
+  const tailStatusOwner =
+    lastTranscriptItem?.kind === "agent-run-frame" &&
+    lastTranscriptItem.outcome.kind === "completed" &&
+    lastTranscriptItem.outcome.actionOwner !== null
+      ? lastTranscriptItem
+      : lastTranscriptItem?.kind === "group" &&
+          assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
+        ? lastTranscriptItem
+        : null;
   latestAssistantItemKey =
-    props.runActive || props.runWorking || searchFiltering
-      ? null
-      : lastTranscriptItem?.kind === "agent-run-frame" &&
-          lastTranscriptItem.outcome.kind === "completed" &&
-          lastTranscriptItem.outcome.actionOwner !== null
-        ? lastTranscriptItem.key
-        : lastTranscriptItem?.kind === "group" &&
-            !lastTranscriptItem.isStreaming &&
-            assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
-          ? lastTranscriptItem.key
-          : null;
+    !props.runActive &&
+    !props.runWorking &&
+    !searchFiltering &&
+    tailStatusOwner &&
+    (tailStatusOwner.kind !== "group" || !tailStatusOwner.isStreaming)
+      ? tailStatusOwner.key
+      : null;
   for (const item of transcriptItems) {
     const groups =
       item.kind === "agent-run-frame"
@@ -539,19 +523,9 @@ export function projectChatTranscript(
   }
   transcript.syncMessageRows(messageRowKeysById);
   let turnRecapOwnerKey: string | null = null;
-  if (turnRecap !== null) {
-    const lastItem = transcriptItems.at(-1);
-    if (lastItem?.kind === "group" && assistantGroupCanOwnActiveRunStatus(lastItem)) {
-      turnRecapByGroupKey.set(lastItem.key, turnRecap);
-      turnRecapOwnerKey = lastItem.key;
-    } else if (
-      lastItem?.kind === "agent-run-frame" &&
-      lastItem.outcome.kind === "completed" &&
-      lastItem.outcome.actionOwner
-    ) {
-      turnRecapByGroupKey.set(lastItem.key, turnRecap);
-      turnRecapOwnerKey = lastItem.key;
-    }
+  if (turnRecap !== null && tailStatusOwner) {
+    turnRecapByGroupKey.set(tailStatusOwner.key, turnRecap);
+    turnRecapOwnerKey = tailStatusOwner.key;
   }
   // New row keys measure expanded work immediately; existing keys keep their
   // cached height until ResizeObserver reports the changed layout.

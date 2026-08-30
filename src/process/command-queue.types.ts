@@ -3,6 +3,8 @@
  * points that should not import the full queue implementation.
  */
 export type CommandQueueEnqueueOptions = {
+  /** Called only when this entry remains queued after immediate lane admission. */
+  onQueued?: () => void;
   warnAfterMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
   taskTimeoutMs?: number;

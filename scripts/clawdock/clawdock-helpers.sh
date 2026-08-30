@@ -54,20 +54,6 @@ _clawdock_trim_quotes() {
   printf "%s" "$value"
 }
 
-_clawdock_mask_value() {
-  local value="$1"
-  local length=${#value}
-  if (( length == 0 )); then
-    printf "%s" "<empty>"
-    return 0
-  fi
-  if (( length == 1 )); then
-    printf "%s" "<redacted:1 char>"
-    return 0
-  fi
-  printf "%s" "<redacted:${length} chars>"
-}
-
 _clawdock_browser_url_for_gateway_url() {
   local url="$1"
   case "$url" in
@@ -222,54 +208,41 @@ clawdock-config() {
 
 clawdock-show-config() {
   _clawdock_ensure_dir >/dev/null 2>&1 || true
-  local config_dir="${HOME}/.openclaw"
+  local config_dir="${HOME}/.openclaw" file rendered result=0
+  local files=("${config_dir}/openclaw.json" "${config_dir}/.env")
+  [[ -z "$CLAWDOCK_DIR" ]] || files+=("${CLAWDOCK_DIR}/.env")
   echo -e "${_CLR_BOLD}Config directory:${_CLR_RESET} ${_CLR_CYAN}${config_dir}${_CLR_RESET}"
   echo ""
 
-  # Show openclaw.json
-  if [[ -f "${config_dir}/openclaw.json" ]]; then
-    echo -e "${_CLR_BOLD}${config_dir}/openclaw.json${_CLR_RESET}"
-    echo -e "${_CLR_DIM}$(cat "${config_dir}/openclaw.json")${_CLR_RESET}"
-  else
-    echo -e "${_CLR_YELLOW}No openclaw.json found${_CLR_RESET}"
-  fi
-  echo ""
-
-  # Show .env (mask secret values)
-  if [[ -f "${config_dir}/.env" ]]; then
-    echo -e "${_CLR_BOLD}${config_dir}/.env${_CLR_RESET}"
-    while IFS= read -r line || [[ -n "$line" ]]; do
-      if [[ "$line" =~ ^[[:space:]]*# ]] || [[ -z "$line" ]]; then
-        echo -e "${_CLR_DIM}${line}${_CLR_RESET}"
-      elif [[ "$line" == *=* ]]; then
-        local key="${line%%=*}"
-        local val="${line#*=}"
-        echo -e "${_CLR_CYAN}${key}${_CLR_RESET}=${_CLR_DIM}$(_clawdock_mask_value "$val")${_CLR_RESET}"
-      else
-        echo -e "${_CLR_DIM}${line}${_CLR_RESET}"
-      fi
-    done < "${config_dir}/.env"
-  else
-    echo -e "${_CLR_YELLOW}No .env found${_CLR_RESET}"
-  fi
-  echo ""
-
-  # Show project .env if available
-  if [[ -n "$CLAWDOCK_DIR" && -f "${CLAWDOCK_DIR}/.env" ]]; then
-    echo -e "${_CLR_BOLD}${CLAWDOCK_DIR}/.env${_CLR_RESET}"
-    while IFS= read -r line || [[ -n "$line" ]]; do
-      if [[ "$line" =~ ^[[:space:]]*# ]] || [[ -z "$line" ]]; then
-        echo -e "${_CLR_DIM}${line}${_CLR_RESET}"
-      elif [[ "$line" == *=* ]]; then
-        local key="${line%%=*}"
-        local val="${line#*=}"
-        echo -e "${_CLR_CYAN}${key}${_CLR_RESET}=${_CLR_DIM}$(_clawdock_mask_value "$val")${_CLR_RESET}"
-      else
-        echo -e "${_CLR_DIM}${line}${_CLR_RESET}"
-      fi
-    done < "${CLAWDOCK_DIR}/.env"
-  fi
-  echo ""
+  for file in "${files[@]}"; do
+    printf '%b%s%b\n' "$_CLR_BOLD" "$file" "$_CLR_RESET"
+    if [[ ! -f "$file" ]]; then
+      echo "Not found"
+      continue
+    fi
+    # Buffer the renderer: neither partial output nor parser errors are safe to show.
+    if rendered=$(_clawdock_compose run --rm --no-deps -T --entrypoint node openclaw-gateway -e '
+      const input = require("node:fs").readFileSync(0, "utf8");
+      if (process.argv[1] === "openclaw.json") {
+        const config = require("json5").parse(input);
+        console.log(JSON.stringify(config, (_key, value) =>
+          value !== null && typeof value === "object" ? value : "<redacted>", 2));
+      } else {
+        const env = require("dotenv").parse(input);
+        // Unterminated quotes can turn secret continuation lines into keys.
+        // Reject ambiguous quote-leading values before displaying any keys.
+        if (Object.values(env).some(value => /^[\x22\x27`]/.test(value))) process.exit(1);
+        console.log(Object.keys(env).map(key => `${key}=<redacted>`).join("\n"));
+      }
+    ' "${file##*/}" 2>/dev/null < "$file"); then
+      printf '%s\n' "$rendered"
+    else
+      echo "Unable to safely display file. Check its syntax and permissions, Docker availability, and the built OpenClaw image."
+      result=1
+    fi
+    echo ""
+  done
+  return "$result"
 }
 
 clawdock-workspace() {
@@ -350,33 +323,27 @@ clawdock-fix-token() {
 
   echo "🔧 Configuring gateway token..."
   local token
-  token=$(clawdock-token)
-  if [[ -z "$token" ]]; then
+  if ! token=$(clawdock-token 2>/dev/null) || [[ -z "$token" ]]; then
     echo "❌ Error: Could not find gateway token"
     echo "   Check: ${CLAWDOCK_DIR}/.env"
     return 1
   fi
 
-  echo "📝 Setting token: ${token:0:20}..."
-
-  _clawdock_compose exec -e "TOKEN=$token" openclaw-gateway \
-    bash -c './openclaw.mjs config set gateway.remote.token "$TOKEN" && ./openclaw.mjs config set gateway.auth.token "$TOKEN"' 2>&1 | _clawdock_filter_warnings
-
-  echo "🔍 Verifying token was saved..."
-  local saved_token
-  saved_token=$(_clawdock_compose exec openclaw-gateway \
-    bash -c "./openclaw.mjs config get gateway.remote.token 2>/dev/null" 2>&1 | _clawdock_filter_warnings | tr -d '\r\n' | head -c 64)
-
-  if [[ "$saved_token" == "$token" ]]; then
-    echo "✅ Token saved correctly!"
-  else
-    echo "⚠️  Token mismatch detected"
-    echo "   Expected: ${token:0:20}..."
-    echo "   Got: ${saved_token:0:20}..."
+  # config set owns validation/persistence; config get intentionally redacts tokens.
+  # Check both writes without forwarding diagnostics that may contain credentials.
+  if ! _clawdock_compose exec -T -e "TOKEN=$token" openclaw-gateway \
+    bash -c './openclaw.mjs config set gateway.remote.token "$TOKEN" && ./openclaw.mjs config set gateway.auth.token "$TOKEN"' >/dev/null 2>&1; then
+    echo "❌ Token configuration failed. Check Docker and config permissions, then retry clawdock-fix-token."
+    return 1
   fi
 
+  echo "✅ Token configured!"
+
   echo "🔄 Restarting gateway..."
-  _clawdock_compose restart openclaw-gateway 2>&1 | _clawdock_filter_warnings
+  if ! _clawdock_compose restart openclaw-gateway >/dev/null 2>&1; then
+    echo "❌ Gateway restart failed. Check Docker, then try clawdock-restart."
+    return 1
+  fi
 
   echo "⏳ Waiting for gateway to start..."
   sleep 5
