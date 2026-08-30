@@ -1808,6 +1808,30 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("directly delivers structured media owned by the child event", async () => {
+    const callGateway = createGatewayMock({ result: { payloads: [] } });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        result: "",
+        mediaUrls: ["/tmp/child-event.png"],
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "",
+        mediaUrls: ["/tmp/child-event.png"],
+        idempotencyKey: "announce-dm-fallback-empty:text-direct",
+      }),
+    );
+  });
+
   it.each([
     {
       name: "intentional suppression",

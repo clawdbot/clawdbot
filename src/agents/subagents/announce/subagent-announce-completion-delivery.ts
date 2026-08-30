@@ -16,7 +16,7 @@ import {
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../../embedded-agent-runner/delivery-evidence.js";
 import { hasVisibleAgentPayload } from "../../embedded-agent-runner/message-visibility.js";
-import type { AgentInternalEvent } from "../../internal-events.js";
+import { collectAgentInternalEventMedia, type AgentInternalEvent } from "../../internal-events.js";
 import {
   SourceOwnerChangedError,
   sourceOwnerChangedResult,
@@ -116,9 +116,14 @@ function collectDirectCompletionContent(params: {
     if (event?.type !== "task_completion" || event.source !== "subagent" || event.status !== "ok") {
       continue;
     }
-    const eventContent = collect([{ text: event.result }]);
-    if (eventContent) {
-      return eventContent;
+    const parsedEvent = collect([{ text: event.result }]);
+    const eventMediaUrls = collectAgentInternalEventMedia([event]).mediaUrls;
+    const mediaUrls = new Set([...(parsedEvent?.mediaUrls ?? []), ...eventMediaUrls]);
+    if (parsedEvent || mediaUrls.size > 0) {
+      return {
+        content: parsedEvent?.content ?? "",
+        mediaUrls: [...mediaUrls],
+      };
     }
   }
   return undefined;
