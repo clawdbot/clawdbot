@@ -304,11 +304,17 @@ describe("pane-owned canonical session projection", () => {
   it.each([
     {
       name: "session",
-      previous: { sessionKey: "agent:main:previous", sessionId: "previous-session" },
-      next: { sessionKey: "agent:main:next", sessionId: "next-session" },
+      previous: { sessionKey: "agent:main:previous", sessionId: "shared-session" },
+      next: { sessionKey: "agent:main:next", sessionId: "shared-session" },
+    },
+    {
+      name: "session identity",
+      previous: { sessionKey: "main", sessionId: "previous-session" },
+      next: { sessionKey: "main", sessionId: "next-session" },
     },
     {
       name: "active branch",
+      retainsTerminal: true,
       previous: {
         sessionKey: "agent:main:shared",
         sessionId: "shared-session",
@@ -322,6 +328,7 @@ describe("pane-owned canonical session projection", () => {
     },
     {
       name: "cleared branch",
+      retainsTerminal: true,
       previous: {
         sessionKey: "agent:main:shared",
         sessionId: "shared-session",
@@ -343,37 +350,89 @@ describe("pane-owned canonical session projection", () => {
       previous: { sessionKey: "main", agentId: "first" },
       next: { sessionKey: "main", agentId: "second" },
     },
-  ])("drops stale live and run provenance when the $name changes", ({ previous, next }) => {
-    const owner = {};
-    const liveUser = createHistoryMessage("user", "obsolete turn", {
-      id: "obsolete-user",
-      seq: 1,
-    });
-    const running = reduceSessionProjection(projectLiveMessage(owner, liveUser, previous), {
-      type: "runDelta",
-      runId: "obsolete-run",
-      scope: previous,
-    });
-    setChatSessionProjection(owner, running);
-    setChatRunOwner(owner, "obsolete-run");
+  ])(
+    "resets transcript and live ownership when the $name changes",
+    ({ previous, next, retainsTerminal }) => {
+      const owner = {};
+      const liveUser = createHistoryMessage("user", "obsolete turn", {
+        id: "obsolete-user",
+        seq: 1,
+      });
+      const running = reduceSessionProjection(projectLiveMessage(owner, liveUser, previous), {
+        type: "runDelta",
+        runId: "obsolete-run",
+        scope: previous,
+      });
+      const pending = reduceSessionProjection(running, {
+        type: "sendPending",
+        runId: "pending-run",
+        message: createHistoryMessage("user", "pending old branch input", {
+          idempotencyKey: "pending-run:user",
+        }),
+        scope: previous,
+      });
+      const terminal = reduceSessionProjection(pending, {
+        type: "runTerminal",
+        runId: "retired-run",
+        status: "completed",
+        message: createHistoryMessage("assistant", "old branch reply"),
+        scope: previous,
+      });
+      setChatSessionProjection(owner, terminal);
+      setChatRunOwner(owner, "obsolete-run");
 
-    const projection = getChatSessionProjection(owner, [], next);
+      const projection = getChatSessionProjection(owner, [], next);
 
-    expect(projection.messages).toEqual([]);
-    expect(projection.runs).toEqual({});
-    expect(projection.scope).toEqual(next);
-    expect(getChatRunOwner(owner)).toBeUndefined();
-  });
+      expect(projection.messages).toEqual([]);
+      expect(projection.entries).toEqual([]);
+      expect(projection.runs).toEqual(
+        retainsTerminal ? { "retired-run": terminal.runs["retired-run"] } : {},
+      );
+      if (retainsTerminal) {
+        expect(projection.runs["retired-run"]).toBe(terminal.runs["retired-run"]);
+      }
+      expect(projection.scope).toEqual(next);
+      expect(getChatRunOwner(owner)).toBeUndefined();
+    },
+  );
 
   it("retires run display ownership when the same session is reset", () => {
     const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
     reduceChatSessionProjection(owner, { type: "runDelta", runId: "before-reset" });
+    reduceChatSessionProjection(owner, {
+      type: "runTerminal",
+      runId: "retired-before-reset",
+      status: "completed",
+    });
     setChatRunOwner(owner, "before-reset");
 
     reduceChatSessionProjection(owner, { type: "sessionReset" });
 
     expect(getChatRunOwner(owner)).toBeUndefined();
     expect(getChatSessionProjection(owner, owner.chatMessages).runs).toEqual({});
+  });
+
+  it("retains known lifecycle scope through a leaf advance before a later lifecycle reset", () => {
+    const owner = {};
+    const previous = { sessionKey: "main", lifecycleRevision: 1, activeLeafEntryId: "old-leaf" };
+    setChatSessionProjection(
+      owner,
+      reduceSessionProjection(getChatSessionProjection(owner, [], previous), {
+        type: "runTerminal",
+        runId: "retired-run",
+        status: "completed",
+        scope: previous,
+      }),
+    );
+    const advanced = getChatSessionProjection(owner, [], {
+      sessionKey: "main",
+      activeLeafEntryId: "new-leaf",
+    });
+    expect(advanced.scope.lifecycleRevision).toBe(1);
+    expect(advanced.runs["retired-run"]?.status).toBe("completed");
+    expect(
+      getChatSessionProjection(owner, [], { ...advanced.scope, lifecycleRevision: 2 }).runs,
+    ).toEqual({});
   });
 
   it("retains a proven live branch when another consumer omits optional scope", () => {

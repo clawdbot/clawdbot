@@ -332,6 +332,44 @@ describe("reconcileChatRunLifecycle yielded parent", () => {
 });
 
 describe("reconcileChatRunLifecycle indicators", () => {
+  it.each([
+    { indicatorRunId: "r1", clearToolStream: false, retained: false },
+    { indicatorRunId: null, clearToolStream: false, retained: false },
+    { indicatorRunId: "r2", clearToolStream: false, retained: true },
+    { indicatorRunId: "session-operation", clearToolStream: false, retained: true },
+    { indicatorRunId: "r2", clearToolStream: true, retained: false },
+    { indicatorRunId: "session-operation", clearToolStream: true, retained: false },
+  ])(
+    "scopes compaction $indicatorRunId with full cleanup $clearToolStream",
+    ({ indicatorRunId, clearToolStream, retained }) => {
+      vi.useFakeTimers();
+      try {
+        const expire = vi.fn();
+        const timer = setTimeout(expire, 5_000);
+        const indicator = {
+          phase: "active" as const,
+          runId: indicatorRunId,
+          startedAt: 1,
+          completedAt: null,
+        };
+        const host = makeHost({
+          chatRunId: "r1",
+          compactionStatus: indicator,
+          compactionClearTimer: timer,
+        });
+
+        reconcileChatRunLifecycle(host, { runId: "r1", clearToolStream });
+
+        expect(host.compactionStatus).toBe(retained ? indicator : null);
+        expect(host.compactionClearTimer).toBe(retained ? timer : null);
+        vi.advanceTimersByTime(5_000);
+        expect(expire).toHaveBeenCalledTimes(retained ? 1 : 0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("clears run-owned transient indicators on terminal run end", () => {
     const host = makeHost({
       chatRunId: "r1",

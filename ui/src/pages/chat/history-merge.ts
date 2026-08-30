@@ -68,10 +68,14 @@ export function readChatSessionProjectionScope(
 function chatProjectionScopeChanged(
   previous: SessionProjectionScope,
   scope: SessionProjectionScope,
+  ignoredKey?: (typeof CHAT_PROJECTION_SCOPE_KEYS)[number],
 ) {
   return CHAT_PROJECTION_SCOPE_KEYS.some(
     (key) =>
-      Object.hasOwn(scope, key) && previous[key] !== undefined && previous[key] !== scope[key],
+      key !== ignoredKey &&
+      Object.hasOwn(scope, key) &&
+      previous[key] !== undefined &&
+      previous[key] !== scope[key],
   );
 }
 
@@ -82,9 +86,16 @@ export function getChatSessionProjection(
   scope: SessionProjectionScope = {},
 ): SessionProjectionState {
   const current = chatSessionProjections.get(owner);
-  const scopeChanged = current !== undefined && chatProjectionScopeChanged(current.scope, scope);
-  if (!current || scopeChanged) {
+  if (!current || chatProjectionScopeChanged(current.scope, scope)) {
     const projection = createSessionProjection(scope, messages);
+    // A new leaf drops transcript/live provenance. Retired runs remain replay
+    // fences within this session lifecycle, without reclaiming display ownership.
+    if (current && !chatProjectionScopeChanged(current.scope, scope, "activeLeafEntryId")) {
+      projection.scope = { ...current.scope, ...scope };
+      projection.runs = Object.fromEntries(
+        Object.entries(current.runs).filter(([, run]) => run.status !== "streaming"),
+      );
+    }
     setChatSessionProjection(owner, projection);
     return projection;
   }

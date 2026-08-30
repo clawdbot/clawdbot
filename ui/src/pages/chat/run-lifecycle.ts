@@ -415,9 +415,9 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
   if (!runId || host.chatRunStartup?.runId === runId) {
     host.chatRunStartup = null;
   }
-  clearTimer(host.compactionClearTimer);
-  host.compactionClearTimer = null;
-  if (host.compactionStatus) {
+  if (!runId || !host.compactionStatus?.runId || host.compactionStatus.runId === runId) {
+    clearTimer(host.compactionClearTimer);
+    host.compactionClearTimer = null;
     host.compactionStatus = null;
   }
   clearTimer(host.fallbackClearTimer);
@@ -507,7 +507,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   const sessionKey = toSessionKey(options.sessionKey) ?? host.sessionKey;
 
   if (options.clearIndicators ?? true) {
-    clearRunIndicators(host, runId);
+    clearRunIndicators(host, options.clearToolStream ? null : runId);
   }
   if (options.clearChatStream) {
     host.chatStream = null;

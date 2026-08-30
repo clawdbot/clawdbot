@@ -341,6 +341,88 @@ suite.define(() => {
     }
   });
 
+  it("adopts a replacement run that started while the socket was offline", async () => {
+    const { context, page, gateway } = await openActiveTurn();
+    try {
+      const previousPrompt = "Start the first task.";
+      const previousText = "The first task is streaming.";
+      const previousRun = await startActiveTurn(page, gateway, previousPrompt, previousText);
+      await capture(page, "09-turnover-before");
+      const startupCount = (await gateway.getRequests("chat.startup")).length;
+      const subscriptionCount = (await gateway.getRequests("sessions.messages.subscribe")).length;
+      await gateway.setOnline(false);
+
+      const nextRun = "run-offline-replacement";
+      const nextPrompt = "Start the second task.";
+      const nextText = "The second task is streaming.";
+      await installActiveRunSnapshot(gateway, nextRun, nextPrompt, nextText, {
+        messages: [
+          ...activeRunSnapshot(previousRun, previousPrompt, previousText).messages,
+          {
+            __openclaw: { idempotencyKey: previousRun },
+            role: "assistant",
+            content: "The first task completed while offline.",
+            timestamp: 950,
+          },
+          ...activeRunSnapshot(nextRun, nextPrompt, nextText).messages,
+        ],
+      });
+      await gateway.deferNext("chat.startup");
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("chat.startup", { after: startupCount });
+      await waitForGatewayConnected(page);
+      await gateway.emitGatewayEvent("agent", {
+        runId: nextRun,
+        seq: 2,
+        stream: "compaction",
+        ts: 1_100,
+        sessionKey: "main",
+        data: { phase: "start" },
+      });
+      const compaction = page.locator(".compaction-indicator--active");
+      await expect(compaction).toBeVisible();
+      await gateway.resolveDeferred("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe", { after: subscriptionCount });
+      await assertActiveTurnVisible(page, nextText);
+      await expect(compaction).toBeVisible();
+      await expect(
+        page.locator(".chat-thread").getByText(previousText, { exact: true }),
+      ).toHaveCount(0);
+
+      const nextProgress = "New live progress.";
+      const liveText = `${nextText} ${nextProgress}`;
+      await gateway.emitGatewayEvent("chat", {
+        runId: nextRun,
+        sessionKey: "main",
+        state: "delta",
+        message: { role: "assistant", content: liveText },
+      });
+      await assertActiveTurnVisible(page, nextProgress);
+      // Replayed tool activity separates the recovered prefix from later cumulative deltas.
+      const visibleOrder = await page.locator(".chat-thread-inner").evaluate(
+        (element, texts) =>
+          Array.from(element.querySelectorAll(".chat-bubble")).flatMap((bubble) => {
+            const text = bubble.textContent?.trim();
+            if (text === texts.prefix) {
+              return ["prefix"];
+            }
+            if (bubble.querySelector(".chat-tool-row--running")) {
+              return ["tool"];
+            }
+            return text === texts.tail ? ["tail"] : [];
+          }),
+        { prefix: nextText, tail: nextProgress },
+      );
+      expect(visibleOrder).toEqual(["prefix", "tool", "tail"]);
+      await capture(page, "10-turnover-after");
+      await page.getByRole("button", { name: "Stop generating" }).click();
+      const abort = await gateway.waitForRequest("chat.abort");
+      expect(abort.params).toMatchObject({ sessionKey: "main", runId: nextRun });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("restores the active assistant and tool after a full reload", async () => {
     const { context, page, gateway } = await openActiveTurn();
     try {
