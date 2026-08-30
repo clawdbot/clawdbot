@@ -4019,7 +4019,7 @@ jobs:
         include:
           - suite_id: native-live-src-agents
             label: Native live agents
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
+            command: OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full

@@ -637,20 +637,23 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("keeps valid local MEDIA paths as assistant attachments", () => {
-      const result = normalizeMessage({
-        role: "assistant",
-        content: "Hello\nMEDIA:/tmp/openclaw/test-image.png\nWorld",
-      });
-
-      expect(result.content).toEqual([
+    it.each([
+      ["/tmp/openclaw/test-image.png", "test-image.png"],
+      ["file:///tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["FILE:///tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["FILE:/tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+      ["file://localhost/tmp/caf%C3%A9%20image.png", "caf%C3%A9%20image.png"],
+    ])("keeps local MEDIA references as assistant attachments: %s", (url, label) => {
+      expect(
+        normalizeMessage({ role: "assistant", content: `Hello\nMEDIA:${url}\nWorld` }).content,
+      ).toEqual([
         { type: "text", text: "Hello" },
         {
           type: "attachment",
           attachment: {
-            url: "/tmp/openclaw/test-image.png",
+            url,
             kind: "image",
-            label: "test-image.png",
+            label,
             mimeType: "image/png",
           },
         },
