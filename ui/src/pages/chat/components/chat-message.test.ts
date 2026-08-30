@@ -5123,6 +5123,23 @@ describe("grouped chat rendering", () => {
     }
   });
 
+  it("shows the omitted image fallback for nested tool results when tool cards are hidden", () => {
+    const container = document.createElement("div");
+    const message = createAssistantMessage([
+      createToolCall("nested-image-call", "image", {}),
+      {
+        type: "toolResult",
+        id: "nested-image-call",
+        content: [{ type: "input_image", omitted: true, bytes: 26 }],
+      },
+    ]);
+
+    renderAssistantMessage(container, message, { showToolCalls: false });
+
+    expect(container.querySelector(".chat-inline-media-omitted")).not.toBeNull();
+    expect(container.textContent).toContain("Image unavailable in history");
+  });
+
   it("expires pairing QR images and requests a refresh at the expiry boundary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-30T05:45:00Z"));
