@@ -17,10 +17,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
-import {
-  readOnlySqliteTranscriptSessionIds,
-  readOnlySqliteTranscriptRepairSnapshot,
-} from "./doctor-session-sqlite-transcript-readers.js";
+import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript labels";
 
@@ -214,17 +211,13 @@ export async function noteSessionTranscriptLabelHealth(params: {
     let readDatabase: DatabaseSync | undefined;
     try {
       readDatabase = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+      const reader = new ReadOnlySqliteTranscriptReader(readDatabase);
       // Detect read-only, then repair each session in its own transaction as it is found, so a large
       // store never buffers every plan at once. Enumerate from transcript_events, not sessions: the
       // latter gained its columns post-ship and is not safe to assume on old databases.
-      const sessionIds = readOnlySqliteTranscriptSessionIds(readDatabase);
-      for (const sessionId of sessionIds) {
+      for (const sessionId of reader.sessionIds()) {
         // Read transcript in read-only mode (detection phase).
-        const readResult = readOnlySqliteTranscriptRepairSnapshot(
-          readDatabase,
-          sessionId,
-          normalizeLegacyInboundContextLabels,
-        );
+        const readResult = reader.repairSnapshot(sessionId, normalizeLegacyInboundContextLabels);
         if (!readResult.ok) {
           const detail = formatErrorMessage(readResult.error).replace(/\s+/g, " ").trim();
           note(
