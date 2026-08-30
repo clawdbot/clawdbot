@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
   cpSync,
   mkdirSync,
   readFileSync,
@@ -9,21 +10,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
+import { afterAll } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+let fixtureTemplate: ReturnType<typeof createMainRefreshTemplate> | undefined;
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
-// Keep the complete wrapper/lock/entry/gate owners. Command resolution, Git
-// transport faults, and GitHub responses are synthetic.
-export function createMainRefreshFixture(directory: string) {
-  const root = realpathSync(directory);
-  const canonical = join(root, "canonical");
-  const origin = join(root, "origin.git");
-  const worktree = join(canonical, ".worktrees", "pr-42");
-  const bin = join(root, "bin");
+function createFixtureGit(root: string) {
   const home = join(root, "home");
-  mkdirSync(bin);
   mkdirSync(home);
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
@@ -43,6 +41,14 @@ export function createMainRefreshFixture(directory: string) {
     }
     return result.stdout.trim();
   }
+  return { env, realGit, git };
+}
+
+function createMainRefreshTemplate(directory: string) {
+  const root = realpathSync(directory);
+  const canonical = join(root, "canonical");
+  const origin = join(root, "origin.git");
+  const { git } = createFixtureGit(root);
   git(root, "init", "--bare", "-b", "main", origin);
   git(root, "init", "-b", "main", canonical);
   git(canonical, "config", "user.name", "OpenClaw Test");
@@ -82,15 +88,7 @@ export function createMainRefreshFixture(directory: string) {
   git(canonical, "add", ".");
   git(canonical, "commit", "-qm", "test: trusted native wrapper");
   const main = git(canonical, "rev-parse", "HEAD");
-  git(canonical, "remote", "add", "origin", origin);
-  git(canonical, "config", `url.${origin}.insteadOf`, "https://github.com/fixture/repo");
-  git(
-    canonical,
-    "config",
-    "--add",
-    `url.${origin}.insteadOf`,
-    "https://github.com/fixture/repo.git",
-  );
+  git(canonical, "remote", "add", "origin", "../origin.git");
   git(canonical, "push", "origin", "main");
   git(canonical, "checkout", "-qb", "topic");
   writeFileSync(join(canonical, "src", "subject.ts"), "export const subject = 'reviewed';\n");
@@ -109,6 +107,37 @@ export function createMainRefreshFixture(directory: string) {
   git(canonical, "push", "origin", `${gateMain}:refs/heads/gate-movement`);
   git(canonical, "push", "origin", `${movedMain}:refs/heads/movement`);
   git(canonical, "checkout", "--detach", main);
+  return { canonical, origin, main, head, sameTreeHead, movedMain, gateMain };
+}
+
+// Keep the complete wrapper/lock/entry/gate owners. Command resolution, Git
+// transport faults, and GitHub responses are synthetic.
+export function createMainRefreshFixture(directory: string) {
+  const template = (fixtureTemplate ??= createMainRefreshTemplate(
+    templateDirs.make("openclaw-pr-main-refresh-template-"),
+  ));
+  const root = realpathSync(directory);
+  const canonical = join(root, "canonical");
+  const origin = join(root, "origin.git");
+  const worktree = join(canonical, ".worktrees", "pr-42");
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  const { env, realGit, git } = createFixtureGit(root);
+  const { main, head, sameTreeHead, movedMain, gateMain } = template;
+  // Copy complete object stores (including sameTreeHead), never shared refs or
+  // hardlinks. Create worktrees afterward so their absolute back-links stay local.
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  cpSync(template.canonical, canonical, copyOptions);
+  cpSync(template.origin, origin, copyOptions);
+  git(canonical, "remote", "set-url", "origin", origin);
+  git(canonical, "config", `url.${origin}.insteadOf`, "https://github.com/fixture/repo");
+  git(
+    canonical,
+    "config",
+    "--add",
+    `url.${origin}.insteadOf`,
+    "https://github.com/fixture/repo.git",
+  );
   git(canonical, "worktree", "add", "--detach", worktree, head);
   symlinkSync(join(process.cwd(), "node_modules"), join(canonical, "node_modules"), "dir");
   const local = join(worktree, ".local");
