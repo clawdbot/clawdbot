@@ -12,7 +12,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { encodeSessionStateWatchTarget } from "./session-watch-target.js";
+import {
+  encodeSessionStateWatchTarget,
+  isLegacySessionStateWatchTarget,
+} from "./session-watch-target.js";
 
 type SessionUpstreamDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -248,13 +251,16 @@ export function listWatchedSessionUpstreamLinks(
           .distinct(),
       ).rows.map((row) => row.target_session_key),
     );
-    const links = linkRows.map(rowToSessionUpstreamLink).filter((link) =>
-      watchedTargetKeys.has(
-        encodeSessionStateWatchTarget({
-          sessionKey: link.sessionKey,
-          agentId: link.agentId,
-        }),
-      ),
+    const links = linkRows.map(rowToSessionUpstreamLink).filter(
+      (link) =>
+        watchedTargetKeys.has(
+          encodeSessionStateWatchTarget({
+            sessionKey: link.sessionKey,
+            agentId: link.agentId,
+          }),
+        ) ||
+        (isLegacySessionStateWatchTarget(link.sessionKey) &&
+          watchedTargetKeys.has(link.sessionKey)),
     );
     // Keep the duplicate-key guard for legacy rows that may still be visible while
     // an older runtime is draining; never probe an arbitrary agent's upstream.

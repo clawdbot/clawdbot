@@ -91,13 +91,14 @@ export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
 export function enqueueSessionStateNotice(params: {
   watcherSessionKey: string;
   targetSessionKey: string;
-  targetAgentId: string;
+  targetAgentId?: string;
   lastSeenSequence: number;
   queueOnly?: boolean;
 }): void {
   enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
     sessionKey: params.watcherSessionKey,
     contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${
+      !params.targetAgentId ||
       parseAgentSessionKey(params.targetSessionKey)?.agentId === params.targetAgentId
         ? encodeNoticeTarget(params.targetSessionKey)
         : encodeNoticeTargetWithAgent({

@@ -499,6 +499,37 @@ describe("session state events", () => {
     ).toEqual({ count: 1 });
   });
 
+  it("keeps legacy bare target cursors receiving and acknowledging notices", () => {
+    const database = createDatabaseOptions();
+    openOpenClawStateDatabase(database)
+      .db.prepare(
+        `INSERT INTO session_watch_cursors
+         (watcher_session_key, target_session_key, last_seen_sequence, notified_sequence,
+          material_sequence, provenance, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(watcher, "global", 0, 0, 0, "explicit", 1);
+
+    recordSessionStateEvent(
+      eventInput({
+        sessionKey: "global",
+        agentId: "main",
+        kind: "goal_changed",
+        actorType: "human",
+        watcherSessionKeys: [],
+      }),
+      database,
+    );
+
+    expect(readCursor(database, watcher, "global")).toMatchObject({ material_sequence: 1 });
+    expect(peekSystemEventEntries(watcher)).toHaveLength(2);
+    acknowledgeSessionStateNotices(watcher, ["global"], database);
+    expect(readCursor(database, watcher, "global")).toMatchObject({
+      last_seen_sequence: 0,
+      notified_sequence: 1,
+    });
+  });
+
   it("acks only drained session-state entries and ignores ordinary events", async () => {
     const database = createDatabaseOptions();
     seedChild(database);

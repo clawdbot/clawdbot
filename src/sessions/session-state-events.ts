@@ -35,6 +35,7 @@ import { deleteSessionUpstreamLink } from "./session-upstream-links.js";
 import {
   decodeSessionStateWatchTarget,
   encodeSessionStateWatchTarget,
+  isLegacySessionStateWatchTarget,
   type SessionStateWatchTarget,
 } from "./session-watch-target.js";
 
@@ -262,7 +263,7 @@ export function recordSessionStateEvent(
   const notices: Array<{
     watcherSessionKey: string;
     targetSessionKey: string;
-    targetAgentId: string;
+    targetAgentId?: string;
     lastSeenSequence: number;
     queueOnly: boolean;
   }> = [];
@@ -318,46 +319,57 @@ export function recordSessionStateEvent(
       // Explicit watch registrations (registerSessionStateWatch) live as cursor rows;
       // union them with producer-passed watchers so sessions_send coordinators get
       // notices without every producer knowing about registration.
+      const targetCursorKeys =
+        targetCursorKey === input.sessionKey
+          ? [targetCursorKey]
+          : [targetCursorKey, input.sessionKey];
       const registeredWatcherKeys = NOTIFY_BY_KIND[input.kind]
         ? executeSqliteQuerySync(
             db,
             getSessionStateKysely(db)
               .selectFrom("session_watch_cursors")
               .select("watcher_session_key")
-              .where("target_session_key", "=", targetCursorKey),
+              .where("target_session_key", "in", targetCursorKeys),
           ).rows.map((row) => row.watcher_session_key)
         : [];
       const watcherSessionKeys = [
         ...new Set([...(input.watcherSessionKeys ?? []), ...registeredWatcherKeys]),
       ].filter((key) => Boolean(key) && isNotifiableWatcherKey(key));
       for (const watcherSessionKey of watcherSessionKeys) {
-        if (input.kind === "child_spawned") {
-          upsertSeedCursor({
+        const legacyCursor =
+          targetCursorKey === input.sessionKey
+            ? undefined
+            : readCursor(db, watcherSessionKey, input.sessionKey);
+        const cursorKeys = legacyCursor ? [targetCursorKey, input.sessionKey] : [targetCursorKey];
+        for (const cursorKey of cursorKeys) {
+          if (input.kind === "child_spawned") {
+            upsertSeedCursor({
+              db,
+              watcherSessionKey,
+              targetSessionKey: cursorKey,
+              sequence: insertedSequence,
+              now,
+            });
+            continue;
+          }
+          if (!NOTIFY_BY_KIND[input.kind] || input.actorId === watcherSessionKey) {
+            continue;
+          }
+          const materialCursor = updateMaterialCursor({
             db,
             watcherSessionKey,
-            targetSessionKey: input.sessionKey,
+            targetSessionKey: cursorKey,
             sequence: insertedSequence,
             now,
           });
-          continue;
+          notices.push({
+            watcherSessionKey,
+            targetSessionKey: input.sessionKey,
+            ...(cursorKey === targetCursorKey ? { targetAgentId: input.agentId } : {}),
+            lastSeenSequence: materialCursor.lastSeenSequence,
+            queueOnly: materialCursor.queueOnly,
+          });
         }
-        if (!NOTIFY_BY_KIND[input.kind] || input.actorId === watcherSessionKey) {
-          continue;
-        }
-        const materialCursor = updateMaterialCursor({
-          db,
-          watcherSessionKey,
-          targetSessionKey: targetCursorKey,
-          sequence: insertedSequence,
-          now,
-        });
-        notices.push({
-          watcherSessionKey,
-          targetSessionKey: input.sessionKey,
-          targetAgentId: input.agentId,
-          lastSeenSequence: materialCursor.lastSeenSequence,
-          queueOnly: materialCursor.queueOnly,
-        });
       }
 
       const row = executeSqliteQueryTakeFirstSync(
@@ -515,7 +527,7 @@ export function acknowledgeSessionStateNotices(
   const followups: Array<{
     watcherSessionKey: string;
     targetSessionKey: string;
-    targetAgentId: string;
+    targetAgentId?: string;
     lastSeenSequence: number;
     queueOnly: boolean;
   }> = [];
@@ -525,10 +537,17 @@ export function acknowledgeSessionStateNotices(
       for (const rawTarget of targetSessionKeys) {
         const target =
           typeof rawTarget === "string" ? decodeSessionStateWatchTarget(rawTarget) : rawTarget;
-        if (!target) {
+        const legacyTargetSessionKey =
+          typeof rawTarget === "string" && isLegacySessionStateWatchTarget(rawTarget)
+            ? rawTarget
+            : undefined;
+        const targetCursorKey = target
+          ? encodeSessionStateWatchTarget(target)
+          : legacyTargetSessionKey;
+        const targetSessionKey = target?.sessionKey ?? legacyTargetSessionKey;
+        if (!targetCursorKey || !targetSessionKey) {
           continue;
         }
-        const targetCursorKey = encodeSessionStateWatchTarget(target);
         if (seenTargets.has(targetCursorKey)) {
           continue;
         }
@@ -555,8 +574,8 @@ export function acknowledgeSessionStateNotices(
         if (material > notified) {
           followups.push({
             watcherSessionKey,
-            targetSessionKey: target.sessionKey,
-            targetAgentId: target.agentId,
+            targetSessionKey,
+            ...(target?.agentId ? { targetAgentId: target.agentId } : {}),
             lastSeenSequence: notified,
             queueOnly: isAmbientGroupWatchCursor(row),
           });
@@ -622,7 +641,7 @@ export function handleSessionStateSessionDeleted(
           .where((eb) =>
             eb.or([
               eb("watcher_session_key", "=", sessionKey),
-              eb("target_session_key", "=", targetCursorKey),
+              eb("target_session_key", "in", [targetCursorKey, sessionKey]),
             ]),
           ),
       );
@@ -656,7 +675,8 @@ export function sweepSessionStateWatchNotices(
     ).rows.filter(
       (row) =>
         sessionExists(row.watcher_session_key, options.env) &&
-        decodeSessionStateWatchTarget(row.target_session_key) !== undefined,
+        (decodeSessionStateWatchTarget(row.target_session_key) !== undefined ||
+          isLegacySessionStateWatchTarget(row.target_session_key)),
     );
     runOpenClawStateWriteTransaction(({ db: writeDb }) => {
       for (const row of pendingRows) {
@@ -672,13 +692,13 @@ export function sweepSessionStateWatchNotices(
     }, options);
     for (const row of pendingRows) {
       const target = decodeSessionStateWatchTarget(row.target_session_key);
-      if (!target) {
+      if (!target && !isLegacySessionStateWatchTarget(row.target_session_key)) {
         continue;
       }
       enqueueSessionStateNotice({
         watcherSessionKey: row.watcher_session_key,
-        targetSessionKey: target.sessionKey,
-        targetAgentId: target.agentId,
+        targetSessionKey: target?.sessionKey ?? row.target_session_key,
+        ...(target?.agentId ? { targetAgentId: target.agentId } : {}),
         lastSeenSequence: normalizeSqliteNumber(row.last_seen_sequence) ?? 0,
         queueOnly: isAmbientGroupWatchCursor(row),
       });
@@ -845,11 +865,10 @@ function hasSessionStateWatchers(
       getSessionStateKysely(db)
         .selectFrom("session_watch_cursors")
         .select("watcher_session_key")
-        .where(
-          "target_session_key",
-          "=",
+        .where("target_session_key", "in", [
           encodeSessionStateWatchTarget({ sessionKey: targetSessionKey, agentId: targetAgentId }),
-        )
+          targetSessionKey,
+        ])
         .limit(1),
     );
     return row !== undefined;
@@ -878,7 +897,11 @@ export function listAmbientGroupWatchTargets(
     return new Set(
       rows.flatMap((row) => {
         const target = decodeSessionStateWatchTarget(row.target_session_key);
-        return target ? [target.sessionKey] : [];
+        return target
+          ? [target.sessionKey]
+          : isLegacySessionStateWatchTarget(row.target_session_key)
+            ? [row.target_session_key]
+            : [];
       }),
     );
   } catch (error) {
