@@ -54,7 +54,7 @@ function buildCodeModeChildArgs(): string[] {
 }
 
 function isCodeModeBridgeMethod(value: unknown): value is CodeModeBridgeMethod {
-  return value === "search" || value === "describe" || value === "call";
+  return value === "search" || value === "describe" || value === "call" || value === "callValue";
 }
 
 async function runCodeModeBridgeRequest(
@@ -92,6 +92,16 @@ async function runCodeModeBridgeRequest(
         throw new ToolInputError("call id must be a string.");
       }
       return await runtime.call(id, values[1] ?? {}, {
+        ...options,
+        recoverySurface: "code-mode",
+      });
+    }
+    case "callValue": {
+      const id = values[0];
+      if (typeof id !== "string") {
+        throw new ToolInputError("callValue id must be a string.");
+      }
+      return await runtime.callValue(id, values[1] ?? {}, {
         ...options,
         recoverySurface: "code-mode",
       });

@@ -133,7 +133,7 @@ export type ToolSearchCatalogRef = {
   onDispose?: Set<() => void>;
 };
 
-export type CodeModeBridgeMethod = "search" | "describe" | "call";
+export type CodeModeBridgeMethod = "search" | "describe" | "call" | "callValue";
 
 export type CodeModeChildMessage =
   | { type: "result"; ok: true; value: unknown }

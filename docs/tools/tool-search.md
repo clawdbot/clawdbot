@@ -28,7 +28,7 @@ JavaScript body in an isolated Node subprocess with an `openclaw.tools` bridge:
 ```js
 const hits = await openclaw.tools.search("create a GitHub issue");
 const tool = await openclaw.tools.describe(hits[0].id);
-return await openclaw.tools.call(tool.id, {
+return await openclaw.tools.callValue(tool.id, {
   title: "Crash on startup",
   body: "Steps to reproduce...",
 });
@@ -67,7 +67,7 @@ run:
 
 At execution time every real tool call returns to OpenClaw. The isolated Node
 runtime does not hold plugin implementations, MCP client objects, or secrets.
-`openclaw.tools.call(...)` crosses the bridge back into the Gateway, where the
+`openclaw.tools.callValue(...)` crosses the bridge back into the Gateway, where the
 normal policy, approval, hook, logging, and result handling still apply.
 
 ## Modes
@@ -177,11 +177,11 @@ the trusted full `outputSchema` when the tool declares one.
 const calendarCreate = await openclaw.tools.describe("mcp:calendar:create_event");
 ```
 
-`openclaw.tools.call(id, args)`
+`openclaw.tools.callValue(id, args)`
 
-Calls a selected tool through OpenClaw and returns the raw `{ tool, result }`
-envelope. JSON-returning tools normally place their value in
-`result.details`. OpenClaw validates a trusted core or plugin tool's declared
+Calls a selected tool through OpenClaw and returns its ordinary JSON value. Use
+`openclaw.tools.call(id, args)` when the full `{ tool, result }` envelope is
+needed. OpenClaw validates a trusted core or plugin tool's declared
 input schema before execution. Missing required arguments, incorrect types,
 and forbidden properties return actionable tool errors instead of executing
 the tool; misspelled properties include a suggested parameter when available.
@@ -196,7 +196,7 @@ ambiguous tool selectors instead of calling the wrong tool. Nest target
 arguments under `args` when a target field matches another cataloged tool.
 
 ```js
-await openclaw.tools.call(calendarCreate.id, {
+await openclaw.tools.callValue(calendarCreate.id, {
   summary: "Planning",
   start: "2026-05-09T14:00:00Z",
 });

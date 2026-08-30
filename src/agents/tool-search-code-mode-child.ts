@@ -143,6 +143,7 @@ function buildControllerSource() {
     "    search: (query, options) => bridge('search', [query, options]),\n" +
     "    describe: (id) => bridge('describe', [id]),\n" +
     "    call: (id, input) => bridge('call', [id, input]),\n" +
+    "    callValue: (id, input) => bridge('callValue', [id, input]),\n" +
     "  }),\n" +
     "});\n" +
     "return Object.freeze({\n" +
