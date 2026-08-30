@@ -90,6 +90,11 @@ function resolveIMessageActionTarget(params: {
     readStringParam(params.actionParams, "to") ??
     readStringParam(params.actionParams, "target") ??
     (params.currentChannelId?.trim() || undefined);
+  if (rawTarget === "***") {
+    throw new Error(
+      "iMessage action target is a redacted display value. Omit the target to use the current conversation.",
+    );
+  }
   return rawTarget ? parseIMessageTarget(rawTarget) : null;
 }
 
