@@ -535,7 +535,11 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  async selectTab(targetId: string, route?: BrowserRoute): Promise<void> {
+  async selectTab(
+    targetId: string,
+    route?: BrowserRoute,
+    options?: { focusBrowserTab?: boolean },
+  ): Promise<void> {
     if (route && browserRouteKey(this.operations.route) !== browserRouteKey(route)) {
       this.operations.resetRoute(route);
       this.resetBrowserState();
@@ -552,10 +556,10 @@ export class BrowserPanelController implements ReactiveController {
     if (!route && this.clearUnavailableView()) {
       return;
     }
-    const focused = await this.runAction(async (actionClient) => {
+    const selectionSucceeded = await this.runAction(async (actionClient) => {
       if (route) {
-        // Listing can observe stopped or blocked tabs; focus needs a running,
-        // accessible tab. A historical target cannot survive a browser restart.
+        // Listing can observe stopped or blocked tabs; focus and capture need a
+        // running, accessible tab. A historical target cannot survive a browser restart.
         await this.refreshTabsOnly(actionClient, () => this.operations.isLive(epoch, actionClient));
         if (!this.operations.isLive(epoch, actionClient)) {
           return;
@@ -570,7 +574,9 @@ export class BrowserPanelController implements ReactiveController {
       if (!selectedTargetId) {
         return;
       }
-      await focusBrowserTab(actionClient, selectedTargetId);
+      if (options?.focusBrowserTab !== false) {
+        await focusBrowserTab(actionClient, selectedTargetId);
+      }
       if (!this.operations.isLive(epoch, actionClient)) {
         return;
       }
@@ -583,7 +589,7 @@ export class BrowserPanelController implements ReactiveController {
         this.operations.markNavigationReconciled(actionClient, selectedTargetId);
       }
     }, false);
-    if (!focused && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
+    if (!selectionSucceeded && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
       if (this.operations.hasPendingNavigation(client, previous.targetId)) {
         // The prior remote document changed while selection failed. Expose an
         // unavailable state instead of restoring a screenshot that no longer owns it.
