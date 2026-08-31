@@ -363,22 +363,25 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     const config = resolveExtensionTestConfig(root);
     rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
   }
-  const plans: Array<{ config: string; includePatterns?: string[]; roots: string[] }> = [
-    ...rootsByConfig,
-  ].flatMap(([config, roots]) => {
-    const testFiles = shouldSplitExtensionTestProcesses(config)
-      ? listExtensionTestFilesForRoots(roots)
-      : [];
-    const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
-    return chunks.length > 1
-      ? chunks.map((includePatterns) => ({ config, includePatterns, roots }))
-      : [{ config, roots }];
-  });
-  return plans.map(({ config, includePatterns, roots }, index) => {
+  const plans: Array<{ config: string; includePatterns?: string[] }> = [...rootsByConfig].flatMap(
+    ([config, roots]) => {
+      const testFiles = shouldSplitExtensionTestProcesses(config)
+        ? listExtensionTestFilesForRoots(roots)
+        : [];
+      const chunks =
+        testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
+      return chunks.length > 1
+        ? chunks.map((includePatterns) => ({ config, includePatterns }))
+        : [{ config }];
+    },
+  );
+  return plans.map(({ config, includePatterns }, index) => {
     const suffix = plans.length === 1 ? "" : `-${index + 1}`;
     const shard: ChangedNodeTestShard = {
       checkName: `checks-node-changed-extensions-config${suffix}`,
       configs: [config],
+      // No plans overlap in this row, so CI can scale the single process's worker budget.
+      planConcurrency: 1,
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
@@ -391,9 +394,6 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     }
     if (includePatterns) {
       shard.includePatterns = includePatterns;
-    }
-    if (roots.some((root) => SERIAL_CHANGED_TARGET_RE.test(`${root}/`))) {
-      shard.planConcurrency = 1;
     }
     return shard;
   });

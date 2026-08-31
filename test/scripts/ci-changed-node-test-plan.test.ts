@@ -432,6 +432,16 @@ describe("CI changed Node test plan", () => {
     );
   });
 
+  it("declares one-config extension jobs serial for the CI worker budget", () => {
+    const shards = createChangedExtensionFallbackShards([
+      "scripts/lib/ci-changed-node-test-plan.mts",
+    ]);
+
+    expect(shards.length).toBeGreaterThan(1);
+    expect(shards.every((shard) => shard.configs.length === 1 && !shard.targets)).toBe(true);
+    expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
+  });
+
   it("covers every extension config when the extension inventory changes", () => {
     expectAllExtensionConfigs(
       createChangedExtensionFallbackShards(["scripts/lib/changed-extensions.mts"]),
@@ -452,6 +462,7 @@ describe("CI changed Node test plan", () => {
       {
         checkName: "checks-node-changed-extensions-config",
         configs: ["test/vitest/vitest.extension-discord.config.ts"],
+        planConcurrency: 1,
         requiresDist: false,
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed-extensions-config",
