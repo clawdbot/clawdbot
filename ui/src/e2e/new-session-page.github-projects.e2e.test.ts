@@ -368,7 +368,7 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("chat.startup");
       await page
-        .getByText("Accepted by the Gateway. Waiting for its turn.", { exact: true })
+        .getByText("Message received. Waiting for the agent to start it.", { exact: true })
         .waitFor();
       const working = page.locator('.chat-working-indicator[role="status"]');
       await pollLocatorText(working).toContain("Preparing workspace…");
