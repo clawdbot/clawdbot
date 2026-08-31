@@ -225,12 +225,15 @@ export class CompilerInputSnapshot {
           parsed.files.map((file) => [portableRelativePath(this.rootDir, file), this.hash(file)]),
           inputs.map((file) => [file, this.hash(file)]),
         ],
-        (_key, value: unknown) =>
-          value === this.rootDir
+        (_key, value: unknown) => {
+          // TypeScript config paths use forward slashes even on Windows.
+          const normalized = typeof value === "string" ? path.normalize(value) : value;
+          return normalized === this.rootDir
             ? "."
-            : typeof value === "string" && value.startsWith(`${this.rootDir}${path.sep}`)
-              ? portableRelativePath(this.rootDir, value)
-              : value,
+            : typeof normalized === "string" && normalized.startsWith(`${this.rootDir}${path.sep}`)
+              ? portableRelativePath(this.rootDir, normalized)
+              : value;
+        },
       ),
     );
   }
