@@ -158,11 +158,12 @@ function encodeSqliteValue(value: unknown): unknown {
   throw new Error(`Git backup cannot encode SQLite value type ${typeof value}.`);
 }
 
-function serializeTable(
+async function serializeTableToFile(
   database: DatabaseSync,
   table: string,
+  outputPath: string,
   rowFilter?: (row: Record<string, unknown>) => boolean,
-): { content: string; rows: number } {
+): Promise<{ rows: number; sha256: string }> {
   const columns = readTableColumns(database, table);
   if (columns.length === 0) {
     throw new Error(`Git backup table has no readable columns: ${table}`);
@@ -177,19 +178,36 @@ function serializeTable(
        FROM ${quoteIdentifier(table)} ORDER BY ${orderBy}`,
   );
   statement.setReadBigInts(true);
-  const lines: string[] = [];
-  for (const rawRow of statement.iterate()) {
-    const source = rawRow as Record<string, unknown>;
-    if (rowFilter && !rowFilter(source)) {
-      continue;
+  // Stream each JSONL row to disk while hashing, instead of accumulating one
+  // in-memory string. Large agent databases can exceed V8's max string length
+  // (~512MB) when a table serialization is buffered whole, which surfaced as
+  // `RangeError: Invalid string length` on `git backup create`.
+  const handle = await fs.open(outputPath, "wx", 0o600);
+  const hash = createHash("sha256");
+  let rows = 0;
+  try {
+    for (const rawRow of statement.iterate()) {
+      const source = rawRow as Record<string, unknown>;
+      if (rowFilter && !rowFilter(source)) {
+        continue;
+      }
+      const encoded: Record<string, unknown> = {};
+      for (const column of columns) {
+        encoded[column.name] = encodeSqliteValue(source[column.name]);
+      }
+      const bytes = Buffer.from(`${JSON.stringify(encoded)}\n`, "utf8");
+      let written = 0;
+      while (written < bytes.length) {
+        const { bytesWritten } = await handle.write(bytes, written);
+        written += bytesWritten;
+      }
+      hash.update(bytes);
+      rows += 1;
     }
-    const encoded: Record<string, unknown> = {};
-    for (const column of columns) {
-      encoded[column.name] = encodeSqliteValue(source[column.name]);
-    }
-    lines.push(JSON.stringify(encoded));
+  } finally {
+    await handle.close();
   }
-  return { content: lines.length > 0 ? `${lines.join("\n")}\n` : "", rows: lines.length };
+  return { rows, sha256: hash.digest("hex") };
 }
 
 function schemaText(entries: SchemaEntry[], userVersion: number): string {
@@ -266,12 +284,12 @@ export async function dumpGitBackupDatabase(params: {
               );
             }
           : undefined;
-      const serialized = serializeTable(database, table, rowFilter);
-      await fs.writeFile(path.join(tablesPath, `${table}.jsonl`), serialized.content, {
-        encoding: "utf8",
-        mode: 0o600,
-      });
-      tables[table] = { rows: serialized.rows, sha256: sha256(serialized.content) };
+      tables[table] = await serializeTableToFile(
+        database,
+        table,
+        path.join(tablesPath, `${table}.jsonl`),
+        rowFilter,
+      );
     }
     const manifest: GitBackupManifest = {
       schemaVersion: 1,
@@ -621,16 +639,24 @@ export async function restoreGitBackupDirectory(params: {
     // their canonical empty schemas before enforcing database ownership.
     convergeRestoredSchema(database, restoreIdentity);
     validateRestoredOwner(database, stagedPath, restoreIdentity);
-    const tables = Object.entries(manifest.tables).map(([table, expected]) => {
-      const actual = serializeTable(database, table);
-      const actualSha256 = sha256(actual.content);
-      return {
-        table,
-        rows: actual.rows,
-        sha256: actualSha256,
-        ok: actual.rows === expected.rows && actualSha256 === expected.sha256,
-      };
-    });
+    const verifyTablesDirectory = path.join(stagingDirectory, ".verify-tables");
+    await fs.mkdir(verifyTablesDirectory, { recursive: true, mode: 0o700 });
+    const tables = await Promise.all(
+      Object.entries(manifest.tables).map(async ([table, expected]) => {
+        requireSafeTableName(table);
+        const actual = await serializeTableToFile(
+          database,
+          table,
+          path.join(verifyTablesDirectory, `${table}.jsonl`),
+        );
+        return {
+          table,
+          rows: actual.rows,
+          sha256: actual.sha256,
+          ok: actual.rows === expected.rows && actual.sha256 === expected.sha256,
+        };
+      }),
+    );
     if (tables.some((table) => !table.ok)) {
       throw new Error(`Restored Git backup does not match its table manifest: ${stagedPath}`);
     }

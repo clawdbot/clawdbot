@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -808,5 +809,53 @@ describe("Git-backed SQLite snapshots", () => {
     } finally {
       restored.close();
     }
+  });
+
+  it("streams a large table dump to disk instead of buffering one giant string", async () => {
+    const root = await tempRoot();
+    const source = path.join(root, "large.sqlite");
+    const dump = path.join(root, "dump");
+    await createFormatFixture(source);
+    const filler = "x".repeat(1_024);
+    const database = new DatabaseSync(source);
+    try {
+      const insert = database.prepare(
+        "INSERT INTO content (id, body, huge, bytes, optional) VALUES (?, ?, ?, ?, ?)",
+      );
+      // ~4 MB of serialized rows, enough to exercise the incremental write+hash
+      // path without buffering a single large in-memory string.
+      insert.run(1000, filler, 7n, Buffer.from([0]), null);
+      for (let id = 1001; id <= 4_000; id += 1) {
+        insert.run(id, `payload-${id}-${filler}`, BigInt(id), Buffer.from([id & 0xff]), "tag");
+      }
+    } finally {
+      database.close();
+    }
+
+    const manifest = await dumpGitBackupDatabase({
+      snapshotPath: source,
+      outputPath: dump,
+      identity: { role: "global" },
+    });
+    const contentPath = path.join(dump, "tables", "content.jsonl");
+    const stat = await fs.stat(contentPath);
+    const contentEntry = manifest.tables.content as { rows: number; sha256: string };
+    const { rows: statedRows, sha256: statedSha } = contentEntry;
+    expect(stat.size).toBeGreaterThan(1_000_000);
+    expect(statedRows).toBe(3_003);
+    expect(statedSha).toBe(
+      createHash("sha256")
+        .update(await fs.readFile(contentPath))
+        .digest("hex"),
+    );
+
+    // A successful restore round-trips the streamed tables against the manifest.
+    const restoredPath = path.join(root, "restored.sqlite");
+    const restored = await restoreGitBackupDirectory({
+      sourcePath: dump,
+      targetPath: restoredPath,
+      expectedIdentity: { role: "global" },
+    });
+    expect(restored.tables.find((entry) => entry.table === "content")?.ok).toBe(true);
   });
 });
