@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -82,7 +83,9 @@ function testGatewayCaller(
 ): NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]> {
   const operationalRunInstance = createOperationalRunInstanceRef("run-gateway-tool-test");
   testDelegatedAuthorities.push(claimAgentRunDelegatedAuthority(operationalRunInstance));
+  const context = {} as GatewayRequestContext;
   return {
+    gatewayContextResolver: () => context,
     ...identity,
     operationalRunInstance,
   };
@@ -96,7 +99,7 @@ describe("gateway tool defaults", () => {
 
   beforeEach(() => {
     releaseTestDelegatedAuthorities();
-    mocks.callGateway.mockClear();
+    mocks.callGateway.mockReset();
     mocks.deviceIdentityError = undefined;
     mocks.persistedDeviceIdentity = undefined;
     mocks.configState.value = {};

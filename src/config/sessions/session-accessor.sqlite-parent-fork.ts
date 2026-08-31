@@ -45,9 +45,10 @@ function formatParentForkTooLargeMessage(params: {
 export function planParentForkDecision(
   parentEntry: SessionEntry,
   transcriptEstimate?: SqliteTranscriptParentTokenEstimate,
-  options: { preferTranscriptEstimate?: boolean } = {},
+  options: { maxTokens?: number; preferTranscriptEstimate?: boolean } = {},
 ): SessionParentForkDecision {
-  const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
+  const maxTokens =
+    normalizePositiveTokenCount(options.maxTokens) ?? DEFAULT_PARENT_FORK_MAX_TOKENS;
   const parentTokens = options.preferTranscriptEstimate
     ? transcriptEstimate?.tokens
     : (resolveFreshSessionTotalTokens(parentEntry) ?? transcriptEstimate?.tokens);
@@ -75,6 +76,9 @@ export function estimateTranscriptPromptTokens(
   let latestUsageEstimateIsExactContext = false;
   let trailingBytes = 0;
   for (const event of selectParentForkTokenEstimateEvents(events)) {
+    if (isRecord(event) && isRecord(event.message) && event.message.excludeFromContext === true) {
+      continue;
+    }
     const serializedBytes = Buffer.byteLength(JSON.stringify(event)) + 1;
     byteEstimate += serializedBytes;
     if (!isRecord(event)) {

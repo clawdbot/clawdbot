@@ -82,6 +82,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   let attemptedFinalDelivery = false;
   let acceptedFinal = false;
   let finalDeliveryFailed = false;
+  let sessionWriterDeliveryRevoked = false;
   let channelTransformSuppressedFinal = false;
   const finalDeliveries: Promise<ReplyDispatchDeliveryOutcome>[] = [];
   let allQueuedFinalsObserved = true;
@@ -132,6 +133,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           }
         : {}),
     });
+    if (finalReply.sessionWriterDeliveryRevoked) {
+      sessionWriterDeliveryRevoked = true;
+      continue;
+    }
     if (finalReply.suppressionReason) {
       channelTransformSuppressedFinal ||= finalReply.suppressionReason === "channel_transform";
       continue;
@@ -283,6 +288,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !emptyFinalAllowedAsSilent &&
     !deliberateSilentTerminalReply &&
     !pendingContinuation &&
+    !sessionWriterDeliveryRevoked &&
     !channelTransformSuppressed &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
@@ -295,6 +301,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     // fallback skip the wait, so deliveries that legitimately outlive the turn
     // (queued same-session mirroring) cannot deadlock the gate on themselves.
     queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
+  }
+  if (queuedSettleResult === "settled") {
+    sessionWriterDeliveryRevoked ||= replies.some(
+      (reply) => !state.isSessionWriterDeliveryAuthorized(reply),
+    );
   }
   let counts = dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
@@ -359,7 +370,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const agentRunTerminalOutcome = state.getAgentRunTerminalOutcome();
   state.commitInboundDedupeIfClaimed();
   const messageInjectionAborted = state.replyOperationRunState.messageInjectionAborted === true;
-  const dispatchOutcome = queueCapRejected || messageInjectionAborted ? "skipped" : "completed";
+  const dispatchOutcome =
+    agentRunTerminalOutcome === "failed"
+      ? "error"
+      : queueCapRejected || messageInjectionAborted
+        ? "skipped"
+        : "completed";
   const dispatchReason = queueCapRejected
     ? "queue-cap"
     : messageInjectionAborted
@@ -374,7 +390,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     dispatchReason ? { reason: dispatchReason } : undefined,
   );
   state.recordProcessed(dispatchOutcome, dispatchReason ? { reason: dispatchReason } : undefined);
-  state.markIdle(queueCapRejected ? "message_queue_cap_rejected" : "message_completed");
+  state.markIdle(
+    dispatchOutcome === "error"
+      ? "message_error"
+      : queueCapRejected
+        ? "message_queue_cap_rejected"
+        : "message_completed",
+  );
   state.completeDispatchReplyOperation();
   const result = state.attachSourceReplyDeliveryMode({
     queuedFinal,

@@ -198,7 +198,8 @@ function listReloadRules(): ReloadRule[] {
     return cachedReloadRules;
   }
   // Channel docking: plugins contribute hot reload/no-op prefixes here.
-  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => {
+  const channelPlugins = listChannelPlugins();
+  const channelReloadRules: ReloadRule[] = channelPlugins.flatMap((plugin) => {
     const restartAction = plugin.reload?.accountScopedRestart
       ? (`restart-channel-account:${plugin.id}` as ReloadAction)
       : (`restart-channel:${plugin.id}` as ReloadAction);
@@ -223,7 +224,7 @@ function listReloadRules(): ReloadRule[] {
         ),
       );
   });
-  const channelPluginStateRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
+  const channelPluginStateRules: ReloadRule[] = channelPlugins.flatMap((plugin) => [
     {
       prefix: `plugins.entries.${plugin.id}`,
       kind: "hot",
@@ -257,11 +258,18 @@ function listReloadRules(): ReloadRule[] {
         ),
       ),
   );
-  const rules = [
+  const rules: ReloadRule[] = [
     ...BASE_RELOAD_RULES,
     ...pluginReloadRules,
     ...channelReloadRules,
     ...channelPluginStateRules,
+    // Channel snapshots capture the shared fallback. Fan out by default while
+    // preserving explicit plugin/channel policies above on equal-prefix ties.
+    {
+      prefix: "agents.defaults.mediaMaxMb",
+      kind: "hot",
+      actions: channelPlugins.map(({ id }): ReloadAction => `restart-channel:${id}`),
+    },
     ...BASE_RELOAD_RULES_TAIL,
   ];
   // Narrow config contracts must override broad owner fallbacks. Sort once per

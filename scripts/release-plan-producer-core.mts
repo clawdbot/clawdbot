@@ -7,6 +7,7 @@ import {
   collectPublishablePluginPackagesFromCandidates,
   type PluginPackageJson,
 } from "./lib/plugin-publication-collector.ts";
+import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   canonicalReleasePlanJson,
@@ -151,7 +152,7 @@ function findLockfileMapping(
 }
 
 function verifyYamlLockfile(lockfileText: string) {
-  const lines = lockfileText.split("\n");
+  const lines = pnpmLockfileDocuments(lockfileText).dependencies.split("\n");
   const body = (range: LineRange) => lines.slice(range.start + 1, range.end);
   if (lines.filter((line) => line === "lockfileVersion: '9.0'").length !== 1) {
     throw new Error("pnpm lockfile must use lockfileVersion 9.0");

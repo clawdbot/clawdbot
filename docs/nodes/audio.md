@@ -228,6 +228,7 @@ provider-wide rather than scoped to the audio model entry.
 - Mistral setup details: [Mistral](/providers/mistral).
 - SenseAudio picks up `SENSEAUDIO_API_KEY` when `provider: "senseaudio"` is used. Setup details: [SenseAudio](/providers/senseaudio).
 - Audio providers can use defaults under `tools.media.audio` or override `baseUrl`, `headers`, `providerOptions`, and limits on their `tools.media.models[]` entry.
+- Leave `tools.media.audio.language` unset for language autodetection. OpenAI-compatible transcription requests then omit the implicit English prompt; explicit custom prompts and language hints are preserved. Use transcription prompts for context or spelling in the audio's language, not instructions to the downstream agent.
 - The built-in audio size cap is 20MB. An entry-level `maxBytes` override can change it; oversize audio is skipped for that model and the next entry is tried.
 - Audio files below 1024 bytes are skipped before provider/CLI transcription.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
@@ -279,7 +280,8 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 - Known file-output modes are authoritative: an empty or missing inferred transcript file produces no transcript instead of falling back to CLI progress output.
 - For `parakeet-mlx`, use `--output-format txt` (or `all`) with `--output-dir` and the default `{filename}` output template. The upstream `PARAKEET_OUTPUT_FORMAT` and `PARAKEET_OUTPUT_TEMPLATE` environment variables are also honored. OpenClaw reads `<output-dir>/<media-basename>.txt`; the default `srt` format, other formats, and custom output templates continue to use stdout.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.
-- Preflight transcription only processes the **first** audio attachment for mention detection. Additional audio attachments are processed during the main media-understanding phase.
+- Preflight transcription only processes the **first** untranscribed audio attachment for mention detection, even when the main phase prefers the last attachment or processes all attachments. Additional audio attachments follow the configured policy during the main media-understanding phase; an empty preflight result does not mark an attachment as transcribed.
+- The preflight transcript stays in the model-facing message when later media or link processing adds context. A separate channel envelope does not replace that prepared text.
 
 ## Related
 

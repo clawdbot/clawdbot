@@ -2,6 +2,7 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSmsAccount } from "./accounts.js";
 import { smsPlugin } from "./channel.js";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import type { probeSmsAccount as probeSmsAccountType } from "./status.js";
@@ -84,6 +85,31 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("smsPlugin account removal", () => {
+  it("removes the default media cap without changing retained named accounts", () => {
+    const cfg = smsPlugin.config.deleteAccount?.({
+      accountId: "default",
+      cfg: {
+        agents: { defaults: { mediaMaxMb: 3 } },
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            mediaMaxMb: 1,
+            accounts: { support: { mediaMaxMb: 2 }, inherited: { enabled: true } },
+          },
+        },
+      },
+    });
+    if (!cfg) {
+      throw new Error("expected SMS account deletion result");
+    }
+    expect(resolveSmsAccount(cfg, "support").mediaMaxBytes).toBe(2 * 1024 * 1024);
+    expect(resolveSmsAccount(cfg, "inherited").mediaMaxBytes).toBe(3 * 1024 * 1024);
+  });
 });
 
 describe("smsPlugin status", () => {

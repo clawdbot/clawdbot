@@ -1,6 +1,5 @@
 /** Coordinates one direct compaction attempt through explicit lifecycle phases. */
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveCompactionFailureReason } from "./compact-reasons.js";
 import { executePreparedCompactionSession } from "./compaction-session-execution.js";
 import {
   prepareDirectCompactionAttempt,
@@ -24,11 +23,7 @@ export async function compactEmbeddedAgentSessionDirectOnce(
     runtime = await buildPreparedCompactionRuntime(preparation.value);
     return await executePreparedCompactionSession(runtime);
   } catch (err) {
-    const reason = resolveCompactionFailureReason({
-      reason: formatErrorMessage(err),
-      safeguardCancelReason: undefined,
-    });
-    return preparation.value.fail(reason, err);
+    return preparation.value.fail(formatErrorMessage(err), err);
   } finally {
     await runtime?.dispose();
   }

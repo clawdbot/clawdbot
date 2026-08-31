@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { isDefaultInstallIdentity, resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
@@ -16,7 +17,7 @@ import {
   renderGatewayServiceCleanupHints,
   type ExtraGatewayService,
 } from "../daemon/inspect.js";
-import { isLaunchctlNotLoaded } from "../daemon/launchd.js";
+import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { readWindowsStartupFallbackRuntimeForUpdate } from "../daemon/schtasks.js";
@@ -26,6 +27,7 @@ import {
   readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
+import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { SERVICE_PROXY_ENV_KEYS } from "../daemon/service-env.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import {
@@ -34,6 +36,7 @@ import {
 } from "../daemon/service-managed-env.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import {
+  assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentOverride,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
@@ -52,7 +55,6 @@ import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.j
 import { isTruthyEnvValue } from "../infra/env.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
-import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { resolveGatewayDaemonRuntime, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -126,47 +128,18 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
 ]);
 const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
 const DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS = 100;
-type LaunchctlCleanupAttempt =
-  | { status: "succeeded"; stdout: string; stderr: string }
-  | { status: "failed"; stdout: string; stderr: string; timedOut: boolean };
-
-const runLaunchctlQuietly = async (
-  args: string[],
-  timeoutMs = DOCTOR_LAUNCHCTL_TIMEOUT_MS,
-): Promise<LaunchctlCleanupAttempt> => {
-  try {
-    const output = await runExec("launchctl", args, {
-      logOutput: false,
-      timeoutMs,
-    });
-    return { status: "succeeded", ...output };
-  } catch (error) {
-    const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
-    const message = typeof record.message === "string" ? record.message : "";
-    return {
-      status: "failed",
-      stdout: typeof record.stdout === "string" ? record.stdout : "",
-      stderr: typeof record.stderr === "string" ? record.stderr : "",
-      timedOut:
-        record.timedOut === true ||
-        record.noOutputTimedOut === true ||
-        /\bcommand timed out\b/i.test(message),
-    };
-  }
-};
-
 async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promise<boolean> {
   const deadline = Date.now() + DOCTOR_LAUNCHCTL_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1, deadline - Date.now());
-    const probe = await runLaunchctlQuietly(
+    const probe = await execLaunchctl(
       ["print", serviceTarget],
       Math.min(DOCTOR_LAUNCHCTL_TIMEOUT_MS, remainingMs),
     );
-    if (probe.status === "failed") {
+    if (probe.code !== 0) {
       // A successful print (including a stopped job) means launchd still owns
       // the label. Unknown errors and probe timeouts stay fail-closed.
-      return !probe.timedOut && isLaunchctlNotLoaded(probe);
+      return isLaunchctlNotLoaded(probe);
     }
     const delayMs = Math.min(DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS, deadline - Date.now());
     if (delayMs <= 0) {
@@ -199,13 +172,15 @@ async function buildExpectedGatewayServicePlan(params: {
   runtime: GatewayDaemonRuntime;
   runtimePath?: string;
 }) {
+  const managed = resolveManagedGatewayServiceCommand(params.command);
   return buildGatewayInstallPlan({
     env: params.serviceInstallEnv,
     port: params.port,
     runtime: params.runtime,
     runtimePath: params.runtimePath,
-    existingEnvironment: params.command.environment,
-    existingEnvironmentValueSources: params.command.environmentValueSources,
+    existingCommand: params.command,
+    existingEnvironment: managed?.environment,
+    existingEnvironmentValueSources: managed?.environmentValueSources,
     warn: (message, title) => note(message, title),
     config: params.cfg,
   });
@@ -301,34 +276,24 @@ async function readWindowsGatewayRuntimeForUpdateRepair(params: {
   return await params.service.readRuntime(params.env).catch(() => null);
 }
 
-async function suppressRunningSystemdExecStartRepairs(params: {
-  command: GatewayServiceCommandConfig;
-  issues: { code: string }[];
-}): Promise<boolean> {
-  if (process.platform !== "linux") {
-    return false;
+async function resolveSystemdServiceRewriteBlock(
+  command: GatewayServiceCommandConfig,
+  issues: { code: string }[],
+): Promise<string | undefined> {
+  if (process.platform !== "linux" || !issues.some(isExecStartRepairIssue)) {
+    return undefined;
   }
-  if (!params.issues.some(isExecStartRepairIssue)) {
-    return false;
+  const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
+  const scope = resolveSystemdScopeFromServicePath(command.sourcePath);
+  const active = await isSystemdUnitActive(process.env, unitName, scope);
+  if (!active.ok) {
+    return `Could not determine whether gateway service ${unitName} is active: ${active.error}. Leaving supervisor metadata unchanged. Check \`systemctl${scope === "user" ? " --user" : ""} status ${unitName}\` and rerun doctor.`;
   }
-  const unitName = resolveSystemdUnitNameFromServicePath(params.command.sourcePath);
-  const scope = resolveSystemdScopeFromServicePath(params.command.sourcePath);
-  if (!(await isSystemdUnitActive(process.env, unitName, scope))) {
-    return false;
+  if (!active.value) {
+    return undefined;
   }
-  const before = params.issues.length;
-  params.issues.splice(
-    0,
-    params.issues.length,
-    ...params.issues.filter((issue) => !isExecStartRepairIssue(issue)),
-  );
-  if (params.issues.length !== before) {
-    note(
-      `Gateway service ${unitName} is running; skipped command/entrypoint rewrites for this doctor pass.`,
-      "Gateway service config",
-    );
-  }
-  return true;
+  issues.splice(0, issues.length, ...issues.filter((issue) => !isExecStartRepairIssue(issue)));
+  return `Gateway service ${unitName} is running; skipped command/entrypoint rewrites and leaving supervisor metadata unchanged. Stop the service first or use \`openclaw gateway install --force\` when you want to replace the active launcher.`;
 }
 
 async function filterInactiveExtraGatewayServices(
@@ -343,7 +308,8 @@ async function filterInactiveExtraGatewayServices(
       activeOrLegacy.push(svc);
       continue;
     }
-    if (await isSystemdUnitActive(process.env, svc.label, svc.scope)) {
+    const active = await isSystemdUnitActive(process.env, svc.label, svc.scope);
+    if (!active.ok || active.value) {
       activeOrLegacy.push(svc);
     }
   }
@@ -397,8 +363,8 @@ async function cleanupLegacyLaunchdService(params: {
   plistPath: string;
 }): Promise<{ status: "removed"; destination?: string } | { status: "failed"; reason: string }> {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  await runLaunchctlQuietly(["bootout", domain, params.plistPath]);
-  await runLaunchctlQuietly(["unload", params.plistPath]);
+  await execLaunchctl(["bootout", domain, params.plistPath], DOCTOR_LAUNCHCTL_TIMEOUT_MS);
+  await execLaunchctl(["unload", params.plistPath], DOCTOR_LAUNCHCTL_TIMEOUT_MS);
 
   // bootout/unload can return before launchd finishes stopping the job. A plist
   // must stay in place unless a bounded print probe observes the label gone.
@@ -563,7 +529,9 @@ export async function maybeRepairGatewayServiceConfig(
   }
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;
   note(
-    formatGatewayHeapLimitReport(inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS)),
+    formatGatewayHeapLimitReport(
+      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, {}, command.programArguments),
+    ),
     "Gateway heap",
   );
   const managedWrapperPath = managedDefinition.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
@@ -607,7 +575,7 @@ export async function maybeRepairGatewayServiceConfig(
     runtimeChoice === "bun" ? managedDefinition.programArguments[0] : undefined;
   const expectedPlan = await buildExpectedGatewayServicePlan({
     cfg,
-    command: managedDefinition,
+    command,
     serviceInstallEnv,
     port,
     runtime: runtimeChoice,
@@ -639,14 +607,14 @@ export async function maybeRepairGatewayServiceConfig(
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
-  const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
+  const systemNodePath = systemNodeInfo?.status === "supported" ? systemNodeInfo.path : null;
   if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
     const warning = renderSystemNodeWarning(systemNodeInfo);
     if (warning) {
       note(warning, "Gateway runtime");
     } else {
       note(
-        "System Node 22 LTS (22.22.3+) or Node 24.15+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+        `System Node ${SUPPORTED_NODE_VERSIONS} not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.`,
         "Gateway runtime",
       );
     }
@@ -656,7 +624,7 @@ export async function maybeRepairGatewayServiceConfig(
     needsNodeRuntime && systemNodePath
       ? await buildExpectedGatewayServicePlan({
           cfg,
-          command: managedDefinition,
+          command,
           serviceInstallEnv,
           port,
           runtime: "node",
@@ -685,10 +653,10 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
 
-  const serviceRewriteBlocked = await suppressRunningSystemdExecStartRepairs({
-    command,
-    issues: audit.issues,
-  });
+  const serviceRewriteBlock = await resolveSystemdServiceRewriteBlock(command, audit.issues);
+  if (serviceRewriteBlock) {
+    note(serviceRewriteBlock, "Gateway service config");
+  }
 
   const hasEntrypointMismatch = audit.issues.some(
     (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
@@ -718,6 +686,9 @@ export async function maybeRepairGatewayServiceConfig(
     ),
   );
   note(consolidatedLines.join("\n"), "Gateway service config");
+  if (audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)) {
+    return cfg;
+  }
 
   const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
   const needsAggressive = aggressiveIssues.length > 0;
@@ -734,11 +705,7 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
 
-  if (serviceRewriteBlocked) {
-    note(
-      "Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
-      "Gateway service config",
-    );
+  if (serviceRewriteBlock) {
     return cfg;
   }
 
@@ -808,6 +775,24 @@ export async function maybeRepairGatewayServiceConfig(
         "Gateway service config",
       );
     }
+    return cfg;
+  }
+  try {
+    // Installed and planned environments can select different state files. Check
+    // both before token persistence; native publication still revalidates under locks.
+    for (const environment of [
+      mergeGatewayServiceEnv(serviceInstallEnv, command),
+      expectedRuntimePlan.environment,
+    ]) {
+      const capability = await service
+        .readDefinitionMutationCapability?.({ env: serviceInstallEnv, environment })
+        .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+      if (capability) {
+        assertServiceDefinitionWritable(capability);
+      }
+    }
+  } catch (err) {
+    runtime.error(`Gateway service repair blocked: ${String(err)}`);
     return cfg;
   }
   const serviceEmbeddedToken = readEmbeddedGatewayToken(managedDefinition);
@@ -920,7 +905,7 @@ export async function maybeRepairGatewayServiceConfig(
   const updatedPort = resolveGatewayPort(cfgForServiceInstall, process.env);
   const updatedPlan = await buildExpectedGatewayServicePlan({
     cfg: cfgForServiceInstall,
-    command: managedDefinition,
+    command,
     serviceInstallEnv,
     port: updatedPort,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
@@ -1097,7 +1082,7 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
   if (!systemOwnsGateway) {
     note(
       [
-        "The system-scope unit is not both running and enabled at boot, so the",
+        "Could not verify the system-scope unit is both running and enabled at boot, so the",
         "user-scope unit may be your working gateway. Not removing anything",
         "automatically.",
         "If the system-scope unit is the one you want, activate it and re-run doctor:",
@@ -1111,7 +1096,7 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
   }
   note(
     [
-      "The system-scope unit is the active or boot-enabled supervisor and is",
+      "The system-scope unit is the active and boot-enabled supervisor and is",
       "treated as authoritative; the user-scope unit is the redundant leftover.",
     ].join("\n"),
     "System-scope unit owns the gateway",

@@ -40,7 +40,6 @@ import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
   peekDiagnosticSessionState,
-  pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
 import {
@@ -211,21 +210,21 @@ describe("diagnostic session state pruning", () => {
     expect(diagnosticSessionStates.size).toBe(1);
   });
 
-  it("caps tracked session states to a bounded max", () => {
-    const now = Date.now();
-    for (let i = 0; i < 2001; i += 1) {
-      diagnosticSessionStates.set(`session-${i}`, {
-        sessionId: `session-${i}`,
-        lastActivity: now + i,
-        generation: 0,
-        state: "idle",
-        queueDepth: 1,
-      });
-    }
-    pruneDiagnosticSessionStates(now + 2002, true);
+  it.each(["session-0", ""])(
+    "caps tracked session states when the oldest key is %j",
+    (oldestKey) => {
+      const now = Date.now();
+      for (let i = 0; i < 2001; i += 1) {
+        vi.setSystemTime(now + i);
+        getDiagnosticSessionState({
+          sessionKey: i === 0 ? oldestKey : `session-${i}`,
+        }).queueDepth = 1;
+      }
 
-    expect(diagnosticSessionStates.size).toBe(2000);
-  });
+      expect(diagnosticSessionStates.size).toBe(2000);
+      expect(diagnosticSessionStates.has(oldestKey)).toBe(false);
+    },
+  );
 
   it("reuses keyed session state when later looked up by sessionId", () => {
     const keyed = getDiagnosticSessionState({

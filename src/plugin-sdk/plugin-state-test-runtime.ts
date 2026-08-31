@@ -17,6 +17,7 @@ export {
 export {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
+  listChannelIngressQueueAccountIdsForTests,
 } from "./channel-ingress-test-runtime.js";
 export { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 export type { DB as OpenClawStateKyselyDatabaseForTests } from "../state/openclaw-state-db.generated.js";

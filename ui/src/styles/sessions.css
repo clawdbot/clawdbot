@@ -713,40 +713,6 @@
   white-space: nowrap;
 }
 
-/* Context meter: totalTokens vs the model context window. */
-.session-context-meter {
-  display: block;
-  width: 84px;
-  height: 3px;
-  overflow: hidden;
-  background: var(--bg-hover);
-  border-radius: var(--radius-full);
-}
-
-.session-context-meter__fill {
-  display: block;
-  height: 100%;
-  background: currentColor;
-  border-radius: inherit;
-}
-
-.session-context-meter--ok {
-  color: var(--ok);
-}
-
-/* Stale token snapshots keep a neutral meter; they must not read as danger. */
-.session-context-meter--stale {
-  color: var(--muted);
-}
-
-.session-context-meter--warn {
-  color: var(--warn);
-}
-
-.session-context-meter--danger {
-  color: var(--danger);
-}
-
 /* Actions cell: details disclosure + row tools */
 .session-actions-col {
   width: 76px;

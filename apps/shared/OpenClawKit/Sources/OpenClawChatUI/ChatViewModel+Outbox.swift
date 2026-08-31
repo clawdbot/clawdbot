@@ -826,11 +826,11 @@ extension OpenClawChatViewModel {
                 break
             }
             guard next.branchEpoch == next.scopeBranchEpoch else {
-                _ = await outbox.markCommandFailedIfPresent(
-                    id: next.id,
-                    attemptVersion: next.attemptVersion,
+                _ = await self.failOutboxCommand(
+                    next,
+                    outbox: outbox,
                     retryCount: next.retryCount,
-                    lastError: "Session branch changed; review and retry this message.")
+                    reason: "Session branch changed; review and retry this message.")
                 continue
             }
             if self.transport.outboxRequiresSessionRoutingContract,
@@ -982,7 +982,11 @@ extension OpenClawChatViewModel {
         _ command: OpenClawChatOutboxCommand,
         outbox: any OpenClawChatCommandOutbox) async -> OutboxFlushDisposition
     {
-        let update = await self.parkOutboxCommandWithUnconfirmedDelivery(command, outbox: outbox)
+        let update = await self.failOutboxCommand(
+            command,
+            outbox: outbox,
+            retryCount: command.retryCount,
+            reason: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
         self.applyTransportHealth(false)
         guard update == .updated else { return .stop }
         return .stopAndReconcile(Self.deliveryTarget(for: command))
@@ -1001,23 +1005,29 @@ extension OpenClawChatViewModel {
             agentID: command.agentID)
     }
 
-    private func parkOutboxCommandWithUnconfirmedDelivery(
+    private func failOutboxCommand(
         _ command: OpenClawChatOutboxCommand,
-        outbox: any OpenClawChatCommandOutbox) async -> OpenClawChatOutboxUpdateResult
+        outbox: any OpenClawChatCommandOutbox,
+        retryCount: Int,
+        reason: String) async -> OpenClawChatOutboxUpdateResult
     {
         let update = await outbox.markCommandFailedIfPresent(
             id: command.id,
             attemptVersion: command.attemptVersion,
-            retryCount: command.retryCount,
-            lastError: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
+            retryCount: retryCount,
+            lastError: reason)
         switch update {
         case .updated:
-            self.setOutboxState(
-                .failed(reason: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError),
-                forCommandID: command.id)
-        case .missing, .confirmed:
-            self.clearOutboxState(forCommandID: command.id)
-        case .superseded:
+            if let messageID = self.outboxMessageIDsByCommandID[command.id] {
+                // The retry action needs the same failed version as its badge;
+                // history may stay unavailable after this durable transition.
+                var failed = command
+                failed.status = .failed
+                failed.retryCount = retryCount
+                failed.lastError = reason
+                self.mapOutboxCommand(failed, to: messageID)
+            }
+        case .missing, .confirmed, .superseded:
             self.clearOutboxState(forCommandID: command.id)
         case .unavailable:
             self.applyTransportHealth(false)
@@ -1029,22 +1039,11 @@ extension OpenClawChatViewModel {
         _ command: OpenClawChatOutboxCommand,
         outbox: any OpenClawChatCommandOutbox) async -> Bool
     {
-        let update = await outbox.markCommandFailedIfPresent(
-            id: command.id,
-            attemptVersion: command.attemptVersion,
+        await self.failOutboxCommand(
+            command,
+            outbox: outbox,
             retryCount: command.retryCount,
-            lastError: OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError)
-        guard update != .unavailable else {
-            self.applyTransportHealth(false)
-            return false
-        }
-        if update == .updated {
-            let reason = "Gateway session routing changed; review and retry this message."
-            self.setOutboxState(.failed(reason: reason), forCommandID: command.id)
-        } else {
-            self.clearOutboxState(forCommandID: command.id)
-        }
-        return true
+            reason: OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError) != .unavailable
     }
 
     /// Gateway rejections ("error"/"timeout" send acks) burn a retry attempt
@@ -1058,25 +1057,13 @@ extension OpenClawChatViewModel {
         outboxLogger.error("outbox flush send rejected \(reason, privacy: .public)")
         let attempts = command.retryCount + 1
         if attempts >= Self.maxOutboxSendAttempts {
-            let update = await outbox.markCommandFailedIfPresent(
-                id: command.id,
-                attemptVersion: command.attemptVersion,
-                retryCount: attempts,
-                lastError: reason)
-            guard update != .unavailable else {
-                self.applyTransportHealth(false)
-                return false
-            }
-            if update == .updated {
-                self.setOutboxState(.failed(reason: reason), forCommandID: command.id)
-            } else {
-                // Canonical history may have removed the claimed row while
-                // the rejection was in flight.
-                self.clearOutboxState(forCommandID: command.id)
-            }
             // Terminal failure needs user action; let younger commands
             // flush instead of blocking behind it forever.
-            return true
+            return await self.failOutboxCommand(
+                command,
+                outbox: outbox,
+                retryCount: attempts,
+                reason: reason) != .unavailable
         }
         _ = await outbox.markCommandQueued(
             id: command.id,
@@ -1235,6 +1222,8 @@ extension OpenClawChatViewModel {
             .sending
         case .awaitingConfirmation:
             .confirming
+        case .failed where command.lastError == OpenClawChatSQLiteTranscriptCache.outboxChangedTargetError:
+            .failed(reason: "Gateway session routing changed; review and retry this message.")
         case .failed:
             .failed(reason: OpenClawChatSQLiteTranscriptCache.outboxDisplayError(command.lastError))
         }

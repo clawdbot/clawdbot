@@ -1,7 +1,4 @@
-import {
-  routeFromBindingRecord,
-  routeToDeliveryFields,
-} from "../../../channels/route-projection.js";
+import { deliveryContextFromConversation } from "../../../channels/route-projection.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -99,7 +96,7 @@ export async function bindThreadForSubagentSpawn(params: {
           "Unable to create or bind a thread for this subagent session. Session mode is unavailable for this target.",
       };
     }
-    const deliveryOrigin = routeToDeliveryFields(routeFromBindingRecord(binding)).deliveryContext;
+    const deliveryOrigin = deliveryContextFromConversation(binding.conversation);
     return {
       status: "ok",
       ...(deliveryOrigin ? { deliveryOrigin } : {}),

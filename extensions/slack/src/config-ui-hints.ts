@@ -103,7 +103,7 @@ export const slackChannelConfigUiHints = {
   },
   execApprovals: {
     label: "Slack Exec Approvals",
-    help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this Slack account.",
+    help: 'Slack-native exec approval routing and approver authorization. Set enabled to "auto" or true to enable DM-first native approvals when approvers can be resolved for this Slack account; unset or false disables them.',
   },
   presenceEvents: {
     label: "Slack Presence Events",
@@ -127,7 +127,7 @@ export const slackChannelConfigUiHints = {
   },
   "execApprovals.enabled": {
     label: "Slack Exec Approvals Enabled",
-    help: 'Controls Slack native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',
+    help: 'Controls Slack native exec approvals for this account: "auto" or true enables DM-first native approvals when approvers can be resolved; unset or false disables them.',
   },
   "execApprovals.approvers": {
     label: "Slack Exec Approval Approvers",

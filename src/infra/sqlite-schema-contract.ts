@@ -138,8 +138,14 @@ export function collectSqliteSchemaIssues(
         !allowedMissingTables.has(tableName),
       ),
     );
+    const actualIndexFingerprints = new Set(
+      actualTable.indexes.map((index) => JSON.stringify(index)),
+    );
+    const expectedIndexFingerprints = new Set(
+      expectedTable.indexes.map((index) => JSON.stringify(index)),
+    );
     for (const expectedIndex of expectedTable.indexes) {
-      if (!actualTable.indexes.some((actualIndex) => isEqual(actualIndex, expectedIndex))) {
+      if (!actualIndexFingerprints.has(JSON.stringify(expectedIndex))) {
         const objectName = expectedIndex.name ?? tableName;
         const namedIndexPresent = expectedIndex.name
           ? actualTable.indexes.some((actualIndex) => actualIndex.name === expectedIndex.name)
@@ -159,10 +165,7 @@ export function collectSqliteSchemaIssues(
       }
     }
     for (const actualIndex of actualTable.indexes) {
-      if (
-        actualIndex.unique === 1 &&
-        !expectedTable.indexes.some((expectedIndex) => isEqual(actualIndex, expectedIndex))
-      ) {
+      if (actualIndex.unique === 1 && !expectedIndexFingerprints.has(JSON.stringify(actualIndex))) {
         const objectName = actualIndex.name ?? tableName;
         add(
           "unexpected-unique-index",
@@ -190,7 +193,11 @@ export function collectSqliteSchemaIssues(
       ) {
         continue;
       }
-      if (!actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, expectedTrigger))) {
+      if (
+        !actualTable.triggers.some((actualTrigger) =>
+          isEqualTrigger(actualTrigger, expectedTrigger),
+        )
+      ) {
         add("missing-or-drifted-trigger", expectedTrigger.name);
       }
     }
@@ -205,7 +212,9 @@ export function collectSqliteSchemaIssues(
       }
       for (const canonicalTrigger of triggerGroup.triggers) {
         if (
-          !actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, canonicalTrigger))
+          !actualTable.triggers.some((actualTrigger) =>
+            isEqualTrigger(actualTrigger, canonicalTrigger),
+          )
         ) {
           add("missing-or-drifted-trigger", canonicalTrigger.name);
         }
@@ -214,10 +223,10 @@ export function collectSqliteSchemaIssues(
     for (const actualTrigger of actualTable.triggers) {
       if (
         !expectedTable.triggers.some((expectedTrigger) =>
-          isEqual(actualTrigger, expectedTrigger),
+          isEqualTrigger(actualTrigger, expectedTrigger),
         ) &&
         !optionalCanonicalTriggers.some((canonicalTrigger) =>
-          isEqual(actualTrigger, canonicalTrigger),
+          isEqualTrigger(actualTrigger, canonicalTrigger),
         )
       ) {
         add("unexpected-trigger", actualTrigger.name);
@@ -404,9 +413,9 @@ function collectSqliteTableContract(
   }
 
   const quotedTable = quoteSqliteIdentifier(tableName);
-  const tableList = (database.prepare("PRAGMA table_list").all() as SqliteTableListRow[]).find(
-    (entry) => entry.name === tableName,
-  );
+  const tableList = (
+    database.prepare(`PRAGMA table_list(${quotedTable})`).all() as SqliteTableListRow[]
+  ).find((entry) => entry.name === tableName);
   if (!tableList) {
     throw new Error(`Could not inspect SQLite table options for ${tableName}.`);
   }
@@ -492,7 +501,7 @@ function compareTableDefinitions(
       add("column-definition-drift", objectName);
     }
   }
-  if (!isEqual(actual.constraints, expected.constraints)) {
+  if (JSON.stringify(actual.constraints) !== JSON.stringify(expected.constraints)) {
     add("table-constraint-drift", tableName);
   }
   return issues;
@@ -579,8 +588,8 @@ function sqliteIndexTermKind(cid: number): SqliteIndexTermContract["kind"] {
   return cid === -2 ? "expression" : cid === -1 ? "rowid" : "column";
 }
 
-function isEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+function isEqualTrigger(left: SqliteSchemaRow, right: SqliteSchemaRow): boolean {
+  return left.name === right.name && left.sql === right.sql;
 }
 
 function compareJson(left: unknown, right: unknown): number {

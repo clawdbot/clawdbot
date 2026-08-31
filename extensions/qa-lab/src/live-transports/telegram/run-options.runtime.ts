@@ -17,6 +17,10 @@ export function resolveTelegramQaRunOptions(
   repoRoot: string;
   providerMode: QaProviderMode;
 } {
+  const credentialSource = opts.credentialSource?.trim().toLowerCase() || "convex";
+  if (credentialSource !== "convex") {
+    throw new Error("Telegram QA supports only --credential-source convex.");
+  }
   return {
     repoRoot: path.resolve(opts.repoRoot ?? process.cwd()),
     outputDir: resolveRepoRelativeOutputDir(
@@ -35,7 +39,7 @@ export function resolveTelegramQaRunOptions(
     scenarioIds: opts.scenarioIds,
     listScenarios: opts.listScenarios,
     sutAccountId: opts.sutAccountId,
-    credentialSource: opts.credentialSource?.trim(),
+    credentialSource,
     credentialRole: opts.credentialRole?.trim(),
   };
 }

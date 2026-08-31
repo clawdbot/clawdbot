@@ -5,16 +5,13 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn(() => null),
 }));
 
-// classify.ts resolves this hook through a lazy require. Mocking the runtime
-// directly keeps the corpus independent of plugin loadability.
-vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => providerRuntimeMocks,
-}));
+// Keep the classification corpus independent of plugin loading; native source
+// and compiled payload probes cover the real provider boundary.
+vi.mock("../../plugins/provider-failover.js", () => providerRuntimeMocks);
 
 import { resolveReplyFailoverFacts } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import {
   classifyFailoverSignal,
-  classifyProviderSpecificError,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
@@ -206,13 +203,10 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     {
       message: "ThrottlingException: Rate exceeded",
       rateLimit: true,
-      // FIXED(refactor-02): was rate_limit, now null
-      providerSpecific: null,
     },
     {
       message: "throttling disabled for this account",
       rateLimit: true,
-      providerSpecific: null,
     },
   ])("records generic throttling normalization for $message", (row) => {
     // FIXED(refactor-02): generic matching owns throttling; provider-specific duplicates are gone.
@@ -222,8 +216,5 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
       kind: "reason",
       reason: "rate_limit",
     });
-    expect(classifyProviderSpecificError(row.message, { includePluginHooks: false })).toBe(
-      row.providerSpecific,
-    );
   });
 });

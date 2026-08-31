@@ -25,7 +25,7 @@ type UsageSessionQueryTarget = {
   providerOverride?: string;
   origin?: { provider?: string };
   model?: string;
-  contextWeight?: unknown;
+  hasContextWeight?: boolean;
   usage?: {
     totalTokens?: number;
     totalCost?: number;
@@ -183,7 +183,7 @@ type UsageQueryPredicate = (session: UsageSessionQueryTarget) => boolean;
 const HAS_PREDICATES: Readonly<Record<string, UsageQueryPredicate>> = {
   tools: (session) => (session.usage?.toolUsage?.totalCalls ?? 0) > 0,
   errors: (session) => (session.usage?.messageCounts?.errors ?? 0) > 0,
-  context: (session) => Boolean(session.contextWeight),
+  context: (session) => session.hasContextWeight === true,
   usage: (session) => Boolean(session.usage),
   model: (session) => getSessionModels(session).length > 0,
   provider: (session) => getSessionProviders(session).length > 0,

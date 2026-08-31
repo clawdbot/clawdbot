@@ -13,6 +13,7 @@ import {
   readQaScorecardTaxonomyReport,
   type QaScorecardTaxonomyReport,
 } from "./scorecard-taxonomy.js";
+import { shellQuote } from "./shell-quote.js";
 
 type QaCoverageScenarioSummary = {
   id: string;
@@ -31,6 +32,7 @@ type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
   executionKind: QaSeedScenarioWithSource["execution"]["kind"];
   executionPath?: string;
   runtimePairLane?: string;
+  requiredChannelDriver?: string;
   requiredProviderMode?: string;
   requiredProvider?: string;
   requiredModel?: string;
@@ -145,6 +147,7 @@ function summarizeScenarioSearchMatch(
       channels[0],
     ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
     runtimePairLane: scenario.runtimePairLane,
+    requiredChannelDriver: stringifyConfigValue(config.requiredChannelDriver),
     requiredProviderMode: resolveQaScenarioRequiredProviderMode(scenario),
     requiredProvider: stringifyConfigValue(config.requiredProvider),
     requiredModel: stringifyConfigValue(config.requiredModel),
@@ -393,14 +396,18 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
 
 function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
   const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
-  const { channel, requiredProviderMode } = matches[0]!;
-  const channelArg =
-    channel && channel !== "qa-channel" ? ` --channel-driver live --channel ${channel}` : "";
+  const { channel, requiredChannelDriver, requiredProviderMode } = matches[0]!;
+  const channelArg = channel && channel !== "qa-channel" ? ` --channel ${channel}` : "";
+  const driverArg = requiredChannelDriver
+    ? ` --channel-driver ${shellQuote(requiredChannelDriver)}`
+    : channelArg
+      ? " --channel-driver live"
+      : "";
   const providerModeArg =
     requiredProviderMode && requiredProviderMode !== DEFAULT_QA_LIVE_PROVIDER_MODE
       ? ` --provider-mode ${requiredProviderMode}`
       : "";
-  return `pnpm openclaw qa suite${channelArg}${providerModeArg} ${scenarioArgs}`;
+  return `pnpm openclaw qa suite${driverArg}${channelArg}${providerModeArg} ${scenarioArgs}`;
 }
 
 function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
@@ -409,6 +416,7 @@ function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
     const key = JSON.stringify([
       match.executionKind,
       match.channel,
+      match.requiredChannelDriver,
       match.requiredProviderMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
     ]);
     const group = groups.get(key) ?? [];

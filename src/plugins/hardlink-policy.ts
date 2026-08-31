@@ -1,7 +1,7 @@
 /** Enforces plugin root hardlink policy with bundled and immutable Nix-store exceptions. */
 import path from "node:path";
 import { resolveIsNixMode } from "../config/paths.js";
-import { safeRealpathSync } from "./path-safety.js";
+import { pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const NIX_STORE_ROOT = "/nix/store";
@@ -16,8 +16,8 @@ const NIX_STORE_ROOT = "/nix/store";
 // - /nix/store in OPENCLAW_NIX_MODE: immutable Nix package outputs, where
 //   hardlinked files are normal package-store layout rather than user mutation.
 /** Returns true when a plugin root resolves inside the immutable Nix store. */
-function isNixStorePluginRoot(rootDir: string, realpathCache?: Map<string, string>): boolean {
-  const rootRealPath = safeRealpathSync(rootDir, realpathCache) ?? path.resolve(rootDir);
+function isNixStorePluginRoot(rootDir: string): boolean {
+  const rootRealPath = pluginCacheRealpathSync(rootDir) ?? path.resolve(rootDir);
   return rootRealPath === NIX_STORE_ROOT || rootRealPath.startsWith(`${NIX_STORE_ROOT}/`);
 }
 
@@ -31,7 +31,7 @@ export function shouldRejectHardlinkedPluginFiles(params: {
   if (params.origin === "bundled") {
     return false;
   }
-  if (resolveIsNixMode(params.env) && isNixStorePluginRoot(params.rootDir, params.realpathCache)) {
+  if (resolveIsNixMode(params.env) && isNixStorePluginRoot(params.rootDir)) {
     return false;
   }
   return true;
