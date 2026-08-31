@@ -84,14 +84,18 @@ export class DraftRepositoryController {
       this.worktreeValue = false;
       this.preferredWorktreeRestore = preference?.worktree === true;
     }
-    this.preferredBaseRefRestore = preference?.baseRef ?? "";
-    this.worktreeNameValue = preference?.worktreeName ?? "";
-    this.detailsSelectedByUser = false;
+    if (!this.detailsSelectedByUser) {
+      this.preferredBaseRefRestore = preference?.baseRef ?? "";
+      this.worktreeNameValue = preference?.worktreeName ?? "";
+    }
     if (!this.matchesCurrentRepo()) {
       // Retire the old folder's RPC before it can consume the new preference.
       this.invalidate();
     } else if (this.repositoryValue.kind !== "checking") {
-      this.adoptResolvedRepository(this.repositoryValue, this.baseRefEditGeneration);
+      this.adoptResolvedRepository(
+        this.repositoryValue,
+        this.detailsSelectedByUser ? undefined : this.baseRefEditGeneration,
+      );
     }
   }
 
@@ -232,7 +236,7 @@ export class DraftRepositoryController {
       });
   }
 
-  private adoptResolvedRepository(state: ResolvedRepository, baseRefEditGeneration: number) {
+  private adoptResolvedRepository(state: ResolvedRepository, baseRefEditGeneration?: number) {
     // Discovery owns restore/rejection for both immediate and RPC results;
     // Read the current preference: group defaults and user edits can arrive
     // while an RPC is pending.

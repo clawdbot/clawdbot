@@ -88,6 +88,25 @@ function createRepositoryFixture(
 }
 
 describe("DraftPlaceState repository selection", () => {
+  it("preserves edited details when identity preferences arrive after discovery", async () => {
+    const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+    request.mockResolvedValue({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+    state.adoptAgentDefaults();
+    await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+    state.setBaseRef("my-branch");
+    state.setWorktreeName("my-checkout");
+
+    readPreference.mockReturnValue({
+      worktree: true,
+      baseRef: "saved-branch",
+      worktreeName: "saved-checkout",
+    });
+    state.adoptAgentDefaults();
+
+    expect(state.baseRef).toBe("my-branch");
+    expect(state.worktreeName).toBe("my-checkout");
+  });
+
   it.each([false, true])(
     "adopts a preference arriving during repository discovery without overwriting user edits (%s)",
     async (edited) => {
