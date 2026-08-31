@@ -109,9 +109,25 @@ type InternalSessionTranscriptDeliveryMirror =
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     };
 
+/**
+ * Producer-owned link from a persisted CLI turn aggregate to the native CLI
+ * record it flattens. A CLI backend persists one synthetic assistant message
+ * per run whose text is that run's assistant text blocks joined; the same turn
+ * also exists as native records in the backend's own transcript. Only the
+ * producer sees both at once, so it records the relation here instead of
+ * leaving readers to infer it from text and timing.
+ */
+export type CliNativeTurnRef = {
+  /** Native CLI session that owns the turn. */
+  cliSessionId: string;
+  /** Native record id of the turn's terminal assistant message. */
+  terminalRecordId: string;
+};
+
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
   [ASSISTANT_DISPLAY_CONTENT_FIELD]?: Array<Record<string, unknown>>;
+  cliNativeTurn?: CliNativeTurnRef;
 };
 
 type AssistantTranscriptText = {

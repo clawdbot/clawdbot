@@ -98,3 +98,62 @@ it.each([
     }
   },
 );
+
+type NativeTurnCase = {
+  nativeTurn?: { cliSessionId: string; terminalRecordId: string };
+  expected?: { cliSessionId: string; terminalRecordId: string };
+};
+
+it.each<[string, NativeTurnCase]>([
+  [
+    "records the native turn a CLI aggregate flattens",
+    {
+      nativeTurn: { cliSessionId: "native-session-1", terminalRecordId: "native-record-9" },
+      expected: { cliSessionId: "native-session-1", terminalRecordId: "native-record-9" },
+    },
+  ],
+  ["omits the link when the run reported no native turn", {}],
+])("%s", async (_label, testCase) => {
+  // The aggregate is the only record written at the point where both the
+  // flattened text and the native records that produced it are known, so the
+  // link has to be stamped here or readers are left inferring it.
+  const root = tempDirs.make("openclaw-cli-native-turn-");
+  const target = {
+    agentId: "main",
+    sessionId: "cli-native-turn-session",
+    sessionKey: "agent:main:cli-native-turn",
+    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: { sessionId: target.sessionId, updatedAt: Date.now() },
+  });
+  const updates: InternalSessionTranscriptUpdate[] = [];
+  const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
+  try {
+    const result = await persistCliAssistantTranscript({
+      runParams: {
+        ...target,
+        sessionFile: `sqlite://agents/main/${target.sessionId}`,
+        workspaceDir: root,
+        prompt: "run it",
+        provider: "claude-cli",
+        runId: "cli-native-turn-run",
+        timeoutMs: 1_000,
+        persistAssistantTranscript: true,
+      },
+      text: "part one\n\npart two",
+      modelId: "claude-sonnet-4-6",
+      stopReason: "stop",
+      ...(testCase.nativeTurn ? { nativeTurn: testCase.nativeTurn } : {}),
+    });
+
+    expect(result.owned).toBe(true);
+    expect(updates).toHaveLength(1);
+    const persisted = updates[0]?.message as Record<string, unknown> | undefined;
+    expect(persisted?.idempotencyKey).toBe(result.idempotencyKey);
+    expect(persisted?.cliNativeTurn).toEqual(testCase.expected);
+  } finally {
+    unsubscribe();
+  }
+});
