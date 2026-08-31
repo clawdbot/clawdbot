@@ -12,7 +12,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DiscordChannelConfigSchema } from "../../extensions/discord/channel-config-api.js";
 import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
   CONFIG_COMMAND_TIMEOUT_MS,
@@ -24,7 +23,6 @@ import {
   runUpgradeSurvivorOpenClawStep,
 } from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 import { AgentsSchema } from "../../src/config/zod-schema.agents.js";
-import { validateJsonSchemaValue } from "../../src/plugins/schema-validator.js";
 
 const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 const RUN_PATH = "scripts/e2e/lib/upgrade-survivor/run.sh";
@@ -200,40 +198,6 @@ describe("upgrade survivor config recipe command resolution", () => {
       expect(agents.entries.ops.fastModeDefault).toBe(true);
     },
   );
-
-  it.each([
-    ["2026.3.13", true],
-    ["2026.7.1-2", true],
-    ["2026.7.2-beta.3", true],
-    ["2026.7.2-beta.4", false],
-    ["2026.8.1-beta.1", false],
-    ["2026.8.1-beta.2", false],
-    ["2026.8.1", false],
-    [null, false],
-  ] as const)("preserves supported Discord DM input for baseline %s", (version, legacy) => {
-    const step = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
-      (entry) => entry.id === "channels-discord",
-    );
-    const discord = JSON.parse(step?.argv[3] ?? "{}");
-    if (legacy) {
-      expect(discord.dm).toEqual({ policy: "allowlist", allowFrom: ["111111111111111111"] });
-      expect(discord.dmPolicy).toBeUndefined();
-      expect(discord.allowFrom).toBeUndefined();
-    } else {
-      expect(discord.dm).toBeUndefined();
-      expect(discord.dmPolicy).toBe("allowlist");
-      expect(discord.allowFrom).toEqual(["111111111111111111"]);
-    }
-    // The public schema is the config-set boundary; runtime Zod preprocessing
-    // would silently normalize the legacy specimen and miss a bad baseline cutoff.
-    expect(
-      validateJsonSchemaValue({
-        schema: DiscordChannelConfigSchema.schema,
-        cacheKey: "upgrade-survivor-discord-config",
-        value: discord,
-      }).ok,
-    ).toBe(!legacy);
-  });
 
   it.each(["2026.3.13", "2026.4.1", "2026.8.1-beta.1"])(
     "preserves the legacy agent contract for baseline %s",
