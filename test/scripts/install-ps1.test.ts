@@ -1284,8 +1284,8 @@ try {
     writeFileSync(
       fixturePath,
       [
-        "$ErrorActionPreference = 'Stop'",
         scriptWithoutEntryPoint,
+        "$ErrorActionPreference = 'Stop'",
         `$nodePath = ${toPowerShellSingleQuotedLiteral(process.execPath)}`,
         "$nodeScript = 'console.error(12345); console.log(67890)'",
         "$output = @(Invoke-NpmCommand -CommandPath $nodePath -Arguments @('-e', $nodeScript) 2>&1 | ForEach-Object { $_.ToString() })",
