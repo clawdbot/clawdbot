@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ErrorCodes,
   SessionMembersListEvidenceResultSchema,
   SessionSharingEvidenceEventSchema,
   SessionSharingEventSchema,
@@ -734,6 +735,74 @@ describe("session sharing handlers", () => {
           agentId: "main",
         }),
       ).toBeNull();
+    });
+  });
+
+  it("rejects channel actors as members while keeping legacy rows removable", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:channel-actor-member";
+      const channelActorId = "slack:channel:C012345";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-channel-actor-member",
+          updatedAt: 2,
+          visibility: "shared",
+        },
+      );
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:slack-channel" },
+        {
+          sessionId: "session-slack-channel",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "channel", id: channelActorId },
+        },
+      );
+      const requestContext = context(vi.fn());
+
+      const listed = await call("session.members.list", { sessionKey }, requestContext);
+      expect(listed[0]?.[1]).toMatchObject({
+        identities: expect.not.arrayContaining([expect.objectContaining({ id: channelActorId })]),
+      });
+      expect(
+        await call(
+          "session.members.add",
+          { sessionKey, identityId: channelActorId },
+          requestContext,
+        ),
+      ).toEqual([
+        [
+          false,
+          undefined,
+          expect.objectContaining({
+            code: ErrorCodes.INVALID_REQUEST,
+            message: "unknown identity",
+          }),
+        ],
+      ]);
+      expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([]);
+
+      expect(
+        addSessionMember(
+          { agentId: "main", sessionKey },
+          { identityId: channelActorId, addedBy: "legacy-owner", addedAt: 1 },
+        ).inserted,
+      ).toBe(true);
+      const legacyListed = await call("session.members.list", { sessionKey }, requestContext);
+      expect(legacyListed[0]?.[1]).toMatchObject({
+        members: [expect.objectContaining({ identityId: channelActorId })],
+        identities: expect.arrayContaining([
+          expect.objectContaining({ type: "human", id: channelActorId }),
+        ]),
+      });
+      expect(
+        await call(
+          "session.members.remove",
+          { sessionKey, identityId: channelActorId },
+          requestContext,
+        ),
+      ).toEqual([[true, { ok: true, sessionKey, identityId: channelActorId }, undefined]]);
+      expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([]);
     });
   });
 
