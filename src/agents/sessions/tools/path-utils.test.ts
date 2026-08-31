@@ -28,12 +28,16 @@ describe("resolveToCwd", () => {
   });
 
   it("keeps lexical backend paths independent of local literal @ names", async () => {
-    const cwd = tempDirs.make("openclaw-at-path-");
-    await fs.writeFile(path.join(cwd, "@literal.txt"), "literal", "utf8");
+    const tempCwd = tempDirs.make("openclaw-at-path-");
+    await fs.writeFile(path.join(tempCwd, "@literal.txt"), "literal", "utf8");
 
-    expect(resolveLocalPathToCwd("@literal.txt", cwd)).toBe(path.join(cwd, "@literal.txt"));
-    expect(resolveLocalPathToCwd("@missing.txt", cwd)).toBe(path.join(cwd, "missing.txt"));
-    expect(resolveToCwd("@literal.txt", cwd)).toBe(path.join(cwd, "literal.txt"));
+    expect(resolveLocalPathToCwd("@literal.txt", tempCwd)).toBe(
+      path.join(tempCwd, "@literal.txt"),
+    );
+    expect(resolveLocalPathToCwd("@missing.txt", tempCwd)).toBe(
+      path.join(tempCwd, "missing.txt"),
+    );
+    expect(resolveToCwd("@literal.txt", tempCwd)).toBe(path.join(tempCwd, "literal.txt"));
   });
 
   it("keeps malformed file URLs on the ordinary relative-path path", () => {
