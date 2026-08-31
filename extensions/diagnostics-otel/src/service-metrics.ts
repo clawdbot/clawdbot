@@ -101,6 +101,7 @@ export function createDiagnosticsMetrics(
   const messageDurationHistogram = createHistogram("openclaw.message.duration_ms", {
     unit: "ms",
     description: "Message processing duration",
+    advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
   });
   const messageDeliveryStartedCounter = createCounter("openclaw.message.delivery.started", {
     unit: "1",

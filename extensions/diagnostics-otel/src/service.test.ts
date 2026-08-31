@@ -4246,6 +4246,18 @@ describe("diagnostics-otel service", () => {
     }
   });
 
+  test("uses agent-duration buckets for full message processing", async () => {
+    await startOtelService({ metrics: true });
+
+    const runBoundaries = histogramCreateOptions("openclaw.run.duration_ms")?.advice
+      ?.explicitBucketBoundaries;
+    const messageOptions = histogramCreateOptions("openclaw.message.duration_ms");
+
+    expect(messageOptions?.unit).toBe("ms");
+    expect(messageOptions?.advice?.explicitBucketBoundaries).toEqual(runBoundaries);
+    expect(messageOptions?.advice?.explicitBucketBoundaries).toContain(3_600_000);
+  });
+
   test.each([
     ["bounds agent identifiers on model usage metric attributes", "Bearer sk-test-secret-value"],
     [
