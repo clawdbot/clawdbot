@@ -1,6 +1,6 @@
 // Ci Node Test Plan tests cover ci node test plan script behavior.
 import { existsSync, globSync, readdirSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, matchesGlob, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createChangedExtensionFallbackShards,
@@ -33,6 +33,7 @@ import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "../vitest/vitest.tui.config.ts";
 import { createUiIsolatedVitestConfig } from "../vitest/vitest.ui-isolated.config.ts";
 import { createUiVitestConfig } from "../vitest/vitest.ui.config.ts";
+import { getUnitFastTestFilesForIncludePatterns } from "../vitest/vitest.unit-fast-paths.mjs";
 import { createUnitVitestConfigWithOptions } from "../vitest/vitest.unit.config.ts";
 import { createWizardVitestConfig } from "../vitest/vitest.wizard.config.ts";
 
@@ -476,11 +477,32 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ).length,
     ).toBeGreaterThan(0);
     const expectedEmbeddedAgentGroupNames = [
-      "agentic-agents-embedded-base",
+      "agentic-agents-embedded-base-1",
+      "agentic-agents-embedded-base-2",
+      "agentic-agents-embedded-base-3",
       "agentic-agents-embedded-incomplete-turn",
       "agentic-agents-embedded-overflow-compaction",
       "agentic-agents-embedded-run",
     ];
+    // Scoped configs drop unit-fast files and the shared live/e2e suffixes, so
+    // a striped owner covers only the files its config runs; the rest are inert.
+    const ownerScopedTestFiles = (owner: { dir: string; include: string[]; exclude: string[] }) => {
+      const unitFastFiles = new Set(
+        getUnitFastTestFilesForIncludePatterns(owner.include, { dir: owner.dir }),
+      );
+      return globSync(owner.include)
+        .map(toRepoPath)
+        .filter(
+          (file) =>
+            !unitFastFiles.has(file) &&
+            !file.endsWith(".live.test.ts") &&
+            !file.endsWith(".e2e.test.ts") &&
+            !owner.exclude.some((pattern) => matchesGlob(file, pattern)),
+        );
+    };
+    // The embedded composite is the one shard the compact layer subdivides:
+    // it expands into per-config groups and stripes the serial base config.
+    const embeddedBaseOwnerFiles = ownerScopedTestFiles(agentVitestProjectOwners.embedded);
     const compactGroups = compact.flatMap((shard) => shard.groups);
     const pullRequestCompactGroups = pullRequestCompact.flatMap((shard) => shard.groups);
     const expectedGroupNames = base.flatMap((shard) =>
@@ -523,9 +545,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         if (owner.includePatterns) {
           expect(actual.toSorted(), owner.shardName).toEqual(owner.includePatterns.toSorted());
         } else if (owner.shardName === "agentic-agents-support") {
-          const expected = globSync(agentVitestProjectOwners.support.include, {
-            exclude: agentVitestProjectOwners.support.exclude,
-          }).map(toRepoPath);
+          const expected = ownerScopedTestFiles(agentVitestProjectOwners.support);
           expect(actual.toSorted()).toEqual(expected.toSorted());
         }
       }
@@ -544,6 +564,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       base
         .filter((shard) => !pushExcludedShardNames.has(shard.shardName))
         .flatMap((shard) => shard.includePatterns ?? [])
+        .concat(embeddedBaseOwnerFiles)
         .toSorted((a, b) => a.localeCompare(b)),
     );
     expect(
@@ -551,7 +572,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .flatMap((group) => group.includePatterns ?? [])
         .toSorted((a, b) => a.localeCompare(b)),
     ).toEqual(
-      base.flatMap((shard) => shard.includePatterns ?? []).toSorted((a, b) => a.localeCompare(b)),
+      base
+        .flatMap((shard) => shard.includePatterns ?? [])
+        .concat(embeddedBaseOwnerFiles)
+        .toSorted((a, b) => a.localeCompare(b)),
     );
     expect(compact.every((shard) => shard.groups.every((group) => group.configs.length > 0))).toBe(
       true,
@@ -650,14 +674,31 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shard.groups.some((group) => group.shard_name === "agentic-agents-embedded"),
       ),
     ).toBe(false);
-    expect(embeddedAgentGroups.flatMap((group) => group.configs).toSorted()).toEqual(
-      embeddedAgentVitestProjectOwners.map((owner) => owner.config).toSorted(),
+    // The base config repeats once per stripe; its files stay partitioned below.
+    expect(new Set(embeddedAgentGroups.flatMap((group) => group.configs))).toEqual(
+      new Set(embeddedAgentVitestProjectOwners.map((owner) => owner.config)),
     );
     expect(
       embeddedAgentGroups.every(
         (group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000",
       ),
     ).toBe(true);
+    // The base config runs serially with a shared module graph, so its stripes
+    // must partition the owner's files: a repeat re-runs a suite, a miss drops it.
+    const embeddedBaseGroups = embeddedAgentGroups.filter((group) =>
+      /^agentic-agents-embedded-base-\d+$/u.test(group.shard_name),
+    );
+    const embeddedBaseFiles = embeddedBaseGroups.flatMap((group) => group.includePatterns ?? []);
+    expect(embeddedBaseGroups).toHaveLength(3);
+    expect(
+      embeddedBaseGroups.every(
+        (group) => group.configs[0] === agentVitestProjectOwners.embedded.config,
+      ),
+    ).toBe(true);
+    expect(new Set(embeddedBaseFiles).size).toBe(embeddedBaseFiles.length);
+    expect(embeddedBaseFiles.toSorted((a, b) => a.localeCompare(b))).toEqual(
+      embeddedBaseOwnerFiles.toSorted((a, b) => a.localeCompare(b)),
+    );
     expect(
       compact
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))
