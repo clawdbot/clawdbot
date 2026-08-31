@@ -30,6 +30,15 @@ export function markCoreTtsAttemptResult<T extends object>(
   return result;
 }
 
+/** Core lifecycle copies preserve attestation; plugin-created result copies stay untrusted. */
+export function copyCoreTtsAttemptResultProvenance<T extends object>(source: object, target: T): T {
+  const mediaUrls = coreTtsMediaByAttemptResult.get(source);
+  if (mediaUrls) {
+    coreTtsMediaByAttemptResult.set(target, mediaUrls);
+  }
+  return target;
+}
+
 export function getCoreTtsAttemptResultMediaUrls(
   result: object,
   deliveredMediaUrls: readonly string[] | undefined,
