@@ -1,6 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
-import type { TemplateContext } from "../templating.js";
+// Register fixture mocks before error helpers capture provider-hook bindings.
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
@@ -8,7 +6,11 @@ import {
   createFollowupRun,
 } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
+
+import { describe, expect, it, vi } from "vitest";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import type { TemplateContext } from "../templating.js";
 
 describe("executeAgentTurn: conversation failures", () => {
   it("returns a session reset hint for Bedrock tool mismatch errors on external chat channels", async () => {

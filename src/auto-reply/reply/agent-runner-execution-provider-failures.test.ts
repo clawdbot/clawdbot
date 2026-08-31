@@ -1,12 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
-import { resolveMaxRunRetryIterations } from "../../agents/embedded-agent-runner/run/helpers.js";
-import { FailoverError } from "../../agents/failover-error.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { ProviderAuthError } from "../../agents/model-auth.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
-import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+// Register fixture mocks before error helpers capture provider-hook bindings.
 import {
   PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
@@ -24,10 +16,20 @@ import {
   type FallbackRunnerParams,
   createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
+
+const state = await setupAgentRunnerExecutionTestState();
+
+import { describe, expect, it, vi } from "vitest";
+import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
+import { resolveMaxRunRetryIterations } from "../../agents/embedded-agent-runner/run/helpers.js";
+import { FailoverError } from "../../agents/failover-error.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { ProviderAuthError } from "../../agents/model-auth.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
+import type { TemplateContext } from "../templating.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
-
-const state = setupAgentRunnerExecutionTestState();
 
 async function executeTestTurn(
   params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],

@@ -1,9 +1,4 @@
-import { describe, expect, it } from "vitest";
-import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { createCliOutputFailoverError } from "../../agents/cli-runner/output-error.js";
-import { FailoverError } from "../../agents/failover-error.js";
-import { MissingProviderAuthError, ProviderAuthError } from "../../agents/model-auth.js";
-import type { TemplateContext } from "../templating.js";
+// Register fixture mocks before error helpers capture provider-hook bindings.
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
@@ -12,9 +7,16 @@ import {
   createMinimalRunAgentTurnParams,
   createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
-import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
+
+import { describe, expect, it } from "vitest";
+import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { createCliOutputFailoverError } from "../../agents/cli-runner/output-error.js";
+import { FailoverError } from "../../agents/failover-error.js";
+import { MissingProviderAuthError, ProviderAuthError } from "../../agents/model-auth.js";
+import type { TemplateContext } from "../templating.js";
+import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
 const CODEX_LOGIN_PRESENTATION = {
   blocks: [

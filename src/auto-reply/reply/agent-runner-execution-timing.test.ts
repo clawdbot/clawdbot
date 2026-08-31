@@ -1,16 +1,18 @@
-import { expect, it, vi } from "vitest";
-import type { InternalSessionEntry } from "../../config/sessions.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-state.js";
-import { emitAgentEvent, onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
+// Register fixture mocks before error helpers capture provider-hook bindings.
 import {
   createMinimalRunAgentTurnParams,
   setupAgentRunnerExecutionTestState,
   type EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 
-vi.mock("../../gateway/session-utils.js", () => ({ loadSessionEntry: vi.fn() }));
+const state = await setupAgentRunnerExecutionTestState();
 
-const state = setupAgentRunnerExecutionTestState();
+import { expect, it, vi } from "vitest";
+import type { InternalSessionEntry } from "../../config/sessions.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-state.js";
+import { emitAgentEvent, onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
+
+vi.mock("../../gateway/session-utils.js", () => ({ loadSessionEntry: vi.fn() }));
 
 it.each(["embedded preparation", "fallback preparation"])(
   "times %s failure between successful turns without borrowing the previous start",

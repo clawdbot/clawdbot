@@ -21,7 +21,7 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: result and tool delivery", () => {
   it("forwards media-only tool results without typing text", async () => {

@@ -1,3 +1,20 @@
+// Register fixture mocks before error helpers capture provider-hook bindings.
+import {
+  setupAgentRunnerExecutionTestState,
+  getExecuteAgentTurnForTest,
+  createMockTypingSignaler,
+  createFollowupRun,
+  createTestUserTurnRecorder,
+  requireRecord,
+  requireMockCall,
+  expectMockCallArgFields,
+  initialFallbackAttemptOptions,
+  createMinimalRunAgentTurnParams,
+  makeTestSessionStorePath,
+} from "./agent-runner-execution.test-support.js";
+
+const state = await setupAgentRunnerExecutionTestState();
+
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
@@ -14,22 +31,7 @@ import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import {
-  setupAgentRunnerExecutionTestState,
-  getExecuteAgentTurnForTest,
-  createMockTypingSignaler,
-  createFollowupRun,
-  createTestUserTurnRecorder,
-  requireRecord,
-  requireMockCall,
-  expectMockCallArgFields,
-  initialFallbackAttemptOptions,
-  createMinimalRunAgentTurnParams,
-  makeTestSessionStorePath,
-} from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
-
-const state = setupAgentRunnerExecutionTestState();
 afterEach(resetGeneratedMediaTaskActivityForTests);
 
 function rejectUnexpectedCompactionSuccessor(): never {

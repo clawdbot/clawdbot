@@ -1,10 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { FailoverError } from "../../agents/failover-error.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
-import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
+// Register fixture mocks before error helpers capture provider-hook bindings.
 import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
@@ -17,12 +11,20 @@ import {
   expectMockCallArgFields,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
+
+const state = await setupAgentRunnerExecutionTestState();
+
+import { describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../agents/failover-error.js";
+import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
+import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
-
-const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: primary probe routing", () => {
   it("rechecks queued auto fallback primary probes before running", async () => {

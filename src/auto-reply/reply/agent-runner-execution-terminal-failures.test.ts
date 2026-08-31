@@ -1,16 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { FailoverError } from "../../agents/failover-error.js";
-import {
-  formatBillingErrorMessage,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-} from "../../agents/failover/user-copy.js";
-import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
-import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions } from "../types.js";
+// Register fixture mocks before error helpers capture provider-hook bindings.
 import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
@@ -24,10 +12,24 @@ import {
   createMinimalRunAgentTurnParams,
   createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
+
+const state = await setupAgentRunnerExecutionTestState();
+
+import { describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../agents/failover-error.js";
+import {
+  formatBillingErrorMessage,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "../../agents/failover/user-copy.js";
+import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
+import type { TemplateContext } from "../templating.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { GetReplyOptions } from "../types.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { createReplyOperation } from "./reply-run-registry.js";
-
-const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: terminal failures", () => {
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
