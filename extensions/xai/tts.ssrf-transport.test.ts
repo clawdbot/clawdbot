@@ -3,7 +3,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { xaiTTS } from "./tts.js";
+import { listXaiTtsVoices, xaiTTS } from "./tts.js";
 
 const AUDIO = Buffer.from("ID3fake-mp3-body");
 const servers: Server[] = [];
@@ -48,6 +48,10 @@ async function synthesize(baseUrl: string) {
   });
 }
 
+async function listVoices(baseUrl: string) {
+  return await listXaiTtsVoices({ apiKey: "test-key", baseUrl });
+}
+
 describe("xaiTTS against the real guarded transport", () => {
   it("reaches a self-hosted origin on a private address", async () => {
     const baseUrl = await listen((_req, res) => {
@@ -71,5 +75,31 @@ describe("xaiTTS against the real guarded transport", () => {
     });
 
     await expect(synthesize(baseUrl)).rejects.toThrow();
+  });
+});
+
+describe("listXaiTtsVoices against the real guarded transport", () => {
+  it("reaches a self-hosted origin on a private address", async () => {
+    const baseUrl = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ voices: [{ voice_id: "alpha", name: "Alpha" }] }));
+    });
+
+    const voices = await listVoices(baseUrl);
+
+    expect(voices.map((voice) => voice.id)).toEqual(["alpha"]);
+  });
+
+  it("refuses a redirect to a different private origin", async () => {
+    const elsewhere = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ voices: [{ voice_id: "leaked" }] }));
+    });
+    const baseUrl = await listen((_req, res) => {
+      res.writeHead(302, { location: `${elsewhere}/tts/voices` });
+      res.end();
+    });
+
+    await expect(listVoices(baseUrl)).rejects.toThrow();
   });
 });
