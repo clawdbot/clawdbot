@@ -204,14 +204,6 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain('source "$script_parent_dir/lib/plain-gh.sh"');
     expect(script).toContain("for cmd in git gh jq rg pnpm node");
     expect(script).not.toContain("gh() {");
-    expect(script).toContain("scripts/watch-pr-ci.mjs");
-    expect(script).toContain("scripts/watch-pr-ci.mts");
-    expect(script).toContain("scripts/verify-pr-hosted-gates.mjs");
-    expect(script).toContain("scripts/verify-pr-hosted-gates.mts");
-    expect(script).toContain("scripts/lib/tsx-cli-shim.mjs");
-    expect(script).toContain("scripts/tsx.mjs");
-    expect(script).toContain("scripts/lib/plain-gh.mjs");
-    expect(script).toContain("scripts/lib/direct-run.mjs");
     expect(script).toContain("scripts/pr review-init <PR>");
     expect(script).toContain("scripts/pr prepare-run <PR>");
     expect(script).toContain("scripts/pr ci-dispatch <PR>");
@@ -462,7 +454,6 @@ describe("scripts/pr wrappers", () => {
   }
 
   function materializeAnchor(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
-    parkCanonicalOffAnchor(fixture);
     const materialized = spawnSync(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
       cwd: fixture.linked,
       encoding: "utf8",
@@ -477,6 +468,29 @@ describe("scripts/pr wrappers", () => {
     const anchor = join(fixture.root, anchors[0]!);
     expect(statSync(anchor).mode & 0o777).toBe(0o700);
     return anchor;
+  }
+
+  function advanceAnchorReviewDependency(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
+    const dependency = "scripts/lib/anchor-review-record.mjs";
+    cpSync("scripts/lib/record-shared.mjs", join(fixture.canonical, dependency));
+    const inventory = "scripts/pr-lib/wrapper-components.txt";
+    writeFileSync(
+      join(fixture.canonical, inventory),
+      `${readScript(join(fixture.canonical, inventory))}${dependency}\n`,
+    );
+    const helper = join(fixture.canonical, "scripts/pr-lib/review-artifacts.mjs");
+    writeFileSync(
+      helper,
+      readScript(helper).replace("../lib/record-shared.mjs", "../lib/anchor-review-record.mjs"),
+    );
+    fixture.git(fixture.canonical, [
+      "add",
+      inventory,
+      dependency,
+      "scripts/pr-lib/review-artifacts.mjs",
+    ]);
+    fixture.git(fixture.canonical, ["commit", "-m", "test: anchor-only review dependency"]);
+    fixture.git(fixture.canonical, ["push", "origin", "main"]);
   }
 
   it("materializes the origin/main anchor wrapper when canonical is parked elsewhere", () => {
@@ -537,46 +551,62 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
-  itPosix("executes review artifacts from the extracted anchor dependency closure", () => {
-    const fixture = makeMismatchedWrapperRepo({ realModules: true });
-    try {
-      const anchor = materializeAnchor(fixture);
-      writeFileSync(join(fixture.bin, "gh"), "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n");
-      writeReviewArtifacts(fixture.linked, validReview());
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
+  itPosix.each(["parked", "dirty added dependency"])(
+    "executes review artifacts from the extracted anchor dependency closure with canonical %s",
+    (canonicalState) => {
+      const fixture = makeMismatchedWrapperRepo({ realModules: true });
+      try {
+        advanceAnchorReviewDependency(fixture);
+        if (canonicalState === "parked") {
+          parkCanonicalOffAnchor(fixture);
+        } else {
+          writeFileSync(
+            join(fixture.canonical, "scripts/lib/anchor-review-record.mjs"),
+            "throw new Error('unreviewed dependency');\n",
+          );
+        }
+        const anchor = materializeAnchor(fixture);
+        writeFileSync(join(fixture.bin, "gh"), "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n");
+        writeReviewArtifacts(fixture.linked, validReview());
+        const result = spawnSync(
+          "bash",
           [
-            "set -euo pipefail",
-            'script_parent_dir="$1/scripts"',
-            'source "$script_parent_dir/pr-lib/review.sh"',
-            'node "$(review_artifacts_helper_path)" template "$2" "$3"',
-            'node "$(review_artifacts_helper_path)" validate .local/review.json .local/review.md .local/pr-meta.json',
-          ].join("\n"),
-          "anchor-review",
-          anchor,
-          String(REVIEWED_PR),
-          REVIEWED_HEAD,
-        ],
-        {
-          cwd: fixture.linked,
-          encoding: "utf8",
-          env: fixture.env,
-        },
-      );
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(JSON.parse(result.stdout).pr).toEqual({ number: REVIEWED_PR, headSha: REVIEWED_HEAD });
-    } finally {
-      fixture.cleanup();
-    }
-  });
+            "-c",
+            [
+              "set -euo pipefail",
+              'script_parent_dir="$1/scripts"',
+              'source "$script_parent_dir/pr-lib/review.sh"',
+              'node "$(review_artifacts_helper_path)" template "$2" "$3"',
+              'node "$(review_artifacts_helper_path)" validate .local/review.json .local/review.md .local/pr-meta.json',
+            ].join("\n"),
+            "anchor-review",
+            anchor,
+            String(REVIEWED_PR),
+            REVIEWED_HEAD,
+          ],
+          {
+            cwd: fixture.linked,
+            encoding: "utf8",
+            env: fixture.env,
+          },
+        );
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+        expect(JSON.parse(result.stdout).pr).toEqual({
+          number: REVIEWED_PR,
+          headSha: REVIEWED_HEAD,
+        });
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   itPosix(
     "executes tooling and publisher code from the extracted anchor dependency closure",
     () => {
       const fixture = makeMismatchedWrapperRepo({ realModules: true });
       try {
+        parkCanonicalOffAnchor(fixture);
         const anchor = materializeAnchor(fixture);
         writeFileSync(join(fixture.bin, "gh"), "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n");
         const run = (args: string[]) =>
@@ -671,6 +701,7 @@ describe("scripts/pr wrappers", () => {
   itPosix("refuses an extracted anchor with a tampered dependency", () => {
     const fixture = makeMismatchedWrapperRepo({ realModules: true });
     try {
+      advanceAnchorReviewDependency(fixture);
       parkCanonicalOffAnchor(fixture);
       const tar = join(fixture.bin, "tar");
       writeFileSync(
@@ -679,7 +710,7 @@ describe("scripts/pr wrappers", () => {
 "$OPENCLAW_TEST_TAR" "$@" || exit
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-C" ]; then
-    printf '\\n// tampered\\n' >> "$2/scripts/lib/record-shared.mjs"
+    printf '\\n// tampered\\n' >> "$2/scripts/lib/anchor-review-record.mjs"
     exit
   fi
   shift
@@ -895,35 +926,40 @@ exit 99
     },
   );
 
-  it("keeps the refusal when the anchor wrapper predates the handoff contract", () => {
-    const fixture = makeMismatchedWrapperRepo();
-    try {
-      // Rewrite origin/main's scripts/pr to an entrypoint without the
-      // OPENCLAW_PR_ANCHOR_REPO_ROOT handoff, as pre-fix anchors are.
-      fixture.git(fixture.canonical, ["checkout", "main"]);
-      const legacy = readScript(join(fixture.canonical, "scripts", "pr")).replaceAll(
-        "OPENCLAW_PR_ANCHOR_REPO_ROOT",
-        "OPENCLAW_PR_LEGACY_UNSUPPORTED",
-      );
-      writeFileSync(join(fixture.canonical, "scripts", "pr"), legacy);
-      fixture.git(fixture.canonical, ["add", "scripts/pr"]);
-      fixture.git(fixture.canonical, ["commit", "-m", "test: legacy anchor wrapper"]);
-      fixture.git(fixture.canonical, ["push", "origin", "main"]);
-      fixture.git(fixture.linked, ["fetch", "origin", "main"]);
-      parkCanonicalOffAnchor(fixture);
-      const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
-        cwd: fixture.linked,
-        encoding: "utf8",
-        env: fixture.env,
-      });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Refusing to silently substitute");
-      expect(result.stdout).not.toContain("canonical wrapper executed");
-      expect(result.stdout).not.toContain("local wrapper executed");
-    } finally {
-      fixture.cleanup();
-    }
-  });
+  it.each(["handoff", "inventory"])(
+    "keeps the refusal when the anchor lacks its %s",
+    (contract) => {
+      const fixture = makeMismatchedWrapperRepo();
+      try {
+        fixture.git(fixture.canonical, ["checkout", "main"]);
+        if (contract === "handoff") {
+          const legacy = readScript(join(fixture.canonical, "scripts/pr")).replaceAll(
+            "OPENCLAW_PR_ANCHOR_REPO_ROOT",
+            "OPENCLAW_PR_LEGACY_UNSUPPORTED",
+          );
+          writeFileSync(join(fixture.canonical, "scripts/pr"), legacy);
+        } else {
+          rmSync(join(fixture.canonical, "scripts/pr-lib/wrapper-components.txt"));
+        }
+        fixture.git(fixture.canonical, ["add", "-u", "scripts/pr", "scripts/pr-lib"]);
+        fixture.git(fixture.canonical, ["commit", "-m", "test: legacy anchor wrapper"]);
+        fixture.git(fixture.canonical, ["push", "origin", "main"]);
+        fixture.git(fixture.linked, ["fetch", "origin", "main"]);
+        parkCanonicalOffAnchor(fixture);
+        const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
+          cwd: fixture.linked,
+          encoding: "utf8",
+          env: fixture.env,
+        });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Refusing to silently substitute");
+        expect(result.stdout).not.toContain("canonical wrapper executed");
+        expect(result.stdout).not.toContain("local wrapper executed");
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   it("keeps merge wrapper modes delegated to the main PR helper", () => {
     const script = readScript("scripts/pr-merge");
@@ -986,6 +1022,7 @@ exit 99
     expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
 
     for (const component of [
+      "scripts/pr-lib/wrapper-components.txt",
       "scripts/pr-lib/merge.sh",
       "scripts/watch-pr-ci.mts",
       "scripts/verify-pr-hosted-gates.mts",
