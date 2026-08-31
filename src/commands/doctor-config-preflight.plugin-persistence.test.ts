@@ -458,7 +458,7 @@ describe("Doctor plugin persistence", () => {
             },
           }),
         ).rejects.toThrow(
-          "reread source was derived; diagnostics: persisted-registry-stale-source",
+          /differences: preflight-fixture .*persisted source: .*fixture-plugin.*derived source: .*fixture-plugin.*openclaw plugins registry --refresh/u,
         );
       } finally {
         lease.release();

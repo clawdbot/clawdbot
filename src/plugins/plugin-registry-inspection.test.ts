@@ -176,6 +176,13 @@ describe("plugin registry inspection", () => {
     ]);
     expect(inspection.state).toBe("stale");
     expect(inspection.refreshReasons).toEqual(["source-changed"]);
+    expect(inspection.differences).toEqual([
+      {
+        pluginId: "demo",
+        persistedSource: sourceCandidate.source,
+        derivedSource: builtSource,
+      },
+    ]);
     expect(inspection.current.plugins[0]?.source).toBe(builtSource);
   });
 

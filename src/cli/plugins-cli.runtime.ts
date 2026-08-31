@@ -1,6 +1,7 @@
 // Runtime implementations for `openclaw plugins` subcommands. Heavy plugin modules stay
 // lazy-loaded so the base CLI can start without activating the plugin registry.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   collectConfiguredRuntimePluginIds,
@@ -342,16 +343,42 @@ export async function runPluginsInstallAction(
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
   const { inspectPluginRegistry } = await import("../plugins/plugin-registry.js");
 
+  const formatDifferences = (
+    differences: Awaited<ReturnType<typeof inspectPluginRegistry>>["differences"],
+  ) => {
+    const formatSource = (source: string | null) =>
+      source ? sanitizeTerminalText(shortenHomeInString(source)) : "missing";
+    return differences.map(
+      (difference) =>
+        `${sanitizeTerminalText(difference.pluginId)}: persisted ${formatSource(difference.persistedSource)}; derived ${formatSource(difference.derivedSource)}`,
+    );
+  };
+
   if (opts.refresh) {
     const { refreshPluginRegistry } = await import("../plugins/plugin-registry-refresh.js");
     return await withPluginLifecycleLease({}, async () => {
+      const config = getRuntimeConfig();
       const index = await refreshPluginRegistry({
-        config: getRuntimeConfig(),
+        config,
         reason: "manual",
       });
+      const inspection = await inspectPluginRegistry({ config });
+      if (inspection.state !== "fresh") {
+        const differenceLines = formatDifferences(inspection.differences);
+        throw new Error(
+          [
+            "Plugin registry refresh could not verify the persisted replacement.",
+            ...differenceLines.map((difference) => `- ${difference}`),
+            "Stop plugin package changes, then run `openclaw plugins registry --refresh` again.",
+          ].join("\n"),
+        );
+      }
       if (opts.json) {
         defaultRuntime.writeJson({
           refreshed: true,
+          state: inspection.state,
+          refreshReasons: inspection.refreshReasons,
+          differences: inspection.differences,
           registry: index,
         });
         return;
@@ -367,6 +394,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     defaultRuntime.writeJson({
       state: inspection.state,
       refreshReasons: inspection.refreshReasons,
+      differences: inspection.differences,
       persisted: inspection.persisted,
       current: inspection.current,
     });
@@ -386,6 +414,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
   ];
   if (inspection.refreshReasons.length > 0) {
     lines.push(`${theme.muted("Refresh reasons:")} ${inspection.refreshReasons.join(", ")}`);
+    lines.push(...formatDifferences(inspection.differences).map((difference) => `- ${difference}`));
     lines.push(`${theme.muted("Repair:")} ${theme.command("openclaw plugins registry --refresh")}`);
   }
   defaultRuntime.log(lines.join("\n"));
