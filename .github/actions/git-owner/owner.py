@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import re
 import runpy
@@ -362,6 +363,14 @@ def checkout_selected_ref():
 
 def checkout():
     check_cancelled()
+    prerequisites = json.loads(os.environ.get("CHECKOUT_GIT_COMMITS_JSON", "null")) if kind == "linux-node" else None
+    if prerequisites is None:
+        prerequisites = []
+    if not isinstance(prerequisites, list) or any(
+        not isinstance(commit, str) or not re.fullmatch("[0-9a-f]{40}", commit)
+        for commit in prerequisites
+    ):
+        raise ValueError("Invalid immutable test prerequisite commits")
     if reset:
         os.makedirs(workspace, exist_ok=True)
         # Every earlier Git group has been drained before deleting its workspace.
@@ -381,6 +390,9 @@ def checkout():
     base = os.environ.get("CHECKOUT_BASE_SHA") if kind == "linux-node" else None
     if base:
         refs.append(f"+{base}:refs/remotes/origin/ci-ratchet-base")
+    # Fetch full reader objects with the authenticated checkout, before its
+    # credential scope ends and test workers create historical worktrees.
+    refs.extend(prerequisites)
     fetch(workspace, *refs, prune=True, max_attempts=1 if reset else 3,
           retry_codes=(124, 137) if kind == "skills" else ())
     run_git(workspace, "checkout", *(["--force"] if reset else []), "--detach",
