@@ -49,6 +49,7 @@ function renderComposer(
     context?: ApplicationContext;
     onInput?: (message: string) => void;
     onSubmit?: () => void;
+    onBackgroundSubmit?: () => void;
     textareaController?: NewSessionComposerTextareaController;
   } = {},
 ) {
@@ -98,6 +99,7 @@ function renderComposer(
         },
         onVisibilityChange: overrides.onVisibilityChange,
         onSubmit: overrides.onSubmit ?? (() => undefined),
+        onBackgroundSubmit: overrides.onBackgroundSubmit,
       }),
       container,
     );
@@ -434,9 +436,11 @@ describe("new-session composer keyboard submission", () => {
     { label: "Meta+Enter", requiresModifier: true, ctrlKey: false, metaKey: true },
   ])("submits once with $label when starting a session is enabled", (testCase) => {
     const onSubmit = vi.fn();
+    const onBackgroundSubmit = vi.fn();
     const { composer } = renderComposer({
       canSubmit: true,
       onSubmit,
+      onBackgroundSubmit,
       requiresModifier: testCase.requiresModifier,
     });
     const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
@@ -455,6 +459,64 @@ describe("new-session composer keyboard submission", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onBackgroundSubmit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "Ctrl+Enter in Enter mode",
+      ctrlKey: true,
+      metaKey: false,
+      requiresModifier: false,
+      shiftKey: false,
+    },
+    {
+      label: "Meta+Enter in Enter mode",
+      ctrlKey: false,
+      metaKey: true,
+      requiresModifier: false,
+      shiftKey: false,
+    },
+    {
+      label: "Ctrl+Shift+Enter in modifier mode",
+      ctrlKey: true,
+      metaKey: false,
+      requiresModifier: true,
+      shiftKey: true,
+    },
+    {
+      label: "Meta+Shift+Enter in modifier mode",
+      ctrlKey: false,
+      metaKey: true,
+      requiresModifier: true,
+      shiftKey: true,
+    },
+  ])("starts in the background with $label", (testCase) => {
+    const onSubmit = vi.fn();
+    const onBackgroundSubmit = vi.fn();
+    const { composer } = renderComposer({
+      onSubmit,
+      onBackgroundSubmit,
+      requiresModifier: testCase.requiresModifier,
+    });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: testCase.ctrlKey,
+      key: "Enter",
+      metaKey: testCase.metaKey,
+      shiftKey: testCase.shiftKey,
+    });
+
+    textarea.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onBackgroundSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("forwards Enter to onSubmit while a reasoned gate blocks submission", () => {
