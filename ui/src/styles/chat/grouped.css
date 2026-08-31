@@ -214,18 +214,14 @@
   pointer-events: auto;
 }
 
-.chat-group:hover .chat-group-footer--persistent-identity .chat-confirm-wrap,
-.chat-group:hover .chat-group-footer--persistent-identity .chat-group-timestamp,
-.chat-group:hover .chat-group-footer--persistent-identity .msg-meta__summary,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-confirm-wrap,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-timestamp,
-.chat-group:focus-within .chat-group-footer--persistent-identity .msg-meta__summary,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .chat-confirm-wrap,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .chat-group-timestamp,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .msg-meta__summary,
-.chat-group:hover .chat-group-footer--persistent-identity .chat-group-footer-actions,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-footer-actions,
-.chat-group-footer--persistent-identity:has(.msg-meta[open]) .chat-group-footer-actions {
+.chat-group:hover
+  .chat-group-footer--persistent-identity
+  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions),
+.chat-group:focus-within
+  .chat-group-footer--persistent-identity
+  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions),
+.chat-group-footer--persistent-identity:has(.msg-meta[open])
+  :is(.chat-confirm-wrap, .chat-group-timestamp, .msg-meta__summary, .chat-group-footer-actions) {
   position: static;
   opacity: 1;
   pointer-events: auto;
@@ -1194,7 +1190,8 @@ img.chat-avatar.chat-avatar--logo {
   min-width: 200px;
   max-width: calc(100vw - 48px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 100;
+  /* Above the still-connected .chat-reply-context-menu (9999). */
+  z-index: 10000;
   animation: scale-in 0.15s ease-out;
   transform-origin: top right;
 }
@@ -1252,21 +1249,20 @@ img.chat-avatar.chat-avatar--logo {
   color: var(--media-foreground);
 }
 
-:root[data-theme="dark"] .chat-confirm-popover__yes {
-  background: var(--destructive);
-  color: var(--destructive-foreground);
-}
-
-:root[data-theme="openknot"] .chat-confirm-popover__yes,
-:root[data-theme="dash"] .chat-confirm-popover__yes,
-:root[data-theme="absolutely"] .chat-confirm-popover__yes,
-:root[data-theme="tide"] .chat-confirm-popover__yes,
-:root[data-theme="phosphor"] .chat-confirm-popover__yes,
-:root[data-theme="crt"] .chat-confirm-popover__yes,
-:root[data-theme="manuscript"] .chat-confirm-popover__yes,
-:root[data-theme="rose"] .chat-confirm-popover__yes,
-:root[data-theme="miami"] .chat-confirm-popover__yes,
-:root[data-theme="beacon"] .chat-confirm-popover__yes {
+:root:is(
+    [data-theme="dark"],
+    [data-theme="openknot"],
+    [data-theme="dash"],
+    [data-theme="absolutely"],
+    [data-theme="tide"],
+    [data-theme="phosphor"],
+    [data-theme="crt"],
+    [data-theme="manuscript"],
+    [data-theme="rose"],
+    [data-theme="miami"],
+    [data-theme="beacon"]
+  )
+  .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
 }
@@ -1275,20 +1271,20 @@ img.chat-avatar.chat-avatar--logo {
   background: var(--danger-solid-hover);
 }
 
-:root[data-theme="dark"] .chat-confirm-popover__yes:hover {
-  background: var(--destructive-hover);
-}
-
-:root[data-theme="openknot"] .chat-confirm-popover__yes:hover,
-:root[data-theme="dash"] .chat-confirm-popover__yes:hover,
-:root[data-theme="absolutely"] .chat-confirm-popover__yes:hover,
-:root[data-theme="tide"] .chat-confirm-popover__yes:hover,
-:root[data-theme="phosphor"] .chat-confirm-popover__yes:hover,
-:root[data-theme="crt"] .chat-confirm-popover__yes:hover,
-:root[data-theme="manuscript"] .chat-confirm-popover__yes:hover,
-:root[data-theme="rose"] .chat-confirm-popover__yes:hover,
-:root[data-theme="miami"] .chat-confirm-popover__yes:hover,
-:root[data-theme="beacon"] .chat-confirm-popover__yes:hover {
+:root:is(
+    [data-theme="dark"],
+    [data-theme="openknot"],
+    [data-theme="dash"],
+    [data-theme="absolutely"],
+    [data-theme="tide"],
+    [data-theme="phosphor"],
+    [data-theme="crt"],
+    [data-theme="manuscript"],
+    [data-theme="rose"],
+    [data-theme="miami"],
+    [data-theme="beacon"]
+  )
+  .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }
 

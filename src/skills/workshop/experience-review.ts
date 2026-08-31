@@ -139,7 +139,10 @@ export async function prepareSkillExperienceReviewCandidate(
   const { mergeAlsoAllowPolicy } = await import("../../agents/tool-policy.js");
   const foreground = candidate.ctx.foregroundPromptContext;
   const sessionKey = candidate.ctx.sessionKey;
-  if (!sessionKey || resolveSandboxRuntimeStatus({ cfg: config, sessionKey }).sandboxed) {
+  if (
+    !sessionKey ||
+    resolveSandboxRuntimeStatus({ cfg: config, sessionKey, agentId: foreground.agentId }).sandboxed
+  ) {
     return undefined;
   }
   const capabilityProfile = resolveConversationCapabilityProfile({

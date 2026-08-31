@@ -124,9 +124,10 @@ On the first identified connection, the Control UI uploads existing browser-loca
 
 When a remote project session starts before its repository finishes cloning, chat shows workspace preparation progress. If preparation fails, opening or reloading chat restores the session's failure summary. Correct the reported problem, then send a new message in the same session to retry preparation.
 
-Inputs accepted through `sessions_send` or the Gateway `agent` method while a
-cloud turn is running remain visible with a waiting notice until their own turn
-starts. They are stored separately from the active model transcript. If
+Accepted browser messages, including initial prompts waiting for workspace
+preparation and follow-ups during a run, remain visible with a waiting notice
+until their own turn starts. Inputs accepted through `sessions_send` or the
+Gateway `agent` method use the same display. They are stored separately from the active model transcript. If
 cancellation or a Gateway restart interrupts that wait,
 the input stays readable with its recorded disposition and is never resent
 automatically. Copy it into the composer to start a new attempt. **Earlier
@@ -134,8 +135,12 @@ accepted inputs** pages through retained inputs; **Latest accepted inputs**
 returns to the newest page. Long accepted input uses the normal full-message
 reader without becoming a transcript reply, fork, or rewind target.
 
-Ordinary browser follow-ups still use the existing chat queue, including collect
-mode; they do not yet have this durable pending-input custody.
+Browser drafts and unsent messages remain in the local queue. Once the Gateway
+accepts an ordinary browser message, it owns the approved input in durable
+custody. Collect mode consumes the accepted sources with their combined
+transcript entry. Acceptance does not imply that a transcript row already
+exists; the accepted input replaces its local pending copy and later becomes
+one canonical message, including its attachments.
 
 ## Personal identity
 
@@ -307,7 +312,7 @@ The **+** in the sidebar's **Sessions** toolbar opens a full-page draft at `/new
 
 The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent Gateway folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. Local placement keeps the optional **Worktree** control with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Choosing either a device or cloud profile forces a managed worktree from the selected Gateway source. **Start in terminal** is available only for local placement.
 
-Gateway reconnects and Git verification retries preserve your edited base branch and worktree name. Choosing another folder or project clears those repository-specific details.
+The project picker refreshes after sign-in and reconnects. Gateway reconnects and Git verification retries preserve your edited base branch and worktree name. Choosing another folder or project clears those repository-specific details.
 
 For local worktree sessions, sending the first message opens the admitted session before naming, checkout, and setup finish. The chat shows the submitted message and preparation stages. A generated title is saved as soon as naming completes, independently of checkout and setup. Setup failures remain visible in that session; send a retry there after correcting the problem. The retry reuses the saved title. If naming itself fails, another attempt uses the original first prompt, including text attachments. Stopping during setup cancels preparation without starting the agent. Steering an active run keeps its progress visible, and delayed history cannot replace a newer startup stage or restore startup labels after activity begins.
 
@@ -595,7 +600,7 @@ Chat error banners, including cloud runner failures, show short messages in full
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
-    - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
+    - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).

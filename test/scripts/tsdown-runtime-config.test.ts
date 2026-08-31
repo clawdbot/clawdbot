@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import tsdownConfig, {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
 } from "../../tsdown.config.ts";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 
 type TsdownConfigEntry = {
   deps?: {
@@ -87,11 +87,11 @@ function requireUnifiedDistGraph(): TsdownConfigEntry {
 }
 
 function readGatewayRunLoopSource(): string {
-  return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
+  return readFileSync(new URL("../../src/cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
 }
 
 function readAgentAuthDiscoverySource(): string {
-  return readFileSync(new URL("../agents/agent-auth-discovery.ts", import.meta.url), "utf8");
+  return readFileSync(new URL("../../src/agents/agent-auth-discovery.ts", import.meta.url), "utf8");
 }
 
 describe("tsdown config", () => {

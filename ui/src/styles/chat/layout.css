@@ -1663,29 +1663,28 @@ openclaw-chat-video-player {
   color: inherit;
 }
 
-.chat-assistant-attachment-card--checking {
+.chat-assistant-attachment-card--checking,
+.chat-controls__model-trigger-skeleton {
   --skeleton-base: color-mix(in srgb, var(--muted) 15%, transparent);
   --skeleton-highlight: color-mix(in srgb, var(--text) 30%, transparent);
 }
 
 .chat-assistant-attachment-card__status-meta.skeleton {
   inline-size: clamp(112px, 14vw, 144px);
-  max-inline-size: 100%;
 }
 
 .chat-assistant-attachment-card__action-skeleton {
   position: absolute;
-  inset-block-start: 0;
+  inset-block: 0;
   inset-inline-end: 0;
-  inline-size: 64px;
-  block-size: 30px;
-  border-radius: 999px;
+  width: 64px;
+  border-radius: 50%;
 }
 
 .chat-assistant-attachment-card__actions--loading {
   position: relative;
-  padding-inline-start: 38px;
-  block-size: 30px;
+  padding-inline: 38px 0;
+  height: 30px;
   font-size: 12px;
   font-weight: 600;
 }
@@ -3428,7 +3427,6 @@ button.chat-pr__diff {
   -webkit-mask:
     linear-gradient(white 0 0) content-box,
     linear-gradient(white 0 0);
-  -webkit-mask-composite: xor;
   mask-composite: exclude;
   animation: chat-dictation-edge-orbit 6.6s linear infinite;
   pointer-events: none;
@@ -3649,13 +3647,6 @@ button.chat-pr__diff {
   --chat-composer-scroll-mask-top: currentColor;
   --chat-composer-scroll-mask-bottom: currentColor;
 
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    var(--chat-composer-scroll-mask-top) 0,
-    currentColor 16px,
-    currentColor calc(100% - 16px),
-    var(--chat-composer-scroll-mask-bottom) 100%
-  );
   mask-image: linear-gradient(
     to bottom,
     var(--chat-composer-scroll-mask-top) 0,
@@ -4844,13 +4835,6 @@ button.chat-pr__diff {
   background: color-mix(in srgb, var(--text-strong) 7%, transparent);
 }
 
-.chat-talk-control--active {
-  --chat-picker-background: color-mix(in srgb, var(--accent) 14%, transparent);
-  --chat-picker-color: var(--accent);
-  --chat-picker-hover-background: color-mix(in srgb, var(--accent) 20%, transparent);
-  --chat-picker-hover-color: var(--accent);
-}
-
 .chat-talk-control > openclaw-tooltip {
   display: inline-flex;
 }
@@ -5261,7 +5245,6 @@ button.chat-pr__diff {
   -webkit-mask:
     linear-gradient(white 0 0) content-box,
     linear-gradient(white 0 0);
-  -webkit-mask-composite: xor;
   mask-composite: exclude;
   /* Keep the visible fill aligned with HOLD_PROGRESS_MS in composer-dictation.ts. */
   animation: chat-dictation-hold-progress 350ms linear forwards;
@@ -6248,8 +6231,6 @@ button.chat-pr__diff {
 }
 
 .chat-controls__model-trigger-skeleton {
-  --skeleton-base: color-mix(in srgb, var(--muted) 15%, transparent);
-  --skeleton-highlight: color-mix(in srgb, var(--text) 30%, transparent);
   --skeleton-duration: 1.45s;
 
   display: block;

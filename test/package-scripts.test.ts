@@ -162,7 +162,7 @@ describe("package scripts", () => {
 
   it("builds the native host before browser bootstrap E2E against real Chromium", () => {
     expect(readPackageJson().scripts["test:e2e:browser-extension"]).toBe(
-      "pnpm build && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+      "pnpm build:ci-artifacts && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     );
   });
 
@@ -264,6 +264,12 @@ describe("package scripts", () => {
 
   it("runs direct-run entrypoint coverage in Windows CI", () => {
     expect(readWindowsCiCoverageScript()).toContain("test/scripts/direct-run-entrypoints.test.ts");
+  });
+
+  it("runs compiled worker path, IPC, and cleanup coverage in Windows CI", () => {
+    expect(readWindowsCiPartScripts().flatMap(readWindowsCiTargets)).toContain(
+      "test/scripts/vitest-worker-artifacts.test.ts",
+    );
   });
 
   it("runs Docker package process-tree coverage in Windows CI", () => {

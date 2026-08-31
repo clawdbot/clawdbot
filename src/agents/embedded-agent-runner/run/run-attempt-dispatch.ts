@@ -211,6 +211,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ? await (async () => {
         const workspace = await resolveAttemptWorkspaceSandbox({
           ...params,
+          agentId: runtime.agentId,
           cwd: undefined,
           sessionId: runtime.sessionId,
           sessionKey: runtime.sessionKey,
@@ -238,6 +239,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
+  const sessionKey = runtime.sessionKey?.trim() || runtime.sessionId;
+  const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
   const pluginSandbox = control.pluginHarnessOwnsTransport
     ? ((await resolveSessionPlacementSandbox({
         agentId: runtime.agentId,
@@ -248,7 +251,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
       })) ??
       (await resolveSandboxContext({
         config: params.config,
-        sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
+        agentId: sandboxSessionKey === sessionKey ? runtime.agentId : undefined,
+        sessionKey: sandboxSessionKey,
         workspaceDir: runtime.workspaceDir,
       })))
     : undefined;

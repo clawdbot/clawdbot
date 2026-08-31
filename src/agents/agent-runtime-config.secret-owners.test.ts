@@ -111,7 +111,7 @@ afterEach(async () => {
 });
 
 describe("agent execution respects prepared secret owners", () => {
-  it("reads active config without copying reload-only plugin metadata", async () => {
+  it("reuses active config without copying source or reload-only plugin metadata", async () => {
     const config: OpenClawConfig = {
       plugins: { enabled: false },
       agents: { defaults: { workspace: "/fixture/workspace" } },
@@ -147,13 +147,9 @@ describe("agent execution respects prepared secret owners", () => {
 
     const result = await resolveAgentRuntimeConfig(runtime);
 
-    expect(result.cfg).toBe(active?.config);
-    expect(result.loadedRaw).toBe(result.cfg);
-    expect(result.sourceConfig).toEqual(config);
-    expect(result.sourceConfig).not.toBe(active?.sourceConfig);
-    expect(getConfigResolutionFacts(result.sourceConfig)).toBe(facts);
-    result.sourceConfig.agents!.defaults!.workspace = "/fixture/changed-by-caller";
-    expect(active?.sourceConfig.agents?.defaults?.workspace).toBe("/fixture/workspace");
+    expect(clone).not.toHaveBeenCalledWith(active?.sourceConfig);
+    expect(result).toBe(active?.config);
+    expect(getConfigResolutionFacts(result)).toBe(facts);
     expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(revision);
     expect(clone).not.toHaveBeenCalledWith(manifestRegistry);
   });
@@ -167,7 +163,7 @@ describe("agent execution respects prepared secret owners", () => {
       const config =
         entry === "reply"
           ? await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig)
-          : (await resolveAgentRuntimeConfig(runtime)).cfg;
+          : await resolveAgentRuntimeConfig(runtime);
       expect(config).toBe(getRuntimeConfigSnapshot());
       expect(config.models?.providers?.healthy?.apiKey).toBe("prepared-fixture-key");
       expect(config.models?.providers?.ollama?.apiKey).toEqual(
@@ -252,7 +248,7 @@ describe("agent execution respects prepared secret owners", () => {
       vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
       for (const config of [
         await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig),
-        (await resolveAgentRuntimeConfig(runtime)).cfg,
+        await resolveAgentRuntimeConfig(runtime),
       ]) {
         await expect(
           resolveApiKeyForProviderCore({
@@ -323,7 +319,7 @@ describe("agent execution respects prepared secret owners", () => {
       expect(getActiveSecretsRuntimeConfigSnapshot()?.configRefsPrepared).toBe(true);
       for (const config of [
         await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig),
-        (await resolveAgentRuntimeConfig(runtime)).cfg,
+        await resolveAgentRuntimeConfig(runtime),
       ]) {
         expect(config.skills).toEqual(source.skills);
         await expect(
@@ -467,7 +463,7 @@ describe("agent execution respects prepared secret owners", () => {
       resolveAgentRuntimeConfig(runtime, {
         runtimeChannelSecretScope: { channel: "telegram", accountId: "healthy" },
       }),
-    ).resolves.toMatchObject({ cfg: snapshot.config });
+    ).resolves.toEqual(snapshot.config);
     expect(callGatewayMock).not.toHaveBeenCalled();
     await expect(
       resolveQueuedReplyExecutionConfig(snapshot.sourceConfig, {
@@ -510,10 +506,10 @@ describe("agent execution respects prepared secret owners", () => {
     vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
     const resolveRef = vi.spyOn(secretResolver, "resolveSecretRefValue");
     const result = await resolveAgentRuntimeConfig(runtime);
-    expect(result.cfg.models?.providers?.healthy?.apiKey).toBe("local-fixture-key");
-    expect(result.cfg.channels).toEqual(config.channels);
-    expect(result.cfg.gateway).toEqual(config.gateway);
-    expect(result.cfg.plugins).toEqual(config.plugins);
+    expect(result.models?.providers?.healthy?.apiKey).toBe("local-fixture-key");
+    expect(result.channels).toEqual(config.channels);
+    expect(result.gateway).toEqual(config.gateway);
+    expect(result.plugins).toEqual(config.plugins);
     expect(resolveRef.mock.calls.map(([ref]) => ref.id)).toEqual(["TEST_HEALTHY_PROVIDER_KEY"]);
   });
 });

@@ -289,50 +289,59 @@ function adaptStepForBaseline(
     }
     return null;
   }
-  if (!isReleaseBefore(baselineVersion, "2026.4.0")) {
-    return step;
-  }
-  if (step.id === "plugins-feishu" || step.id === "channels-feishu") {
+  const legacyBaseline = isReleaseBefore(baselineVersion, "2026.4.0");
+  const modernBaseline = baselineVersion && !isReleaseBefore(baselineVersion, "2026.8.1");
+  if (legacyBaseline && (step.id === "plugins-feishu" || step.id === "channels-feishu")) {
     if (!summary.skippedIntents.includes("feishu-channel")) {
       summary.skippedIntents.push("feishu-channel");
     }
     return null;
   }
-  if (step.id === "agents") {
-    const agentsJson = step.argv[3];
-    if (agentsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
-    }
-    const agents = JSON.parse(agentsJson);
-    delete agents.defaults?.skills;
-    for (const agent of agents.list ?? []) {
-      delete agent.thinkingDefault;
-      delete agent.fastModeDefault;
-      delete agent.skills;
-    }
-    summary.skippedIntents.push("agent-modern-preferences");
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
-    };
+  if (
+    !(step.id === "agents" && (legacyBaseline || modernBaseline)) &&
+    !(step.id === "channels-discord" && modernBaseline) &&
+    !(step.intent === "plugins" && legacyBaseline)
+  ) {
+    return step;
   }
-  if (step.intent === "plugins") {
-    const pluginsJson = step.argv[3];
-    if (pluginsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+  const configJson = step.argv[3];
+  if (configJson === undefined) {
+    throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+  }
+  const config = JSON.parse(configJson);
+  if (step.id === "agents") {
+    // Modern config writes stamp explicit ownership when adding a second agent.
+    // Older baselines need their default marker for ownership migration on upgrade.
+    for (const agent of config.list ?? []) {
+      if (modernBaseline) {
+        delete agent.default;
+      }
+      if (legacyBaseline) {
+        delete agent.thinkingDefault;
+        delete agent.fastModeDefault;
+        delete agent.skills;
+      }
     }
-    const plugins = JSON.parse(pluginsJson);
-    plugins.allow = (plugins.allow ?? []).filter((id: unknown) => id !== "memory");
-    delete plugins.entries?.memory;
+    if (legacyBaseline) {
+      delete config.defaults?.skills;
+      summary.skippedIntents.push("agent-modern-preferences");
+    }
+  } else if (step.id === "channels-discord") {
+    // Keep retired DM fields as migration specimens only for older baselines.
+    config.dmPolicy = config.dm.policy;
+    config.allowFrom = config.dm.allowFrom;
+    delete config.dm;
+  } else {
+    config.allow = (config.allow ?? []).filter((id: unknown) => id !== "memory");
+    delete config.entries?.memory;
     if (!summary.skippedIntents.includes("memory-plugin-allow")) {
       summary.skippedIntents.push("memory-plugin-allow");
     }
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(plugins), ...step.argv.slice(4)],
-    };
   }
-  return step;
+  return {
+    ...step,
+    argv: [...step.argv.slice(0, 3), JSON.stringify(config), ...step.argv.slice(4)],
+  };
 }
 
 export function resolveUpgradeSurvivorConfigStepsForBaseline(

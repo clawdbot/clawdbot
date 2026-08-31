@@ -139,6 +139,19 @@ suite.define(() => {
         await rewind.click();
         await page.locator(".chat-confirm-popover").waitFor({ state: "visible" });
 
+        const confirmation = page.locator(".chat-confirm-popover");
+        const remember = confirmation.getByRole("checkbox");
+        await remember.check();
+        expect(await remember.isChecked()).toBe(true);
+        await remember.uncheck();
+        await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+        await confirmation.waitFor({ state: "detached" });
+        expect(await gateway.getRequests("sessions.rewind")).toHaveLength(0);
+        expect(await initialMenu.isVisible()).toBe(true);
+        expect(await rewind.evaluate((element) => element === document.activeElement)).toBe(true);
+        await rewind.click();
+        await confirmation.waitFor({ state: "visible" });
+
         await gateway.emitGatewayEvent("sessions.changed", {
           ...session,
           archived: true,

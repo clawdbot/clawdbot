@@ -3,11 +3,15 @@ import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway
 import { setLastActiveSessionKey } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { INTERRUPTED_SETTINGS_WAIT_ERROR } from "../../lib/chat/outbox-store-codec.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
 import { readChatResetTargetAccess } from "./chat-commands.ts";
-import { loadChatBranches, loadChatHistory } from "./chat-history.ts";
+import { loadChatBranches } from "./chat-history-branches.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   flushStoredChatOutbox,
   scheduleStoredChatOutboxDrain as scheduleOutboxDrain,
@@ -52,11 +56,6 @@ import {
   updateChatSendAckTiming,
 } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch, refreshChatSessionListForTarget } from "./chat-session.ts";
-import {
-  INTERRUPTED_SETTINGS_WAIT_ERROR,
-  listStoredChatOutboxes,
-  storedChatOutboxScopeKey,
-} from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";

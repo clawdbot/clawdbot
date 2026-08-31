@@ -256,12 +256,14 @@ describe("dispatchReplyFromConfig", () => {
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async (ctx) => {
-        markCommandSessionMetadataChanged({ ctx, sessionKey });
+        markCommandSessionMetadataChanged({ ctx, sessionKey, agentId: "main" });
         return { text: "goal updated" };
       },
     });
 
-    expect(result.sessionMetadataChanges).toEqual([{ sessionKey, reason: "command-metadata" }]);
+    expect(result.sessionMetadataChanges).toEqual([
+      { sessionKey, agentId: "main", reason: "command-metadata" },
+    ]);
   });
 
   it("notifies session metadata changes before later dispatch errors", async () => {
@@ -283,14 +285,14 @@ describe("dispatchReplyFromConfig", () => {
         dispatcher,
         onSessionMetadataChanges,
         replyResolver: async (ctx) => {
-          markCommandSessionMetadataChanged({ ctx, sessionKey });
+          markCommandSessionMetadataChanged({ ctx, sessionKey, agentId: "main" });
           return { text: "goal updated" };
         },
       }),
     ).rejects.toThrow("delivery failed");
 
     expect(onSessionMetadataChanges).toHaveBeenCalledWith([
-      { sessionKey, reason: "command-metadata" },
+      { sessionKey, agentId: "main", reason: "command-metadata" },
     ]);
   });
 

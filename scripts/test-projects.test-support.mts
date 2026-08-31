@@ -104,6 +104,7 @@ import {
   listGatewayServerTestTargets,
   splitTestTargetChunks as splitTargetChunks,
 } from "./lib/gateway-server-test-plan.mts";
+import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
@@ -157,7 +158,12 @@ type ImportGraph = {
   reverseReexports: Map<string, string[]>;
   testFiles: Set<string>;
 };
-type ImportGraphEdges = { file: string; imports: Set<string>; reexports: Set<string> };
+type ImportGraphEdges = {
+  file: string;
+  imports: Set<string>;
+  reexports: Set<string>;
+  references: Set<string>;
+};
 type UnmatchedExplicitTestTarget = {
   target: string;
   reason: "glob-matched-no-files" | "path-does-not-exist" | "target-matched-no-test-files";
@@ -833,10 +839,6 @@ const TOOLING_IMPORTABLE_FILE_EXTENSIONS = [
 const TOOLING_IMPORT_GRAPH_GREP_PATHS = TOOLING_IMPORT_GRAPH_ROOTS.flatMap((root) =>
   TOOLING_IMPORTABLE_FILE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`),
 );
-const IMPORT_SPECIFIER_PATTERN =
-  /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
-const REEXPORT_SPECIFIER_PATTERN =
-  /\bexport\s+(?:type\s+)?(?:\*\s+(?:as\s+\w+\s+)?from\s+|[^"']+?\s+from\s+)["']([^"']+)["']/gu;
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
@@ -1554,38 +1556,37 @@ function resolveImportGraphSearchTerms(
 
 function readImportGraphEdges(
   cwd: string,
-  file: string,
+  files: string[],
   fileSet: ReadonlySet<string>,
   tooling = false,
-  suppliedSource?: string,
+  terms: string[] = [],
 ) {
-  const cacheKey = `${cwd}\0${tooling}\0${file}`;
-  const cached = cachedImportGraphEdges.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  let source;
-  try {
-    source = suppliedSource ?? fs.readFileSync(path.join(cwd, file), "utf8");
-  } catch {
-    return null;
-  }
+  const cacheKey = (file: string) => `${cwd}\0${tooling}\0${file}`;
+  const requests = files
+    .map((file) => ({ file, parseImports: !cachedImportGraphEdges.has(cacheKey(file)) }))
+    .filter(({ parseImports }) => parseImports || terms.length > 0);
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
-  const resolve = (pattern: RegExp) =>
-    new Set(
-      [...source.matchAll(pattern)]
-        .map((match) =>
-          resolveImportSpecifier(file, match[1] ?? match[2] ?? "", fileSet, extensions),
-        )
-        .filter((imported) => imported !== null),
-    );
-  const edges = {
-    file,
-    imports: resolve(IMPORT_SPECIFIER_PATTERN),
-    reexports: resolve(REEXPORT_SPECIFIER_PATTERN),
-  };
-  cachedImportGraphEdges.set(cacheKey, edges);
-  return edges;
+  return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES).map(
+    ({ file, imports, reexports, matches, references }) => {
+      const resolve = (specifiers: string[]) =>
+        new Set(
+          specifiers
+            .map((specifier) => resolveImportSpecifier(file, specifier, fileSet, extensions))
+            .filter((imported) => imported !== null),
+        );
+      const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
+        file,
+        imports: resolve(imports),
+        reexports: resolve(reexports),
+        references: new Set<string>(),
+      };
+      for (const reference of references) {
+        edges.references.add(reference);
+      }
+      cachedImportGraphEdges.set(cacheKey(file), edges);
+      return { edges, matches };
+    },
+  );
 }
 
 function listImportGraphGrepMatches(
@@ -1660,22 +1661,17 @@ function listImportGraphGrepMatches(
       .map((line) => normalizePathPattern(line.trim()))
       .filter((file) => trackedFiles.has(file))
       .toSorted((left, right) => left.localeCompare(right));
-    for (const file of candidates) {
-      let source;
-      try {
-        source = fs.readFileSync(path.join(cwd, file), "utf8");
-      } catch {
-        continue;
-      }
-      // Keep per-term membership: the broad-term cap and helper first-success rule
-      // apply to each search, not the union of the frontier's candidates.
-      const edges = readImportGraphEdges(cwd, file, trackedFiles, tooling, source);
-      if (edges) {
-        for (const term of missing) {
-          if (source.includes(term)) {
-            matches.get(term)?.push(edges);
-          }
-        }
+    // Per-term membership protects the broad cap and helper first-success rule.
+    // Cached edges need only term facts; full-graph acquisition reuses their parsing.
+    for (const { edges, matches: fileTerms } of readImportGraphEdges(
+      cwd,
+      candidates,
+      trackedFiles,
+      tooling,
+      missing,
+    )) {
+      for (const term of fileTerms) {
+        matches.get(term)?.push(edges);
       }
     }
   }
@@ -1780,8 +1776,9 @@ function getImportGraph(cwd: string) {
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
 
+  readImportGraphEdges(cwd, files, fileSet);
   for (const file of files) {
-    const edges = readImportGraphEdges(cwd, file, fileSet);
+    const edges = cachedImportGraphEdges.get(`${cwd}\0false\0${file}`);
     if (!edges) {
       continue;
     }
@@ -2468,8 +2465,14 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["openclaw-cross-os-release-workflow"],
   ],
   [
-    /^scripts\/write-plugin-sdk-entry-dts\.ts$/u,
-    ["build-all", "declaration-stage", "tsdown-build"],
+    /^scripts\/(?:write-plugin-sdk-entry-dts\.ts|lib\/local-check-runtime\.mts)$/u,
+    [
+      "test/scripts/write-plugin-sdk-entry-dts.test.ts",
+      "build-all",
+      "declaration-stage",
+      "tsdown-build",
+      "prepare-extension-package-boundary-artifacts",
+    ],
   ],
   [/^scripts\/pr-lib\/worktree\.sh$/u, ["test/vitest/vitest.tooling.config.ts"]],
   [/^scripts\/dev\/gateway-smoke\.ts$/u, ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
@@ -3013,17 +3016,14 @@ function resolveGithubYamlGuardTargets(changedPath: string) {
 function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
   const normalized = normalizePathPattern(changedPath);
   return (listImportGraphGrepMatches(cwd, [normalized], { tooling: true }).get(normalized) ?? [])
-    .map(({ file }) => file)
     .filter(
-      (file) =>
+      ({ file, references }) =>
         file !== "test/scripts/test-projects.test.ts" &&
         !file.endsWith(".live.test.ts") &&
         isTestFileTarget(file) &&
-        fs
-          .readFileSync(path.join(cwd, file), "utf8")
-          .match(/[A-Za-z0-9_.@+/-]{4,}/gu)
-          ?.includes(normalized),
-    );
+        references.has(normalized),
+    )
+    .map(({ file }) => file);
 }
 
 function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {

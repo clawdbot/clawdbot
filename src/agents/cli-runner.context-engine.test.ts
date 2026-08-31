@@ -2,6 +2,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
@@ -86,6 +87,23 @@ const CONTEXT_ENGINE_SESSION_TARGET = {
   sessionKey: "agent:main:main",
   storePath: "/tmp/openclaw-cli-context-engine-test/openclaw-agent.sqlite",
 } as const;
+
+function createAdmittedCliRecorder(entryId: string) {
+  const message = { role: "user" as const, content: "visible ask", timestamp: 1 };
+  const recorder = createUserTurnTranscriptRecorder({ message, target: async () => undefined });
+  const admission = {
+    ...CONTEXT_ENGINE_SESSION_TARGET,
+    generation: "generation-1",
+    entryId,
+    rawSeq: 1,
+    effectiveParentId: null,
+    activeMessagePosition: 0,
+    logicalTurnId: `${entryId}-turn`,
+    role: "user" as const,
+  };
+  recorder.markRuntimePersisted(message, admission);
+  return { recorder, admission };
+}
 
 function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunContext {
   // Prepared contexts mirror the shape produced by prepare.runtime without
@@ -377,24 +395,31 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
-  it("does not emit CLI turn facts without transcript admission", async () => {
-    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
-    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
-      createMaintenanceResult(),
-    );
-    const dispose = vi.fn(async () => {});
-    const context = buildPreparedContext(createContextEngine({ afterTurn, maintain, dispose }));
-    const onContextEngineTurnCandidate = vi.fn();
-    context.params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
-    prepareCliRunContextMock.mockResolvedValue(context);
+  it.each(["admission", "terminal"] as const)(
+    "does not emit CLI turn facts without %s",
+    async (missing) => {
+      const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+      const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
+        createMaintenanceResult(),
+      );
+      const dispose = vi.fn(async () => {});
+      const context = buildPreparedContext(createContextEngine({ afterTurn, maintain, dispose }));
+      const onContextEngineTurnCandidate = vi.fn();
+      context.params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
+      if (missing === "terminal") {
+        context.params.userTurnTranscriptRecorder = createAdmittedCliRecorder("cli-user").recorder;
+        context.params.persistAssistantTranscript = false;
+      }
+      prepareCliRunContextMock.mockResolvedValue(context);
 
-    await runCliAgent(context.params);
+      await runCliAgent(context.params);
 
-    expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
-    expect(afterTurn).not.toHaveBeenCalled();
-    expect(maintain).toHaveBeenCalledTimes(1);
-    expect(dispose).not.toHaveBeenCalled();
-  });
+      expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+      expect(afterTurn).not.toHaveBeenCalled();
+      expect(maintain).toHaveBeenCalledTimes(1);
+      expect(dispose).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses the admitted user anchor for an accepted transcriptless CLI turn", async () => {
     const context = buildPreparedContext(createContextEngine());
@@ -407,36 +432,10 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       diagnosticUsage: { input: 21, output: 0, total: 21 },
       finalPromptText: "prompt sent to cli",
     });
-    const admission = {
-      agentId: "main",
-      sessionId: "openclaw-session-1",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/openclaw-cli-context-engine-test/sessions.json",
-      generation: "generation-1",
-      entryId: "cli-user",
-      rawSeq: 1,
-      effectiveParentId: null,
-      activeMessagePosition: 0,
-      logicalTurnId: "cli-turn",
-      role: "user" as const,
-    };
+    const { admission, recorder } = createAdmittedCliRecorder("cli-user");
     const onContextEngineTurnCandidate = vi.fn();
     context.params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
-    context.params.userTurnTranscriptRecorder = {
-      message: undefined,
-      resolveMessage: vi.fn(async () => undefined),
-      getAdmissionReceipt: () => admission,
-      markRuntimePersistencePending: vi.fn(),
-      markRuntimePersisted: vi.fn(),
-      markBlocked: vi.fn(),
-      hasPersisted: () => true,
-      isBlocked: () => false,
-      hasRuntimePersistencePending: () => false,
-      waitForRuntimePersistence: vi.fn(async () => {}),
-      persistApproved: vi.fn(async () => undefined),
-      persistBlocked: vi.fn(async () => undefined),
-      persistFallback: vi.fn(async () => undefined),
-    };
+    context.params.userTurnTranscriptRecorder = recorder;
 
     await runPreparedCliAgent(context);
 
@@ -449,38 +448,12 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
 
   it("uses the admitted user anchor as the terminal for transcriptless room events", async () => {
     const context = buildPreparedContext(createContextEngine());
-    const admission = {
-      agentId: "main",
-      sessionId: "openclaw-session-1",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/openclaw-cli-context-engine-test/sessions.json",
-      generation: "generation-1",
-      entryId: "room-event-user",
-      rawSeq: 1,
-      effectiveParentId: null,
-      activeMessagePosition: 0,
-      logicalTurnId: "room-event-turn",
-      role: "user" as const,
-    };
+    const { admission, recorder } = createAdmittedCliRecorder("room-event-user");
     const onContextEngineTurnCandidate = vi.fn();
     context.params.currentInboundEventKind = "room_event";
     context.params.persistAssistantTranscript = false;
     context.params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
-    context.params.userTurnTranscriptRecorder = {
-      message: undefined,
-      resolveMessage: vi.fn(async () => undefined),
-      getAdmissionReceipt: () => admission,
-      markRuntimePersistencePending: vi.fn(),
-      markRuntimePersisted: vi.fn(),
-      markBlocked: vi.fn(),
-      hasPersisted: () => true,
-      isBlocked: () => false,
-      hasRuntimePersistencePending: () => false,
-      waitForRuntimePersistence: vi.fn(async () => {}),
-      persistApproved: vi.fn(async () => undefined),
-      persistBlocked: vi.fn(async () => undefined),
-      persistFallback: vi.fn(async () => undefined),
-    };
+    context.params.userTurnTranscriptRecorder = recorder;
 
     await runPreparedCliAgent(context);
 

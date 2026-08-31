@@ -8,6 +8,7 @@ import {
 } from "@openclaw/ai/transports";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -624,11 +625,21 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             assertActive,
             onHookMessages: params.onCompactionHookMessages,
           });
+          const resultSessionTarget: ContextEngineSessionTarget = {
+            agentId: sessionTarget.agentId,
+            sessionId: sessionTarget.sessionId,
+            sessionKey: sessionTarget.sessionKey,
+            storePath: sessionTarget.storePath,
+          };
+          if (params.sessionTarget?.threadId !== undefined) {
+            resultSessionTarget.threadId = params.sessionTarget.threadId;
+          }
           return {
             ok: true,
             compacted: true,
             ...(serverResult ? { compactionKind: "server-endpoint" as const } : {}),
             result: {
+              sessionTarget: resultSessionTarget,
               ...(clientResult
                 ? {
                     summary: clientResult.summary,

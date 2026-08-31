@@ -166,14 +166,24 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     };
   }
 
-  const settlePluginBindingDeliveryVisibility = async () => {
+  const finishPluginBindingDispatch = async (outcome: "handled" | "declined" | "error") => {
     const settlement = await turnLedger.settleQueued(state.getPreDispatchAbortSignal());
     if (settlement === "aborted" || isPreDispatchOperationAborted()) {
-      return { status: "aborted" as const };
+      return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
+    markIdle(outcome === "handled" ? "plugin_binding_dispatch" : `plugin_binding_${outcome}`);
+    recordProcessed("completed", { reason: `plugin-bound-${outcome}` });
+    commitInboundDedupeIfClaimed();
+    completeDispatchReplyOperation();
     return {
-      status: "ready" as const,
-      observedReplyDelivery: turnLedger.hasVisibleDelivery(),
+      status: "complete" as const,
+      // Routed replies bypass dispatcher counters. Only settled visible delivery
+      // suppresses the no-reply warning; failed or hook-suppressed sends do not.
+      result: attachSourceReplyDeliveryMode({
+        queuedFinal: false,
+        counts: dispatcher.getQueuedCounts(),
+        ...(turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
+      }),
     };
   };
 
@@ -262,26 +272,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               transcriptOwner,
             );
           }
-          const deliveryVisibility = await settlePluginBindingDeliveryVisibility();
-          if (deliveryVisibility.status === "aborted") {
-            return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
-          }
-          markIdle("plugin_binding_dispatch");
-          recordProcessed("completed", { reason: "plugin-bound-handled" });
-          commitInboundDedupeIfClaimed();
-          completeDispatchReplyOperation();
-          return {
-            status: "complete" as const,
-            // Routed binding deliveries bypass the dispatcher counters, so the
-            // ledger's settled visibility keeps a delivered reply from reading as
-            // a silent zero-count turn. A hook-suppressed or failed route never
-            // reached the recipient, so it must keep the warning eligible.
-            result: attachSourceReplyDeliveryMode({
-              queuedFinal: false,
-              counts: dispatcher.getQueuedCounts(),
-              ...(deliveryVisibility.observedReplyDelivery ? { observedReplyDelivery: true } : {}),
-            }),
-          };
+          return await finishPluginBindingDispatch("handled");
         }
         case "missing_plugin":
         case "no_handler": {
@@ -331,22 +322,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             "terminal",
             transcriptOwner,
           );
-          const deliveryVisibility = await settlePluginBindingDeliveryVisibility();
-          if (deliveryVisibility.status === "aborted") {
-            return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
-          }
-          markIdle("plugin_binding_declined");
-          recordProcessed("completed", { reason: "plugin-bound-declined" });
-          commitInboundDedupeIfClaimed();
-          completeDispatchReplyOperation();
-          return {
-            status: "complete" as const,
-            result: attachSourceReplyDeliveryMode({
-              queuedFinal: false,
-              counts: dispatcher.getQueuedCounts(),
-              ...(deliveryVisibility.observedReplyDelivery ? { observedReplyDelivery: true } : {}),
-            }),
-          };
+          return await finishPluginBindingDispatch("declined");
         }
         case "error": {
           const transcriptOwner = await persistPluginBindingUserTurn();
@@ -358,22 +334,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             "terminal",
             transcriptOwner,
           );
-          const deliveryVisibility = await settlePluginBindingDeliveryVisibility();
-          if (deliveryVisibility.status === "aborted") {
-            return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
-          }
-          markIdle("plugin_binding_error");
-          recordProcessed("completed", { reason: "plugin-bound-error" });
-          commitInboundDedupeIfClaimed();
-          completeDispatchReplyOperation();
-          return {
-            status: "complete" as const,
-            result: attachSourceReplyDeliveryMode({
-              queuedFinal: false,
-              counts: dispatcher.getQueuedCounts(),
-              ...(deliveryVisibility.observedReplyDelivery ? { observedReplyDelivery: true } : {}),
-            }),
-          };
+          return await finishPluginBindingDispatch("error");
         }
       }
     }

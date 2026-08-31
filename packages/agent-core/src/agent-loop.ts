@@ -15,7 +15,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import {
-  copyInternalToolResultAcknowledgement,
+  copyInternalToolResultState,
   getInternalToolExecutionPreparer,
   getInternalSyncSteeringGetter,
   type InternalToolExecutionPreparation,
@@ -1600,7 +1600,7 @@ async function finalizeExecutedToolCall(
         batch.signal,
       );
       if (afterResult) {
-        result = copyInternalToolResultAcknowledgement(result, {
+        result = copyInternalToolResultState(result, {
           ...result,
           content: afterResult.content ?? result.content,
           details: afterResult.details ?? result.details,
@@ -1659,7 +1659,7 @@ async function finalizeToolCallOutcome(
     }
     return {
       ...finalized,
-      result: copyInternalToolResultAcknowledgement(finalized.result, {
+      result: copyInternalToolResultState(finalized.result, {
         ...finalized.result,
         content: afterResult.content ?? finalized.result.content,
         details: afterResult.details ?? finalized.result.details,
@@ -1818,7 +1818,7 @@ async function emitToolExecutionEnd(
 }
 
 function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResultMessage {
-  return copyInternalToolResultAcknowledgement(
+  return copyInternalToolResultState(
     finalized.result,
     withToolResultContentSource(
       {

@@ -274,7 +274,13 @@ async function prepareNodeBootstrapArtifact(
     .map(({ id }) => `dist/extensions/${id}/`);
   const files = (
     await collectPackageDistInventory(packageRoot, { packageManifest: packageJson })
-  ).filter((relative) => !externalPluginPrefixes.some((prefix) => relative.startsWith(prefix)));
+  ).filter(
+    // Nodes install the Gateway's worker bundle separately through authenticated transfer.
+    // Carrying its deploy artifacts here duplicates staging, validation, and download work.
+    (relative) =>
+      !relative.startsWith("dist/worker/") &&
+      !externalPluginPrefixes.some((prefix) => relative.startsWith(prefix)),
+  );
   if (!files.includes("dist/entry.js") && !files.includes("dist/entry.mjs")) {
     throw new Error(
       "Cloud bootstrap is missing its built CLI entry; run pnpm build and restart the Gateway",

@@ -125,6 +125,17 @@ stages a separate package directory without source `node_modules`, and runs a
 script-free npm install there for runtime dependencies. It then packs or publishes
 the plugin tarball with those dependency files included and removes the staging
 directory. The pnpm-owned source dependency tree stays unchanged.
+
+When a direct runtime dependency has an approved workspace patch for its exact version, npm and
+ClawHub packaging include that dependency from the matching frozen pnpm
+install. Packaging verifies the installed patch identity and packs its bytes
+into the temporary dependency install, then restores the original public
+version specifier in the published manifest. This also applies when bundling
+all runtime dependencies is disabled; unrelated dependencies retain their
+normal install behavior. A stale source install or an explicit
+`bundleRuntimeDependencies: false` opt-out stops packaging rather than
+publishing an unpatched dependency.
+
 Native-heavy packages (Codex, ACPX, Copilot, llama.cpp,
 memory-lancedb, Microsoft Teams, Tlon) opt out with
 `openclaw.release.bundleRuntimeDependencies: false`; they still ship a

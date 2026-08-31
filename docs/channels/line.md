@@ -267,6 +267,9 @@ as untrusted.
   member who has not added the bot as a friend. If either lookup fails the raw
   id is used and the message is still delivered. Multi-person rooms have no name
   API, so they keep their room id.
+- LINE describes inline emoji with metadata and alternative text. Empty `()`
+  alternatives reach the agent as `[emoji]`; meaningful alternatives such as
+  `(hello)` and parentheses typed by the sender are preserved.
 
 ## Structured rich messages
 

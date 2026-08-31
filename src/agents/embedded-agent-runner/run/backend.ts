@@ -8,6 +8,7 @@ import {
 import type { AgentHarness } from "../../harness/types.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { settleRequesterAfterSessionSpawns } from "../../subagents/registry/subagent-registry.js";
+import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /** Replaces backend-retained provenance with the exact prepared request fact. */
@@ -48,10 +49,10 @@ export async function runEmbeddedAttemptWithBackend(
   }
   const { modelAttempt: _backendModelAttempt, ...attempt } = result;
   const modelAttempt = resolveRuntimeModelAttempt(params.runtimePlan);
-  return {
+  return copyCoreTtsAttemptResultProvenance(result, {
     ...attempt,
     ...(modelAttempt ? { modelAttempt } : {}),
-  };
+  });
 }
 
 /** Runs one operation-specific settled-turn finalization through the selected harness. */

@@ -3,7 +3,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  resolveSessionAgentId,
+} from "../agents/agent-scope.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   canonicalizeMainSessionAlias,
@@ -143,8 +147,21 @@ export function resolveSessionStoreKey(params: {
   return canonicalizeSessionKeyForAgent(agentId, raw);
 }
 
-/** Resolve the agent that owns a canonical session-store key. */
-export function resolveSessionStoreAgentId(cfg: OpenClawConfig, canonicalKey: string): string {
+/** Resolve ownership before a prepared agent's main alias collapses to global. */
+export function resolveSessionStoreAgentId(
+  cfg: OpenClawConfig,
+  canonicalKey: string,
+  explicitAgentId?: string,
+): string {
+  if (explicitAgentId) {
+    const parsed = parseAgentSessionKey(canonicalKey);
+    const sessionKey = parsed
+      ? resolveParsedSessionStoreKey(cfg, canonicalKey, parsed, {
+          storeAgentId: explicitAgentId,
+        }).sessionKey
+      : canonicalKey;
+    return resolveSessionAgentId({ config: cfg, sessionKey, agentId: explicitAgentId });
+  }
   if (canonicalKey === "global" || canonicalKey === "unknown") {
     return resolveLogicalSessionStoreAgentId(cfg, canonicalKey);
   }

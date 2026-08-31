@@ -54,7 +54,6 @@ const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
 export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
   "Could not store the previous draft in browser storage. It remains available in this tab.";
 
-export { INTERRUPTED_SETTINGS_WAIT_ERROR } from "../../lib/chat/outbox-store-codec.ts";
 export { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 export { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 export type { ChatComposerScope, StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";

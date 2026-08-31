@@ -10,11 +10,9 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import {
-  loadChatHistory,
-  resetChatHistoryProjection,
-  type ChatHistoryResult,
-} from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { resetChatHistoryProjection } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   appendChatThread,
   createNativeShowEarlierPane,
@@ -357,7 +355,7 @@ describe("chat pane native history pagination", () => {
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
-  it("auto-loads a visible sentinel when the initial tail is not scrollable", async () => {
+  it("bootstraps a visible history tail once the viewport can fit it", async () => {
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
       hasMore: false,
@@ -369,8 +367,9 @@ describe("chat pane native history pagination", () => {
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
     const thread = document.createElement("div");
     thread.className = "chat-thread";
-    Object.defineProperty(thread, "scrollHeight", { value: 100 });
-    Object.defineProperty(thread, "clientHeight", { value: 200 });
+    Object.defineProperty(thread, "scrollHeight", { value: 400 });
+    let clientHeight = 200;
+    Object.defineProperty(thread, "clientHeight", { get: () => clientHeight });
     const sentinel = document.createElement("div");
     sentinel.className = "chat-history-sentinel";
     thread.append(sentinel);
@@ -390,6 +389,9 @@ describe("chat pane native history pagination", () => {
     }
     vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
     try {
+      pane.syncHistoryObserver();
+      expect(request).not.toHaveBeenCalled();
+      clientHeight = 600;
       pane.syncHistoryObserver();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       expect(observe).toHaveBeenCalledWith(sentinel);
@@ -641,8 +643,9 @@ describe("chat pane native history pagination", () => {
     expect(pane.historyAutoLoadBlocked).toBe(false);
   });
 
-  it("reuses an unchanged armed history observer across pane updates", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+  it("reuses an armed history observer and ignores its queued callback after reset", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
     pane.historyObserverArmed = true;
@@ -657,10 +660,11 @@ describe("chat pane native history pagination", () => {
     vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const observe = vi.fn();
     const disconnect = vi.fn();
-    const construct = vi.fn();
+    const construct =
+      vi.fn<(callback: IntersectionObserverCallback, observer: IntersectionObserver) => void>();
     class FakeIntersectionObserver {
-      constructor() {
-        construct();
+      constructor(callback: IntersectionObserverCallback) {
+        construct(callback, this as unknown as IntersectionObserver);
       }
       disconnect() {
         disconnect();
@@ -678,6 +682,12 @@ describe("chat pane native history pagination", () => {
       expect(observe).toHaveBeenCalledOnce();
       expect(observe).toHaveBeenCalledWith(sentinel);
       expect(disconnect).not.toHaveBeenCalled();
+
+      pane.resetOlderMessagesViewport();
+      const [notify, observer] = construct.mock.calls[0]!;
+      notify([{ isIntersecting: true } as IntersectionObserverEntry], observer);
+      await Promise.resolve();
+      expect(request).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }

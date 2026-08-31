@@ -184,36 +184,6 @@ describe("stripThinkingTags", () => {
     expect(stripThinkingTags("<final\nHello")).toBe("<final\nHello");
     expect(stripThinkingTags("Hello</final>")).toBe("Hello");
   });
-
-  it("strips <relevant-memories> blocks", () => {
-    const input = [
-      "<relevant-memories>",
-      "The following memories may be relevant to this conversation:",
-      "- Internal memory note",
-      "</relevant-memories>",
-      "",
-      "User-visible answer",
-    ].join("\n");
-    expect(stripThinkingTags(input)).toBe("User-visible answer");
-  });
-
-  it("keeps relevant-memories tags in fenced code blocks", () => {
-    const input = [
-      "```xml",
-      "<relevant-memories>",
-      "sample",
-      "</relevant-memories>",
-      "```",
-      "",
-      "Visible text",
-    ].join("\n");
-    expect(stripThinkingTags(input)).toBe(input);
-  });
-
-  it("hides unfinished <relevant-memories> block tails", () => {
-    const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello\n");
-  });
 });
 
 describe("formatUnknownText", () => {

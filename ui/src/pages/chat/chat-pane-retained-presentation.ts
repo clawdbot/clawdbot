@@ -2,7 +2,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
-import { loadChatBranches, retireChatBranchRequests } from "./chat-history.ts";
+import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import {
   consumePaneSessionHandoff,

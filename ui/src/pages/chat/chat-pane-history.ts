@@ -18,19 +18,20 @@ import {
   cloneChatAttachmentsForIndependentOwner,
   replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
+import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
-  commitCurrentChatHistorySnapshot,
   fetchStagedOlderHistoryPage,
   isStagedOlderHistoryPageCurrent,
-  loadChatHistory,
   loadOlderChatHistoryPage,
-  resolveChatHistoryPagination,
-  rewindChatHistory,
-  switchChatHistoryBranch,
-  type ChatHistoryResult,
   type StagedOlderHistoryPage,
-} from "./chat-history.ts";
+} from "./chat-history-request.ts";
+import {
+  commitCurrentChatHistorySnapshot,
+  resolveChatHistoryPagination,
+  type ChatHistoryResult,
+} from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
   CHAT_HISTORY_PREFETCH_EDGE_PX,
@@ -130,18 +131,9 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return;
     }
     this.transcriptScrollTop ??= root.scrollTop;
-    const threadIsScrollable = root.scrollHeight > root.clientHeight;
-    const bootstrap = !this.historyObserverArmed && !threadIsScrollable;
+    const bootstrap = !this.historyObserverArmed;
     if (this.historyAutoLoadBlocked) {
       this.clearHistoryObserver();
-      return;
-    }
-    if (!this.historyObserverArmed && !bootstrap) {
-      this.clearHistoryObserver();
-      if (!threadIsScrollable) {
-        this.historyAutoLoadBlocked = true;
-        this.requestUpdate();
-      }
       return;
     }
     if (
@@ -154,11 +146,20 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     this.clearHistoryObserver();
     this.historyObserver = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          this.historyObserverArmed = false;
-          void this.loadOlderMessages();
+      (entries, observer) => {
+        // Disconnecting does not cancel queued notifications. Only the current
+        // observer may consume this pane's history intent.
+        if (this.historyObserver !== observer || !entries.some((entry) => entry.isIntersecting)) {
+          return;
         }
+        this.clearHistoryObserver();
+        // Bootstrap geometry matters only at the visible history boundary.
+        // Measuring here avoids forcing layout during every pane update.
+        if (bootstrap && root.scrollHeight > root.clientHeight) {
+          return;
+        }
+        this.historyObserverArmed = false;
+        void this.loadOlderMessages();
       },
       // Fire well before the wall: a page fetch takes long enough that a short
       // margin guarantees the user hits the top before the prepend lands. The

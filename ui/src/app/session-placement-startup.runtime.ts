@@ -22,7 +22,7 @@ import {
 } from "../lib/sessions/session-placement-submit.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { restoreChatApiAttachments } from "../pages/chat/attachment-api.ts";
-import { buildLocalUserMessage } from "../pages/chat/user-message-content.ts";
+import { prepareInitialUserMessageHandoff } from "../pages/chat/initial-turn-handoff.ts";
 import {
   capturePlacementStartupConnection,
   type ApplicationPlacementStartupRuntime,
@@ -152,21 +152,13 @@ export default function createApplicationPlacementStartupRuntime(
     recovery: SessionPlacementRecovery,
     result: Extract<SessionPlacementDraftAdvanceResult, { status: "started" }>,
   ) => {
-    const message = buildLocalUserMessage({
-      text: recovery.message,
-      attachments: entry.attachments,
-      createdAt: entry.createdAt,
-      runId: result.messageId,
-      sequence: result.messageSeq,
-    });
-    if (message) {
-      params.initialUserMessage.prepare({
-        sessionKey: entry.owner.sessionKey,
-        owner: entry.scope.client,
-        pendingRunId: result.messageId,
-        message,
-      });
-    }
+    prepareInitialUserMessageHandoff(
+      params.initialUserMessage,
+      entry.owner.sessionKey,
+      { text: recovery.message, attachments: entry.attachments, createdAt: entry.createdAt },
+      entry.scope.client,
+      { runId: result.messageId },
+    );
   };
 
   const refreshAfterFailure = (entry: PlacementStartupEntry) => {

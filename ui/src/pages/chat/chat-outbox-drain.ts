@@ -2,6 +2,14 @@ import { CHAT_INPUT_RUN_ID_MAX_CHARS } from "../../../../packages/gateway-protoc
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import {
+  listStoredChatOutboxes,
+  type StoredChatOutbox,
+} from "../../lib/chat/outbox-store-projection.ts";
+import {
+  storedChatOutboxScopeKey,
+  type StoredChatOutboxScope,
+} from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -17,7 +25,8 @@ import {
   type ChatCommandTarget,
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   consumeChatOutboxRetry,
   retryableGatewayDelayMs,
@@ -41,12 +50,6 @@ import {
   retireDeliveredQueuedUserTurn,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
-import {
-  listStoredChatOutboxes,
-  storedChatOutboxScopeKey,
-  type StoredChatOutbox,
-  type StoredChatOutboxScope,
-} from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { isChatBusy } from "./run-lifecycle.ts";

@@ -2,24 +2,12 @@
   position: relative;
   display: inline-block;
   flex: none;
-  width: 44px;
-  height: 44px;
   color: var(--file-icon-glyph);
-  background: var(--chat-file-icon-shell-dark) center / contain no-repeat;
-}
-
-.chat-attachment-file-icon[data-mode="preview-with-favicon"] {
-  width: 20px;
-  height: 20px;
-  background-image: var(--chat-file-icon-compact-dark);
+  background: var(--chat-file-icon-dark) center / contain no-repeat;
 }
 
 :root[data-theme-mode="light"] .chat-attachment-file-icon {
-  background-image: var(--chat-file-icon-shell-light);
-}
-
-:root[data-theme-mode="light"] .chat-attachment-file-icon[data-mode="preview-with-favicon"] {
-  background-image: var(--chat-file-icon-compact-light);
+  background-image: var(--chat-file-icon-light);
 }
 
 .chat-attachment-file-icon__overlay {

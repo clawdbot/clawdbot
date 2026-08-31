@@ -978,7 +978,6 @@ extensions/qa-lab/src/bus-state.ts	2
 extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
 extensions/qa-lab/src/cli.runtime.ts	9
-extensions/qa-lab/src/cli.ts	1
 extensions/qa-lab/src/codex-plugin.fixture.ts	2
 extensions/qa-lab/src/confidence-report.ts	2
 extensions/qa-lab/src/crabline-transport.ts	6
@@ -1865,7 +1864,7 @@ src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
-src/agents/failover-error.ts	22
+src/agents/failover-error.ts	15
 src/agents/failover/retry-evidence.ts	1
 src/agents/failover/signal-details.ts	1
 src/agents/fallback-skip-cache.ts	1
@@ -2206,7 +2205,7 @@ src/auto-reply/reply/session.ts	3
 src/auto-reply/reply/source-reply-delivery-runtime.ts	2
 src/auto-reply/reply/source-turn-id.ts	4
 src/auto-reply/reply/stage-sandbox-media.ts	1
-src/auto-reply/reply/strip-inbound-meta.ts	5
+src/auto-reply/reply/strip-inbound-meta.ts	4
 src/auto-reply/reply/system-event-session-key.ts	1
 src/auto-reply/templating.ts	1
 src/auto-reply/thinking.ts	1
@@ -2814,7 +2813,7 @@ src/gateway/chat-display-projection.canvas.ts	14
 src/gateway/chat-display-projection.core.ts	6
 src/gateway/chat-display-projection.helpers.ts	10
 src/gateway/chat-display-projection.history.ts	1
-src/gateway/chat-display-projection.sanitize.ts	16
+src/gateway/chat-display-projection.sanitize.ts	15
 src/gateway/chat-sanitize.ts	3
 src/gateway/chat-tool-titles.ts	2
 src/gateway/cli-session-history.claude-activity.ts	1
@@ -2991,7 +2990,6 @@ src/gateway/server/ws-connection.ts	3
 src/gateway/server/ws-connection/authenticated-request-dispatch.ts	1
 src/gateway/server/ws-connection/connect-device-metadata.ts	1
 src/gateway/server/ws-connection/connect-node-session.ts	1
-src/gateway/server/ws-connection/connect-session.ts	1
 src/gateway/server/ws-connection/message-handler.ts	10
 src/gateway/server/ws-connection/worker-connection.ts	2
 src/gateway/session-compaction-checkpoints.ts	7
@@ -3257,7 +3255,7 @@ src/infra/system-run-approval-context.ts	6
 src/infra/tailscale.ts	9
 src/infra/terminal-file-upload.ts	2
 src/infra/tmp-openclaw-dir.ts	3
-src/infra/unhandled-rejections.ts	7
+src/infra/unhandled-rejections.ts	6
 src/infra/update-check-package-target.ts	3
 src/infra/update-doctor-result.ts	2
 src/infra/update-global.ts	3
@@ -3293,7 +3291,6 @@ src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
 src/logging/logger.ts	14
-src/logging/node-require.ts	2
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	3
@@ -3602,7 +3599,7 @@ src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
 src/projects/project-registry.ts	1
-src/provider-runtime/operation-retry.ts	4
+src/provider-runtime/operation-retry.ts	3
 src/proxy-capture/env.ts	1
 src/proxy-capture/runtime.ts	10
 src/proxy-capture/store.sqlite.ts	27
@@ -3967,9 +3964,8 @@ ui/src/lib/board/widget-sandbox-host.ts	1
 ui/src/lib/board/widgets/workboard-card.ts	3
 ui/src/lib/board/widgets/workboard-widget.ts	2
 ui/src/lib/channels/index.ts	3
-ui/src/lib/chat/heartbeat-display.ts	4
 ui/src/lib/chat/message-extract.ts	7
-ui/src/lib/chat/message-normalizer.ts	3
+ui/src/lib/chat/message-normalizer.ts	2
 ui/src/lib/chat/outbox-store-codec.ts	1
 ui/src/lib/chat/outbox-store.ts	1
 ui/src/lib/chat/tool-call-patch.ts	1
@@ -4020,7 +4016,6 @@ ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4
 ui/src/pages/chat/chat-gateway.ts	2
 ui/src/pages/chat/chat-history-retry.ts	1
-ui/src/pages/chat/chat-history.ts	3
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-page.ts	1
 ui/src/pages/chat/chat-pane-board.ts	2
@@ -4067,7 +4062,6 @@ ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
 ui/src/pages/chat/components/chat-swarm-progress.ts	2
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	6
-ui/src/pages/chat/components/chat-tool-cards.ts	2
 ui/src/pages/chat/components/chat-voice-activity.ts	1
 ui/src/pages/chat/components/session-diff-menus.ts	1
 ui/src/pages/chat/components/session-diff-panel.ts	2
@@ -4088,7 +4082,6 @@ ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	1
 ui/src/pages/chat/session-cache.ts	2
 ui/src/pages/chat/stream-reconciliation.ts	11
-ui/src/pages/chat/tool-stream.ts	5
 ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/config-page.ts	1
 ui/src/pages/config/config-sections.ts	1

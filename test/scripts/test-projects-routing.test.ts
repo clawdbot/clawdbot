@@ -6,7 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-vitest.mts";
-import { withEnv } from "../test-utils/env.js";
+import { withEnv } from "../../src/test-utils/env.js";
 
 const {
   applyParallelVitestCachePaths,
@@ -89,7 +89,7 @@ describe("test-projects args", () => {
     },
     {
       title: "routes script tests to the tooling config",
-      target: "src/scripts/test-projects.test.ts",
+      target: "test/scripts/test-projects-routing.test.ts",
       config: "test/vitest/vitest.tooling.config.ts",
     },
     {

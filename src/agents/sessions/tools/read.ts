@@ -43,7 +43,14 @@ import {
   readToolInputSchema,
   readToolOutputSchema,
 } from "./read-tool-contract.js";
-import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
+import {
+  getTextOutput,
+  invalidArgText,
+  replaceTabs,
+  shortenPath,
+  str,
+  trimTrailingEmptyLines,
+} from "./render-utils.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
@@ -180,14 +187,6 @@ function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme): string 
   const pathDisplay =
     path === null ? invalidArg : path ? theme.fg("accent", path) : theme.fg("toolOutput", "...");
   return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${formatReadLineRange(args, theme)}`;
-}
-
-function trimTrailingEmptyLines(lines: string[]): string[] {
-  let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") {
-    end--;
-  }
-  return lines.slice(0, end);
 }
 
 function getOpenClawDocsClassification(

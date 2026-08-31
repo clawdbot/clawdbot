@@ -998,6 +998,10 @@ approval resumes, policy summaries, background monitor
 deltas, and command continuations that should be visible to the model on the
 next turn but should not become permanent system prompt text.
 
+Pass `agentId` with an unscoped `sessionKey`, such as `global`, when multiple
+agents are configured. Enqueueing, consumption, and plugin session state stay in
+that agent's store; the owner selector is not part of the persisted injection.
+
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
 `restart`. The host removes the owning plugin's persistent session extension
