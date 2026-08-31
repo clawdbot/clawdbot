@@ -5032,15 +5032,23 @@ describe("update-cli", () => {
     expect(logs).toContain("expected installed version 2026.3.23-2, found 2026.3.23");
   });
 
-  it("stops package post-update work when staged npm install verification fails", async () => {
+  it("recovers the old package when staged npm verification fails", async () => {
     const tempDir = tempDirs.make("openclaw-update-staged-fail-");
     const prefix = path.join(tempDir, "prefix");
     const nodeModules = path.join(prefix, "lib", "node_modules");
-    const { pkgRoot } = await setupInstalledPackageAtNodeModules(nodeModules, "2026.4.20");
+    const { pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
+      nodeModules,
+      "2026.4.20",
+    );
+    mockFileBackedPathExists();
+    mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entryPath);
     readPackageVersion.mockResolvedValue("2026.4.20");
     primeNpmChannelTag("latest", "2026.4.25");
     mockNpmGlobalCommands(nodeModules, async (argv) => {
       if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
+        expect(serviceStop).toHaveBeenCalledOnce();
+        expect(freshRestartCalls()).toEqual([]);
         const stagePrefix = argv[argv.indexOf("--prefix") + 1];
         if (typeof stagePrefix !== "string") {
           throw new Error("missing stage prefix");
@@ -5058,7 +5066,7 @@ describe("update-cli", () => {
       }
     });
 
-    await updateCommand({ yes: true, restart: false });
+    await updateCommand({ yes: true });
 
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(doctorCommandCall()).toBeUndefined();
@@ -5069,6 +5077,13 @@ describe("update-cli", () => {
     const logs = getLogOutput();
     expect(logs).toContain("global install verify");
     expect(logs).toContain("unexpected packaged dist file dist/stale-runtime.js");
+    expect(freshRestartCalls()).toEqual([
+      [
+        [expect.any(String), entryPath, "gateway", "restart", "--preserve-definition"],
+        expect.objectContaining({ cwd: pkgRoot }),
+      ],
+    ]);
+    expectNoSideEffects(serviceStart, serviceRestart);
   });
 
   it("runs old package doctors without fix mode when service ownership is unknown", async () => {
