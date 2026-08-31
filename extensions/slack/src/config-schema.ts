@@ -52,6 +52,7 @@ const SlackChannelSchema = buildGroupEntrySchema(
   {
     ignoreOtherMentions: z.boolean().optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    ackReactionThreadScope: z.enum(["all", "parent-only"]).optional(),
     allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
@@ -118,6 +119,7 @@ const SlackAccountSchema = z
       reactionAllowlist: true,
       ackReaction: z.string().optional(),
     }),
+    ackReactionThreadScope: z.enum(["all", "parent-only"]).optional(),
     replyToModeByChatType: ReplyToModeByChatTypeSchema.optional(),
     thread: SlackThreadSchema.optional(),
     presenceEvents: SlackPresenceEventsSchema.optional(),

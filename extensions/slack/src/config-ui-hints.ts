@@ -45,6 +45,22 @@ export const slackChannelConfigUiHints = {
     label: "Slack Channel Join Introduction",
     help: "Post one brief, room-specific introduction when the bot joins an allowed Slack channel (default: true). Account settings override the channel-wide setting.",
   },
+  ackReactionThreadScope: {
+    label: "Slack Ack Reaction Thread Scope",
+    help: '"all" (default) allows acknowledgments on parents and replies; "parent-only" excludes thread replies, including mentions. Applies to status reactions too; messages.ackReactionScope still applies.',
+  },
+  "accounts.*.ackReactionThreadScope": {
+    label: "Slack Account Ack Reaction Thread Scope",
+    help: 'Override the default acknowledgment thread filter for this Slack account: "all" or "parent-only".',
+  },
+  "channels.*.ackReactionThreadScope": {
+    label: "Slack Channel Ack Reaction Thread Scope",
+    help: 'Override the account acknowledgment thread filter for this channel: "all" or "parent-only". Does not change message handling, reply threading, or typing reactions.',
+  },
+  "accounts.*.channels.*.ackReactionThreadScope": {
+    label: "Slack Account Channel Ack Reaction Thread Scope",
+    help: 'Override the account acknowledgment thread filter for this channel: "all" or "parent-only". Does not change message handling, reply threading, or typing reactions.',
+  },
   allowBots: {
     label: "Slack Allow Bot Messages",
     help: "Allow bot-authored messages to trigger Slack replies (default: false).",

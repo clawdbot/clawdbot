@@ -747,6 +747,46 @@ describe("monitorSlackProvider tool results", () => {
     );
   });
 
+  it("delivers parent-only thread replies without acknowledgment or lifecycle reactions", async () => {
+    const config = defaultSlackTestConfig();
+    slackTestState.config = {
+      ...config,
+      messages: {
+        ...config.messages,
+        groupChat: { visibleReplies: "automatic" },
+        statusReactions: { enabled: true },
+      },
+      channels: {
+        slack: { ...config.channels.slack, ackReactionThreadScope: "parent-only" },
+      },
+    };
+    replyMock.mockResolvedValue({ text: "ok" });
+
+    for (const message of [{ ts: "456", thread_ts: "123", parent_user_id: "U2" }, { ts: "789" }]) {
+      mockGeneralChannelInfo();
+      await runSlackMessageOnce(
+        monitorSlackProvider,
+        {
+          event: makeSlackMessageEvent({
+            text: "<@bot-user> hello",
+            channel_type: "channel",
+            ...message,
+          }),
+        },
+        { awaitDispatch: true },
+      );
+    }
+
+    expect(replyMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(firstMockRecordArg(sendMock, "send", 2).threadTs).toBe("123");
+    // Wait for the parent's static acknowledgement before checking detached reaction work.
+    await vi.waitFor(() => expect(reactMock).toHaveBeenCalled(), { timeout: 5_000 });
+    for (const [reaction] of reactMock.mock.calls) {
+      expect(reaction).toMatchObject({ channel: "C1", timestamp: "789", name: "eyes" });
+    }
+  });
+
   it("keeps ack reaction after sending the missing-reply fallback when status reactions are enabled", async () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(true);

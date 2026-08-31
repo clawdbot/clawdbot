@@ -1810,6 +1810,95 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
+  describe.each([false, true])("ack thread filtering with status reactions=%s", (statusEnabled) => {
+    it.each([
+      ["parent", "parent-only", undefined, undefined, undefined, true],
+      ["self-thread root", "parent-only", undefined, "2.000", undefined, true],
+      ["reply", "parent-only", undefined, "1.000", "U2", false],
+      ["reply with self timestamp", "parent-only", undefined, "2.000", "U2", false],
+      ["channel override", "all", "parent-only", "1.000", "U2", false],
+      ["channel opt-out", "parent-only", "all", "1.000", "U2", true],
+      ["unchanged default", undefined, undefined, "1.000", "U2", true],
+    ] as const)(
+      "%s keeps message handling and filters only acknowledgments",
+      async (_label, accountScope, channelScope, threadTs, parentUserId, shouldAck) => {
+        const addReaction = vi.fn().mockResolvedValue({ ok: true });
+        const slackCtx = createInboundSlackCtx({
+          cfg: {
+            messages: {
+              ackReaction: "eyes",
+              statusReactions: { enabled: statusEnabled },
+            },
+            channels: { slack: { enabled: true, groupPolicy: "open" } },
+          },
+          channelsConfig: { C123: { ackReactionThreadScope: channelScope } },
+          replyToMode: "all",
+          appClient: { reactions: { add: addReaction } } as unknown as App["client"],
+        });
+        slackCtx.resolveUserName = async () => ({ name: "Alice" });
+        slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+        const prepared = await prepareMessageWith(
+          slackCtx,
+          createSlackAccount({ ackReactionThreadScope: accountScope, replyToMode: "all" }),
+          createSlackMessage({
+            channel: "C123",
+            channel_type: "channel",
+            text: "<@B1> hi",
+            ts: "2.000",
+            thread_ts: threadTs,
+            parent_user_id: parentUserId,
+          }),
+        );
+
+        assertPrepared(prepared);
+        expect(prepared.ctxPayload.MessageSid).toBe("2.000");
+        expect(prepared.ctxPayload.ReplyToId).toBe(parentUserId ? threadTs : undefined);
+        expect(prepared.replyToMode).toBe("all");
+        if (shouldAck) {
+          expect(await prepared.ackReactionPromise).toBe(true);
+        } else {
+          expect(prepared.ackReactionPromise).toBeNull();
+        }
+        expect(addReaction).toHaveBeenCalledTimes(shouldAck && !statusEnabled ? 1 : 0);
+      },
+    );
+  });
+
+  it.each([
+    ["DM parent", "im", "all", undefined, true],
+    ["DM reply", "im", "all", "1.000", false],
+    ["DM excluded by ack scope", "im", "group-all", undefined, false],
+    ["group DM parent", "mpim", "group-all", undefined, true],
+    ["group DM reply", "mpim", "group-all", "1.000", false],
+  ] as const)(
+    "%s applies parent-only filtering without widening the acknowledgement scope",
+    async (_label, channelType, scope, threadTs, shouldAck) => {
+      const addReaction = vi.fn().mockResolvedValue({ ok: true });
+      const slackCtx = createInboundSlackCtx({
+        cfg: { messages: { ackReaction: "eyes" }, channels: { slack: { enabled: true } } },
+        appClient: { reactions: { add: addReaction } } as unknown as App["client"],
+      });
+      slackCtx.ackReactionScope = scope;
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount({ ackReactionThreadScope: "parent-only" }),
+        createSlackMessage({
+          channel: channelType === "mpim" ? "G123" : "D123",
+          channel_type: channelType,
+          ts: "2.000",
+          thread_ts: threadTs,
+        }),
+      );
+
+      assertPrepared(prepared);
+      expect(await prepared.ackReactionPromise).toBe(shouldAck ? true : null);
+      expect(addReaction).toHaveBeenCalledTimes(shouldAck ? 1 : 0);
+    },
+  );
+
   it("keeps unmentioned room events quiet when ack scope does not force all messages", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
