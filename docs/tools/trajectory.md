@@ -54,6 +54,10 @@ bundle; do not use allow-all. In group chats, OpenClaw sends the approval
 prompt and export result to the owner privately instead of posting trajectory
 details back to the shared room.
 
+The command reports the current export status. Only a pending approval asks you
+to approve; a running or completed export does not need another approval. If
+execution could not be confirmed, inspect the existing run before trying again.
+
 For local inspection or support workflows, run the underlying CLI command
 directly:
 

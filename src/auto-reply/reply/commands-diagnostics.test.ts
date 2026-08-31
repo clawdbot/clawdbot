@@ -12,6 +12,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 type PluginCommandHandler = OpenClawPluginCommandDefinition["handler"];
 import type { MsgContext } from "../templating.js";
 import { handleDiagnosticsCommand as defaultDiagnosticsCommandHandler } from "./commands-diagnostics.js";
+import { exportExecOutcomeCases } from "./commands-export-test-mocks.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const diagnosticsCommandMocks = vi.hoisted(() => ({
@@ -299,6 +300,29 @@ afterEach(() => {
 });
 
 describe("diagnostics command", () => {
+  it.each(exportExecOutcomeCases)(
+    "reports typed export status: $name",
+    async ({ name, details, lead }) => {
+      const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest({
+        execResult: { content: [{ type: "text", text: "untyped output" }], details },
+      });
+      if (name === "thrown") {
+        diagnosticsCommandMocks.createExecTool.mockReturnValue({
+          execute: async () => {
+            throw new Error("transport interrupted");
+          },
+        });
+      }
+      const result = await handleDiagnosticsCommand(buildDiagnosticsParams("/diagnostics"), true);
+      expect(result?.reply?.text).toContain(lead);
+      expect(result?.reply?.text).not.toContain("Approve once");
+      expect(result?.reply?.text).not.toContain("approval prompts");
+      if (details && "aggregated" in details) {
+        expect(result?.reply?.text).toContain("typed output");
+      }
+    },
+  );
+
   it("requests Gateway diagnostics approval without a duplicate pending chat reply", async () => {
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(buildDiagnosticsParams("/diagnostics"), true);
@@ -539,7 +563,7 @@ describe("diagnostics command", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe(
-      "Diagnostics are sensitive. I sent the diagnostics details and approval prompts to the owner privately.",
+      "Diagnostics approval is pending. Use the private owner approval route to review it.",
     );
     expect(result?.reply?.text).not.toContain("codex-thread-1");
     expect(privateReplies).toHaveLength(0);
@@ -606,7 +630,7 @@ describe("diagnostics command", () => {
     );
 
     expect(result?.reply?.text).toBe(
-      "Diagnostics are sensitive. I sent the diagnostics details and approval prompts to the owner privately.",
+      "Diagnostics are sensitive. I sent the export status to the owner privately.",
     );
     expect(privateReplies).toHaveLength(1);
     expect(privateReplies[0]?.targets).toEqual([

@@ -5,6 +5,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import {
   claimExecApprovalFollowupRuntimeHandoff,
   finalizeExecApprovalFollowupRuntimeHandoff,
   isExecApprovalFollowupSessionRebound,
@@ -13,11 +17,20 @@ import {
 import {
   buildExecApprovalPendingToolResult,
   buildHeadlessExecApprovalDeniedMessage,
+  buildExecApprovalFollowupTarget,
   createExecApprovalRequestRoute,
   resolveExecApprovalWaitOutcome,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
+import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "./prepared-model-runtime-generation-scope.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 const mocks = vi.hoisted(() => ({
   resolveExecApprovals: vi.fn(async () => ({
@@ -61,6 +74,36 @@ vi.mock("./bash-tools.exec-approval-request.js", async (importOriginal) => {
 describe("sendExecApprovalFollowupResult", () => {
   const sendExecApprovalFollowup = vi.fn();
   const logWarn = vi.fn();
+
+  it("leaves only the inherited model scope at the followup turn boundary", async () => {
+    const generation = {
+      inlineProviderModels: [],
+      configuredCatalogEntries: [],
+      pluginMetadataSnapshot: createPluginMetadataSnapshot({ manifestRegistry: makeRegistry([]) }),
+    };
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:main" },
+      async () => {
+        const caller = getGatewayToolCallerIdentity();
+        await withPreparedModelRuntimePluginGenerationScope(generation, async () => {
+          await sendExecApprovalFollowupResult(
+            buildExecApprovalFollowupTarget({ approvalId: "scope", sessionKey: "agent:main:main" }),
+            "Exec finished",
+            {
+              sendExecApprovalFollowup: async () => {
+                expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
+                expect(getGatewayToolCallerIdentity()).toBe(caller);
+                return true;
+              },
+              logWarn,
+            },
+          );
+          expect(logWarn).not.toHaveBeenCalled();
+          expect(getPreparedModelRuntimePluginGeneration()).toBe(generation);
+        });
+      },
+    );
+  });
 
   beforeEach(() => {
     sendExecApprovalFollowup.mockReset();
@@ -108,10 +151,10 @@ describe("sendExecApprovalFollowupResult", () => {
   it("logs repeated followup dispatch failures once per approval id and error message", async () => {
     sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
 
-    const target = {
+    const target = buildExecApprovalFollowupTarget({
       approvalId: "approval-log-once",
       sessionKey: "agent:main:main",
-    };
+    });
     const deps = { sendExecApprovalFollowup, logWarn };
     await sendExecApprovalFollowupResult(target, "Exec finished", deps);
     await sendExecApprovalFollowupResult(target, "Exec finished", deps);
@@ -144,10 +187,10 @@ describe("sendExecApprovalFollowupResult", () => {
     sendExecApprovalFollowup.mockRejectedValue(error);
 
     await sendExecApprovalFollowupResult(
-      {
+      buildExecApprovalFollowupTarget({
         approvalId: "approval-expired",
         sessionKey: "agent:main:main",
-      },
+      }),
       "Exec finished",
       { sendExecApprovalFollowup, logWarn },
     );
@@ -162,19 +205,19 @@ describe("sendExecApprovalFollowupResult", () => {
 
     for (let i = 0; i < failureKeysBeyondDedupeWindow; i += 1) {
       await sendExecApprovalFollowupResult(
-        {
+        buildExecApprovalFollowupTarget({
           approvalId: `approval-${i}`,
           sessionKey: "agent:main:main",
-        },
+        }),
         "Exec finished",
         deps,
       );
     }
     await sendExecApprovalFollowupResult(
-      {
+      buildExecApprovalFollowupTarget({
         approvalId: "approval-0",
         sessionKey: "agent:main:main",
-      },
+      }),
       "Exec finished",
       deps,
     );
@@ -194,12 +237,12 @@ describe("sendExecApprovalFollowupResult", () => {
     };
 
     await sendExecApprovalFollowupResult(
-      {
+      buildExecApprovalFollowupTarget({
         approvalId: "approval-elevated-75832",
         sessionKey: "agent:main:telegram:direct:123",
         turnSourceChannel: "telegram",
         bashElevated,
-      },
+      }),
       "Exec finished",
       { sendExecApprovalFollowup, logWarn },
     );
@@ -281,12 +324,12 @@ describe("sendExecApprovalFollowupResult", () => {
     };
 
     await sendExecApprovalFollowupResult(
-      {
+      buildExecApprovalFollowupTarget({
         approvalId: "approval-denied-elevated-75832",
         sessionKey: "agent:main:telegram:direct:123",
         turnSourceChannel: "telegram",
         bashElevated,
-      },
+      }),
       "Exec denied (gateway id=approval-denied-elevated-75832, user-denied): uname -a",
       { sendExecApprovalFollowup, logWarn },
     );
@@ -301,11 +344,11 @@ describe("sendExecApprovalFollowupResult", () => {
     sendExecApprovalFollowup.mockResolvedValue(true);
 
     await sendExecApprovalFollowupResult(
-      {
+      buildExecApprovalFollowupTarget({
         approvalId: "approval-normal-75832",
         sessionKey: "agent:main:telegram:direct:123",
         turnSourceChannel: "telegram",
-      },
+      }),
       "Exec finished",
       { sendExecApprovalFollowup, logWarn },
     );
@@ -346,12 +389,12 @@ describe("sendExecApprovalFollowupResult", () => {
     sendExecApprovalFollowup.mockResolvedValue(true);
 
     await sendExecApprovalFollowupResult(
-      {
+      buildExecApprovalFollowupTarget({
         approvalId: "approval-session-pin-59349",
         sessionKey: "agent:main:telegram:direct:123",
         expectedSessionId: "session-original",
         turnSourceChannel: "telegram",
-      },
+      }),
       "Exec finished",
       { sendExecApprovalFollowup, logWarn },
     );
@@ -363,11 +406,11 @@ describe("sendExecApprovalFollowupResult", () => {
     sendExecApprovalFollowup.mockResolvedValue(true);
 
     await sendExecApprovalFollowupResult(
-      {
+      buildExecApprovalFollowupTarget({
         approvalId: "approval-bare-owner",
         agentId: "research",
         sessionKey: "global",
-      },
+      }),
       "Exec finished",
       { sendExecApprovalFollowup, logWarn },
     );

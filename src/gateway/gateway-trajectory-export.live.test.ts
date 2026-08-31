@@ -5,8 +5,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import { listFinishedSessions, waitForExecScope } from "../agents/bash-process-registry.js";
+import { parseExecApprovalFollowupApprovalId } from "../agents/bash-tools.exec-approval-followup-state.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { onAgentEvent } from "../infra/agent-events.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import { GatewayClient } from "./client.js";
@@ -16,7 +20,12 @@ import {
   ensurePairedTestGatewayClientIdentity,
   getCliBackendPortBlock,
 } from "./gateway-cli-backend.live-helpers.js";
-import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
+import {
+  createTrajectoryExportFixture,
+  joinBeforeDeadline,
+  remainingCompletionMs,
+  settleTrajectoryExportWork,
+} from "./gateway-trajectory-export.test-support.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
@@ -53,7 +62,7 @@ type TrajectoryExportApprovalSummary = {
 };
 
 type TrajectoryExportSignal = {
-  approvalId?: string;
+  approvalId: string;
   instructionText: string;
 };
 
@@ -63,35 +72,6 @@ function logLiveStep(step: string, details?: Record<string, unknown>): void {
   }
   const suffix = details && Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : "";
   console.error(`[gateway-trajectory-live] ${step}${suffix}`);
-}
-
-function snapshotEnv(): LiveEnvSnapshot {
-  return snapshotLiveEnv(["OPENCLAW_TRAJECTORY", "OPENCLAW_TRAJECTORY_DIR"]);
-}
-
-function restoreEnv(snapshot: LiveEnvSnapshot): void {
-  restoreLiveEnv(snapshot);
-}
-
-async function removeLiveTempDir(dir: string): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-      return;
-    } catch (error) {
-      lastError = error;
-      const code = (error as { code?: unknown } | null)?.code;
-      if (code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EPERM" && code !== "EACCES") {
-        throw error;
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, 100);
-      });
-    }
-  }
-  await fs.rm(dir, { recursive: true, force: true });
-  void lastError;
 }
 
 async function writeLiveGatewayConfig(params: {
@@ -148,6 +128,7 @@ async function connectGatewayClient(params: {
 async function requestAgentExactReply(params: {
   client: GatewayClient;
   expectedToken: string;
+  runId: string;
   message: string;
   sessionKey: string;
 }): Promise<string> {
@@ -155,7 +136,7 @@ async function requestAgentExactReply(params: {
     "agent",
     {
       sessionKey: params.sessionKey,
-      idempotencyKey: `idem-${randomUUID()}`,
+      idempotencyKey: params.runId,
       message: params.message,
       deliver: false,
       thinking: "low",
@@ -280,6 +261,7 @@ async function waitForTrajectoryExportSignal(params: {
   client: GatewayClient;
   events: EventFrame[];
   eventStartIndex: number;
+  onApproval: (approval: TrajectoryExportApprovalEntry) => void;
   expectedTexts: string[];
   initialTexts?: string[];
   runId: string;
@@ -293,6 +275,14 @@ async function waitForTrajectoryExportSignal(params: {
   let nextHistoryPollAt = 0;
   while (Date.now() < deadline) {
     const newEvents = params.events.slice(params.eventStartIndex);
+    const projectedApproval = newEvents
+      .filter((event) => event.event === "exec.approval.requested")
+      .map((event) => event.payload as TrajectoryExportApprovalEntry)
+      .find(isTrajectoryExportApproval);
+    if (projectedApproval && !approvalId) {
+      params.onApproval(projectedApproval);
+      approvalId = await approveTrajectoryExport(params.client, projectedApproval);
+    }
     finalTexts = newEvents
       .map((event) => extractChatFinalText(event, params.runId))
       .filter((text): text is string => typeof text === "string" && text.trim().length > 0);
@@ -300,8 +290,8 @@ async function waitForTrajectoryExportSignal(params: {
       [...(params.initialTexts ?? []), ...finalTexts, ...(assistantTexts ?? [])],
       params.expectedTexts,
     );
-    if (matchedText) {
-      return { ...(approvalId ? { approvalId } : {}), instructionText: matchedText };
+    if (matchedText && approvalId) {
+      return { approvalId, instructionText: matchedText };
     }
     if (Date.now() >= nextHistoryPollAt) {
       try {
@@ -318,23 +308,12 @@ async function waitForTrajectoryExportSignal(params: {
           [...(params.initialTexts ?? []), ...finalTexts, ...assistantTexts],
           params.expectedTexts,
         );
-        if (matchedHistoryText) {
-          return { ...(approvalId ? { approvalId } : {}), instructionText: matchedHistoryText };
+        if (matchedHistoryText && approvalId) {
+          return { approvalId, instructionText: matchedHistoryText };
         }
       } catch {
         assistantTexts = [];
       }
-      try {
-        const approvals = (await params.client.request(
-          "exec.approval.list",
-          {},
-          { timeoutMs: 10_000 },
-        )) as TrajectoryExportApprovalEntry[];
-        const approval = approvals.find(isTrajectoryExportApproval);
-        if (approval && !approvalId) {
-          approvalId = await approveTrajectoryExport(params.client, approval);
-        }
-      } catch {}
       nextHistoryPollAt = Date.now() + 2_000;
     }
     await new Promise((resolve) => {
@@ -410,30 +389,10 @@ function extractVisibleMessageText(message: unknown): string | undefined {
 
 async function approveTrajectoryExport(
   client: GatewayClient,
-  existingApproval?: TrajectoryExportApprovalEntry,
+  approval: TrajectoryExportApprovalEntry,
 ): Promise<string> {
-  const startedAt = Date.now();
-  let approval: TrajectoryExportApprovalEntry | undefined = existingApproval;
-  let lastApprovalSummaries: TrajectoryExportApprovalSummary[] = [];
-  while (!approval && Date.now() - startedAt < 60_000) {
-    const approvals = (await client.request(
-      "exec.approval.list",
-      {},
-      { timeoutMs: 10_000 },
-    )) as TrajectoryExportApprovalEntry[];
-    lastApprovalSummaries = approvals.map(summarizeTrajectoryExportApproval);
-    approval = approvals.find(isTrajectoryExportApproval);
-    if (approval) {
-      break;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
-  }
-  if (!approval?.id) {
-    throw new Error(
-      `expected trajectory export approval id; approvals=${JSON.stringify(lastApprovalSummaries)}`,
-    );
+  if (!approval.id) {
+    throw new Error("expected projected trajectory export approval id");
   }
   expect(isTrajectoryExportApproval(approval)).toBe(true);
   await client.request(
@@ -444,28 +403,40 @@ async function approveTrajectoryExport(
   return approval.id;
 }
 
+type FollowupTerminal = {
+  runId: string;
+  status: string;
+  endedAt?: number;
+  error?: string;
+  pendingError?: boolean;
+};
+
+function expectSuccessfulFollowup(result: FollowupTerminal, runId: string): void {
+  expect(result.runId).toBe(runId);
+  expect(result.status).toBe("ok");
+  expect(result.endedAt).toEqual(expect.any(Number));
+  expect(result.error).toBeUndefined();
+  expect(result.pendingError).not.toBe(true);
+}
+
 describeLive("gateway live trajectory export", () => {
-  const cleanup: Array<() => Promise<void>> = [];
+  let fixture: Awaited<ReturnType<typeof createTrajectoryExportFixture>> | undefined;
 
   afterEach(async () => {
-    for (const step of cleanup.splice(0).toReversed()) {
-      await step();
-    }
+    const ownedFixture = fixture;
+    fixture = undefined;
+    await ownedFixture?.cleanup();
   });
 
   it(
     "exports a combined runtime and transcript trajectory bundle through the live gateway",
     async () => {
+      const testDeadline = Date.now() + LIVE_TIMEOUT_MS;
       const { clearRuntimeConfigSnapshot } = await import("../config/config.js");
       const { startGatewayServer } = await import("./server.js");
 
-      const previousEnv = snapshotEnv();
-      const tempDir = await fs.mkdtemp(path.join(process.cwd(), ".tmp-openclaw-trajectory-live-"));
-      cleanup.push(async () => {
-        restoreEnv(previousEnv);
-        clearRuntimeConfigSnapshot();
-        await removeLiveTempDir(tempDir);
-      });
+      fixture = await createTrajectoryExportFixture();
+      const { tempDir } = fixture;
 
       const stateDir = path.join(tempDir, "state");
       const trajectoryDir = path.join(tempDir, "runtime-traces");
@@ -507,9 +478,7 @@ describeLive("gateway live trajectory export", () => {
         controlUiEnabled: false,
       });
       logLiveStep("gateway-started", { port });
-      cleanup.push(async () => {
-        await server.close();
-      });
+      fixture.server = server;
 
       const gatewayEvents: EventFrame[] = [];
       const client = await connectGatewayClient({
@@ -520,17 +489,56 @@ describeLive("gateway live trajectory export", () => {
         },
       });
       logLiveStep("client-connected");
-      cleanup.push(async () => {
-        await client.stopAndWait({ timeoutMs: 5_000 });
-      });
+      fixture.client = client;
 
       const sessionKey = "agent:dev:live-trajectory-export";
+      const execScope = "chat:export-trajectory";
+      const firstRunId = `idem-${randomUUID()}`;
+      const exportRunId = `chat-export-${randomUUID()}`;
+      const ownedRunIds = new Set([firstRunId, exportRunId]);
+      let approvalId: string | undefined;
+      let approvedCommand: string | undefined;
+      const followupRunIds = new Set<string>();
+      let ambiguousFollowup = false;
+      let settled = false;
+      const stopAgentEvents = onAgentEvent((event) => {
+        if (!approvalId || parseExecApprovalFollowupApprovalId(event.runId) !== approvalId) {
+          return;
+        }
+        if (!followupRunIds.has(event.runId) && followupRunIds.size > 0) {
+          ambiguousFollowup = true;
+        }
+        // Only the exact approval is observed; retain at most two identities to detect ambiguity.
+        if (followupRunIds.size < 2) {
+          followupRunIds.add(event.runId);
+          ownedRunIds.add(event.runId);
+        }
+      });
+      fixture.settleOwnedWork = async () => {
+        try {
+          if (settled) {
+            return;
+          }
+          await settleTrajectoryExportWork({
+            client,
+            deadline: testDeadline,
+            execScope,
+            workspaceDir,
+            command: approvedCommand,
+            runIds: ownedRunIds,
+            sessionKey,
+          });
+        } finally {
+          stopAgentEvents();
+        }
+      };
       const replyToken = `TRAJECTORY-LIVE-${randomBytes(3).toString("hex").toUpperCase()}`;
       logLiveStep("agent-turn:start", { sessionKey, replyToken });
       const firstReply = await requestAgentExactReply({
         client,
         sessionKey,
         expectedToken: replyToken,
+        runId: firstRunId,
         message: `Reply with exactly ${replyToken} and nothing else.`,
       });
       logLiveStep("agent-turn:done", { firstReply });
@@ -553,7 +561,6 @@ describeLive("gateway live trajectory export", () => {
 
       const bundleDir = path.join(workspaceDir, ".openclaw", "trajectory-exports", "bundle");
       const beforeExport = new Set(await listDirectoryNames(tempDir));
-      const exportRunId = `chat-export-${randomUUID()}`;
       const exportEventStartIndex = gatewayEvents.length;
       logLiveStep("export:start", { bundleDir, exportRunId });
       const exportResponse = (await client.request(
@@ -575,6 +582,12 @@ describeLive("gateway live trajectory export", () => {
         client,
         events: gatewayEvents,
         eventStartIndex: exportEventStartIndex,
+        onApproval: (approval) => {
+          approvalId = approval.id;
+          approvedCommand = approval.request?.command ?? approval.command;
+          expect(approvalId).toEqual(expect.any(String));
+          expect(approvedCommand).toEqual(expect.any(String));
+        },
         expectedTexts: ["Trajectory exports can include", "through exec approval", "Approve once"],
         initialTexts:
           typeof exportResponse?.message === "object"
@@ -587,9 +600,13 @@ describeLive("gateway live trajectory export", () => {
       expect(exportSignal.instructionText).toContain("Trajectory exports can include");
       expect(exportSignal.instructionText).toContain("through exec approval");
       expect(exportSignal.instructionText).toContain("Approve once");
-      const approvalId = exportSignal.approvalId ?? (await approveTrajectoryExport(client));
+      expect(exportSignal.approvalId).toBe(approvalId);
+      const completionDeadline = Date.now() + 60_000;
       logLiveStep("export:approved", { approvalId });
-      await waitForPath(path.join(bundleDir, "events.jsonl"), 60_000);
+      await waitForPath(
+        path.join(bundleDir, "events.jsonl"),
+        remainingCompletionMs(completionDeadline),
+      );
       logLiveStep("export:done", { approvalId, finalText: exportSignal.instructionText });
       const bundleNames = await listDirectoryNames(bundleDir);
       for (const expectedName of [
@@ -630,6 +647,46 @@ describeLive("gateway live trajectory export", () => {
       expect(eventTypes.has("session.ended")).toBe(true);
       expect(eventTypes.has("user.message")).toBe(true);
       expect(eventTypes.has("assistant.message")).toBe(true);
+
+      await joinBeforeDeadline(waitForExecScope(execScope), completionDeadline);
+      const children = listFinishedSessions().filter(
+        (process) =>
+          process.scopeKey === execScope &&
+          process.cwd === workspaceDir &&
+          process.command === approvedCommand,
+      );
+      expect(children).toHaveLength(1);
+      const child = children[0]!;
+      expect(child.id).toEqual(expect.any(String));
+      expect(child).toMatchObject({ terminalStatus: "completed", exitCode: 0, exited: true });
+      expect(child.finalizing).not.toBe(true);
+      await expect
+        .poll(() => followupRunIds.size, { timeout: remainingCompletionMs(completionDeadline) })
+        .toBe(1);
+      expect(ambiguousFollowup).toBe(false);
+      const followupRunId = [...followupRunIds][0]!;
+      const terminal = await client.request<FollowupTerminal>(
+        "agent.wait",
+        {
+          runId: followupRunId,
+          timeoutMs: remainingCompletionMs(completionDeadline),
+        },
+        { timeoutMs: remainingCompletionMs(completionDeadline) },
+      );
+      expectSuccessfulFollowup(terminal, followupRunId);
+      const drained = await waitForGatewayActiveWork(remainingCompletionMs(completionDeadline));
+      expect(drained.drained).toBe(true);
+      expect(ambiguousFollowup).toBe(false);
+      const final = await client.request<FollowupTerminal>(
+        "agent.wait",
+        {
+          runId: followupRunId,
+          timeoutMs: 0,
+        },
+        { timeoutMs: remainingCompletionMs(completionDeadline) },
+      );
+      expectSuccessfulFollowup(final, followupRunId);
+      settled = true;
     },
     LIVE_TIMEOUT_MS,
   );

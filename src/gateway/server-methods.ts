@@ -684,6 +684,7 @@ export async function runWithGatewayRequestEnvelope<T>(
 /** Authorizes and dispatches one gateway JSON-RPC-style request. */
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
+  assertContextCurrent?: () => void,
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context, signal } = opts;
   // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
@@ -705,6 +706,9 @@ export async function handleGatewayRequest(
     respond(false, undefined, authorization.error);
     return;
   }
+  // Internal callers retain an instance owner across authorization's await.
+  // Check before admission; already-admitted work keeps its existing lifecycle.
+  assertContextCurrent?.();
   const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
   if (!handler) {
     respond(

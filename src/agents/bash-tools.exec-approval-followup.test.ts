@@ -26,7 +26,10 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
-import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
+import {
+  captureExecApprovalFollowupGateway,
+  sendExecApprovalFollowup,
+} from "./bash-tools.exec-approval-followup.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const tempStoreDirs: string[] = [];
@@ -123,6 +126,7 @@ function expectAuthenticatedHandoff(
     sourceSessionKey: expected.sessionKey,
     sourceTool: "exec_approval_followup",
   });
+  expect(params).not.toHaveProperty("callGateway");
   expect(params.internalRuntimeHandoffId).toEqual(expect.any(String));
   expect(params.idempotencyKey).toEqual(expect.any(String));
   expect(params.idempotencyKey).toMatch(
@@ -148,6 +152,7 @@ function expectStableDirectDelivery(params: Record<string, unknown>, approvalId:
 describe("exec approval followup", () => {
   it("carries the prepared agent owner for a bare session key", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-bare-owner",
       agentId: "research",
       sessionKey: "global",
@@ -159,6 +164,7 @@ describe("exec approval followup", () => {
 
   it("uses an explicit denial prompt when the command did not run", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-1",
       sessionKey: "agent:main:main",
       resultText: "Exec denied (gateway id=req-1, user-denied): uname -a",
@@ -173,6 +179,7 @@ describe("exec approval followup", () => {
 
   it("uses the denied followup branch for nested-parentheses denial metadata", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-1",
       sessionKey: "agent:main:main",
       resultText: "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): uname -a",
@@ -187,6 +194,7 @@ describe("exec approval followup", () => {
 
   it("carries a compact fallback alongside the authenticated runtime handoff", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-1",
       sessionKey: "agent:main:main",
       resultText: "Exec finished (gateway id=req-1, code 0)\nok",
@@ -203,6 +211,7 @@ describe("exec approval followup", () => {
 
   it("warns the agent not to rerun an outcome-unknown command", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-unknown",
       sessionKey: "agent:main:main",
       resultText: [
@@ -225,6 +234,7 @@ describe("exec approval followup", () => {
 
   it("tells the agent a proven not-dispatched command did not run", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-not-dispatched",
       sessionKey: "agent:main:main",
       resultText: [
@@ -253,6 +263,7 @@ describe("exec approval followup", () => {
     ].join("\n");
 
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-direct-unknown",
       direct: true,
       turnSourceChannel: "telegram",
@@ -266,6 +277,7 @@ describe("exec approval followup", () => {
 
   it("keeps followups internal when no external route is available", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-1",
       sessionKey: "agent:main:main",
       resultText: "Exec completed: echo ok",
@@ -282,6 +294,7 @@ describe("exec approval followup", () => {
 
   it("forwards the approval-time session id so the gateway can drop stale followups", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-pin-59349",
       sessionKey: "agent:main:main",
       expectedSessionId: "session-original",
@@ -296,6 +309,7 @@ describe("exec approval followup", () => {
 
   it("omits the expected session id when none was captured", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-no-pin",
       sessionKey: "agent:main:main",
       resultText: "Exec completed: echo ok",
@@ -315,6 +329,7 @@ describe("exec approval followup", () => {
     });
 
     const result = await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-denied-rebound",
       sessionKey: "agent:main:main",
       expectedSessionId: "session-original",
@@ -345,6 +360,7 @@ describe("exec approval followup", () => {
     });
 
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-denied-same",
       sessionKey: "agent:main:main",
       expectedSessionId: "session-original",
@@ -369,6 +385,7 @@ describe("exec approval followup", () => {
     });
 
     const result = await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-finished-rebound",
       sessionKey: "agent:main:main",
       expectedSessionId: "session-original",
@@ -395,6 +412,7 @@ describe("exec approval followup", () => {
 
   it("routes denied followups through the originating main session", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-denied-main",
       sessionKey: "agent:main:main",
       turnSourceChannel: "webchat",
@@ -440,6 +458,7 @@ describe("exec approval followup", () => {
     },
   ])("uses agent continuation for $channel followups when a session exists", async (target) => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: `req-${target.channel}`,
       sessionKey: target.sessionKey,
       turnSourceChannel: target.channel,
@@ -467,6 +486,7 @@ describe("exec approval followup", () => {
 
   it("preserves the originating routing target for non-built-in plugin channels", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-plugin",
       sessionKey: "agent:main:lansenger:dm:U1",
       turnSourceChannel: "lansenger",
@@ -503,6 +523,7 @@ describe("exec approval followup", () => {
       });
 
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-wait",
       sessionKey: "agent:main:telegram:direct:123",
       turnSourceChannel: "telegram",
@@ -553,6 +574,7 @@ describe("exec approval followup", () => {
       });
 
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-ambiguous",
       sessionKey: "agent:main:telegram:direct:123",
       turnSourceChannel: "telegram",
@@ -612,6 +634,7 @@ describe("exec approval followup", () => {
 
     await expect(
       sendExecApprovalFollowup({
+        callGateway: captureExecApprovalFollowupGateway(),
         approvalId: "req-ambiguous-release",
         sessionKey: "agent:main:telegram:direct:123",
         turnSourceChannel: "telegram",
@@ -639,6 +662,7 @@ describe("exec approval followup", () => {
       });
 
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-wait-retry",
       sessionKey: "agent:main:telegram:direct:123",
       turnSourceChannel: "telegram",
@@ -672,6 +696,7 @@ describe("exec approval followup", () => {
     try {
       await expect(
         sendExecApprovalFollowup({
+          callGateway: captureExecApprovalFollowupGateway(),
           approvalId: "req-observer-deadline",
           sessionKey: "agent:main:telegram:direct:123",
           turnSourceChannel: "telegram",
@@ -720,6 +745,7 @@ describe("exec approval followup", () => {
       });
 
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-terminal",
       sessionKey: "agent:main:telegram:direct:123",
       turnSourceChannel: "telegram",
@@ -749,6 +775,7 @@ describe("exec approval followup", () => {
 
   it("falls back to sanitized direct external delivery only when no session exists", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-no-session",
       turnSourceChannel: "discord",
       turnSourceTo: "123",
@@ -792,6 +819,7 @@ describe("exec approval followup", () => {
 
       await expect(
         sendExecApprovalFollowup({
+          callGateway: captureExecApprovalFollowupGateway(),
           approvalId: `req-${suppressionReason}`,
           turnSourceChannel: "discord",
           turnSourceTo: "123",
@@ -805,6 +833,7 @@ describe("exec approval followup", () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
 
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-redacted",
       turnSourceChannel: "discord",
       turnSourceTo: "123",
@@ -823,6 +852,7 @@ describe("exec approval followup", () => {
 
   it("can force direct delivery even when a session key exists", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-direct",
       agentId: "research",
       sessionKey: "global",
@@ -849,6 +879,7 @@ describe("exec approval followup", () => {
     vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
 
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-session-resume-failed",
       sessionKey: "agent:main:discord:channel:123",
       turnSourceChannel: "discord",
@@ -867,6 +898,7 @@ describe("exec approval followup", () => {
 
   it("uses a generic summary when a no-session completion has no user-visible output", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-no-session-empty",
       turnSourceChannel: "discord",
       turnSourceTo: "123",
@@ -885,6 +917,7 @@ describe("exec approval followup", () => {
     vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
 
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-denied-resume-failed",
       sessionKey: "agent:main:telegram:-100123",
       turnSourceChannel: "telegram",
@@ -905,6 +938,7 @@ describe("exec approval followup", () => {
     vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
 
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-denied-resume-failed-nested",
       sessionKey: "agent:main:telegram:-100123",
       turnSourceChannel: "telegram",
@@ -925,6 +959,7 @@ describe("exec approval followup", () => {
   it("suppresses denied followups for subagent sessions", async () => {
     await expect(
       sendExecApprovalFollowup({
+        callGateway: captureExecApprovalFollowupGateway(),
         approvalId: "req-denied-subagent",
         sessionKey: "agent:main:subagent:test",
         turnSourceChannel: "telegram",
@@ -944,6 +979,7 @@ describe("exec approval followup", () => {
   ])("does not mirror raw denied followups without a session: %s", async (resultText) => {
     await expect(
       sendExecApprovalFollowup({
+        callGateway: captureExecApprovalFollowupGateway(),
         approvalId: "req-denied-nosession",
         turnSourceChannel: "telegram",
         turnSourceTo: "123",
@@ -959,6 +995,7 @@ describe("exec approval followup", () => {
   it("preserves turnSourceChannel as messageProvider on the followup run when no deliverable route exists", async () => {
     // Regression: #74646 — tools.elevated.allowFrom.<provider> fails in approval followup
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-elevated-74646",
       sessionKey: "agent:main:telegram:-100123",
       turnSourceChannel: "telegram",
@@ -975,6 +1012,7 @@ describe("exec approval followup", () => {
 
   it("carries the runtime handoff separately from idempotency without exposing elevated defaults", async () => {
     await sendExecApprovalFollowup({
+      callGateway: captureExecApprovalFollowupGateway(),
       approvalId: "req-elevated-75832",
       sessionKey: "agent:main:telegram:direct:123",
       turnSourceChannel: "telegram",
@@ -1002,6 +1040,7 @@ describe("exec approval followup", () => {
   it("throws when neither a session nor a deliverable route is available", async () => {
     await expect(
       sendExecApprovalFollowup({
+        callGateway: captureExecApprovalFollowupGateway(),
         approvalId: "req-missing",
         turnSourceChannel: "slack",
         resultText: "Exec completed: echo ok",
@@ -1009,3 +1048,5 @@ describe("exec approval followup", () => {
     ).rejects.toThrow("Session key or deliverable origin route is required");
   });
 });
+
+await import("./bash-tools.exec-approval-followup-routing.test-support.js");

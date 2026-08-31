@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
@@ -8,13 +9,21 @@ import {
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { setGatewayDedupeEntry } from "./agent-turn/agent-job.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
+import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
+import { sendHandlers } from "./server-methods/send.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
@@ -45,6 +54,200 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("createGatewayInstanceRuntime", () => {
+  describe.each(["live", "closed", "unavailable"] as const)(
+    "instance liveness after authorization: %s",
+    (liveness) => {
+      it.each(["shared dispatch", "dedicated dispatch", "wait"] as const)(
+        "%s stays bound to its available originating instance",
+        async (operation) => {
+          let available = true;
+          const context = createContext();
+          const runId = `instance-liveness-${liveness}-${operation}`;
+          const payload = { runId, status: "ok", summary: "originating instance" };
+          context.dedupe.set(`agent:${runId}`, { ts: Date.now(), ok: true, payload });
+          const registry = createRegistry({});
+          const runtime = createGatewayInstanceRuntime({
+            getContext: () => context,
+            getMethodRegistry: () => registry,
+            isDispatchAvailable: () => available,
+          });
+          context.resolveGatewayContext = () => (runtime.isAvailable() ? context : undefined);
+          context.recoveryRuntime = runtime.recovery;
+          const replacementContext = createContext();
+          replacementContext.dedupe.set(`agent:${runId}`, {
+            ts: Date.now(),
+            ok: true,
+            payload: { ...payload, summary: "replacement instance" },
+          });
+          const getReplacementContext = vi.fn(() => replacementContext);
+          const replacement = createGatewayInstanceRuntime({
+            getContext: getReplacementContext,
+            getMethodRegistry: () => registry,
+            isDispatchAvailable: () => true,
+          });
+          try {
+            expect(getGatewayRecoveryRuntime()).toBe(replacement.recovery);
+            const pending =
+              operation === "wait"
+                ? runtime.recovery.waitForAgent({ runId, timeoutMs: 0 })
+                : runtime.recovery.dispatchAgent(
+                    {
+                      message: "test",
+                      idempotencyKey: runId,
+                      ...(operation === "dedicated dispatch" ? { model: "test-model" } : {}),
+                    },
+                    undefined,
+                    { allowModelOverride: operation === "dedicated dispatch" },
+                  );
+            // The real authorization function has yielded, but no envelope owns work yet.
+            expect(getActiveGatewayRootWorkCount()).toBe(0);
+            if (liveness === "closed") {
+              runtime.close();
+            } else if (liveness === "unavailable") {
+              available = false;
+            }
+            if (liveness === "live") {
+              await expect(pending).resolves.toEqual(
+                operation === "wait"
+                  ? { runId, status: "timeout", timeoutPhase: "queue", providerStarted: false }
+                  : payload,
+              );
+            } else {
+              await expect(pending).rejects.toThrow("Gateway instance dispatch unavailable");
+            }
+          } finally {
+            runtime.close();
+            replacement.close();
+            expect(getReplacementContext).not.toHaveBeenCalled();
+            expect(getGatewayRecoveryRuntime()).toBeUndefined();
+            await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+          }
+        },
+      );
+    },
+  );
+
+  it.each(["fresh root", "retained root"] as const)(
+    "keeps the instance fence distinct from process drain: %s",
+    async (rootKind) => {
+      const context = createContext();
+      const runId = `instance-liveness-drain-${rootKind}`;
+      context.dedupe.set(`agent:${runId}`, {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status: "ok" },
+      });
+      const runtime = createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: () => createRegistry({}),
+        isDispatchAvailable: () => true,
+      });
+      context.resolveGatewayContext = () => (runtime.isAvailable() ? context : undefined);
+      const root = rootKind === "retained root" ? tryBeginGatewayRootWorkAdmission() : undefined;
+      const dispatch = async () => {
+        const pending = runtime.recovery.dispatchAgent({ message: "test", idempotencyKey: runId });
+        markGatewayRestartDraining();
+        if (rootKind === "retained root") {
+          runtime.close();
+        }
+        await expect(pending).rejects.toThrow(
+          rootKind === "retained root"
+            ? "Gateway instance dispatch unavailable"
+            : "gateway restart",
+        );
+      };
+      try {
+        if (rootKind === "retained root") {
+          expect(root).toBeTruthy();
+        }
+        await (root ? root.run(dispatch) : dispatch());
+      } finally {
+        runtime.close();
+        root?.release();
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
+
+  it("preserves an already-admitted wait when its instance closes", async () => {
+    const context = createContext();
+    const runId = "instance-liveness-admitted-wait";
+    const runtime = createGatewayInstanceRuntime({
+      getContext: () => context,
+      getMethodRegistry: () => createRegistry({}),
+      isDispatchAvailable: () => true,
+    });
+    context.resolveGatewayContext = () => (runtime.isAvailable() ? context : undefined);
+    const pending = runtime.recovery.waitForAgent({ runId });
+    const finish = () =>
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `agent:${runId}`,
+        entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok" } },
+      });
+    try {
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+      runtime.close();
+      finish();
+      await expect(pending).resolves.toMatchObject({ runId, status: "ok" });
+    } finally {
+      finish();
+      await pending;
+      runtime.close();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    }
+  });
+
+  it.each(["live", "closed", "unavailable"] as const)(
+    "checks instance liveness before the real abort handler: %s",
+    async (liveness) => {
+      await withOpenClawTestState({ layout: "state-only", prefix: "instance-abort-" }, async () => {
+        let available = true;
+        const context = createContext();
+        const runId = `instance-liveness-abort-${liveness}`;
+        const payload = {
+          runId,
+          status: "accepted",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        };
+        context.dedupe.set(`agent:${runId}`, { ts: Date.now(), ok: true, payload });
+        const runtime = createGatewayInstanceRuntime({
+          getContext: () => context,
+          getMethodRegistry: () => createRegistry({ "chat.abort": handleChatAbortRequest }),
+          isDispatchAvailable: () => available,
+        });
+        context.resolveGatewayContext = () => (runtime.isAvailable() ? context : undefined);
+        try {
+          const pending = runtime.recovery.abortAgent({
+            agentId: "main",
+            runId,
+            sessionKey: payload.sessionKey,
+          });
+          if (liveness === "closed") {
+            runtime.close();
+          } else if (liveness === "unavailable") {
+            available = false;
+          }
+          if (liveness === "live") {
+            await expect(pending).resolves.toMatchObject({ aborted: true, runIds: [runId] });
+            expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
+              status: "timeout",
+              stopReason: "rpc",
+            });
+          } else {
+            await expect.soft(pending).rejects.toThrow("Gateway instance dispatch unavailable");
+            expect(context.dedupe.get(`agent:${runId}`)?.payload).toEqual(payload);
+          }
+        } finally {
+          runtime.close();
+          await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        }
+      });
+    },
+  );
+
   it("uses the typed recovery path and fails closed when the owning instance closes", async () => {
     let available = false;
     const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {
@@ -177,80 +380,119 @@ describe("createGatewayInstanceRuntime", () => {
     expect(recoveryPrincipal?.internal?.sessionCreation).toBeUndefined();
   });
 
-  it("sends recovery notices through normal outbound without invoking plugin actions", async () => {
-    await withOpenClawTestState({ layout: "state-only", prefix: "recovery-notice-" }, async () => {
-      const sendText = vi.fn(async () => ({ channel: "signal", messageId: "signal-message-1" }));
-      const handleAction = vi.fn(async () => {
-        throw new Error("recovery notice must not invoke message actions");
-      });
-      const plugin: ChannelPlugin = {
-        id: "signal",
-        meta: {
-          id: "signal",
-          label: "Signal",
-          selectionLabel: "Signal",
-          docsPath: "/channels/signal",
-          blurb: "Signal-shaped recovery test plugin.",
+  it.each([
+    ["recovery notice", "live"],
+    ["recovery notice", "closed"],
+    ["recovery notice", "unavailable"],
+    ["approval route", "live"],
+    ["approval route", "closed"],
+    ["approval route", "unavailable"],
+  ] as const)(
+    "checks instance liveness before normal outbound: %s / %s",
+    async (surface, liveness) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "recovery-notice-" },
+        async () => {
+          const sendText = vi.fn(async () => ({
+            channel: "signal",
+            messageId: "signal-message-1",
+          }));
+          const handleAction = vi.fn(async () => {
+            throw new Error("recovery notice must not invoke message actions");
+          });
+          const plugin: ChannelPlugin = {
+            id: "signal",
+            meta: {
+              id: "signal",
+              label: "Signal",
+              selectionLabel: "Signal",
+              docsPath: "/channels/signal",
+              blurb: "Signal-shaped recovery test plugin.",
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: {
+              listAccountIds: () => ["work"],
+              resolveAccount: () => ({}),
+              isConfigured: () => true,
+            },
+            actions: {
+              describeMessageTool: () => ({ actions: ["send"] }),
+              supportsAction: () => false,
+              handleAction,
+            },
+            outbound: {
+              deliveryMode: "direct",
+              resolveTarget: ({ to }) => ({ ok: true, to: to?.trim() ?? "" }),
+              sendText,
+            },
+          };
+          const pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
+          stageActivePluginRegistry(
+            createTestRegistry([{ pluginId: "signal", source: "test", plugin }]),
+            null,
+            "default",
+          );
+          const context = {
+            ...createContext(),
+            getRuntimeConfig: () => ({
+              agents: { list: [{ id: "main" }] },
+              channels: { signal: { enabled: true } },
+            }),
+          } as GatewayRequestContext;
+          let available = true;
+          const runtime = createGatewayInstanceRuntime({
+            getContext: () => context,
+            getMethodRegistry: () =>
+              createRegistry({ send: expectDefined(sendHandlers.send, "send handler") }),
+            isDispatchAvailable: () => available,
+          });
+          context.resolveGatewayContext = () => (runtime.isAvailable() ? context : undefined);
+
+          try {
+            const payload = {
+              channel: "signal",
+              to: "+15551234567",
+              accountId: "work",
+              threadId: "thread-1",
+              idempotencyKey: `main-session-restart-recovery:${surface}:${liveness}`,
+            };
+            const pending =
+              surface === "recovery notice"
+                ? runtime.recovery.sendRecoveryNotice({ ...payload, text: "Recovery notice" })
+                : runtime.nativeApprovals.requestRoute("send", {
+                    ...payload,
+                    message: "Recovery notice",
+                  });
+            if (liveness === "closed") {
+              runtime.close();
+            } else if (liveness === "unavailable") {
+              available = false;
+            }
+            if (liveness === "live") {
+              await pending;
+              expect(sendText).toHaveBeenCalledOnce();
+              expect(sendText).toHaveBeenCalledWith(
+                expect.objectContaining({
+                  to: "+15551234567",
+                  accountId: "work",
+                  threadId: "thread-1",
+                  text: "Recovery notice",
+                }),
+              );
+            } else {
+              await expect.soft(pending).rejects.toThrow("Gateway instance dispatch unavailable");
+              expect(sendText).not.toHaveBeenCalled();
+            }
+            expect(handleAction).not.toHaveBeenCalled();
+          } finally {
+            runtime.close();
+            await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+            restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
+          }
         },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => ["work"],
-          resolveAccount: () => ({}),
-          isConfigured: () => true,
-        },
-        actions: {
-          describeMessageTool: () => ({ actions: ["send"] }),
-          supportsAction: () => false,
-          handleAction,
-        },
-        outbound: {
-          deliveryMode: "direct",
-          resolveTarget: ({ to }) => ({ ok: true, to: to?.trim() ?? "" }),
-          sendText,
-        },
-      };
-      const pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
-      stageActivePluginRegistry(
-        createTestRegistry([{ pluginId: "signal", source: "test", plugin }]),
-        null,
-        "default",
       );
-      const context = {
-        ...createContext(),
-        getRuntimeConfig: () => ({ channels: { signal: { enabled: true } } }),
-      } as GatewayRequestContext;
-      const runtime = createGatewayInstanceRuntime({
-        getContext: () => context,
-        getMethodRegistry: () => createRegistry({}),
-        isDispatchAvailable: () => true,
-      });
-
-      try {
-        await runtime.recovery.sendRecoveryNotice({
-          channel: "signal",
-          to: "+15551234567",
-          accountId: "work",
-          threadId: "thread-1",
-          text: "Recovery notice",
-          idempotencyKey: "main-session-restart-recovery:run-1:failed-notice",
-        });
-
-        expect(sendText).toHaveBeenCalledOnce();
-        expect(sendText).toHaveBeenCalledWith(
-          expect.objectContaining({
-            to: "+15551234567",
-            accountId: "work",
-            threadId: "thread-1",
-            text: "Recovery notice",
-          }),
-        );
-        expect(handleAction).not.toHaveBeenCalled();
-      } finally {
-        runtime.close();
-        restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
-      }
-    });
-  });
+    },
+  );
 
   it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", () => {
     const registry = createRegistry({});

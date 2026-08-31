@@ -2,7 +2,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
-import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -19,6 +18,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
+import { formatExportExecResult } from "./commands-export-common.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
@@ -34,12 +34,11 @@ import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 const DIAGNOSTICS_COMMAND = "/diagnostics";
 const CODEX_DIAGNOSTICS_COMMAND = "/codex diagnostics";
 const DIAGNOSTICS_DOCS_URL = "https://docs.openclaw.ai/gateway/diagnostics";
-const GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL = "openclaw gateway diagnostics export --json";
 const DIAGNOSTICS_EXEC_SCOPE_KEY = "chat:diagnostics";
 const DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner approval route for diagnostics. Run /diagnostics from an owner DM so the sensitive diagnostics details are not posted in this chat.";
 const DIAGNOSTICS_PRIVATE_ROUTE_ACK =
-  "Diagnostics are sensitive. I sent the diagnostics details and approval prompts to the owner privately.";
+  "Diagnostics are sensitive. I sent the export status to the owner privately.";
 
 type DiagnosticsCommandDeps = {
   createExecTool: typeof createExecTool;
@@ -134,7 +133,9 @@ async function handleDiagnosticsCommandWithDeps(
     if (!privateReply) {
       return {
         shouldContinue: false,
-        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_ACK },
+        reply: {
+          text: "Diagnostics approval is pending. Use the private owner approval route to review it.",
+        },
       };
     }
     return await deliverGroupDiagnosticsReplyPrivately(deps, params, privateReply, privateTarget);
@@ -320,11 +321,7 @@ async function requestGatewayDiagnosticsExportApproval(
         ? await codexDiagnostics.approvalFollowup?.()
         : undefined;
     const lines = buildDiagnosticsPreamble();
-    lines.push(
-      "",
-      `Local Gateway bundle: requested \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL}\` through exec approval. Approve once to create the bundle; do not use allow-all for diagnostics.`,
-      formatExecToolResultForDiagnostics(result),
-    );
+    lines.push("", formatExportExecResult("Gateway diagnostics export", result));
     if (codexFollowupText) {
       lines.push("", codexFollowupText);
     }
@@ -333,8 +330,9 @@ async function requestGatewayDiagnosticsExportApproval(
     const lines = buildDiagnosticsPreamble();
     lines.push(
       "",
-      `Local Gateway bundle: could not request exec approval for \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_LABEL}\`.`,
-      formatExecDiagnosticsText(formatErrorMessage(error)),
+      formatExportExecResult("Gateway diagnostics export", {
+        content: [{ type: "text", text: formatErrorMessage(error) }],
+      }),
     );
     return { status: "reply", reply: { text: lines.join("\n") } };
   }
@@ -530,44 +528,6 @@ function resolveDiagnosticsSessionChannelId(
     normalizeOptionalString(sessionDeliveryOrigin(entry)?.nativeChannelId) ??
     (sessionKey === params.sessionKey ? params.command.channelId : undefined)
   );
-}
-
-function formatExecToolResultForDiagnostics(result: {
-  content?: Array<{ type: string; text?: string }>;
-  details?: ExecToolDetails;
-}): string {
-  const text = result.content
-    ?.map((chunk) => (chunk.type === "text" && typeof chunk.text === "string" ? chunk.text : ""))
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-  if (text) {
-    return formatExecDiagnosticsText(text);
-  }
-  const details = result.details;
-  if (details?.status === "approval-pending") {
-    const decisions = details.allowedDecisions?.join(", ") || "allow-once, deny";
-    return formatExecDiagnosticsText(
-      `Exec approval pending (${details.approvalSlug}). Allowed decisions: ${decisions}.`,
-    );
-  }
-  if (details?.status === "running") {
-    return formatExecDiagnosticsText(
-      `Gateway diagnostics export is running (exec session ${details.sessionId}).`,
-    );
-  }
-  if (details?.status === "completed" || details?.status === "failed") {
-    return formatExecDiagnosticsText(details.aggregated);
-  }
-  return "(no exec details returned)";
-}
-
-function formatExecDiagnosticsText(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "(no exec output)";
-  }
-  return trimmed;
 }
 
 function rewriteCodexDiagnosticsResult(result: PluginCommandResult): PluginCommandResult {

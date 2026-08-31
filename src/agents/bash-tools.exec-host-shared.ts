@@ -25,7 +25,10 @@ import {
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
-import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
+import {
+  captureExecApprovalFollowupGateway,
+  sendExecApprovalFollowup,
+} from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
   isExecApprovalRunAbortedError,
@@ -37,6 +40,7 @@ import {
 } from "./bash-tools.exec-runtime.js";
 import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import { isExecDeniedResultText } from "./exec-approval-result.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 /** Cap for deduplicating repeated follow-up dispatch failure log keys. */
@@ -100,6 +104,7 @@ type RegisteredExecApprovalRequestContext = {
 
 /** Destination and context for async exec approval follow-up delivery. */
 type ExecApprovalFollowupTarget = {
+  callGateway: ReturnType<typeof captureExecApprovalFollowupGateway>;
   approvalId: string;
   agentId?: string;
   sessionKey?: string;
@@ -327,9 +332,10 @@ async function createAndRegisterDefaultExecApprovalRequest(
 
 /** Builds the immutable follow-up target passed to async approval continuations. */
 export function buildExecApprovalFollowupTarget(
-  params: ExecApprovalFollowupTarget,
+  params: Omit<ExecApprovalFollowupTarget, "callGateway">,
 ): ExecApprovalFollowupTarget {
   return {
+    callGateway: captureExecApprovalFollowupGateway(),
     approvalId: params.approvalId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey,
@@ -551,25 +557,28 @@ export async function sendExecApprovalFollowupResult(
           bashElevated: target.bashElevated,
           resultText,
         });
-  await send({
-    approvalId: target.approvalId,
-    ...(target.agentId ? { agentId: target.agentId } : {}),
-    sessionKey: target.sessionKey,
-    expectedSessionId: target.expectedSessionId,
-    sessionStore: target.sessionStore,
-    turnSourceChannel: target.turnSourceChannel,
-    turnSourceTo: target.turnSourceTo,
-    turnSourceAccountId: target.turnSourceAccountId,
-    turnSourceThreadId: target.turnSourceThreadId,
-    resultText,
-    direct: target.direct,
-    ...(runtimeHandoff
-      ? {
-          internalRuntimeHandoffId: runtimeHandoff.handoffId,
-          idempotencyKey: runtimeHandoff.idempotencyKey,
-        }
-      : {}),
-  }).catch((error: unknown) => {
+  await runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+    send({
+      callGateway: target.callGateway,
+      approvalId: target.approvalId,
+      ...(target.agentId ? { agentId: target.agentId } : {}),
+      sessionKey: target.sessionKey,
+      expectedSessionId: target.expectedSessionId,
+      sessionStore: target.sessionStore,
+      turnSourceChannel: target.turnSourceChannel,
+      turnSourceTo: target.turnSourceTo,
+      turnSourceAccountId: target.turnSourceAccountId,
+      turnSourceThreadId: target.turnSourceThreadId,
+      resultText,
+      direct: target.direct,
+      ...(runtimeHandoff
+        ? {
+            internalRuntimeHandoffId: runtimeHandoff.handoffId,
+            idempotencyKey: runtimeHandoff.idempotencyKey,
+          }
+        : {}),
+    }),
+  ).catch((error: unknown) => {
     if (isApprovalNotFoundError(error)) {
       return;
     }

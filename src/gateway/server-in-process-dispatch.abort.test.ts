@@ -136,6 +136,7 @@ describe("in-process paired-node invocation cancellation", () => {
     });
     expect(handleGatewayRequest).toHaveBeenCalledWith(
       expect.objectContaining({ signal: controller.signal }),
+      undefined,
     );
   });
 

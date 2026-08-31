@@ -11,6 +11,7 @@ import type { GatewayRequestOptions } from "./server-methods/types.js";
 export type { GatewayMethodDispatchResponse } from "./server-in-process-dispatch.types.js";
 
 type InProcessGatewayDispatchOptions = {
+  assertContextCurrent?: () => void;
   client: GatewayRequestOptions["client"];
   context: GatewayRequestOptions["context"];
   expectFinal?: boolean;
@@ -158,32 +159,35 @@ export async function dispatchGatewayRequestInProcessRaw(
   });
   const deadlineMs = resolveDispatchDeadlineMs(options.timeoutMs);
   const { handleGatewayRequest } = await import("./server-methods.js");
-  void handleGatewayRequest({
-    req: {
-      type: "req",
-      id: `${options.requestIdPrefix ?? "in-process"}-${randomUUID()}`,
-      method,
-      params,
+  void handleGatewayRequest(
+    {
+      req: {
+        type: "req",
+        id: `${options.requestIdPrefix ?? "in-process"}-${randomUUID()}`,
+        method,
+        params,
+      },
+      client: options.client,
+      isWebchatConnect: options.isWebchatConnect ?? (() => false),
+      respond: (ok, payload, error, meta) => {
+        const response = { ok, payload, error, ...(meta ? { meta } : {}) };
+        if (!firstResponse) {
+          firstResponse = response;
+          resolveFirstResponse?.(response);
+          return;
+        }
+        if (!finalResponse) {
+          finalResponse = response;
+          resolveFinalResponse?.(response);
+        }
+      },
+      context: options.context,
+      methodRegistry: options.methodRegistry,
+      sessionMutationCommitGuard: options.sessionMutationCommitGuard,
+      ...(options.signal ? { signal: options.signal } : {}),
     },
-    client: options.client,
-    isWebchatConnect: options.isWebchatConnect ?? (() => false),
-    respond: (ok, payload, error, meta) => {
-      const response = { ok, payload, error, ...(meta ? { meta } : {}) };
-      if (!firstResponse) {
-        firstResponse = response;
-        resolveFirstResponse?.(response);
-        return;
-      }
-      if (!finalResponse) {
-        finalResponse = response;
-        resolveFinalResponse?.(response);
-      }
-    },
-    context: options.context,
-    methodRegistry: options.methodRegistry,
-    sessionMutationCommitGuard: options.sessionMutationCommitGuard,
-    ...(options.signal ? { signal: options.signal } : {}),
-  })
+    options.assertContextCurrent,
+  )
     .then(() => {
       if (!firstResponse) {
         rejectFirstResponse?.(

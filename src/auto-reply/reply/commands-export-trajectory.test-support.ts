@@ -1,6 +1,7 @@
 // Tests trajectory export command approval routing.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { exportExecOutcomeCases } from "./commands-export-test-mocks.js";
 import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -128,6 +129,27 @@ describe("buildExportTrajectoryCommandReply", () => {
     vi.clearAllMocks();
   });
 
+  it.each(exportExecOutcomeCases)(
+    "reports typed export status: $name",
+    async ({ name, details, lead }) => {
+      const { deps } = createExecDeps();
+      const execute = vi.fn(async () => {
+        if (name === "thrown") {
+          throw new Error("transport interrupted");
+        }
+        return { content: [{ type: "text", text: "untyped output" }], details };
+      });
+      deps.createExecTool = vi.fn(() => ({ execute })) as never;
+      const reply = await buildExportTrajectoryCommandReply(makeParams(), deps);
+      expect(reply.text).toContain(lead);
+      expect(reply.text).not.toContain("Approve once");
+      expect(reply.text).not.toContain("approval prompt");
+      if (details && "aggregated" in details) {
+        expect(reply.text).toContain("typed output");
+      }
+    },
+  );
+
   it("requests per-run exec approval for trajectory exports", async () => {
     const { execCalls, deps } = createExecDeps();
     const params = makeParams();
@@ -248,7 +270,7 @@ describe("buildExportTrajectoryCommandReply", () => {
     const reply = await buildExportTrajectoryCommandReply(params, deps);
 
     expect(reply.text).toBe(
-      "Trajectory exports are sensitive. I sent the export request and approval prompt to the owner privately.",
+      "Trajectory exports are sensitive. I sent the export status to the owner privately.",
     );
     expect(reply.text).not.toContain("agent:target:session");
     expect(privateReplies).toHaveLength(1);

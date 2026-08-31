@@ -1453,7 +1453,7 @@ export async function processGatewayAllowlist(
       }
 
       let admitted:
-        | { status: "started"; run: Awaited<ReturnType<typeof runExecProcess>> }
+        | { status: "completed" }
         | { status: "approval-state-write-failed" }
         | { status: "operand-drift"; message: string }
         | { status: "run-aborted" }
@@ -1536,12 +1536,35 @@ export async function processGatewayAllowlist(
             return { status: "spawn-failed" as const };
           }
 
-          // Keep the admitted root until the registry owns the live process.
-          // Suspension must observe one side of this handoff at every instant.
+          // The process registry releases at child finalization. This root also
+          // owns the dynamic follow-up and its dispatch/observation after that.
           markBackgrounded(run.session);
-          return { status: "started" as const, run };
+          const outcome = await run.promise;
+          const dynamicFollowupText = await resolveGatewayExecApprovalFollowupText({
+            approvalFollowup: params.approvalFollowup,
+            approvalId,
+            sessionId: run.session.id,
+            trigger: params.trigger,
+            outcome,
+          });
+          const approvalFollowupText = normalizeStringEntries([
+            params.approvalFollowupText ?? "",
+            dynamicFollowupText ?? "",
+          ]).join("\n\n");
+          const summary = buildGatewayExecApprovalFollowupSummary({
+            approvalId,
+            sessionId: run.session.id,
+            outcome,
+            trigger: params.trigger,
+            approvalFollowupText,
+          });
+          await sendExecApprovalFollowupResult(followupTarget, summary);
+          return { status: "completed" as const };
         });
       } catch (error) {
+        if (gatewayInvocationStarted) {
+          throw error;
+        }
         if (
           error instanceof GatewayDrainingError ||
           (error instanceof Error && error.message === "gateway is draining for restart")
@@ -1574,31 +1597,7 @@ export async function processGatewayAllowlist(
           followupTarget,
           `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}`,
         );
-        return;
       }
-
-      const { run } = admitted;
-
-      const outcome = await run.promise;
-      const dynamicFollowupText = await resolveGatewayExecApprovalFollowupText({
-        approvalFollowup: params.approvalFollowup,
-        approvalId,
-        sessionId: run.session.id,
-        trigger: params.trigger,
-        outcome,
-      });
-      const approvalFollowupText = normalizeStringEntries([
-        params.approvalFollowupText ?? "",
-        dynamicFollowupText ?? "",
-      ]).join("\n\n");
-      const summary = buildGatewayExecApprovalFollowupSummary({
-        approvalId,
-        sessionId: run.session.id,
-        outcome,
-        trigger: params.trigger,
-        approvalFollowupText,
-      });
-      await sendExecApprovalFollowupResult(followupTarget, summary);
     })()
       .catch(async (): Promise<void> => {
         // Once dispatch starts, a delivery failure cannot mean execution was denied.

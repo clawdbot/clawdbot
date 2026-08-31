@@ -46,9 +46,13 @@ Gateway export as one copy-pasteable support report:
 
 In group chats, an owner can still run `/diagnostics`, but OpenClaw sends the
 export result, approval prompts, and Codex session/thread breakdown to the
-owner privately. The group only sees a short notice that diagnostics were sent
-privately. If no private owner route exists, the command fails closed and asks
+owner privately. The group sees either a pending-approval notice or confirmation
+that the export status was delivered privately. If no private owner route exists, the command fails closed and asks
 the owner to run it from a DM.
+
+Running, completed, failed, and unavailable exports report their current status
+without requesting another approval. If execution could not be confirmed,
+inspect the existing run before trying again.
 
 When the active session uses the native OpenAI Codex harness, the same exec
 approval also covers an OpenAI feedback upload for the Codex threads OpenClaw

@@ -2920,83 +2920,119 @@ EOF`,
     },
   );
 
-  it("waits outside admission, then atomically hands an approved process to the registry", async () => {
-    let resolveApproval: (decision: ExecApprovalDecision) => void = () => {};
-    const approval = new Promise<ExecApprovalDecision>((resolve) => {
-      resolveApproval = resolve;
-    });
-    let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
-    const outcome = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
-      resolveOutcome = resolve;
-    });
-    let allowSpawn: () => void = () => {};
-    const spawnAllowed = new Promise<void>((resolve) => {
-      allowSpawn = resolve;
-    });
-    let announceSpawn: () => void = () => {};
-    const spawnStarted = new Promise<void>((resolve) => {
-      announceSpawn = resolve;
-    });
-    resolveApprovalDecisionOrUndefinedMock.mockReturnValue(approval);
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: false },
-      approvedByAsk: true,
-      deniedReason: null,
-    });
-    commitExecAuthorizationMock.mockImplementation(async () => {
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-    });
-    runExecProcessMock.mockImplementation(async () => {
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-      announceSpawn();
-      await spawnAllowed;
-      return { session: { id: "sess-atomic" }, promise: outcome };
-    });
-    markBackgroundedMock.mockImplementation(() => {
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-    });
-    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+  it.each(["completed", "sender failed"] as const)(
+    "retains approved exec admission through child, factory, and sender settlement: %s",
+    async (senderOutcome) => {
+      let resolveApproval: (decision: ExecApprovalDecision) => void = () => {};
+      const approval = new Promise<ExecApprovalDecision>((resolve) => {
+        resolveApproval = resolve;
+      });
+      let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
+      const outcome = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
+        resolveOutcome = resolve;
+      });
+      let allowSpawn: () => void = () => {};
+      const spawnAllowed = new Promise<void>((resolve) => {
+        allowSpawn = resolve;
+      });
+      let announceSpawn: () => void = () => {};
+      const spawnStarted = new Promise<void>((resolve) => {
+        announceSpawn = resolve;
+      });
+      let finishFactory!: () => void;
+      const factoryGate = new Promise<void>((resolve) => {
+        finishFactory = resolve;
+      });
+      const approvalFollowup = vi.fn(async () => {
+        await factoryGate;
+        return "followup";
+      });
+      let finishSender!: () => void;
+      const senderGate = new Promise<void>((resolve) => {
+        finishSender = resolve;
+      });
+      sendExecApprovalFollowupResultMock.mockImplementation(async () => {
+        await senderGate;
+        if (senderOutcome === "sender failed") {
+          throw new Error("gateway is draining for restart");
+        }
+      });
+      resolveApprovalDecisionOrUndefinedMock.mockReturnValue(approval);
+      createExecApprovalDecisionStateMock.mockReturnValue({
+        baseDecision: { timedOut: false },
+        approvedByAsk: true,
+        deniedReason: null,
+      });
+      commitExecAuthorizationMock.mockImplementation(async () => {
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+      });
+      runExecProcessMock.mockImplementation(async () => {
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        announceSpawn();
+        await spawnAllowed;
+        return { session: { id: "sess-atomic" }, promise: outcome };
+      });
+      markBackgroundedMock.mockImplementation(() => {
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+      });
+      buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
 
-    const result = await runGatewayAllowlist({
-      command: "find . -maxdepth 1",
-      turnSourceChannel: "feishu",
-    });
-    expect(result.pendingResult?.details.status).toBe("approval-pending");
-    await vi.waitFor(() => {
-      expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
-    });
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
+      try {
+        const result = await runGatewayAllowlist({
+          command: "find . -maxdepth 1",
+          turnSourceChannel: "feishu",
+          approvalFollowup,
+        });
+        expect(result.pendingResult?.details.status).toBe("approval-pending");
+        await vi.waitFor(() => {
+          expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
 
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
-    resolveApproval("allow-once");
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
-    expect(runExecProcessMock).not.toHaveBeenCalled();
-    expect(markBackgroundedMock).not.toHaveBeenCalled();
+        const suspension = tryBeginGatewaySuspendAdmission(() => {});
+        expect(suspension?.commit()).toBe(true);
+        resolveApproval("allow-once");
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
+        expect(runExecProcessMock).not.toHaveBeenCalled();
+        expect(markBackgroundedMock).not.toHaveBeenCalled();
 
-    suspension?.release();
-    await spawnStarted;
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-    allowSpawn();
-    await vi.waitFor(() => {
-      expect(markBackgroundedMock).toHaveBeenCalledOnce();
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    });
-    expect(commitExecAuthorizationMock).toHaveBeenCalledOnce();
-    expect(runExecProcessMock).toHaveBeenCalledOnce();
+        suspension?.release();
+        await spawnStarted;
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        allowSpawn();
+        await vi.waitFor(() => {
+          expect(markBackgroundedMock).toHaveBeenCalledOnce();
+          expect(getActiveGatewayRootWorkCount()).toBe(1);
+        });
+        expect(commitExecAuthorizationMock).toHaveBeenCalledOnce();
+        expect(runExecProcessMock).toHaveBeenCalledOnce();
 
-    resolveOutcome({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-      aggregated: "done",
-    });
-    await vi.waitFor(() => {
-      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
-    });
-  });
+        resolveOutcome({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          aggregated: "done",
+        });
+        await vi.waitFor(() => expect(approvalFollowup).toHaveBeenCalledOnce());
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        finishFactory();
+        await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        finishSender();
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
+      } finally {
+        allowSpawn();
+        resolveApproval("allow-once");
+        resolveOutcome({ status: "completed", exitCode: 0, timedOut: false, aggregated: "done" });
+        finishFactory();
+        finishSender();
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      }
+    },
+  );
 
   it.each([
     { name: "denies drift", mutate: true },

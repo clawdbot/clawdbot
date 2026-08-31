@@ -1,11 +1,10 @@
 // Implements trajectory export command packaging for the active session agent.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
-import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { ReplyPayload } from "../types.js";
-import { parseExportCommandOutputPath } from "./commands-export-common.js";
+import { formatExportExecResult, parseExportCommandOutputPath } from "./commands-export-common.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
@@ -24,7 +23,7 @@ const MAX_TRAJECTORY_EXPORT_ENCODED_REQUEST_CHARS = 8192;
 const EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE =
   "I couldn't find a private owner approval route for the trajectory export. Run /export-trajectory from an owner DM so the sensitive trajectory bundle is not posted in this chat.";
 const EXPORT_TRAJECTORY_PRIVATE_ROUTE_ACK =
-  "Trajectory exports are sensitive. I sent the export request and approval prompt to the owner privately.";
+  "Trajectory exports are sensitive. I sent the export status to the owner privately.";
 
 type ExportTrajectoryCommandDeps = {
   createExecTool: typeof createExecTool;
@@ -201,54 +200,12 @@ async function requestTrajectoryExportApproval(
       background: true,
       timeoutSeconds: timeoutSec,
     });
-    return [
-      `Trajectory bundle: requested \`${request.displayCommand}\` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.`,
-      formatExecToolResultForTrajectory(result),
-    ].join("\n");
+    return formatExportExecResult("Trajectory export", result);
   } catch (error) {
-    return [
-      `Trajectory bundle: could not request exec approval for \`${request.displayCommand}\`.`,
-      formatExecTrajectoryText(formatErrorMessage(error)),
-    ].join("\n");
+    return formatExportExecResult("Trajectory export", {
+      content: [{ type: "text", text: formatErrorMessage(error) }],
+    });
   }
-}
-
-function formatExecToolResultForTrajectory(result: {
-  content?: Array<{ type: string; text?: string }>;
-  details?: ExecToolDetails;
-}): string {
-  const text = result.content
-    ?.map((chunk) => (chunk.type === "text" && typeof chunk.text === "string" ? chunk.text : ""))
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-  if (text) {
-    return formatExecTrajectoryText(text);
-  }
-  const details = result.details;
-  if (details?.status === "approval-pending") {
-    const decisions = details.allowedDecisions?.join(", ") || "allow-once, deny";
-    return formatExecTrajectoryText(
-      `Exec approval pending (${details.approvalSlug}). Allowed decisions: ${decisions}.`,
-    );
-  }
-  if (details?.status === "running") {
-    return formatExecTrajectoryText(
-      `Trajectory export is running (exec session ${details.sessionId}).`,
-    );
-  }
-  if (details?.status === "completed" || details?.status === "failed") {
-    return formatExecTrajectoryText(details.aggregated);
-  }
-  return "(no exec details returned)";
-}
-
-function formatExecTrajectoryText(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "(no exec output)";
-  }
-  return trimmed;
 }
 
 type TrajectoryExportCliRequest = {
@@ -263,7 +220,6 @@ type TrajectoryExportExecRequest = {
   argv: string[];
   command: string;
   env: Record<string, string> | undefined;
-  displayCommand: string;
   encodedRequest: string;
   request: TrajectoryExportCliRequest;
 };
@@ -292,7 +248,6 @@ function buildTrajectoryExportExecRequest(
   const args = ["sessions", "export-trajectory", "--request-json-base64", encodedRequest, "--json"];
   return {
     ...buildCurrentOpenClawCliExecRequest(args),
-    displayCommand: ["openclaw", ...args].join(" "),
     encodedRequest,
     request,
   };

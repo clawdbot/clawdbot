@@ -298,6 +298,7 @@ export async function dispatchGatewayMethodInProcessRaw(
 ): Promise<GatewayMethodDispatchResponse> {
   return await withInProcessGatewayDispatch(method, options, async (resolved) => {
     return await dispatchGatewayRequestInProcessRaw(method, params, {
+      assertContextCurrent: resolved.assertContextCurrent,
       client: resolved.client,
       context: resolved.context,
       expectFinal: options?.expectFinal,

@@ -10,6 +10,7 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
@@ -20,6 +21,7 @@ import { sendMessage } from "../infra/outbound/message.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -38,6 +40,7 @@ import {
   isExecDeniedResultText,
   parseExecApprovalResultText,
 } from "./exec-approval-result.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const log = createSubsystemLogger("agents/exec-approval-followup");
@@ -54,27 +57,46 @@ const AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS = 1_000;
 const AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS =
   AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS * 1_000 + AGENT_FOLLOWUP_WAIT_TIMEOUT_MS;
 
-async function callExecApprovalFollowupGateway(
+type ExecApprovalFollowupGateway = (
   method: "agent" | "agent.wait",
   timeoutMs: number,
   params: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const gatewayRuntime = getGatewayRecoveryRuntime();
-  if (gatewayRuntime) {
-    return method === "agent"
-      ? await gatewayRuntime.dispatchAgent(
-          params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
-          timeoutMs,
-        )
-      : await gatewayRuntime.waitForAgent(
-          params as Parameters<typeof gatewayRuntime.waitForAgent>[0],
-          timeoutMs,
-        );
+) => Promise<Record<string, unknown>>;
+
+/** Captures routing only; the retained instance still owns authorization and liveness. */
+export function captureExecApprovalFollowupGateway(): ExecApprovalFollowupGateway {
+  const resolveContext =
+    getGatewayToolCallerIdentity()?.gatewayContextResolver ??
+    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  let context: GatewayRequestContext | undefined;
+  try {
+    context = resolveContext?.();
+  } catch {
+    /* Retain a refusing bound route. */
   }
-  return await callGatewayTool(method, { timeoutMs }, params);
+  const gatewayRuntime = resolveContext ? context?.recoveryRuntime : getGatewayRecoveryRuntime();
+  return async (method, timeoutMs, params) => {
+    // A retired binding never transfers this continuation to a replacement or socket.
+    if (resolveContext && (!context || resolveContext() !== context || !gatewayRuntime)) {
+      throw new Error(`Gateway instance followup dispatch unavailable for ${method}`);
+    }
+    if (gatewayRuntime) {
+      return method === "agent"
+        ? await gatewayRuntime.dispatchAgent(
+            params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
+            timeoutMs,
+          )
+        : await gatewayRuntime.waitForAgent(
+            params as Parameters<typeof gatewayRuntime.waitForAgent>[0],
+            timeoutMs,
+          );
+    }
+    return await callGatewayTool(method, { timeoutMs }, params);
+  };
 }
 
 type ExecApprovalFollowupParams = {
+  callGateway: ExecApprovalFollowupGateway;
   approvalId: string;
   agentId?: string;
   sessionKey?: string;
@@ -266,6 +288,7 @@ function hasTerminalFollowupEvidence(value: unknown): boolean {
 }
 
 async function waitForAgentFollowupRun(params: {
+  callGateway: ExecApprovalFollowupGateway;
   runId: string;
   timeoutMs: number;
 }): Promise<
@@ -283,7 +306,7 @@ async function waitForAgentFollowupRun(params: {
     const waitTimeoutMs = Math.max(1, Math.min(params.timeoutMs, remainingMs));
     let wait: Record<string, unknown>;
     try {
-      wait = await callExecApprovalFollowupGateway("agent.wait", waitTimeoutMs + 2_000, {
+      wait = await params.callGateway("agent.wait", waitTimeoutMs + 2_000, {
         runId: params.runId,
         timeoutMs: waitTimeoutMs,
       });
@@ -506,7 +529,7 @@ export async function sendExecApprovalFollowup(
         internalRuntimeHandoffId,
         idempotencyKey,
       });
-      const accepted = await callExecApprovalFollowupGateway("agent", 60_000, agentArgs);
+      const accepted = await params.callGateway("agent", 60_000, agentArgs);
       const status = readGatewayStatus(accepted);
       if (isSuccessfulFollowupStatus(status)) {
         return true;
@@ -518,6 +541,7 @@ export async function sendExecApprovalFollowup(
           throw buildFollowupWaitError({ status: "missing-run-id" });
         }
         const waitResult = await waitForAgentFollowupRun({
+          callGateway: params.callGateway,
           runId,
           timeoutMs: AGENT_FOLLOWUP_WAIT_TIMEOUT_MS,
         });

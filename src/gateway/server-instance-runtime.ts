@@ -92,6 +92,7 @@ export function createGatewayInstanceRuntime(
       context: options.getContext(),
       methodRegistry: options.getMethodRegistry(),
       requestIdPrefix: "gateway-internal",
+      assertContextCurrent: () => assertDispatchAvailable(params.method),
       timeoutMs: params.timeoutMs,
     });
   };
@@ -176,10 +177,9 @@ export function createGatewayInstanceRuntime(
       return await recoveryAgentTurns.wait<T>(payload, timeoutMs);
     },
     sendRecoveryNotice: async (payload) => {
-      if (closed || !options.isDispatchAvailable()) {
-        throw new Error("Gateway instance dispatch unavailable for recovery notice");
-      }
+      assertDispatchAvailable("recovery notice");
       const { sendMessage } = await loadOutboundMessageRuntime();
+      assertDispatchAvailable("recovery notice");
       const context = options.getContext();
       const result = await sendMessage({
         cfg: context.getRuntimeConfig(),
