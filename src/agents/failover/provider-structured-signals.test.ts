@@ -1,10 +1,14 @@
 // Covers provider hook structured failover signals.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
+import { buildApiErrorObservationFields } from "../embedded-agent-error-observation.js";
 import { classifyAssistantFailoverReason } from "../embedded-agent-helpers/assistant-message-failures.js";
+import { formatUserFacingAssistantErrorText } from "../embedded-agent-helpers/error-text.js";
 import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
 import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { classifyFailoverSignal } from "./classify.js";
+import { formatBillingErrorMessage, PROVIDER_SCHEMA_REJECTION_USER_TEXT } from "./user-copy.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn(),
@@ -16,6 +20,129 @@ describe("provider failover hook structured signals", () => {
   beforeEach(() => {
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
   });
+
+  it.each([
+    {
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+      copy: "LLM streaming response contained a malformed fragment. Please try again.",
+      runtimeKind: "unclassified",
+    },
+    {
+      errorMessage: "opaque provider refusal",
+      copy: "LLM request failed.",
+      runtimeKind: "unclassified",
+    },
+    {
+      errorMessage: "model input limit reached",
+      copy: "LLM request failed.",
+      runtimeKind: "unclassified",
+    },
+    {
+      errorMessage: "Request size exceeds model context window",
+      copy: "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+      runtimeKind: "unclassified",
+    },
+    {
+      errorMessage: '429 {"error":{"type":"rate_limit_error","message":"Too many requests"}}',
+      copy: "⚠️ API rate limit reached. Please try again later.",
+      runtimeKind: "rate_limit",
+    },
+  ])(
+    "presents and observes $errorMessage without provider discovery",
+    ({ errorMessage, copy, runtimeKind }) => {
+      const message = makeAssistantMessageFixture({ errorMessage });
+      expect(formatUserFacingAssistantErrorText(message)).toBe(copy);
+      expect
+        .soft(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin)
+        .not.toHaveBeenCalled();
+      providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockClear();
+      expect(
+        buildApiErrorObservationFields(errorMessage, { provider: message.provider }),
+      ).toMatchObject({
+        providerRuntimeFailureKind: runtimeKind,
+        rawErrorHash: expect.stringMatching(/^sha256:/),
+      });
+      expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["billing", "rate_limit", "context_overflow", "model_not_found", "format"] as const)(
+    "presents prepared %s policy once with the full signal and no rediscovery",
+    (reason) => {
+      const classifyFailoverReason = vi.fn(() => reason);
+      const matchesContextOverflowError = vi.fn(() => reason === "context_overflow");
+      const message = makeAssistantMessageFixture({
+        provider: "custom-route",
+        errorMessage: "403 fixture refusal",
+        errorCode: "PROVIDER_CODE",
+        errorType: "PROVIDER_TYPE",
+      });
+      const copies = {
+        billing: formatBillingErrorMessage("custom-route", message.model),
+        rate_limit: "⚠️ API rate limit reached. Please try again later.",
+        context_overflow:
+          "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+        model_not_found:
+          "The selected model was not found by the provider. Check the model id or choose a different model.",
+        format: PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+      };
+      expect(
+        formatUserFacingAssistantErrorText(message, {
+          provider: "custom-route",
+          providerOwner: {
+            id: "prepared-owner",
+            matchesContextOverflowError,
+            classifyFailoverReason,
+          },
+        }),
+      ).toBe(copies[reason]);
+      expect(matchesContextOverflowError).toHaveBeenCalledExactlyOnceWith({
+        provider: "prepared-owner",
+        status: 403,
+        code: "PROVIDER_CODE",
+        errorType: "PROVIDER_TYPE",
+        errorMessage: message.errorMessage,
+      });
+      expect(classifyFailoverReason).toHaveBeenCalledTimes(reason === "context_overflow" ? 0 : 1);
+      expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { errorCode: "RESOURCE_EXHAUSTED", copy: "⚠️ API rate limit reached. Please try again later." },
+    { errorType: "invalid_request_error", copy: PROVIDER_SCHEMA_REJECTION_USER_TEXT },
+    {
+      errorBody: '{"error":{"message":"Request size exceeds model context window"}}',
+      copy: "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+    },
+    {
+      errorBody: '{"error":{"message":"insufficient credits"}}',
+      copy: formatBillingErrorMessage(),
+    },
+    {
+      errorMessage: '{"error":{"type":"invalid_request_error","message":"provider refusal"}}',
+      errorBody: '{"error":{"message":"insufficient credits"}}',
+      copy: formatBillingErrorMessage(),
+    },
+    {
+      errorMessage: '{"error":{"type":"invalid_request_error","message":"provider refusal"}}',
+      errorCode: "RESOURCE_EXHAUSTED",
+      copy: "⚠️ API rate limit reached. Please try again later.",
+    },
+  ])(
+    "presents structured signal $errorCode $errorType $errorBody without discovery",
+    ({ copy, ...fields }) => {
+      expect(
+        formatUserFacingAssistantErrorText(
+          makeAssistantMessageFixture({
+            errorMessage: "provider refusal",
+            ...fields,
+          }),
+        ),
+      ).toBe(copy);
+      expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not resolve provider runtime for a generic non-ambiguous error", () => {
     expect(
@@ -357,13 +484,10 @@ describe("provider failover hook structured signals", () => {
       });
 
       expect(classifyAssistantFailoverReason(message)).toBe(reason);
-      expect(
-        classifyProviderRuntimeFailureKind({
-          provider: "anthropic",
-          message: "",
-          errorType,
-        }),
-      ).toBe(runtimeKind);
+      const signal = { provider: "anthropic", message: "", errorType };
+      const classification = classifyFailoverSignal(signal);
+      expect(classifyProviderRuntimeFailureKind(signal, classification)).toBe(runtimeKind);
+      expect(classifyProviderRuntimeFailureKind(signal)).toBe("unclassified");
     },
   );
 

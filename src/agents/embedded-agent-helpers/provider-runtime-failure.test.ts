@@ -182,7 +182,7 @@ describe("classifyProviderRuntimeFailureKind", () => {
         code: "CERT_HAS_EXPIRED",
         message: "certificate field rejected",
       }),
-    ).toBe("unclassified");
+    ).toBe("schema");
     expect(
       classifyProviderRuntimeFailureKind("INVALID_REQUEST_ERROR: string should match pattern"),
     ).toBe("schema");

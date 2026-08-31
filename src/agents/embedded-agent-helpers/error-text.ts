@@ -11,10 +11,7 @@ import {
 } from "../../shared/assistant-error-format.js";
 import { renderAssistantRequestFailureCopy } from "../failover/assistant-request-failure-copy.js";
 import {
-  classifyFailoverReason,
-  isBilling429MessageForProvider,
-  isBillingErrorMessage,
-  isContextOverflowError,
+  classifyFailoverSignal,
   isProviderCompletedErrorFinishReasonMessage,
   isReasoningConstraintErrorMessage,
   isTimeoutErrorMessage,
@@ -87,13 +84,13 @@ export function formatAssistantErrorText(
   ) {
     return formatCopy;
   }
-  const providerOwner = opts?.providerOwner?.id ?? opts?.provider;
-  // Rendering can reuse a prepared owner, but must not discover runtime plugins.
+  const signal = buildAssistantFailoverSignal(msg, {
+    provider: opts?.providerOwner?.id ?? opts?.provider,
+  });
+  // Rendering reuses its explicit owner; ownerless presentation stays generic.
   const providerPlugin = opts?.providerOwner ?? null;
-  const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind(
-    { ...buildAssistantFailoverSignal(msg, { provider: providerOwner }), message: raw },
-    { providerPlugin },
-  );
+  const classification = classifyFailoverSignal(signal, { providerPlugin });
+  const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind(signal, { providerPlugin });
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
@@ -178,7 +175,7 @@ export function formatAssistantErrorText(
   if (providerRuntimeFailureKind === "model_not_found") {
     return MODEL_NOT_FOUND_USER_TEXT;
   }
-  if (isContextOverflowError(raw, { providerPlugin })) {
+  if (classification?.kind === "context_overflow") {
     return (
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
@@ -223,20 +220,15 @@ export function formatAssistantErrorText(
   }
 
   const apiError = parseApiErrorInfo(raw);
-  if (apiError?.type?.toLowerCase().includes("invalid_request") && apiError.message?.trim()) {
+  if (
+    providerRuntimeFailureKind === "schema" &&
+    apiError?.type?.toLowerCase().includes("invalid_request") &&
+    apiError.message?.trim()
+  ) {
     return `LLM request rejected: ${apiError.message.trim()}`;
   }
 
-  if (isBilling429MessageForProvider(raw, providerOwner)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
-  }
-
-  const failoverReason = facts
-    ? facts.reason
-    : classifyFailoverReason(raw, {
-        provider: providerOwner,
-        providerPlugin,
-      });
+  const failoverReason = classification?.kind === "reason" ? classification.reason : undefined;
   if (failoverReason === "billing") {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
@@ -265,10 +257,6 @@ export function formatAssistantErrorText(
 
   if (isTimeoutErrorMessage(raw)) {
     return SYNTHESIZED_TIMEOUT_ERROR_TEXT;
-  }
-
-  if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
   if (providerRuntimeFailureKind === "schema") {
