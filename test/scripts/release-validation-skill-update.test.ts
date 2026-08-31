@@ -18,10 +18,16 @@ async function runChecker(scriptPath: string, workspace: string) {
   const preloadPath = path.join(path.dirname(workspace), "mock-fetch.mjs");
   await writeFile(
     preloadPath,
-    `globalThis.fetch = async () => new Response(JSON.stringify({
-      latestVersion: { version: "0.1.7" },
-      owner: { handle: "openclaw" },
-    }), { status: 200, headers: { "content-type": "application/json" } });\n`,
+    `globalThis.fetch = async (input) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.searchParams.get("ownerHandle") !== "openclaw") {
+        throw new Error("missing owner-qualified ClawHub detail lookup");
+      }
+      return new Response(JSON.stringify({
+        latestVersion: { version: "0.1.7" },
+        owner: { handle: "openclaw" },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };\n`,
   );
   const { stdout } = await execFileAsync(
     process.execPath,

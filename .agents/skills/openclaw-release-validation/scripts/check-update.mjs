@@ -250,7 +250,9 @@ async function main() {
       artifactSha256: origin?.artifact?.sha256 ?? null,
     };
 
-    const response = await fetch(`${REGISTRY}/api/v1/skills/${encodeURIComponent(SLUG)}`, {
+    const detailUrl = new URL(`${REGISTRY}/api/v1/skills/${encodeURIComponent(SLUG)}`);
+    detailUrl.searchParams.set("ownerHandle", OWNER);
+    const response = await fetch(detailUrl, {
       headers: {
         Accept: "application/json",
         "User-Agent": "openclaw-release-validation-skill",
