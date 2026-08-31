@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Voice call history:** preserve the original call and canonical provider ID across delayed callbacks and dial responses, preventing phantom calls and post-completion history changes. (#130059) Thanks @ruel225 and @jackatagenticforce.
 - **Subagent completion:** recognize visible final answers delivered to internal and nested parent sessions, preventing false delivery failures while preserving external channel delivery checks.
 - Codex/Linux: wait for a live app-server process to expose its startup command line within the existing inspection deadline, preserving process identity checks and preventing intermittent startup failures.
 - **Cloud session lifecycle:** prevent archive, delete, and restart recovery from deadlocking behind an earlier worker move, keep work admission closed through cleanup, and preserve the same successor for concurrent recovery requests.
