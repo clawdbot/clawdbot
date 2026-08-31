@@ -533,62 +533,6 @@ export function pruneInstalledPackageDist(params = {}) {
   return removed;
 }
 
-function resolveDistModuleUrl(packageRoot, distPath) {
-  return pathToFileURL(join(packageRoot, distPath)).href;
-}
-
-async function importInstalledDistModule(params, distPath) {
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const pathExists = params.existsSync ?? existsSync;
-  const modulePath = join(packageRoot, distPath);
-  if (!pathExists(modulePath)) {
-    return null;
-  }
-  const importModule = params.importModule ?? ((specifier) => import(specifier));
-  return await importModule(resolveDistModuleUrl(packageRoot, distPath));
-}
-
-export async function runPluginRegistryPostinstallMigration(params = {}) {
-  const log = params.log ?? console;
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const env = params.env ?? process.env;
-  const pathExists = params.existsSync ?? existsSync;
-
-  // Registry migration belongs to installed-package upgrades. Source checkouts
-  // can contain stale dist from a different build and must not touch operator state.
-  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
-    return { status: "skipped", reason: "source-checkout" };
-  }
-
-  try {
-    const migrationModule = await importInstalledDistModule(
-      { ...params, existsSync: pathExists },
-      "dist/commands/doctor/shared/plugin-registry-migration.js",
-    );
-    if (!migrationModule) {
-      return { status: "skipped", reason: "missing-dist-entry" };
-    }
-    if (typeof migrationModule.migratePluginRegistryForInstall !== "function") {
-      return { status: "skipped", reason: "missing-dist-contract" };
-    }
-
-    const result = await migrationModule.migratePluginRegistryForInstall({
-      env,
-      packageRoot,
-    });
-    if (result.migrated) {
-      log.log(
-        `[postinstall] migrated plugin registry: ${result.current.plugins.length} plugin(s) indexed`,
-      );
-    }
-    return result;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log.warn(`[postinstall] could not migrate plugin registry: ${message}`);
-    return { status: "failed", error: message };
-  }
-}
-
 export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
   const hasPostinstallInventory = pathExists(join(params.packageRoot, DIST_INVENTORY_PATH));
@@ -650,5 +594,4 @@ export function isDirectPostinstallInvocation(params = {}) {
 
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
-  await runPluginRegistryPostinstallMigration();
 }

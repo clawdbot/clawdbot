@@ -400,8 +400,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
-    "commands/doctor/shared/plugin-registry-migration":
-      "src/commands/doctor/shared/plugin-registry-migration.ts",
     "commands/status.summary.runtime": "src/status/summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",

@@ -989,8 +989,8 @@ describe("ensureOnboardingPluginInstalled", () => {
     { version: "2026.8.1-2", channel: "stable", installVersion: "2026.8.1" },
     { version: "2026.7.33-1", channel: "extended-stable", installVersion: "2026.7.33" },
     { version: "2026.8.1", channel: "beta", installVersion: "beta" },
-    { version: "2026.8.1-beta.4", channel: undefined, installVersion: "beta" },
-    { version: "2026.8.1-beta.4", channel: "stable", installVersion: "beta" },
+    { version: "2026.8.1-beta.4", channel: undefined, installVersion: "2026.8.1-beta.4" },
+    { version: "2026.8.1-beta.4", channel: "stable", installVersion: "2026.8.1-beta.4" },
   ] as const)(
     "aligns version-bound plugins on core $version with channel $channel",
     async ({ version, channel, installVersion }) => {
