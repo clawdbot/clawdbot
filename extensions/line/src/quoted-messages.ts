@@ -5,7 +5,11 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 /** One message a later quote can name, as this account already knew it. */
 export type LineQuotedMessage = {
-  /** Text this account already showed the agent; absent for a non-text message. */
+  /**
+   * Text this account already showed the agent. A non-text message keeps the
+   * marker the ambient window shows (`<image>`); only a message this account
+   * sent has no body, because outbound text is never retained.
+   */
   body?: string;
   /** LINE user id of the sender; absent for a message this account sent. */
   senderId?: string;
@@ -94,9 +98,11 @@ export function recordLineAgentVisibleMessage(
 
 /**
  * Resolves what a quoted message id names, or undefined once it has aged out.
- * A received message answers only inside the conversation it was seen in: message
- * ids are account-wide, so the conversation is what keeps one chat's text out of
- * another's prompt rather than a platform promise we cannot check.
+ * An id this account sent answers anywhere, since recognizing its own message is
+ * how the bot reads a quote as being addressed. A received message answers only
+ * inside the conversation it was seen in: message ids are account-wide, so the
+ * conversation is what keeps one chat's text out of another's prompt rather than
+ * a platform promise we cannot check.
  */
 export function resolveLineQuotedMessage(
   accountId: string,

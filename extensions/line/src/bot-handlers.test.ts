@@ -1294,39 +1294,54 @@ describe("handleLineWebhookEvents", () => {
     );
   });
 
-  it("makes an ambient group message quotable inside its own conversation", async () => {
+  it.each([
+    { name: "an ambient group message the mention gate skipped", mentioned: false },
+    { name: "a mentioned group message that reached the agent", mentioned: true },
+  ])("makes $name quotable inside its own conversation", async ({ mentioned }) => {
+    const processMessage = vi.fn();
     const groupHistories = new Map<string, HistoryEntry[]>();
+    const messageId = mentioned ? "m-dispatched-quotable" : "m-ambient-quotable";
+    const text = mentioned ? "@Bot staging is on 10.0.0.5" : "staging is on 10.0.0.5";
     const event = createTestMessageEvent({
       message: {
-        id: "m-ambient-quotable",
+        id: messageId,
         type: "text",
-        text: "staging is on 10.0.0.5",
-        quoteToken: "q-ambient",
+        text,
+        quoteToken: "q-quotable",
+        ...(mentioned
+          ? {
+              mention: {
+                mentionees: [{ index: 0, length: 4, type: "user" as const, isSelf: true }],
+              },
+            }
+          : {}),
       },
       source: { type: "group", groupId: "group-ambient", userId: "user-ambient" },
-      webhookEventId: "evt-ambient-quotable",
+      webhookEventId: `evt-quotable-${messageId}`,
     });
 
     await handleLineWebhookEvents(
       [event],
       createLineWebhookTestContext({
-        processMessage: vi.fn(),
+        processMessage,
         groupPolicy: "open",
         requireMention: true,
         groupHistories,
       }),
     );
 
+    // The two record sites write the same fields, so the branch has to be pinned
+    // from outside: only the skipped message stays out of the agent turn.
+    expect.soft(processMessage).toHaveBeenCalledTimes(mentioned ? 1 : 0);
+    expect.soft(groupHistories.get("group-ambient") ?? []).toHaveLength(mentioned ? 0 : 1);
     // The record sites are the only place the conversation is attached, so this
     // is what proves a quote resolves in the group it was written in and nowhere else.
-    expect(resolveLineQuotedMessage("default", "m-ambient-quotable", "group-ambient")).toEqual({
+    expect(resolveLineQuotedMessage("default", messageId, "group-ambient")).toEqual({
       fromBot: false,
-      body: "staging is on 10.0.0.5",
+      body: text,
       senderId: "user-ambient",
     });
-    expect(
-      resolveLineQuotedMessage("default", "m-ambient-quotable", "group-other"),
-    ).toBeUndefined();
+    expect(resolveLineQuotedMessage("default", messageId, "group-other")).toBeUndefined();
   });
 
   it("skips a group message quoting a message the bot did not send", async () => {

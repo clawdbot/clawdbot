@@ -67,8 +67,12 @@ describe("buildLineMessageContext quotes", () => {
     }) as MessageEvent;
 
   beforeEach(async () => {
-    getUserProfileMock.mockClear();
-    getLineGroupNameMock.mockClear();
+    // mockClear keeps the implementation, so a display name set by one test would
+    // leak into every later one and make the suite order-dependent.
+    getUserProfileMock.mockReset();
+    getUserProfileMock.mockImplementation(async () => null);
+    getLineGroupNameMock.mockReset();
+    getLineGroupNameMock.mockImplementation(async () => undefined);
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -162,6 +166,9 @@ describe("buildLineMessageContext quotes", () => {
       commandAuthorized: true,
     });
 
+    // Read through the turn that was actually built: `context?.` alone would also
+    // be satisfied by a null context, which is a different bug wearing this result.
+    expect(context?.ctxPayload.RawBody).toBe("what about this?");
     expect(context?.ctxPayload.ReplyToBody).toBeUndefined();
     expect(context?.ctxPayload.ReplyToId).toBeUndefined();
   });
@@ -272,6 +279,7 @@ describe("buildLineMessageContext quotes", () => {
       commandAuthorized: true,
     });
 
+    expect(context?.ctxPayload.RawBody).toBe("hello");
     expect(context?.ctxPayload.ReplyToId).toBeUndefined();
     expect(context?.ctxPayload.ReplyToIsQuote).toBeUndefined();
   });
