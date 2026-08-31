@@ -8,7 +8,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { ProductReturnCovenantGatewayControl } from "./gateway.js";
 import {
   authorizeReturnCovenantPhaseRequest,
@@ -26,6 +25,7 @@ import {
   type ReturnCovenantPlan,
 } from "./protocol.js";
 import { ReturnCovenantFixtureRun } from "./run.js";
+import { projectReturnCovenantRuntimeConfig } from "./runtime-config.js";
 
 const MAX_CONTROL_BYTES = 1024 * 1024;
 const FORBIDDEN_AMBIENT_ENV = [
@@ -109,10 +109,7 @@ async function validateIsolatedRuntime(params: {
   if (sha256ReturnCovenant(stableStringify(rawConfig)) !== params.plan.target.runtimeConfigSha256) {
     throw new Error("return-covenant runtime config differs from the frozen plan");
   }
-  const parsed = validateConfigObjectRaw(rawConfig, { env: process.env });
-  if (!parsed.ok || parsed.config.gateway?.mode !== "local") {
-    throw new Error("return-covenant runtime config is not a valid local gateway config");
-  }
+  const config = projectReturnCovenantRuntimeConfig(rawConfig);
   const identities = {
     candidateSha: process.env.OPENCLAW_CANDIDATE_SHA,
     productTreeSha: process.env.OPENCLAW_PRODUCT_TREE_SHA,
@@ -128,7 +125,7 @@ async function validateIsolatedRuntime(params: {
     throw new Error("return-covenant runtime environment identity mismatch");
   }
   return {
-    config: parsed.config,
+    config,
     configPath: configFile,
     homePath: homeRoot,
     statePath: stateRoot,
