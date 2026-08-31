@@ -8,6 +8,7 @@ import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 const dispatchAgentRunFromGateway = vi.hoisted(() => vi.fn());
 
 vi.mock("./agent-run-dispatch.js", () => ({
+  asPreparedAgentCommandRuntimeContext: (runtime: unknown) => runtime,
   dispatchAgentRunFromGateway,
   resolveAbortedAgentStopReason: () => "rpc",
 }));
@@ -15,6 +16,10 @@ vi.mock("./agent-run-dispatch.js", () => ({
 function createExecution(options: { aborted?: boolean; assertContextCurrent?: () => void } = {}) {
   const abortCleanup = vi.fn();
   const gatewayRelease = vi.fn();
+  const replyDispatchRuntime = {
+    config: { runtime: "A" },
+    pluginGeneration: "generation-A",
+  };
   let resolveRuntimeReleased!: () => void;
   const runtimeReleased = new Promise<void>((resolve) => {
     resolveRuntimeReleased = resolve;
@@ -46,10 +51,7 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
         lifecycleStorePath: "",
         operationalRunInstance: {},
         preparedModelRuntimeLease: { release: runtimeRelease, snapshot: {} },
-        replyDispatchRuntime: {
-          config: { runtime: "A" },
-          pluginGeneration: "generation-A",
-        },
+        replyDispatchRuntime,
         unpersistedOffloadedRefs: [],
         userTurn: {
           execApprovalFollowupHandoffClaimId: "claim",
@@ -82,6 +84,7 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
       context: {
         dedupe: new Map(),
         deps: {},
+        loadPublishedGatewayReplyDispatchRuntime: vi.fn(async () => replyDispatchRuntime),
         logGateway: { error: vi.fn(), warn: vi.fn() },
       },
       io: {

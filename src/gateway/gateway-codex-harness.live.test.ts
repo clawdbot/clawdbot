@@ -1936,8 +1936,6 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
     finalReply,
     taskIds: [waveOneTask.taskId, waveTwoTask.taskId],
   });
-  const deliveredTask = waveOneTask;
-
   const parentControlledChild = events.some(
     (event) => event.stream === "codex_app_server.item" && event.data?.type === "subAgentActivity",
   );
