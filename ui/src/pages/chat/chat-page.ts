@@ -21,6 +21,7 @@ import { currentRouteLocation, stillOwnsCanonicalLocation } from "./chat-canonic
 import { renderChatPagePaneCell } from "./chat-page-pane-render.ts";
 import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
 import { closeStagedPane, resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
+import { bindChatPageSession } from "./chat-state-route.ts";
 import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
@@ -123,8 +124,8 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     window.addEventListener("dragend", this.handleWindowDragEnd);
     window.addEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
     this.retainedSessions.connect();
-    this.syncRouteAgent();
     this.syncRouteToActivePane();
+    this.syncRouteBindings();
     const layout = this.layout ?? this.classicLayout();
     this.viewerPresence.sync(this.context?.gateway, layout, this.narrow);
   }
@@ -186,8 +187,8 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
           );
         }
       });
-      this.syncRouteAgent();
       this.syncRouteToActivePane();
+      this.syncRouteBindings();
       this.retainedSessions.settleRoute(data.sessionKey);
     }
     if (data && routeHandoffRendered) {
@@ -393,22 +394,25 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     this.persistLayout(setPaneSession(layout, activePane.id, sessionKey));
   }
 
-  private syncRouteAgent() {
-    const agentId = this.data?.agentId?.trim();
-    if (agentId) {
-      this.context.agentSelection.set(agentId);
+  private syncRouteBindings() {
+    const activePane = this.layout && findPane(this.layout, this.layout.activePaneId)?.pane;
+    const routeKey = (activePane?.sessionKey ?? this.data?.sessionKey)?.trim();
+    if (this.context && routeKey) {
+      bindChatPageSession(this.context, routeKey, this.data?.agentId);
     }
   }
 
   private persistLayout(layout: ChatSplitLayout | undefined) {
     this.layout = layout;
     patchSettings({ chatSplitLayout: layout });
+    this.syncRouteBindings();
   }
 
   private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
     const data = this.data;
     const sameSession = data && areUiSessionKeysEquivalent(data.sessionKey, sessionKey);
     if (sameSession && (data.face ?? "chat") === face && !data.draft && !data.focusComposer) {
+      this.syncRouteBindings();
       return;
     }
     const options = sessionNavigationTarget({

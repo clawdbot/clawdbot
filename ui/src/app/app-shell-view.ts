@@ -9,7 +9,10 @@ import type {
 import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import { renderNewSessionLink } from "../components/new-session-link.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import {
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
+  HOME_PANEL_TOGGLE_EVENT,
+} from "../components/panel-toggle-contract.ts";
 import {
   renderLazySettingsSidebar,
   type SettingsSidebarModule,
@@ -24,6 +27,7 @@ import {
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import { buildHomeWorkContext } from "../pages/chat/chat-work-context.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -50,7 +54,11 @@ import {
   renderFloatingUpdateCard,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
+import {
+  isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
+  isHomePanelAvailable,
+} from "./panel-availability.ts";
 import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,
@@ -219,6 +227,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+  const homePanelAvailable = isHomePanelAvailable(context.gateway);
   const custodianPanelAvailable =
     // Scope-aware to match the store: admin-only, never advertisement alone.
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
@@ -527,6 +536,18 @@ export function renderApplicationShell(host: ShellViewHost) {
                   ${icons.search}
                 </button>
               </openclaw-tooltip>
+              ${navCollapsed && homePanelAvailable
+                ? html`<openclaw-tooltip .content=${t("assistantPanel.toggle")}>
+                    <button
+                      type="button"
+                      class="shell-chrome-controls__button shell-chrome-controls__home"
+                      aria-label=${t("assistantPanel.toggle")}
+                      @click=${() => window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT))}
+                    >
+                      ${icons.home}
+                    </button>
+                  </openclaw-tooltip>`
+                : nothing}
               ${navCollapsed && custodianPanelAvailable
                 ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
                     <button
@@ -665,12 +686,17 @@ export function renderApplicationShell(host: ShellViewHost) {
               .basePath=${context.basePath}
             ></openclaw-desktop-panel>
           `}
-      <openclaw-custodian-panel
+      <openclaw-assistant-panel
         ?inert=${navDrawerOpen}
-        .available=${custodianPanelAvailable}
-        .suppressed=${activeRoute === "custodian"}
+        .custodianAvailable=${custodianPanelAvailable}
+        .homeAvailable=${homePanelAvailable}
+        .custodianSuppressed=${activeRoute === "custodian"}
+        .sessionPage=${activeRoute === "chat"}
+        .pageSessionKey=${host.activeSessionKey}
+        .pageAgentId=${selectedAgentId}
+        .workContext=${buildHomeWorkContext(context, activeRoute, host.activeSessionKey)}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
-      ></openclaw-custodian-panel>
+      ></openclaw-assistant-panel>
       ${isOptionalElementDefined(host.execApprovalElement)
         ? html`<openclaw-exec-approval
             .props=${{

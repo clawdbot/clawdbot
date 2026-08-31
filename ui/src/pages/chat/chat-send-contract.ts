@@ -37,6 +37,8 @@ export type ChatHost = ChatInputHistoryState &
     reconnectResumeSessionId?: string | null;
     chatLoading: boolean;
     chatMessage: string;
+    /** Captured once at submit; queued delivery never re-reads the current page. */
+    getWorkContext?: () => string | undefined;
     chatGoalDraftMode?: ChatGoalDraftMode | null;
     chatMessages: unknown[];
     chatThinkingLevel: string | null;

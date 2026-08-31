@@ -14,7 +14,9 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -25,6 +27,7 @@ import {
 } from "./components/chat-message.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import { openSlot } from "./sidebar-layout.ts";
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
@@ -774,6 +777,41 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it.each([false, true])(
+    "restores sidebar tabs without opening a compact=%s presentation",
+    (compact) => {
+      vi.stubGlobal("localStorage", createStorageMock());
+      const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const layout = openSlot({ columns: [] }, "workspace");
+      patchSettings({ sidebarSessionLayouts: { [state.sessionKey]: layout } });
+      (pane as TestChatPane & { compact: boolean }).compact = compact;
+      pane.connectedClient = null;
+
+      pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "reconnecting" });
+
+      expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("workspace");
+      expect(state.sidebarLayout.open).toBe(!compact);
+      expect(loadSettings().sidebarSessionLayouts?.[state.sessionKey]?.open).toBe(true);
+    },
+  );
+
+  it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
+    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    (pane as TestChatPane & { agentId: string }).agentId = "personal";
+    pane.sessionKey = "global";
+    state.sessionKey = "global";
+    state.assistantAgentId = "personal";
+    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+    pane.context.agentSelection.set("work");
+
+    pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
+
+    expect(state.assistantAgentId).toBe("personal");
+    expect(pane.context.agentSelection.state.selectedId).toBe("work");
+  });
+
   it("renders once while initially hidden, then reconciles hidden invalidations", async () => {
     let visibilityState: DocumentVisibilityState = "hidden";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);

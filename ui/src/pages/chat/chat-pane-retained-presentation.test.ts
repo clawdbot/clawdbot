@@ -3,7 +3,9 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -13,6 +15,7 @@ import {
   preparePaneStagedAttachments,
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
+import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
   clearPaneSessionHandoffs,
   consumePaneSessionHandoff,
@@ -24,6 +27,76 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
 
 describe("chat pane retained presentation lifecycle", () => {
+  it("hands native drafts and typing to the focused region without changing the work session", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+    const page = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    const dock = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    const listeners = new Set<(draft: string) => void>();
+    page.pane.context.nativeChatDrafts.subscribe = (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    };
+    dock.pane.context = page.pane.context;
+    const panes = [page, dock].map(({ pane, state }, index) => {
+      const mounted = pane as TestChatPane & { inputRegion: "page" | "dock"; render(): null };
+      mounted.inputRegion = index === 0 ? "page" : "dock";
+      mounted.sessionKey = index === 0 ? "agent:work:task" : "agent:main:main";
+      state.sessionKey = mounted.sessionKey;
+      state.settings = {
+        sessionKey: "agent:work:task",
+        lastActiveSessionKey: "agent:work:task",
+      } as ChatPageHost["settings"];
+      state.handleChatDraftChange = vi.fn();
+      state.loadAssistantIdentity = vi.fn(async () => undefined);
+      mounted.render = () => null;
+      mounted.active = true;
+      const composer = document.createElement("div");
+      composer.className = "agent-chat__composer-combobox";
+      const textarea = composer.appendChild(document.createElement("textarea"));
+      mounted.append(composer);
+      const focus = vi.spyOn(textarea, "focus");
+      ChatPaneBase.prototype.connectedCallback.call(mounted);
+      return { mounted, focus, state };
+    });
+    try {
+      await Promise.all(panes.map(({ mounted }) => mounted.updateComplete));
+      const owner = chatInputOwnerForContext(page.pane.context);
+      for (const region of ["dock", "page"] as const) {
+        owner.claim(region);
+        expect(listeners.size).toBe(1);
+        for (const listener of listeners) {
+          listener(region);
+        }
+        const key = new KeyboardEvent("keydown", { key: "x", cancelable: true });
+        for (const { mounted } of panes) {
+          mounted.handleDocumentKeydown(key);
+        }
+      }
+      expect(page.state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith("page");
+      expect(dock.state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith("dock");
+      for (const { focus } of panes) {
+        expect(focus).toHaveBeenCalledOnce();
+      }
+      expect(page.pane.context.gateway.setSessionKey).not.toHaveBeenCalled();
+      expect(page.pane.context.agentSelection.state.selectedId).toBe("main");
+    } finally {
+      for (const { mounted } of panes) {
+        mounted.active = false;
+        Object.defineProperty(mounted, "isConnected", { configurable: true, value: false });
+        ChatPaneBase.prototype.disconnectedCallback.call(mounted);
+      }
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("expires abandoned eviction payload ownership", () => {
     vi.useFakeTimers();
     const id = "expired-retained-attachment";

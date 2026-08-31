@@ -13,6 +13,7 @@ import {
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
+  HOME_PANEL_TOGGLE_EVENT,
   DEBUG_OVERLAY_REQUEST_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
@@ -59,7 +60,11 @@ import {
   restoreToastFromNavDrawer,
   visibleNavDrawerToggle,
 } from "./navigation-surface.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
+import {
+  isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
+  isHomePanelAvailable,
+} from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
@@ -86,7 +91,7 @@ export interface ShellChromeHost extends HTMLElement {
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;
   readonly desktopPanelElement: OptionalCustomElement;
-  readonly custodianPanelElement: OptionalCustomElement;
+  readonly assistantPanelElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly commandPalette: CommandPaletteElement | undefined;
   readonly approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
@@ -176,9 +181,10 @@ export class ShellChromeOwner {
     window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle, options);
     window.addEventListener(
       CUSTODIAN_PANEL_TOGGLE_EVENT,
-      this.handleDeferredCustodianToggle,
+      this.handleDeferredAssistantToggle,
       options,
     );
+    window.addEventListener(HOME_PANEL_TOGGLE_EVENT, this.handleDeferredAssistantToggle, options);
     window.addEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen, options);
     this.navDrawerSwipe.connect();
     if (isMobileNavLayout()) {
@@ -631,16 +637,21 @@ export class ShellChromeOwner {
     );
   };
 
-  readonly handleDeferredCustodianToggle = (event: Event): void => {
+  readonly handleDeferredAssistantToggle = (event: Event): void => {
     const host = this.host;
-    if (isOptionalElementDefined(host.custodianPanelElement)) {
+    if (isOptionalElementDefined(host.assistantPanelElement)) {
       return;
     }
     const snapshot = host.context?.gateway?.snapshot;
-    if (canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
+    const home = event.type === HOME_PANEL_TOGGLE_EVENT;
+    if (
+      home
+        ? isHomePanelAvailable(host.context?.gateway)
+        : canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")
+    ) {
       this.requestLazyElement(
-        host.custodianPanelElement,
-        lazyShellEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, event),
+        host.assistantPanelElement,
+        lazyShellEvent(home ? HOME_PANEL_TOGGLE_EVENT : CUSTODIAN_PANEL_TOGGLE_EVENT, event),
       );
     } else {
       event.preventDefault();
@@ -656,7 +667,8 @@ export class ShellChromeOwner {
       [TERMINAL_PANEL_TOGGLE_EVENT]: host.terminalPanelElement,
       [BROWSER_PANEL_TOGGLE_EVENT]: host.browserPanelElement,
       [DESKTOP_PANEL_TOGGLE_EVENT]: host.desktopPanelElement,
-      [CUSTODIAN_PANEL_TOGGLE_EVENT]: host.custodianPanelElement,
+      [CUSTODIAN_PANEL_TOGGLE_EVENT]: host.assistantPanelElement,
+      [HOME_PANEL_TOGGLE_EVENT]: host.assistantPanelElement,
       [SHELL_APPROVALS_OPEN_EVENT]: host.execApprovalElement,
     };
     return elements[eventType];

@@ -15,6 +15,7 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
+import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type {
@@ -64,6 +65,7 @@ type RenderedPane = HTMLElement & {
   gatewaysSnapshot: NativeGatewaysSnapshot | null;
   onOpenSplitView?: () => void;
   onClosePane?: (paneId: string) => void;
+  onPaneSessionChange?: (paneId: string, sessionKey: string) => boolean;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
 };
 
@@ -169,7 +171,11 @@ function setNavigationContext(page: ChatPage) {
     basePath: "",
     sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null }, subscribe: () => () => undefined },
+    gateway: {
+      snapshot: { hello: null },
+      setSessionKey: vi.fn(),
+      subscribe: () => () => undefined,
+    },
     navigate,
     replace,
     agentSelection: { state: agentSelectionState, set: setAgent },
@@ -282,6 +288,59 @@ describe("chat page split layout host", () => {
     );
     expect(page.querySelector("resizable-divider")).toBeNull();
     expect(typeof itemAt(panes, 0, "rendered pane").onOpenSplitView).toBe("function");
+  });
+
+  it("keeps route ownership on the selected split pane while dock input is active", async () => {
+    const page = new ChatPage();
+    const { context, setAgent } = setNavigationContext(page);
+    page.data = { sessionKey: WORK_SESSION_KEY, agentId: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+    chatInputOwnerForContext(context).claim("dock");
+    const otherSession = "agent:research:review";
+    window.dispatchEvent(
+      new CustomEvent(UI_COMMAND_EVENT, {
+        detail: {
+          command: { kind: "split", direction: "right", sessionKey: otherSession },
+          sessionKey: WORK_SESSION_KEY,
+        },
+        cancelable: true,
+      }),
+    );
+    await page.updateComplete;
+    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith(otherSession);
+    expect(setAgent).toHaveBeenLastCalledWith("research");
+    page
+      .querySelector<HTMLElement>(".chat-split-view__cell")
+      ?.dispatchEvent(new Event("pointerdown"));
+    await page.updateComplete;
+
+    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith(WORK_SESSION_KEY);
+    expect(loadSettings()).toMatchObject({
+      sessionKey: WORK_SESSION_KEY,
+      lastActiveSessionKey: WORK_SESSION_KEY,
+    });
+    expect(setAgent).toHaveBeenLastCalledWith("main");
+    expect(chatInputOwnerForContext(context).current).toBe("dock");
+  });
+
+  it("binds newly resolved Home defaults even when the canonical route is equivalent", async () => {
+    const page = new ChatPage();
+    const { context, navigate, replace } = setNavigationContext(page);
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+    context.gateway.snapshot.hello = {
+      snapshot: { sessionDefaults: { mainKey: "main", mainSessionKey: "agent:main:main" } },
+    } as GatewayHelloOk;
+    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane")!;
+
+    pane.onPaneSessionChange?.(pane.paneId, "agent:main:main");
+
+    expect(context.gateway.setSessionKey).toHaveBeenLastCalledWith("agent:main:main");
+    expect(loadSettings().sessionKey).toBe("agent:main:main");
+    expect(navigate).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
   });
 
   it("passes the chat-owned gateway capability only to the rightmost pane", async () => {
@@ -820,9 +879,12 @@ describe("chat page split layout host", () => {
   it("refreshes split toolbar titles after the shared list loads", async () => {
     const page = new ChatPage();
     const source = createSessionTitleSource();
+    const navigation = setNavigationContext(page);
     (page as unknown as { context: unknown }).context = {
+      ...navigation.context,
       agents: { state: { agentsList: null } },
       gateway: {
+        ...navigation.context.gateway,
         snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
         subscribe: () => () => undefined,
       },
@@ -841,6 +903,7 @@ describe("chat page split layout host", () => {
     // "main"; hello-default resolution plus equivalence matching must find
     // the label anyway — including non-default agent ids.
     (page as unknown as { context: { gateway?: unknown; sessions: unknown } }).context.gateway = {
+      ...navigation.context.gateway,
       snapshot: {
         assistantAgentId: "dev",
         client: null,
@@ -871,8 +934,10 @@ describe("chat page split layout host", () => {
     const second = createSessionTitleSource();
     const page = new ChatPage();
     const sharedContext = {
+      ...setNavigationContext(page).context,
       agents: { state: { agentsList: null } },
       gateway: {
+        setSessionKey: vi.fn(),
         snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
         subscribe: () => () => undefined,
       },

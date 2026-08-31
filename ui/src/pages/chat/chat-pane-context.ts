@@ -155,10 +155,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       selectedSession,
     );
     if (selectedSessionDeleted) {
-      const agentId =
-        parseAgentSessionKey(state.sessionKey)?.agentId ??
-        this.context.agentSelection.state.selectedId ??
-        "main";
+      const agentId = resolveChatAgentId(state);
       this.onSessionDeleted?.(
         this.paneId,
         state.sessionKey,
@@ -241,6 +238,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     // Gateway identity is its default, while each retained pane owns its routed agent.
     const assistantAgentId =
       parseAgentSessionKey(state.sessionKey)?.agentId ??
+      this.agentId ??
       this.context.agentSelection.state.selectedId ??
       snapshot.assistantAgentId;
     const previousSidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
@@ -365,6 +363,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       } else if (state.sidebarLayout.columns.length > 0) {
         state.updateSidebarLayout(state.sidebarLayout);
       }
+      if (this.compact && clientChanged) {
+        state.sidebarLayout = { ...state.sidebarLayout, open: false };
+      }
       state.sidebarFocusPanelId =
         sidebarSettings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "";
       state.sidebarFocusVersion += 1;
@@ -403,7 +404,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       routeSessionKey &&
       canonicalRouteSessionKey &&
       canonicalRouteSessionKey !== routeSessionKey &&
-      this.active &&
       this.presented
     ) {
       this.onPaneSessionChange?.(this.paneId, canonicalRouteSessionKey, { replace: true });
