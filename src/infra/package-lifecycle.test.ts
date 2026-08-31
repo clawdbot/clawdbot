@@ -57,6 +57,56 @@ describe("package lifecycle completion", () => {
     });
   });
 
+  it("does not expire a live lock within the full lifecycle script budget", async () => {
+    await withTestDir({ prefix: "openclaw-package-lifecycle-lock-" }, async (packageRoot) => {
+      const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+      await fs.writeFile(markerPath, "pending\n");
+      let releasePreinstall: (() => void) | undefined;
+      let preinstallCalls = 0;
+      const preinstallBlocked = new Promise<void>((resolve) => {
+        releasePreinstall = resolve;
+      });
+      let firstPreinstallStarted: (() => void) | undefined;
+      const firstPreinstall = new Promise<void>((resolve) => {
+        firstPreinstallStarted = resolve;
+      });
+      const runScript = async (script: { name: string }) => {
+        if (script.name === "preinstall") {
+          preinstallCalls += 1;
+          if (preinstallCalls > 1) {
+            throw new Error("concurrent lifecycle execution");
+          }
+          firstPreinstallStarted?.();
+          await preinstallBlocked;
+        } else {
+          await fs.rm(markerPath);
+        }
+      };
+
+      const first = completePendingPackageLifecycle({ packageRoot, runScript });
+      await firstPreinstall;
+      const staleAtOldThreshold = new Date(Date.now() - 20 * 60_000);
+      await fs.utimes(
+        path.join(packageRoot, ".openclaw-lifecycle-lock"),
+        staleAtOldThreshold,
+        staleAtOldThreshold,
+      );
+      const second = completePendingPackageLifecycle({ packageRoot, runScript });
+      const secondResult = second.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 250);
+      });
+
+      expect(preinstallCalls).toBe(1);
+      releasePreinstall?.();
+      await expect(first).resolves.toBe(true);
+      await expect(secondResult).resolves.toEqual({ value: false });
+    });
+  });
+
   it("migrates the shipped dist guard before retrying the complete lifecycle", async () => {
     await withTestDir({ prefix: "openclaw-package-lifecycle-legacy-" }, async (packageRoot) => {
       const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);

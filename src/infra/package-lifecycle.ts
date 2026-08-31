@@ -25,6 +25,10 @@ const PACKAGE_LIFECYCLE_SCRIPTS: readonly PackageLifecycleScript[] = [
     relativePath: path.join("scripts", "postinstall-bundled-plugins.mjs"),
   },
 ];
+// Each script can consume its full timeout. Keep one extra window so scheduler and
+// filesystem overhead cannot make a live owner look stale between scripts.
+const PACKAGE_LIFECYCLE_LOCK_STALE_MS =
+  PACKAGE_LIFECYCLE_TIMEOUT_MS * (PACKAGE_LIFECYCLE_SCRIPTS.length + 1);
 
 function hasErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && error.code === code;
@@ -76,7 +80,7 @@ async function acquireLifecycleLock(paths: ReturnType<typeof resolveLifecyclePat
       }
       const stat = await fs.stat(paths.lock).catch(() => null);
       // Lifecycle subprocesses share this deadline. An older lock cannot still own live work.
-      if (stat && Date.now() - stat.mtimeMs >= PACKAGE_LIFECYCLE_TIMEOUT_MS) {
+      if (stat && Date.now() - stat.mtimeMs >= PACKAGE_LIFECYCLE_LOCK_STALE_MS) {
         await fs.rmdir(paths.lock).catch(() => undefined);
         continue;
       }
