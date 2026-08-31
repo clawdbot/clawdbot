@@ -215,6 +215,47 @@ export function applyJobResult(
             deferredNotifications: opts?.deferredNotifications,
           });
   };
+  // Terminal one-shot error disposition, shared by timed `at` failures and
+  // watcher-completed `on-exit` failures: the job never runs again, so the
+  // threshold-gated failure alert would stay silent forever. Record the
+  // durable auto-disable fact and route exactly one notice — the richer alert
+  // when a route can emit, else the generic auto-disable notice (#131490).
+  // Aborts keep the quiet disable: the operator already saw a visible outcome.
+  const applyTerminalOneShotErrorDisposition = (
+    retryDecision: ReturnType<typeof resolveTransientCronRetryDecision>,
+    options?: { completedOneShot?: boolean },
+  ) => {
+    const alertOwnsTerminalNotice = alertConfig !== null && !bestEffortSuppressesFailureAlert(job);
+    const recordedAutoDisable =
+      retryDecision.reason !== "aborted" &&
+      autoDisableCronJob({
+        state,
+        job,
+        reason: "consecutive-failures",
+        atMs: result.endedAt,
+        consecutiveErrors: retryDecision.consecutiveErrors,
+        deferredNotifications: opts?.deferredNotifications,
+        notify: !alertOwnsTerminalNotice,
+        ...(options?.completedOneShot ? { completedOneShot: true } : {}),
+      });
+    autoDisableNotificationOwnsFailure = recordedAutoDisable && !alertOwnsTerminalNotice;
+    oneShotTerminalDisable = recordedAutoDisable && alertOwnsTerminalNotice;
+    // System-owned payloads and aborts opt out of the auto-disable owner;
+    // keep the plain disable for them.
+    job.enabled = false;
+    job.state.nextRunAtMs = undefined;
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        consecutiveErrors: retryDecision.consecutiveErrors,
+        error: result.error,
+        reason: retryDecision.reason,
+        retryCategory: retryDecision.retryCategory,
+      },
+      "cron: disabling one-shot job after error",
+    );
+  };
   const finish = () => {
     if (opts?.replaySchedule && job.schedule.kind !== "at") {
       applyReplaySchedule();
@@ -327,46 +368,33 @@ export function applyJobResult(
           // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
           // so exhausted-retry jobs are disabled but intentionally kept in the store
           // to preserve the error state for inspection.
-          // This disable is terminal for a one-shot, so the threshold-gated
-          // failure alert may never fire again; record the durable auto-disable
-          // fact, let a failure-alert route that can actually emit own the
-          // (threshold-bypassed) notification, and fall back to the generic
-          // auto-disable notice otherwise — including best-effort jobs whose
-          // inherited alert is suppressed (#131490). Operator cancels and
-          // lifecycle retirements already have a visible outcome, so they keep
-          // the quiet disable.
-          const alertOwnsTerminalNotice =
-            alertConfig !== null && !bestEffortSuppressesFailureAlert(job);
-          const recordedAutoDisable =
-            retryDecision.reason !== "aborted" &&
-            autoDisableCronJob({
-              state,
-              job,
-              reason: "consecutive-failures",
-              atMs: result.endedAt,
-              consecutiveErrors: retryDecision.consecutiveErrors,
-              deferredNotifications: opts?.deferredNotifications,
-              notify: !alertOwnsTerminalNotice,
-            });
-          autoDisableNotificationOwnsFailure = recordedAutoDisable && !alertOwnsTerminalNotice;
-          oneShotTerminalDisable = recordedAutoDisable && alertOwnsTerminalNotice;
-          // System-owned payloads and aborts opt out of the auto-disable owner;
-          // keep the plain disable for them.
-          job.enabled = false;
-          job.state.nextRunAtMs = undefined;
-          state.deps.log.warn(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveErrors: retryDecision.consecutiveErrors,
-              error: result.error,
-              reason: retryDecision.reason,
-              retryCategory: retryDecision.retryCategory,
-            },
-            "cron: disabling one-shot job after error",
-          );
+          applyTerminalOneShotErrorDisposition(retryDecision);
         }
       }
+    } else if (
+      job.schedule.kind === "on-exit" &&
+      opts?.scheduleMode === "preserve" &&
+      !previousScheduleState.enabled &&
+      result.status === "error"
+    ) {
+      // Watcher-fired terminal run: the exit watcher persisted this one-shot
+      // disabled BEFORE force-running the payload, so a first error here is
+      // already the job's last and must not park below failureAlert.after.
+      // Transient errors are terminal too — a retry would need re-enabling,
+      // and reconcile would re-arm (re-run) the completed watched command.
+      // A manual force-run of a still-armed (enabled) watcher keeps the plain
+      // preserve path below; disabling it would tear down the live watch.
+      applyTerminalOneShotErrorDisposition(
+        resolveTransientCronRetryDecision({
+          cronConfig: state.deps.cronConfig,
+          error: result.error,
+          errorClassification: result.errorClassification,
+          lastErrorReason: job.state.lastErrorReason,
+          executionStarted: result.executionStarted,
+          consecutiveErrors: job.state.consecutiveErrors,
+        }),
+        { completedOneShot: true },
+      );
     } else if (opts?.scheduleMode === "preserve") {
       // Forced recurring runs do not consume, replace, or repair a scheduled
       // slot. Preserve the timestamp and its paced provenance as one unit.

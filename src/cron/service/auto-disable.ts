@@ -28,13 +28,16 @@ export function autoDisableCronJob(params: {
   // Terminal one-shot disables with a resolvable failure-alert route let the
   // richer alert own the notification; the durable fact is still recorded here.
   notify?: boolean;
+  // A completed on-exit watcher persists its job disabled BEFORE force-running
+  // the payload; that pre-disable must not swallow the terminal fact/notice.
+  completedOneShot?: boolean;
 }): boolean {
   const { state, job } = params;
   // Gateway convergence owns these jobs; clients cannot re-enable them, so failures stay visible while they retry on schedule.
   if (isSystemOwnedCronPayloadKind(job.payload.kind)) {
     return false;
   }
-  if (!job.enabled || job.state.autoDisabled) {
+  if ((!job.enabled && params.completedOneShot !== true) || job.state.autoDisabled) {
     return false;
   }
 
