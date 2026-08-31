@@ -36,7 +36,7 @@ const stubs = new Map<string, string>([
   [sourceUrl("../config/config.ts"), snapshotSource],
   [
     sourceUrl("../infra/update-check.ts"),
-    "export const checkUpdateStatus = async () => { throw new Error('Unexpected registry check'); };",
+    "export const resolveUpdateInstallKind = async () => { throw new Error('Unexpected install check'); };",
   ],
   [
     sourceUrl("../plugins/installed-plugin-index-records.ts"),

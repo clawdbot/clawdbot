@@ -68,7 +68,6 @@ import {
   assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
   GatewayServiceUpdateOwnershipError,
-  isGatewayServiceManagementAllowedForUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 import {
