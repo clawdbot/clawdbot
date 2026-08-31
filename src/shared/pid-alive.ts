@@ -1,7 +1,7 @@
 // PID liveness helpers check whether process ids still refer to active processes.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
-import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.js";
+import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
 // Cron reads its own identity on every tick. Cache only a successful Windows
