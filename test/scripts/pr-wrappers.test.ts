@@ -500,6 +500,40 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
+  itPosix("executes extracted helpers through a symlinked temporary root", () => {
+    const fixture = makeMismatchedWrapperRepo({ realModules: true });
+    try {
+      // Exercise the wrapper's own helper path, not a physical path reconstructed by the test.
+      writeFileSync(
+        join(fixture.canonical, "scripts/pr-lib/gates.sh"),
+        `ci_dispatch() { node "$(review_artifacts_helper_path)" template "$1" "${REVIEWED_HEAD}"; }\n`,
+      );
+      fixture.git(fixture.canonical, ["add", "scripts/pr-lib/gates.sh"]);
+      fixture.git(fixture.canonical, ["commit", "-m", "test: real anchor helper dispatch"]);
+      fixture.git(fixture.canonical, ["push", "origin", "main"]);
+      parkCanonicalOffAnchor(fixture);
+      const temporaryAlias = join(fixture.root, "temporary-alias");
+      symlinkSync(fixture.root, temporaryAlias, "dir");
+      const result = spawnSync(
+        join(fixture.linked, "scripts/pr"),
+        ["ci-dispatch", String(REVIEWED_PR)],
+        {
+          cwd: fixture.linked,
+          encoding: "utf8",
+          env: { ...fixture.env, TMPDIR: temporaryAlias },
+        },
+      );
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stderr).toContain("running wrapper code materialized from");
+      expect(result.stdout, "the extracted helper must not silently skip its entrypoint").toContain(
+        REVIEWED_HEAD,
+      );
+      expect(JSON.parse(result.stdout).pr).toEqual({ number: REVIEWED_PR, headSha: REVIEWED_HEAD });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   itPosix("executes review artifacts from the extracted anchor dependency closure", () => {
     const fixture = makeMismatchedWrapperRepo({ realModules: true });
     try {

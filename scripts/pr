@@ -41,7 +41,8 @@ requested_subcommand="${1-}"
 
 # Select trusted wrapper code independently from the canonical repository root;
 # a linked wrapper may be removed by merge-run or gc before supervision ends.
-script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Physical paths keep helper argv aligned with Node's canonical module URLs.
+script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 script_parent_dir="$(dirname "$script_self")"
 canonical_repo_root="$script_parent_dir/.."
 pr_wrapper_components=(
