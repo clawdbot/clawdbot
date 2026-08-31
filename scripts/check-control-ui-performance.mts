@@ -41,8 +41,10 @@ const controlUiPerformanceBudgets = {
   // Composer multiline surface (stack #124301) legitimately grew boot CSS;
   // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
   // 53.0 KiB was exhausted by organic growth (main sat at 99.94% by 2026-08-29);
-  // bumped with operator approval on PR #132054.
-  largestCssGzipBytes: 53.5 * KIB,
+  // bumped with operator approval on PR #132054. Bumped again to 54.0 KiB with
+  // operator approval 2026-08-31: #133593 + #133495 shipped four themes whose
+  // in-boot control styling crossed 53.5 KiB by 25 B only once both merged.
+  largestCssGzipBytes: 54 * KIB,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
