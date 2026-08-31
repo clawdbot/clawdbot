@@ -2832,26 +2832,20 @@ docker_e2e_docker_run_cmd run demo
       expect(script).not.toContain('\nexport FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"\n');
     }
     expectTextToIncludeAll(publishedRunner, [
-      "park_prepublish_authored_config",
-      "park-prepublish",
+      "park-restart-probe",
       "assert_prepublish_fixture_idle",
       "assert-no-requests",
-      "restore_prepublish_authored_config",
       "config-parking.mjs",
       "'^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)='",
       "OPENCLAW_CLAWHUB_URL=%s",
     ]);
-    expect(publishedRunner.indexOf("park_prepublish_authored_config")).toBeLessThan(
-      publishedRunner.lastIndexOf("assert_prepublish_fixture_idle"),
-    );
-    expect(publishedRunner.lastIndexOf("assert_prepublish_fixture_idle")).toBeLessThan(
-      publishedRunner.lastIndexOf("restore_prepublish_authored_config"),
-    );
     expect(publishedRunner.lastIndexOf("write_update_restart_service_env")).toBeLessThan(
       publishedRunner.lastIndexOf("install_update_restart_probe_gateway"),
     );
     expect(publishedRunner.lastIndexOf("install_update_restart_probe_gateway")).toBeLessThan(
-      publishedRunner.lastIndexOf("restore_prepublish_authored_config"),
+      publishedRunner.indexOf(
+        'node "$parking_helper" restore "$OPENCLAW_CONFIG_PATH" "$authored_config"',
+      ),
     );
     for (const script of [runner, updateRestartAuth]) {
       expect(script).not.toContain("assert-no-requests");

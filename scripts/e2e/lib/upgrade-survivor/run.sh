@@ -128,7 +128,6 @@ SYSTEMCTL_SHIM_LOG="$ARTIFACT_ROOT/systemctl-shim.log"
 SYSTEMCTL_SHIM_PID_FILE="$ARTIFACT_ROOT/systemctl-shim.pid"
 SYSTEMCTL_SHIM_DAEMON_LOG="$ARTIFACT_ROOT/systemctl-shim-gateway.log"
 CONFIG_COVERAGE_JSON="$ARTIFACT_ROOT/config-recipe.json"
-PREPUBLISH_AUTHORED_CONFIG="$RUNTIME_ROOT/prepublish-authored-openclaw.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
 : >"$PHASE_LOG"
@@ -486,22 +485,10 @@ prepublish_auto_auth_enabled() {
     [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]
 }
 
-park_prepublish_authored_config() {
-  prepublish_auto_auth_enabled || return 0
-  node "${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}" \
-    park-prepublish "$OPENCLAW_CONFIG_PATH" "$PREPUBLISH_AUTHORED_CONFIG"
-}
-
 assert_prepublish_fixture_idle() {
   prepublish_auto_auth_enabled || return 0
   node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
     assert-no-requests "$OPENCLAW_CLAWHUB_URL"
-}
-
-restore_prepublish_authored_config() {
-  prepublish_auto_auth_enabled || return 0
-  node "${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}" \
-    restore "$OPENCLAW_CONFIG_PATH" "$PREPUBLISH_AUTHORED_CONFIG"
 }
 
 configure_plugin_registry() {
@@ -989,8 +976,13 @@ prepare_update_restart_probe() {
   echo "Preparing configured-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
   seed_update_restart_probe_device_auth
-  local probe_status=0
-  park_prepublish_authored_config || probe_status=$?
+  local probe_status=0 restore_status=0
+  local authored_config="$RUNTIME_ROOT/baseline-authored-openclaw.json"
+  local parking_helper="${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}"
+  # Bootstrap only service auth; authored plugins must reach the actual updater unchanged.
+  # The canonical path stays installed in the unit, with reload off until update owns restart.
+  node "$parking_helper" \
+    park-restart-probe "$OPENCLAW_CONFIG_PATH" "$authored_config" 18789 || probe_status=$?
   if [ "$probe_status" -eq 0 ]; then
     write_update_restart_service_env || probe_status=$?
   fi
@@ -1000,13 +992,14 @@ prepare_update_restart_probe() {
   if [ "$probe_status" -eq 0 ]; then
     assert_prepublish_fixture_idle || probe_status=$?
   fi
-  local restore_status=0
-  restore_prepublish_authored_config || restore_status=$?
-  if [ "$probe_status" -ne 0 ]; then
-    return "$probe_status"
+  if [ -e "$authored_config" ]; then
+    node "$parking_helper" restore "$OPENCLAW_CONFIG_PATH" "$authored_config" || restore_status=$?
   fi
   if [ "$restore_status" -ne 0 ]; then
     return "$restore_status"
+  fi
+  if [ "$probe_status" -ne 0 ]; then
+    return "$probe_status"
   fi
   assert_baseline_state
 }
@@ -1378,6 +1371,11 @@ phase install-baseline install_baseline
 phase seed-state seed_state
 phase apply-baseline-config-recipe apply_baseline_config_recipe
 phase validate-baseline-config validate_baseline_config
+if [ "$SCENARIO" = "cron-scheduled-authority" ]; then
+  # Published 8.1 refuses roster changes with ownerless legacy cron jobs. Seed
+  # these migration specimens after config authoring without repairing their ownership.
+  phase seed-cron-scheduled-authority node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-cron-scheduled-authority
+fi
 phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
 phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
 phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
