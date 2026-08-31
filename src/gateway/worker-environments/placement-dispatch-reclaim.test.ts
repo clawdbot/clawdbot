@@ -68,7 +68,9 @@ describe("worker placement dispatch reclaim", () => {
     const outcome = reclaiming.catch((error: unknown) => error);
     const olderRecovery = coordinated.resumeProvisioning(provisioning, async () => {});
     // The environment service joins the pass already waiting behind reclaim.
-    vi.mocked(harness.environments.reconcileOnce).mockImplementationOnce(() => olderRecovery);
+    vi.mocked(harness.environments.reconcileOnce).mockImplementationOnce(async () => {
+      await olderRecovery;
+    });
     releaseProvision.resolve();
     await dispatching;
     expect(await outcome).toEqual(new Error("destroy pending"));

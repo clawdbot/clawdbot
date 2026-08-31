@@ -365,7 +365,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         lease,
         provider,
         patch,
-        cancellation?.assertActive,
+        preparedInstallation,
+        cancellation,
       );
     }
     const bootstrapping = move(record, "bootstrapping", patch);
@@ -374,7 +375,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       try {
         // A persisted provisioning row can represent an allocation whose response was lost.
         // Replay the idempotent provider operation before packaging can terminalize that lease.
-        installation = await options.prepareInstallation(installFor(bootstrapping));
+        installation = await options.prepareInstallation(
+          installFor(bootstrapping),
+          cancellation?.signal,
+        );
         cancellation?.assertActive();
       } catch (error) {
         return await failBootstrap(bootstrapping, lease.leaseId, provider, error);
@@ -387,13 +391,17 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     record: WorkerEnvironmentRecord,
     provider = providerFor(record.providerId),
     signal?: AbortSignal,
+    retainProviderSettlement?: (settled: Promise<void>) => void,
   ) => {
     const cancellation = signal
       ? createWorkerProvisionCancellation(store, record, signal)
       : undefined;
+    if (cancellation) {
+      retainProviderSettlement?.(cancellation.settled);
+    }
     try {
       let installation: WorkerInstallationArtifact | undefined;
-      await nodeProvisioning.prepare(record, provider);
+      await nodeProvisioning.prepare(record, provider, signal);
       cancellation?.assertActive();
       if (
         record.state === "requested" &&
@@ -403,7 +411,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         try {
           // Fresh requests package before allocation. Once provisioning is durable, provider replay
           // must happen first because the previous response may have been lost after allocation.
-          installation = await options.prepareInstallation(installFor(record));
+          installation = await options.prepareInstallation(installFor(record), signal);
         } catch (error) {
           cancellation?.assertActive();
           const detail = boundedError(error);
@@ -471,7 +479,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     );
   };
 
-  const reconcileRecord = async (initialRecord: WorkerEnvironmentRecord): Promise<void> => {
+  const reconcileRecord = async (
+    initialRecord: WorkerEnvironmentRecord,
+    signal?: AbortSignal,
+    retainProviderSettlement?: (settled: Promise<void>) => void,
+  ): Promise<void> => {
     let record = initialRecord;
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
       return void (await finishDestroy(record));
@@ -479,7 +491,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     let currentBundle: WorkerInstallationArtifact | undefined;
     if (record.destroyRequestedAtMs === null && inState(record, "ready", "idle", "attached")) {
       try {
-        currentBundle = await options.prepareInstallation("bundle");
+        currentBundle = await options.prepareInstallation("bundle", signal);
         if (record.bootstrapReceipt) {
           if (verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
             const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
@@ -490,6 +502,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           }
         }
       } catch {
+        signal?.throwIfAborted();
         // Provider inspection and the state-specific path below retain their existing retry policy.
       }
     }
@@ -505,7 +518,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       await (
         record.destroyRequestedAtMs !== null
           ? finishDestroy(record, provider)
-          : resumeProvision(record, provider)
+          : resumeProvision(record, provider, signal, retainProviderSettlement)
       ).catch(() => undefined);
       return;
     }
@@ -607,39 +620,65 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       return;
     }
     if (inState(record, "bootstrapping", "ready", "idle")) {
-      let installation = currentBundle;
+      let cancellation = signal
+        ? createWorkerProvisionCancellation(store, record, signal)
+        : undefined;
+      if (cancellation) {
+        retainProviderSettlement?.(cancellation.settled);
+      }
       try {
-        // Bundle identity is local and canonical for both install channels. A matching admitted
-        // receipt must not depend on npm registry availability during routine reconciliation.
-        installation ??= await options.prepareInstallation("bundle");
-      } catch (error) {
-        if (record.bootstrapReceipt && inState(record, "ready", "idle")) {
-          saveError(record, error);
-          return;
-        }
-        await failBootstrap(record, leaseId, provider, error).catch(() => undefined);
-        return;
-      }
-      if (
-        record.bootstrapReceipt &&
-        verifyWorkerAdmissionHandshake(record.bootstrapReceipt, installation)
-      ) {
-        ensurePendingCredential(record, null);
-        return;
-      }
-      if (installFor(record) === "npm") {
+        cancellation?.assertActive();
+        let installation = currentBundle;
         try {
-          installation = await options.prepareInstallation("npm");
+          // Bundle identity is local and canonical for both install channels. A matching admitted
+          // receipt must not depend on npm registry availability during routine reconciliation.
+          installation ??= await options.prepareInstallation("bundle", signal);
         } catch (error) {
+          if (record.bootstrapReceipt && inState(record, "ready", "idle")) {
+            saveError(record, error);
+            return;
+          }
           await failBootstrap(record, leaseId, provider, error).catch(() => undefined);
           return;
         }
+        if (
+          record.bootstrapReceipt &&
+          verifyWorkerAdmissionHandshake(record.bootstrapReceipt, installation)
+        ) {
+          ensurePendingCredential(record, null);
+          return;
+        }
+        if (installFor(record) === "npm") {
+          try {
+            installation = await options.prepareInstallation("npm", signal);
+          } catch (error) {
+            await failBootstrap(record, leaseId, provider, error).catch(() => undefined);
+            return;
+          }
+        }
+        record = await stopOwner(record);
+        cancellation?.assertActive();
+        const bootstrapping =
+          record.state === "bootstrapping" ? record : move(record, "bootstrapping");
+        if (cancellation && bootstrapping.ownerEpoch !== record.ownerEpoch) {
+          // Rebootstrap retires the admitted owner. Transfer cancellation synchronously
+          // to the committed epoch before a child can run under that new authority.
+          cancellation.close();
+          cancellation = createWorkerProvisionCancellation(
+            store,
+            bootstrapping,
+            cancellation.signal,
+          );
+          retainProviderSettlement?.(cancellation.settled);
+          cancellation.assertActive();
+        }
+        await finishBootstrap(bootstrapping, provider, installation, cancellation).catch(
+          () => undefined,
+        );
+        return;
+      } finally {
+        cancellation?.close();
       }
-      record = await stopOwner(record);
-      const bootstrapping =
-        record.state === "bootstrapping" ? record : move(record, "bootstrapping");
-      await finishBootstrap(bootstrapping, provider, installation).catch(() => undefined);
-      return;
     }
     if (inState(record, "draining", "destroying")) {
       await finishDestroy(record, provider).catch(() => undefined);

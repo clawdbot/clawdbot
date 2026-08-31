@@ -13,6 +13,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import {
@@ -58,6 +59,7 @@ describe("worker node enrollment", () => {
   let store: WorkerEnvironmentStore;
   let transfer: ReturnType<typeof createWorkerBootstrapArtifactTransferService>;
   let managers: ReturnType<typeof createWorkerNodeEnrollmentManager>[];
+  let artifactProviders: ReturnType<typeof createNodeBootstrapArtifactProvider>[];
 
   const artifact = () => ({
     tarballPath: path.join(root, "node-runtime.tgz"),
@@ -87,14 +89,16 @@ describe("worker node enrollment", () => {
     managers.push(manager);
     return manager;
   };
-  const createProvisioning = (nodeDeviceId?: string) => {
-    const record = store.createIntent({
+  const createRequested = () =>
+    store.createIntent({
       environmentId: "worker-enrollment",
       providerId: "fake-provider",
       profileId: "test-profile",
       profileSnapshot: { settings: {} },
       provisionOperationId: "provision:worker-enrollment",
     });
+  const createProvisioning = (nodeDeviceId?: string) => {
+    const record = createRequested();
     return store.transition({
       environmentId: record.environmentId,
       from: "requested",
@@ -103,12 +107,38 @@ describe("worker node enrollment", () => {
     });
   };
 
+  const createArtifactProvider = async () => {
+    const packageRoot = path.join(root, "gateway");
+    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+    await Promise.all([
+      fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module" }),
+      ),
+      fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";'),
+      fs.writeFile(path.join(packageRoot, "node-version.mjs"), "export const supported = true;"),
+      fs.writeFile(path.join(packageRoot, "dist/entry.js"), "export const ready = true;"),
+      fs.writeFile(
+        path.join(packageRoot, "dist/build-info.json"),
+        JSON.stringify({ version: "2026.8.1", buildId: "gateway-source-build" }),
+      ),
+    ]);
+    const provider = createNodeBootstrapArtifactProvider({
+      packageRoot,
+      runningBuildId: "gateway-source-build",
+      plugins: [],
+    });
+    artifactProviders.push(provider);
+    return provider;
+  };
+
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-node-enrollment-"));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
     transfer = createWorkerBootstrapArtifactTransferService();
     managers = [];
+    artifactProviders = [];
     await fs.writeFile(artifact().tarballPath, "x");
     await fs.writeFile(bundle().tarballPath, "worker");
   });
@@ -117,10 +147,99 @@ describe("worker node enrollment", () => {
     for (const manager of managers) {
       manager.stop();
     }
+    await Promise.all(artifactProviders.map((provider) => provider.close()));
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  it("releases requested-state preflight artifact custody without aborting its caller", async () => {
+    const record = createRequested();
+    const provider = await createArtifactProvider();
+    let consumerSignal: AbortSignal | undefined;
+    const manager = createManager({
+      prepareArtifact: async (_record, signal) => {
+        consumerSignal = signal;
+        return await provider.prepare(signal);
+      },
+    });
+    const caller = new AbortController();
+    const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
+    const grant = vi.spyOn(transfer, "prepare");
+    await manager.prepare(record, caller.signal);
+    expect(consumerSignal?.aborted).toBe(true);
+    expect(caller.signal.aborted).toBe(false);
+    expect(ensureEnrollment).not.toHaveBeenCalled();
+    expect(grant).not.toHaveBeenCalled();
+    expect(store.get(record.environmentId)).toMatchObject({
+      state: "requested",
+      nodeSetupId: null,
+      nodeDeviceId: null,
+    });
+    await provider.close();
+  });
+
+  it.each(["caller", "shutdown"] as const)(
+    "cancels requested-state preflight on %s while its shared producer drains",
+    async (reason) => {
+      const record = createRequested();
+      const provider = await createArtifactProvider();
+      const stagingRoot = path.join(root, "held-artifact");
+      await fs.mkdir(stagingRoot);
+      const entered = createDeferredCore();
+      const resume = createDeferredCore<string>();
+      const makeTemp = vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async () => {
+        entered.resolve();
+        return await resume.promise;
+      });
+      const manager = createManager({
+        prepareArtifact: async (_record, signal) => await provider.prepare(signal),
+      });
+      const caller = new AbortController();
+      const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
+      const grant = vi.spyOn(transfer, "prepare");
+      const completed = vi.fn();
+      const pending = manager.prepare(record, caller.signal).then(
+        () => completed({ ready: true }),
+        (error: unknown) => completed({ error }),
+      );
+      let closing: Promise<void> | undefined;
+      try {
+        await entered.promise;
+        if (reason === "caller") {
+          caller.abort(new DOMException("Stop preflight", "AbortError"));
+        } else {
+          manager.stop();
+        }
+        await vi.waitFor(() =>
+          expect(completed).toHaveBeenCalledExactlyOnceWith({
+            error: expect.objectContaining({ name: "AbortError" }),
+          }),
+        );
+        expect(caller.signal.aborted).toBe(reason === "caller");
+        expect(ensureEnrollment).not.toHaveBeenCalled();
+        expect(grant).not.toHaveBeenCalled();
+        expect(store.get(record.environmentId)).toMatchObject({
+          state: "requested",
+          nodeSetupId: null,
+          nodeDeviceId: null,
+        });
+        const closed = vi.fn();
+        closing = provider.close().then(closed);
+        await expect(fs.access(stagingRoot)).resolves.toBeUndefined();
+        expect(closed).not.toHaveBeenCalled();
+        resume.resolve(stagingRoot);
+        await closing;
+        await expect(fs.access(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        resume.resolve(stagingRoot);
+        manager.stop();
+        await pending;
+        await closing;
+        makeTemp.mockRestore();
+      }
+    },
+  );
 
   it("grants artifact access before enrollment without creating a setup identity or credential", async () => {
     const record = createProvisioning();

@@ -349,8 +349,21 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
   };
 
   return {
-    prepare: async (record: WorkerEnvironmentRecord) => {
-      await prepare(record);
+    prepare: async (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
+      const preflight = new AbortController();
+      try {
+        await prepare(
+          record,
+          AbortSignal.any([
+            signal,
+            preflight.signal,
+            ...(operationSignal ? [operationSignal] : []),
+          ]),
+        );
+      } finally {
+        // Preflight creates no transfer grant; release its artifact pin even on success.
+        preflight.abort();
+      }
     },
     prepareRuntime,
     begin,

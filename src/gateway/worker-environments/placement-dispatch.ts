@@ -24,11 +24,12 @@ import {
   type WorkerPlacementMoveBarrier,
 } from "./placement-move-service.js";
 import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
-import type {
-  WorkerPlacementCancellationTarget,
-  WorkerPlacementReclaimBarriers,
-  WorkerPlacementPendingOperations,
-  WorkerReclaimPlacement,
+import {
+  matchesWorkerPlacementTarget,
+  type WorkerPlacementCancellationTarget,
+  type WorkerPlacementReclaimBarriers,
+  type WorkerPlacementPendingOperations,
+  type WorkerReclaimPlacement,
 } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, reportPlacementTransition } from "./placement-record.js";
 import {
@@ -601,28 +602,27 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     }
     // Only a captured operation's successful result makes local an idempotent Stop.
     // Its real cleanup has settled, and the lifecycle and exact tuple still match.
-    if (
-      current?.state === "local" &&
-      completedOperation?.state === "local" &&
-      current.generation === completedOperation.generation &&
-      current.environmentId === completedOperation.environmentId &&
-      current.activeOwnerEpoch === completedOperation.activeOwnerEpoch
-    ) {
+    if (current?.state === "local" && matchesWorkerPlacementTarget(current, completedOperation)) {
       return current;
     }
     try {
       // The preparation/placement wait can span another completed failed cleanup.
       // Its old generation classifies an idempotent result, never authorizes new teardown.
       const owned = current?.state === "local" && initial?.state === "failed" ? initial : current;
-      if (owned?.state === "failed") {
+      if (owned?.state === "failed" || owned?.state === "provisioning") {
         return await options.runFailedReclaimBarrier({
           ...request,
           authorize,
           reclaim: async (reauthorize) => {
-            const failedPlacement = placements.get(request.sessionId);
+            let failedPlacement = placements.get(request.sessionId);
+            if (owned.state === "provisioning") {
+              failedPlacement = failure.cancelProvisioning(failedPlacement, initial);
+              reportPlacementTransition(onTransition, failedPlacement);
+            }
             // A preceding cleanup can finish while this request waits for the lifecycle fence.
             if (
               failedPlacement?.state === "local" &&
+              owned.state === "failed" &&
               failedPlacement.generation === owned.generation + 1 &&
               failedPlacement.sessionKey === request.sessionKey &&
               failedPlacement.agentId === request.agentId

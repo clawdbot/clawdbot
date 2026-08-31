@@ -15,7 +15,10 @@ import {
   resolveWorkerPlacementSessionTarget,
   WorkerDispatchTargetChangedError,
 } from "./server-worker-placement-session-target.js";
-import type { WorkerPlacementReclaimBarriers } from "./worker-environments/placement-reclaim-contract.js";
+import {
+  matchesWorkerPlacementTarget,
+  type WorkerPlacementReclaimBarriers,
+} from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerPlacementReclaimRequest } from "./worker-environments/service-contract.js";
 
@@ -200,13 +203,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
               captured && (!placement || captured.generation > placement.generation)
                 ? captured
                 : placement;
-            if (
-              (expected || pending) &&
-              (current?.generation !== expected?.generation ||
-                current?.state !== expected?.state ||
-                current?.environmentId !== expected?.environmentId ||
-                current?.activeOwnerEpoch !== expected?.activeOwnerEpoch)
-            ) {
+            if ((expected || pending) && !matchesWorkerPlacementTarget(current, expected)) {
               throw new WorkerDispatchTargetChangedError(
                 `Session ${sessionKey} cloud worker changed before cancellation. Retry.`,
               );

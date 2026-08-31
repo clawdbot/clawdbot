@@ -1,4 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 
 export function createWorkerProvisionCancellation(
@@ -7,6 +8,7 @@ export function createWorkerProvisionCancellation(
   signal: AbortSignal,
 ) {
   let owners = 1;
+  const settled = createDeferredCore();
   let intentError: Error | undefined;
   const requestStop = () => {
     try {
@@ -33,10 +35,12 @@ export function createWorkerProvisionCancellation(
   const close = () => {
     if (--owners === 0) {
       signal.removeEventListener("abort", requestStop);
+      settled.resolve();
     }
   };
   return {
     signal,
+    settled: settled.promise,
     close,
     assertActive: () => {
       if (intentError !== undefined) {

@@ -281,6 +281,7 @@ export function createGatewayWorkerPlacementRuntime(
         await runExclusiveSessionLifecycleMutation({
           scope: target.storePath,
           identities: lifecycleIdentities,
+          signal,
           prepare: async () => {
             const {
               config: currentConfig,
@@ -347,21 +348,11 @@ export function createGatewayWorkerPlacementRuntime(
         }
         return placement;
       },
-      runActivationBarrier: async ({
-        sessionId,
-        sessionKey,
-        agentId,
-        executionMode,
-        authorize,
-        activate,
-      }) =>
+      runActivationBarrier: async ({ authorize, activate, ...identity }) =>
         await runWorkerPlacementSessionBarrier({
           sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
           getConfig: getRuntimeConfig,
-          sessionId,
-          sessionKey,
-          agentId,
-          executionMode,
+          ...identity,
           action: "activation",
           run: () => {
             authorize?.();
@@ -375,6 +366,7 @@ export function createGatewayWorkerPlacementRuntime(
         executionMode,
         environmentId,
         expectedGeneration,
+        signal,
         run,
       }) =>
         await runWorkerPlacementSessionBarrier({
@@ -385,6 +377,7 @@ export function createGatewayWorkerPlacementRuntime(
           agentId,
           executionMode,
           action: "recovery",
+          signal,
           run: async (worktree) => {
             const placement = params.placements.get(sessionId);
             if (

@@ -17,6 +17,18 @@ export type WorkerPlacementCancellationTarget = Readonly<
   Pick<WorkerDispatchPlacement, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
 >;
 
+export function matchesWorkerPlacementTarget(
+  current: WorkerPlacementCancellationTarget | undefined,
+  expected: WorkerPlacementCancellationTarget | undefined,
+): boolean {
+  return (
+    current?.state === expected?.state &&
+    current?.generation === expected?.generation &&
+    current?.environmentId === expected?.environmentId &&
+    current?.activeOwnerEpoch === expected?.activeOwnerEpoch
+  );
+}
+
 export type WorkerPlacementPendingOperations = {
   isCurrent: () => boolean;
   hasPendingDispatch: () => boolean;

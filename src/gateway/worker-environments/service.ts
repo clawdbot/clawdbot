@@ -9,6 +9,7 @@ import type {
   WorkerTranscriptCommitResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -130,7 +131,10 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   ) => Promise<WorkerSessionToolResult>;
 };
 
-export type WorkerEnvironmentReconcileCore = () => Promise<void>;
+export type WorkerEnvironmentReconcileCore = (
+  signal?: AbortSignal,
+  retainProviderSettlement?: (settled: Promise<void>) => void,
+) => Promise<void>;
 type WorkerEnvironmentReconcileGuard = (
   environmentId: string,
   reconcileCore: WorkerEnvironmentReconcileCore,
@@ -199,6 +203,19 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const withLock = <T>(environmentId: string, task: () => Promise<T>) =>
     trackOperation(operations.enqueue(environmentId, task));
+
+  const prepareInstallation = (
+    install: WorkerInstallationArtifact["install"],
+    signal?: AbortSignal,
+  ) => {
+    signal?.throwIfAborted();
+    // The process owns packaging; an attempt only owns its wait. Shutdown must still
+    // drain the real producer after a canceled consumer releases its environment lock.
+    const preparation = trackOperation(
+      Promise.resolve().then(() => options.prepareInstallation(install)),
+    );
+    return racePromiseWithAbortSignal(preparation, signal);
+  };
 
   const callProvider = async <T>(
     environmentId: string,
@@ -282,7 +299,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const credentialBroker = createWorkerCredentialBroker({
     store,
-    prepareInstallation: options.prepareInstallation,
+    prepareInstallation,
     tunnelManager: tunnelLifecycle,
     workerCredentialTtlMs: options.workerCredentialTtlMs,
     generateWorkerCredential: options.generateWorkerCredential,
@@ -301,7 +318,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     store,
     getConfig: options.getConfig,
     resolveProvider: options.resolveProvider,
-    prepareInstallation: options.prepareInstallation,
+    prepareInstallation,
     bootstrapWorker: options.bootstrapWorker,
     resolveSshIdentity: options.resolveSshIdentity,
     ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
@@ -331,7 +348,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     store,
     getConfig: options.getConfig,
-    prepareCurrentBundle: async () => await options.prepareInstallation("bundle"),
+    prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     tunnelManager: options.tunnelManager,
     nodeTunnelManager: options.nodeTunnelManager,
     nodeDesktopCarrier: options.nodeDesktopCarrier,
@@ -346,7 +363,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const turnRpc = createWorkerTurnRpc({
     store,
-    prepareInstallation: options.prepareInstallation,
+    prepareInstallation,
     applyTranscriptCommit: options.applyTranscriptCommit,
     liveEvents: options.liveEvents,
     placementStore: options.placementStore,
@@ -358,7 +375,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     withLock,
   });
 
-  const reconcileEnvironmentCore = async (environmentId: string) => {
+  const reconcileEnvironmentCore = async (
+    environmentId: string,
+    signal?: AbortSignal,
+    retainProviderSettlement?: (settled: Promise<void>) => void,
+  ) => {
     if (stopping) {
       return;
     }
@@ -367,7 +388,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (!current || inState(current, "destroyed", "failed", "orphaned")) {
         return;
       }
-      await providerLifecycle.reconcileRecord(current);
+      await providerLifecycle.reconcileRecord(current, signal, retainProviderSettlement);
     });
   };
 
@@ -388,8 +409,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       await active;
       return;
     }
-    const operation = guard(environmentId, async () => {
-      await reconcileEnvironmentCore(environmentId);
+    const operation = guard(environmentId, async (signal, retainProviderSettlement) => {
+      await reconcileEnvironmentCore(environmentId, signal, retainProviderSettlement);
     });
     guardedReconcileInFlight.set(environmentId, operation);
     try {

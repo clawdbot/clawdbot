@@ -32,6 +32,7 @@ const RESTART_AUTHORITY_EXPIRED =
 export type WorkerPlacementMoveBarrier = (
   params: MoveSessionIdentity & {
     authorize?: WorkerPlacementAuthorization;
+    signal?: AbortSignal;
     sourceDisposition: WorkerPlacementMoveSourceDisposition;
     begin: (prepareNew?: (runId: string) => Promise<void>) => Promise<{
       intent: WorkerPlacementMoveIntent;
@@ -144,6 +145,7 @@ export function createWorkerPlacementMoveService(options: {
         agentId: request.agentId,
         sourceDisposition: request.abandonSource ? "abandon" : "reconcile",
         authorize: assertCurrent,
+        signal,
         begin: async (prepareNew) => {
           const moveRequest = {
             sessionId: request.sessionId,

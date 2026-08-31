@@ -1,8 +1,10 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-reclaim.js";
-import { WorkerDispatchTargetChangedError } from "./server-worker-placement-session-target.js";
-import type { WorkerPlacementDispatchAdmission } from "./worker-environments/placement-dispatch-coordinator.js";
+import {
+  WorkerPlacementAdmissionTargetError,
+  type WorkerPlacementDispatchAdmission,
+} from "./worker-environments/placement-dispatch-coordinator.js";
 
 export function createGatewayWorkerDispatchAdmission(
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>,
@@ -40,7 +42,7 @@ export function createGatewayWorkerDispatchAdmission(
           (currentEntry.lifecycleRevision ?? null) !== revision ||
           currentEntry.archivedAt !== undefined
         ) {
-          throw new WorkerDispatchTargetChangedError(
+          throw new WorkerPlacementAdmissionTargetError(
             `Session ${request.sessionKey} changed before cloud worker dispatch. Retry.`,
           );
         }

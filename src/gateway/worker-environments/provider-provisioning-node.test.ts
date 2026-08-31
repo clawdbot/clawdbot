@@ -479,7 +479,7 @@ describe("node worker provider provisioning", () => {
       sharedHost: true,
       ownerEpoch: 1,
     });
-    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
+    expect(support.testState.prepareInstallation).toHaveBeenCalledExactlyOnceWith("bundle");
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
     const credential = workerService.takeMintedCredential({
       environmentId: result.environmentId,

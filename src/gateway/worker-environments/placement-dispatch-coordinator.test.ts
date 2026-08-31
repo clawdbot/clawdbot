@@ -14,6 +14,23 @@ import type {
 
 type DispatchService = WorkerPlacementDispatchService;
 
+function admittedRecovery(
+  run: (
+    placement: Parameters<DispatchService["resumeProvisioning"]>[0],
+    core: Parameters<DispatchService["resumeProvisioning"]>[1],
+  ) => Promise<void>,
+): DispatchService["resumeProvisioning"] {
+  return async (placement, core, _onTransition, admit) => {
+    if (!admit) {
+      throw new Error("Recovery fixture requires the coordinator admission owner");
+    }
+    return await admit(async (signal) => {
+      await run(placement, async () => await core(signal));
+      return undefined;
+    });
+  };
+}
+
 function preparedReclaim(run: () => Promise<unknown>) {
   return async (
     _request: unknown,
@@ -587,7 +604,7 @@ describe("worker placement dispatch coordinator", () => {
         reclaim: vi.fn(),
         reconcile: vi.fn(),
         reconcileActive,
-        resumeProvisioning: vi.fn(async (_placement, core) => await core()),
+        resumeProvisioning: admittedRecovery(vi.fn(async (_placement, core) => await core())),
       } as unknown as DispatchService;
       const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
@@ -637,7 +654,7 @@ describe("worker placement dispatch coordinator", () => {
       reclaim: vi.fn(),
       reconcile,
       reconcileActive: vi.fn(),
-      resumeProvisioning,
+      resumeProvisioning: admittedRecovery(resumeProvisioning),
     } as unknown as DispatchService;
     const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
     reconcile.mockImplementation(async () => {
@@ -652,7 +669,7 @@ describe("worker placement dispatch coordinator", () => {
     expect(resumeProvisioning).not.toHaveBeenCalled();
     releaseDispatch.resolve();
     await Promise.all([dispatching, recovering]);
-    expect(resumeProvisioning).toHaveBeenCalledWith({}, recoveryCore);
+    expect(resumeProvisioning).toHaveBeenCalledWith({}, expect.any(Function));
 
     await coordinated.reconcile();
     expect(resumeProvisioning).toHaveBeenCalledTimes(2);
@@ -696,7 +713,7 @@ describe("worker placement dispatch coordinator", () => {
         reclaim: vi.fn(),
         reconcile,
         reconcileActive: reconcile,
-        resumeProvisioning,
+        resumeProvisioning: admittedRecovery(resumeProvisioning),
       } as unknown as DispatchService;
       const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
@@ -742,7 +759,7 @@ describe("worker placement dispatch coordinator", () => {
         reclaim: vi.fn(),
         reconcile,
         reconcileActive: reconcile,
-        resumeProvisioning,
+        resumeProvisioning: admittedRecovery(resumeProvisioning),
       } as unknown as DispatchService;
       const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
@@ -756,6 +773,50 @@ describe("worker placement dispatch coordinator", () => {
       expect(recoveryCore).toHaveBeenCalledOnce();
     },
   );
+
+  it("publishes a recovery failure while retaining its unresolved provider owner", async () => {
+    const providerEntered = createDeferredCore();
+    const providerSettled = createDeferredCore();
+    const admissionReleased = createDeferredCore();
+    const failure = new Error("recovery cleanup failed after caller completion");
+    const released = vi.fn();
+    const reconcile = vi.fn(async () => {});
+    const service = {
+      resumeProvisioning: admittedRecovery(async (_placement, core) => await core()),
+      reconcile,
+    } as unknown as DispatchService;
+    const coordinated = coordinateWorkerPlacementDispatch(service, async (_request, run) => {
+      try {
+        return await run();
+      } finally {
+        released();
+        admissionReleased.resolve();
+      }
+    });
+    let outcome: unknown;
+    const recovery = coordinated
+      .resumeProvisioning(REQUEST as never, async (_signal, retain) => {
+        retain?.(providerSettled.promise);
+        providerEntered.resolve();
+        throw failure;
+      })
+      .catch((error: unknown) => {
+        outcome = error;
+      });
+    try {
+      await providerEntered.promise;
+      await vi.waitFor(() => expect(outcome).toBe(failure));
+      expect(released).not.toHaveBeenCalled();
+      expect(coordinated.isPlacementOperationInFlight(REQUEST.sessionId)).toBe(true);
+      await coordinated.reconcile();
+      expect(reconcile).toHaveBeenCalledOnce();
+      expect(released).not.toHaveBeenCalled();
+    } finally {
+      providerSettled.resolve();
+      await Promise.all([recovery, admissionReleased.promise]);
+    }
+    expect(released).toHaveBeenCalledOnce();
+  });
 
   it("runs a full sweep requested behind external recovery", async () => {
     const recoveryStarted = createDeferredCore();
@@ -772,7 +833,7 @@ describe("worker placement dispatch coordinator", () => {
       reclaim: vi.fn(),
       reconcile,
       reconcileActive: vi.fn(),
-      resumeProvisioning,
+      resumeProvisioning: admittedRecovery(resumeProvisioning),
     } as unknown as DispatchService;
     const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
@@ -814,7 +875,7 @@ describe("worker placement dispatch coordinator", () => {
       reclaim: vi.fn(),
       reconcile,
       reconcileActive: vi.fn(),
-      resumeProvisioning,
+      resumeProvisioning: admittedRecovery(resumeProvisioning),
     } as unknown as DispatchService;
     const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
@@ -863,7 +924,7 @@ describe("worker placement dispatch coordinator", () => {
         reclaim: vi.fn(),
         reconcile,
         reconcileActive: reconcile,
-        resumeProvisioning,
+        resumeProvisioning: admittedRecovery(resumeProvisioning),
       } as unknown as DispatchService;
       const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
@@ -919,7 +980,7 @@ describe("worker placement dispatch coordinator", () => {
       reclaim: vi.fn(),
       reconcile,
       reconcileActive: vi.fn(),
-      resumeProvisioning,
+      resumeProvisioning: admittedRecovery(resumeProvisioning),
     } as unknown as DispatchService;
     const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
@@ -969,7 +1030,7 @@ describe("worker placement dispatch coordinator", () => {
         reclaim: preparedReclaim(exclusiveOperation),
         reconcile: vi.fn(),
         reconcileActive: vi.fn(),
-        resumeProvisioning,
+        resumeProvisioning: admittedRecovery(resumeProvisioning),
       } as unknown as DispatchService;
       const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
       const barrier =
