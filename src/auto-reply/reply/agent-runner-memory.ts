@@ -1252,11 +1252,10 @@ export async function runMemoryFlushIfNeeded(params: {
       sessionKey: params.sessionKey,
       classificationSessionKey: params.runtimePolicySessionKey,
     });
-    if (!runtime.sandboxed) {
-      return true;
-    }
-    const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, runtime.classificationAgentId);
-    return sandboxCfg.workspaceAccess === "rw";
+    const workspaceAccess =
+      runtime.workspaceAccess ??
+      resolveSandboxConfigForAgent(params.cfg, runtime.classificationAgentId).workspaceAccess;
+    return !runtime.sandboxed || workspaceAccess === "rw";
   })();
 
   let entry =

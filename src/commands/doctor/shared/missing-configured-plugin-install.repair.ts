@@ -148,7 +148,9 @@ async function repairMissingPluginInstallsWithLease(
     configuredChannelOwnerPluginIds,
     bundledPluginsById,
     configuredPluginIdsWithStaleDescriptors,
+    stalePathInstallPluginIds,
     records,
+    persistedRecords,
     updateChannel,
     installedPluginIdsWithRepairablePackageDiagnostics,
     installedPluginIdsWithStaleVersionBoundRuntimePackages,
@@ -207,6 +209,12 @@ async function repairMissingPluginInstallsWithLease(
     }
     delete nextRecords[pluginId];
     changes.push(`Removed stale managed install record for bundled plugin "${pluginId}".`);
+  }
+
+  for (const pluginId of stalePathInstallPluginIds) {
+    changes.push(
+      `Removed stale path-install record for plugin "${pluginId}" (loaded from a configured load path).`,
+    );
   }
 
   if (shouldDeferConfiguredPluginInstallRepair(env)) {
@@ -402,7 +410,7 @@ async function repairMissingPluginInstallsWithLease(
   }
 
   const persistedIndexOptions = { config: params.cfg, env };
-  if (nextRecords !== records) {
+  if (nextRecords !== persistedRecords) {
     await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   } else if (params.baselineRecords) {
     // The caller seeded us from in-memory state that may not yet have been
@@ -412,7 +420,7 @@ async function repairMissingPluginInstallsWithLease(
     // a stale snapshot.
     await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   }
-  const pluginInventoryChanged = nextRecords !== records || repairedPluginIds.size > 0;
+  const pluginInventoryChanged = nextRecords !== persistedRecords || repairedPluginIds.size > 0;
   return {
     changes,
     warnings,

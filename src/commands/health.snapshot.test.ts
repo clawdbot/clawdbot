@@ -4,11 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
-  createLegacyHealthSnapshotCollector,
+  loadFreshHealthModulesForTest,
+  type HealthTestPlugin,
   type LegacyHealthSnapshotParams,
 } from "./health.snapshot.test-support.js";
 
@@ -28,8 +29,6 @@ let buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
 let probeTelegramAccountForTestOverride:
   | ((account: TelegramHealthAccount, timeoutMs: number) => Promise<Record<string, unknown>>)
   | undefined;
-
-type HealthTestPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config" | "status">;
 
 type TelegramHealthAccount = {
   accountId: string;
@@ -56,57 +55,6 @@ type IMessageHealthAccount = {
   enabled: boolean;
   configured: boolean;
 };
-
-async function loadFreshHealthModulesForTest() {
-  vi.doMock("../config/config.js", () => ({
-    getRuntimeConfig: () => testConfig,
-    loadConfig: () => testConfig,
-  }));
-  vi.doMock("../config/sessions.js", () => ({
-    resolveSessionStorePathCore: () => sessionStorePath,
-    resolveSessionFilePathCore: vi.fn(() => sessionStorePath),
-    loadSessionStore: () => testStore,
-    saveSessionStore: vi.fn().mockResolvedValue(undefined),
-    readSessionUpdatedAt: vi.fn(() => undefined),
-    recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
-    updateLastRoute: vi.fn().mockResolvedValue(undefined),
-  }));
-  vi.doMock("../config/sessions/paths.js", () => ({
-    resolveSessionStorePathCore: () => sessionStorePath,
-  }));
-  vi.doMock("../config/sessions/session-accessor.js", () => ({
-    listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {
-      listHealthSessionEntriesCalls.push(scope ?? {});
-      return Object.entries(testStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
-    },
-  }));
-  vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
-    webAuthExists: vi.fn(async () => true),
-    getWebAuthAgeMs: vi.fn(() => 1234),
-    readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
-    logWebSelfId: vi.fn(),
-    logoutWeb: vi.fn(),
-  }));
-  vi.doMock("../channels/plugins/read-only.js", () => ({
-    listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
-  }));
-
-  const [pluginsRuntime, pluginDegradedState, channelTestUtils, health] = await Promise.all([
-    import("../plugins/runtime.js"),
-    import("../plugins/runtime-degraded-state.js"),
-    import("../test-utils/channel-plugins.js"),
-    import("../gateway/health/collector.js"),
-  ]);
-  const collectSnapshot = health.collectGatewayHealthSnapshot;
-
-  return {
-    setActivePluginRegistry: pluginsRuntime.setActivePluginRegistry,
-    setActiveDegradedPlugins: pluginDegradedState.setActiveDegradedPlugins,
-    createChannelTestPluginBase: channelTestUtils.createChannelTestPluginBase,
-    createTestRegistry: channelTestUtils.createTestRegistry,
-    getHealthSnapshot: createLegacyHealthSnapshotCollector(collectSnapshot),
-  };
-}
 
 function getTelegramChannelConfig(cfg: Record<string, unknown>) {
   const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -471,7 +419,13 @@ describe("collectGatewayHealthSnapshot", () => {
       createChannelTestPluginBase,
       createTestRegistry,
       getHealthSnapshot,
-    } = await loadFreshHealthModulesForTest());
+    } = await loadFreshHealthModulesForTest({
+      getConfig: () => testConfig,
+      getSessionStorePath: () => sessionStorePath,
+      getSessions: () => testStore,
+      getPlugins: () => healthPluginsForTest,
+      onSessionRead: (scope) => listHealthSessionEntriesCalls.push(scope),
+    }));
   });
 
   beforeEach(() => {
