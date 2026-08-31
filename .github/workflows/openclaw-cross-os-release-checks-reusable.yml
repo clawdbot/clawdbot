@@ -688,7 +688,7 @@ jobs:
                 "$INPUT_TARGET_CONTEXT_REF" == "refs/heads/extended-stable/"* ]]; then
             PUBLISHED_VERSIONS="$RUNNER_TEMP/openclaw-published-versions.json"
             npm view openclaw versions --json > "$PUBLISHED_VERSIONS"
-            BASELINE_SPEC="$(pnpm --dir workflow exec node --import tsx scripts/lib/release-upgrade-baseline.mts \
+            BASELINE_SPEC="$(node workflow/scripts/lib/release-upgrade-baseline.mjs \
               --candidate-version "$(jq -er '.candidateVersion' "$CANDIDATE_JSON")" \
               --target-context-ref "$INPUT_TARGET_CONTEXT_REF" \
               --previous-version "$INPUT_PREVIOUS_VERSION" \

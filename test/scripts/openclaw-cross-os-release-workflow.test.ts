@@ -143,7 +143,7 @@ describe("cross-OS release checks workflow", () => {
     });
     expect(baseline.run).toContain('"$INPUT_TARGET_CONTEXT_REF" == "extended-stable/"*');
     expect(baseline.run).toContain("npm view openclaw versions --json");
-    expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mts");
+    expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mjs");
     expect(baseline.run).toContain('--target-context-ref "$INPUT_TARGET_CONTEXT_REF"');
     expect(baseline.run).toContain('--previous-version "$INPUT_PREVIOUS_VERSION"');
     expect(baseline.run).toContain('BASELINE_VERSION="$(npm view openclaw@latest version)"');
@@ -174,7 +174,7 @@ describe("cross-OS release checks workflow", () => {
       TARGET_SHA: "${{ steps.ref.outputs.sha }}",
     });
     expect(baseline.run).toContain("contents/package.json?ref=${TARGET_SHA}");
-    expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mts");
+    expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mjs");
     expect(baseline.run).toContain('--target-context-ref "$TARGET_CONTEXT_REF"');
     expect(baseline.run).toContain('echo "value=${baseline#openclaw@}"');
     expect(installSmoke.needs).toEqual(["resolve_target"]);

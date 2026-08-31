@@ -1,14 +1,24 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { compareReleaseVersions, parseReleaseVersion } from "./release-version.mjs";
 
-function parseVersion(version: unknown) {
+function normalizeStringifiedOptionalString(value) {
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    return normalized || undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  return undefined;
+}
+
+function parseVersion(version) {
   return parseReleaseVersion(normalizeStringifiedOptionalString(version) ?? "") ?? undefined;
 }
 
-function compareOpenClawVersions(leftVersion: string, rightVersion: string) {
+function compareOpenClawVersions(leftVersion, rightVersion) {
   const comparison = compareReleaseVersions(leftVersion, rightVersion);
   if (comparison === null) {
     throw new Error(`cannot compare OpenClaw versions: ${leftVersion} ${rightVersion}`);
@@ -16,32 +26,24 @@ function compareOpenClawVersions(leftVersion: string, rightVersion: string) {
   return comparison;
 }
 
-function normalizePublishedVersions(publishedVersions: readonly unknown[]) {
+function normalizePublishedVersions(publishedVersions) {
   return [
     ...new Set(
       publishedVersions
         .map((version) => normalizeStringifiedOptionalString(version))
-        .filter((version): version is string => version !== undefined),
+        .filter((version) => version !== undefined),
     ),
   ]
     .filter((version) => parseVersion(version)?.channel === "stable")
     .toSorted((left, right) => compareOpenClawVersions(right, left));
 }
 
-type FrozenExtendedStableUpgradeContext = {
-  previousVersion?: unknown;
-  targetContextRef: unknown;
-};
-
-function normalizeTargetContextRef(value: unknown) {
+function normalizeTargetContextRef(value) {
   const raw = normalizeStringifiedOptionalString(value) ?? "";
   return raw.replace(/^refs\/heads\//u, "");
 }
 
-function isEarlierFinalSameExtendedStableLine(params: {
-  baseline: ReturnType<typeof parseVersion>;
-  candidate: NonNullable<ReturnType<typeof parseVersion>>;
-}) {
+function isEarlierFinalSameExtendedStableLine(params) {
   const { baseline, candidate } = params;
   return (
     baseline?.channel === "stable" &&
@@ -58,9 +60,9 @@ function isEarlierFinalSameExtendedStableLine(params: {
  * the same line. A current latest install can have a newer SQLite schema.
  */
 export function resolveFrozenExtendedStableUpgradeBaseline(
-  candidateVersion: unknown,
-  publishedVersions: readonly unknown[],
-  context: FrozenExtendedStableUpgradeContext,
+  candidateVersion,
+  publishedVersions,
+  context,
 ) {
   const targetContextRef = normalizeTargetContextRef(context.targetContextRef);
   if (!targetContextRef.startsWith("extended-stable/")) {
@@ -118,10 +120,7 @@ export function resolveFrozenExtendedStableUpgradeBaseline(
   return `openclaw@${baseline}`;
 }
 
-export function resolveDefaultReleaseUpgradeBaseline(
-  candidateVersion: unknown,
-  publishedVersions: readonly unknown[],
-) {
+export function resolveDefaultReleaseUpgradeBaseline(candidateVersion, publishedVersions) {
   const candidate = parseVersion(candidateVersion);
   if (!candidate) {
     const candidateText = normalizeStringifiedOptionalString(candidateVersion) ?? "";
@@ -144,8 +143,8 @@ export function resolveDefaultReleaseUpgradeBaseline(
   throw new Error(`no published stable OpenClaw baseline is <= candidate ${candidate.version}`);
 }
 
-export function parseArgs(argv: readonly string[]) {
-  const args = new Map<string, string>();
+export function parseArgs(argv) {
+  const args = new Map();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === undefined) {
@@ -165,10 +164,10 @@ export function parseArgs(argv: readonly string[]) {
   return args;
 }
 
-function readPublishedVersions(args: Map<string, string>): unknown[] {
+function readPublishedVersions(args) {
   const versionsJson = args.get("versions-json");
   if (versionsJson) {
-    const parsed: unknown = JSON.parse(readFileSync(versionsJson, "utf8"));
+    const parsed = JSON.parse(readFileSync(versionsJson, "utf8"));
     if (!Array.isArray(parsed)) {
       throw new Error(`npm versions list must be a JSON array: ${versionsJson}`);
     }
@@ -182,7 +181,7 @@ function readPublishedVersions(args: Map<string, string>): unknown[] {
       stdio: ["ignore", "pipe", "inherit"],
     },
   );
-  const parsed: unknown = JSON.parse(raw);
+  const parsed = JSON.parse(raw);
   if (!Array.isArray(parsed)) {
     throw new Error("npm returned a non-array openclaw versions payload");
   }

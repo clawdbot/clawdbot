@@ -808,25 +808,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # A frozen extended-stable target must not downgrade from npm latest.
-      - name: Set up Node.js for frozen installer baseline
-        if: >-
-          steps.inputs.outputs.install_smoke_scheduled == 'true' &&
-          (startsWith(inputs.target_context_ref, 'extended-stable/') ||
-          startsWith(inputs.target_context_ref, 'refs/heads/extended-stable/'))
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install trusted workflow validation dependencies
-        if: >-
-          steps.inputs.outputs.install_smoke_scheduled == 'true' &&
-          (startsWith(inputs.target_context_ref, 'extended-stable/') ||
-          startsWith(inputs.target_context_ref, 'refs/heads/extended-stable/'))
-        working-directory: workflow
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
-
       - name: Resolve frozen installer update baseline
         id: frozen_installer_smoke_baseline
         if: >-
@@ -844,7 +825,7 @@ jobs:
               base64 --decode |
               jq -er '.version | select(type == "string" and length > 0)'
           )"
-          baseline="$(pnpm --dir workflow exec node --import tsx scripts/lib/release-upgrade-baseline.mts \
+          baseline="$(node workflow/scripts/lib/release-upgrade-baseline.mjs \
             --candidate-version "$candidate_version" \
             --target-context-ref "$TARGET_CONTEXT_REF")"
           echo "value=${baseline#openclaw@}" >> "$GITHUB_OUTPUT"
