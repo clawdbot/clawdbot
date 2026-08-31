@@ -285,8 +285,8 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
     );
 }
 
-function hasOpenDropdown(): boolean {
-  return [...document.querySelectorAll<HTMLElement & { open?: boolean }>("wa-dropdown")].some(
+function hasOpenDropdown(root: ParentNode): boolean {
+  return [...root.querySelectorAll<HTMLElement & { open?: boolean }>("wa-dropdown")].some(
     (dropdown) => dropdown.open === true,
   );
 }
@@ -301,7 +301,7 @@ export function focusChatComposerFromPrintableKeydown(
     event.metaKey ||
     event.ctrlKey ||
     event.altKey ||
-    (CHAT_DROPDOWN_KEYS.has(event.key) && hasOpenDropdown()) ||
+    (CHAT_DROPDOWN_KEYS.has(event.key) && hasOpenDropdown(root)) ||
     event.key.length !== 1 ||
     keyboardEventPathHasInteractiveTarget(event) ||
     document.openClawModalLayers?.size ||
