@@ -97,7 +97,7 @@ describe("detectChangedScope Windows routing", () => {
     // paths do not reach the lane through the general Windows scope.
     for (const identityPath of [
       "src/shared/pid-alive.ts",
-      "src/shared/pid-alive.file-lock-identity.test.ts",
+      "test/e2e/windows-cron-process-identity.e2e.test.ts",
       "src/infra/windows-port-pids.ts",
       "src/infra/gateway-lock.ts",
       "src/node-host/node-worker-process-identity.ts",
