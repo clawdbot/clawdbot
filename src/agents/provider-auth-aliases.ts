@@ -1,7 +1,7 @@
 /**
  * Provider auth alias resolution.
  * Maps deprecated and plugin-defined provider IDs to canonical credential
- * providers, with trusted workspace plugin handling and process-stable caching.
+ * providers, with trusted workspace plugin handling and snapshot-owned metadata.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,8 +12,6 @@ import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
-import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -38,41 +36,6 @@ const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>
   global: 2,
   workspace: 3,
 };
-let providerAuthAliasMapCache = new WeakMap<
-  NodeJS.ProcessEnv,
-  Map<string, Record<string, string>>
->();
-
-function buildProviderAuthAliasMapCacheKey(
-  params: ProviderAuthAliasLookupParams | undefined,
-  env: NodeJS.ProcessEnv,
-): string {
-  return JSON.stringify({
-    pluginControlPlane: resolvePluginControlPlaneFingerprint({
-      config: params?.config,
-      env,
-      workspaceDir: params?.workspaceDir,
-    }),
-    includeUntrustedWorkspacePlugins: params?.includeUntrustedWorkspacePlugins === true,
-    plugins: params?.config?.plugins ?? null,
-  });
-}
-
-/** Clears auth aliases when their process-scoped plugin metadata is retired. */
-function clearProviderAuthAliasMapCache(): void {
-  providerAuthAliasMapCache = new WeakMap<NodeJS.ProcessEnv, Map<string, Record<string, string>>>();
-}
-
-// Reloads can replace plugin metadata without changing the config or env cache keys.
-registerPluginMetadataProcessMemoLifecycleClear(clearProviderAuthAliasMapCache);
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.providerAuthAliasesTestApi")] =
-    {
-      resetProviderAuthAliasMapCacheForTest: clearProviderAuthAliasMapCache,
-    };
-}
-
 function resolveProviderAuthAliasOriginPriority(origin: PluginOrigin | undefined): number {
   if (!origin) {
     return Number.MAX_SAFE_INTEGER;
@@ -132,22 +95,6 @@ export function resolveProviderAuthAliasMap(
 ): Record<string, string> {
   const env = params?.env ?? process.env;
   const config = params?.config;
-  let cacheKey: string | undefined;
-  let envCache: Map<string, Record<string, string>> | undefined;
-  if (!params?.metadataSnapshot) {
-    // Plugin metadata is process-stable for a control-plane fingerprint, so
-    // cache per env object without hiding explicit test snapshots.
-    cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
-    envCache = providerAuthAliasMapCache.get(env);
-    if (!envCache) {
-      envCache = new Map<string, Record<string, string>>();
-      providerAuthAliasMapCache.set(env, envCache);
-    }
-    const cached = envCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
   const snapshot =
     params?.metadataSnapshot ??
     (config
@@ -209,9 +156,6 @@ export function resolveProviderAuthAliasMap(
   }
   for (const [alias, candidate] of preferredAliases) {
     aliases[alias] = candidate.target;
-  }
-  if (envCache && cacheKey) {
-    envCache.set(cacheKey, aliases);
   }
   return aliases;
 }

@@ -37,6 +37,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
           refreshOnRead: true,
         }
       : {}),
+    onChanged: () => context?.broadcast("chat.metadata.changed", {}, { dropIfSlow: true }),
     log: params.log,
   });
   const refreshLogged = () => {

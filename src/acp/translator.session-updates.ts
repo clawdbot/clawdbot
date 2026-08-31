@@ -1,10 +1,6 @@
 /** Emits ACP session updates and mirrors replayable updates into the event ledger. */
-import type {
-  AgentSideConnection,
-  AvailableCommand,
-  PromptRequest,
-  SessionUpdate,
-} from "@agentclientprotocol/sdk";
+import type { AgentSideConnection, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
+import { getAvailableCommands } from "./commands.js";
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
 
 /** Session identity used when emitting and recording ACP translator updates. */
@@ -22,7 +18,6 @@ type AcpTranslatorLedgerSessionRef = AcpTranslatorSessionRef & {
 type AcpTranslatorSessionUpdatesOptions = {
   connection: Pick<AgentSideConnection, "sessionUpdate">;
   eventLedger: AcpEventLedger;
-  getAvailableCommands: () => Promise<AvailableCommand[]>;
   log: (message: string) => void;
 };
 
@@ -178,7 +173,7 @@ export class AcpTranslatorSessionUpdates {
       record: options.record,
       update: {
         sessionUpdate: "available_commands_update",
-        availableCommands: await this.options.getAvailableCommands(),
+        availableCommands: getAvailableCommands(),
       },
     });
   }

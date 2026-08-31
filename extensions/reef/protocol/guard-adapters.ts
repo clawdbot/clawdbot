@@ -2,11 +2,12 @@ import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   admitGuardAdapter,
+  assertGuardRules,
   assertPinnedModel,
-  INBOUND_INSTRUCTIONS,
-  OUTBOUND_INSTRUCTIONS,
+  guardInstructions,
   type GuardAdapter,
   type GuardRequest,
+  type GuardRules,
   type RawGuardAdapter,
 } from "./guard.js";
 
@@ -17,6 +18,7 @@ interface AdapterOptions {
   pinnedModel: string;
   fetch: FetchLike;
   timeoutMs?: number;
+  rules?: GuardRules;
 }
 
 const verdictSchema = {
@@ -33,6 +35,7 @@ const verdictSchema = {
 
 export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
   assertPinnedModel(options.pinnedModel);
+  assertGuardRules(options.rules);
   const raw: RawGuardAdapter = {
     providerId: "openai",
     pinnedModel: options.pinnedModel,
@@ -43,7 +46,7 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
         headers: { "content-type": "application/json", authorization: `Bearer ${options.apiKey}` },
         body: JSON.stringify({
           model: options.pinnedModel,
-          instructions: instructionFor(request),
+          instructions: instructionFor(request, options.rules),
           input: JSON.stringify(request),
           store: false,
           background: false,
@@ -94,6 +97,7 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
 
 export function createAnthropicGuard(options: AdapterOptions): GuardAdapter {
   assertPinnedModel(options.pinnedModel);
+  assertGuardRules(options.rules);
   const raw: RawGuardAdapter = {
     providerId: "anthropic",
     pinnedModel: options.pinnedModel,
@@ -109,7 +113,7 @@ export function createAnthropicGuard(options: AdapterOptions): GuardAdapter {
         body: JSON.stringify({
           model: options.pinnedModel,
           max_tokens: 512,
-          system: `${instructionFor(request)} The object must exactly match this schema: ${JSON.stringify(verdictSchema)}`,
+          system: `${instructionFor(request, options.rules)} The object must exactly match this schema: ${JSON.stringify(verdictSchema)}`,
           output_config: { format: { type: "json_schema", schema: verdictSchema } },
           messages: [{ role: "user", content: JSON.stringify(request) }],
         }),
@@ -141,10 +145,8 @@ export function createAnthropicGuard(options: AdapterOptions): GuardAdapter {
   return admitGuardAdapter(raw, options.timeoutMs);
 }
 
-function instructionFor(request: GuardRequest): string {
-  const directionInstructions =
-    request.direction === "outbound" ? OUTBOUND_INSTRUCTIONS : INBOUND_INSTRUCTIONS;
-  return `${directionInstructions} Set policyVersion to exactly ${JSON.stringify(request.policyVersion)}.`;
+function instructionFor(request: GuardRequest, rules?: GuardRules): string {
+  return `${guardInstructions(request.direction, rules)} Set policyVersion to exactly ${JSON.stringify(request.policyVersion)}.`;
 }
 
 function attachProviderModel(value: unknown, model: string): unknown {

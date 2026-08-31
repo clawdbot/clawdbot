@@ -101,10 +101,19 @@ export const PENDING_FINAL_DELIVERY_CLEAR_PATCH = {
 export function resolvePendingFinalDeliveryCompletion(
   payloads: readonly ReplyPayload[] | undefined,
 ): Extract<DurableDeliveryCompletion, { kind: "pending-final" }> | undefined {
-  const completion = payloads
-    ?.map((payload) => getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion)
-    .find(Boolean);
-  return completion ? { kind: "pending-final", ...completion } : undefined;
+  const metadata = payloads
+    ?.map((payload) => getReplyPayloadMetadata(payload))
+    .find((candidate) => candidate?.pendingFinalDeliveryCompletion);
+  const completion = metadata?.pendingFinalDeliveryCompletion;
+  return completion
+    ? {
+        kind: "pending-final",
+        ...completion,
+        ...(metadata.sessionWriterDeliveryAuthority
+          ? { sessionWriterDeliveryAuthority: metadata.sessionWriterDeliveryAuthority }
+          : {}),
+      }
+    : undefined;
 }
 
 function collectDurableMediaDirectives(payload: ReplyPayload): string[] {

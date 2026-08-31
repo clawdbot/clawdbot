@@ -1,9 +1,6 @@
 // Packed Plugin Sdk Type Smoke script supports OpenClaw repository automation.
-import {
-  inspectConversationBinding,
-  type ConversationBindingInspection,
-} from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import type { ChannelMessagingAdapter } from "openclaw/plugin-sdk/core";
+import { inspectSessionBindingByConversation } from "openclaw/plugin-sdk/session-binding-runtime";
 type PublicPluginSdkModules = [
   typeof import("openclaw/plugin-sdk/core"),
   typeof import("openclaw/plugin-sdk/channel-entry-contract"),
@@ -17,7 +14,7 @@ const routeOwnerResolver: NonNullable<ChannelMessagingAdapter["resolveConversati
   accountId,
   conversation,
 }) => {
-  const inspection: ConversationBindingInspection = inspectConversationBinding({
+  const inspection = inspectSessionBindingByConversation({
     channel: "fixture-channel",
     accountId,
     conversationId: conversation.target ?? conversation.peerId,

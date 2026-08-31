@@ -7,6 +7,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { readEnvInt } from "./bash-tools.shared.js";
 
@@ -47,6 +48,12 @@ type NotifyOnExitRemoval = () => boolean;
 type PendingOutputChunk = {
   stream: "stdout" | "stderr";
   text: string;
+};
+
+type PendingPollDelivery = {
+  output: string;
+  outputDropped: boolean;
+  scope: object;
 };
 
 /** One process record from execution through completed retention. */
@@ -96,6 +103,8 @@ export interface ProcessSession {
   pendingStderrChars: number;
   /** Output was dropped from the pending poll buffers since their last drain. */
   pendingOutputDropped: boolean;
+  /** Output prepared for a poll but not yet attached to the agent transcript. */
+  pendingPollDelivery?: PendingPollDelivery;
   aggregated: string;
   tail: string;
   exitCode?: number | null;
@@ -118,22 +127,25 @@ const finishedSessions = new Map<string, ProcessSession & { endedAt: number }>()
 // Display uses start chronology; retained records are evicted in completion order.
 let processSessionStartOrders = new WeakMap<object, number>();
 let nextProcessSessionStartOrder = 0;
-const activeBackgroundExecSessionIds = new Set<string>();
+// Promotion stays live when process removal clears its presentation state.
+const activeExecSessions = new Map<
+  string,
+  { session: ProcessSession; promoted: boolean; settled?: Deferred }
+>();
 let finishedSessionOutputChars = 0;
 
 let sweeper: NodeJS.Timeout | null = null;
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
 export function isProcessSessionIdTaken(id: string): boolean {
-  return (
-    runningSessions.has(id) || finishedSessions.has(id) || activeBackgroundExecSessionIds.has(id)
-  );
+  return runningSessions.has(id) || finishedSessions.has(id) || activeExecSessions.has(id);
 }
 
 /** Adds a running session and starts retention sweeping if needed. */
 export function addSession(session: ProcessSession) {
   processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
   runningSessions.set(session.id, session);
+  activeExecSessions.set(session.id, { session, promoted: session.backgrounded });
   startSweeper();
 }
 
@@ -224,7 +236,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
 }
 
 /** Drains pending chunks in producer callback order for a process poll. */
-export function drainSession(session: ProcessSession) {
+function drainSession(session: ProcessSession) {
   const pending = session.pendingOutput;
   const output =
     typeof pending === "string" ? pending : pending.map((chunk) => chunk.text).join("");
@@ -235,6 +247,50 @@ export function drainSession(session: ProcessSession) {
   session.pendingStderrChars = 0;
   session.pendingOutputDropped = false;
   return { output, outputDropped };
+}
+
+/** Stages one poll result until the agent transcript acknowledges its attachment. */
+export function prepareSessionPoll(session: ProcessSession, scope: object | undefined) {
+  if (!scope) {
+    return { ...drainSession(session), acknowledge() {} };
+  }
+  const pending = session.pendingPollDelivery;
+  if (pending) {
+    // The first retry claims the staged bytes for its turn. Parallel siblings then
+    // observe that scope and cannot duplicate the recovery result.
+    if (pending.scope === scope) {
+      return { output: "", outputDropped: false, acknowledge() {} };
+    }
+    pending.scope = scope;
+    return {
+      output: pending.output,
+      outputDropped: pending.outputDropped,
+      acknowledge() {
+        if (session.pendingPollDelivery === pending) {
+          session.pendingPollDelivery = undefined;
+        }
+      },
+    };
+  }
+  const drained = drainSession(session);
+  if (drained.output.length === 0 && !drained.outputDropped) {
+    return { ...drained, acknowledge() {} };
+  }
+  const delivery = { ...drained, scope };
+  session.pendingPollDelivery = delivery;
+  return {
+    ...drained,
+    acknowledge() {
+      if (session.pendingPollDelivery === delivery) {
+        session.pendingPollDelivery = undefined;
+      }
+    },
+  };
+}
+
+/** Returns whether a prior poll has output ready for immediate replay. */
+export function hasPendingPollDelivery(session: ProcessSession): boolean {
+  return session.pendingPollDelivery !== undefined;
 }
 
 /** Moves a session to finished state and records exit metadata. */
@@ -248,7 +304,6 @@ export function markExited(
 ) {
   // Visibility can be cleared before process termination. Keep suspension
   // blocked until the process owner reports the actual terminal transition.
-  activeBackgroundExecSessionIds.delete(session.id);
   session.terminalStatus = status;
   session.exited = true;
   session.exitCode = exitCode;
@@ -262,13 +317,21 @@ export function markExited(
   session.pendingOutput = pending.output;
   session.pendingOutputDropped = pending.outputDropped;
   moveToFinished(session);
+  const active = activeExecSessions.get(session.id);
+  if (active?.session === session) {
+    activeExecSessions.delete(session.id);
+    // The exec owner's synchronous task/notification callbacks run before
+    // these promise continuations resume and release the environment state.
+    active.settled?.resolve();
+  }
 }
 
 /** Marks a running session as reconnectable after the exec call returns. */
 export function markBackgrounded(session: ProcessSession) {
   session.backgrounded = true;
-  if (!session.exited) {
-    activeBackgroundExecSessionIds.add(session.id);
+  const active = activeExecSessions.get(session.id);
+  if (active?.session === session) {
+    active.promoted = true;
   }
 }
 
@@ -303,12 +366,31 @@ export function acknowledgeNotifyOnExit(record: {
 
 /** Reports owner-tracked process liveness even after visibility is removed. */
 export function hasActiveBackgroundExecSession(sessionId: string): boolean {
-  return activeBackgroundExecSessionIds.has(sessionId);
+  return activeExecSessions.get(sessionId)?.promoted === true;
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */
 export function getActiveBackgroundExecSessionCount(): number {
-  return activeBackgroundExecSessionIds.size;
+  let count = 0;
+  for (const { promoted } of activeExecSessions.values()) {
+    if (promoted) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** Joins registered exec cleanup, including foreground and hidden processes. */
+export async function waitForExecScope(scopeKey: string): Promise<void> {
+  while (true) {
+    const pending = Array.from(activeExecSessions.values())
+      .filter(({ session }) => session.scopeKey === scopeKey)
+      .map((active) => (active.settled ??= createDeferredCore()).promise);
+    if (pending.length === 0) {
+      return;
+    }
+    await Promise.all(pending);
+  }
 }
 
 function moveToFinished(session: ProcessSession) {
@@ -405,7 +487,10 @@ function resetProcessRegistryForTests() {
   processSessionStartOrders = new WeakMap();
   nextProcessSessionStartOrder = 0;
   finishedSessionOutputChars = 0;
-  activeBackgroundExecSessionIds.clear();
+  for (const active of activeExecSessions.values()) {
+    active.settled?.resolve();
+  }
+  activeExecSessions.clear();
   stopSweeper();
 }
 

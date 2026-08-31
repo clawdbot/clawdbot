@@ -11,7 +11,6 @@ import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/s
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { appendTranscriptEventInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
-import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -244,10 +243,7 @@ describe("onboarding authored config persistence", () => {
         env: process.env,
         log,
         deps: {
-          migrateOrphanedSessionKeys: vi.fn(async () => ({ changes: [], warnings: [] })),
-          prepareLegacySessionSurfaces: () => EMPTY_LEGACY_SESSION_SURFACES,
           resolveAllAgentSessionStoreTargetsSync: () => [],
-          sweepOrphanSessionStoreTemps: vi.fn(async () => 0),
         },
       });
       const ownerDatabasePath = path.join(

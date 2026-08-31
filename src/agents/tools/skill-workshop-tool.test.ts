@@ -206,6 +206,10 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("max 160 bytes");
     expect(schema).toContain("shortens the proposal listing entry");
     expect(schema).toContain("artifact_path");
+    expect(schema).toContain("stored proposal record changed");
+    expect(schema).toContain("run interrupted-apply recovery first");
+    expect(schema).toContain("then use only the stored record");
+    expect(schema).not.toContain("action fails if content or support files changed");
     expect(tool.description).toContain(lazyDescription);
     expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
   });

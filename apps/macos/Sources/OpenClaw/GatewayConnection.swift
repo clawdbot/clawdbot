@@ -12,8 +12,17 @@ private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category:
 /// This owns exactly one `GatewayChannelActor` and reuses it across all callers
 /// (ControlChannel, debug actions, SwiftUI WebChat, etc.).
 actor GatewayConnection {
-    static let shared = GatewayConnection(
-        endpointProvider: GatewayConnection.defaultEndpointProvider)
+    static let shared: GatewayConnection = {
+        #if DEBUG
+        // Rendered test views can request previews through the shared connection.
+        // Only explicitly injected test routes may reach a transport or credentials.
+        if ProcessInfo.processInfo.isRunningTests {
+            return GatewayConnection(testEndpointProvider: { throw URLError(.notConnectedToInternet) })
+        }
+        #endif
+        return GatewayConnection(endpointProvider: GatewayConnection.defaultEndpointProvider)
+    }()
+
     nonisolated static let operatorClientCaps = [
         OpenClawGatewayClientCapability.agentKind,
         OpenClawGatewayClientCapability.inlineWidgets,
@@ -457,22 +466,17 @@ actor GatewayConnection {
         guard await isCurrentServerLease(lease) else {
             throw OpenClawChatTransportSendError.notDispatched
         }
-        do {
-            let data = try await lease.client.request(
-                method: method,
-                params: params,
-                timeoutMs: timeoutMs,
-                ifCurrentConnectionGeneration: lease.socketGeneration)
-            guard await self.isCurrentServerLease(lease) else {
-                throw OpenClawChatTransportSendError.notDispatched
-            }
-            return data
-        } catch is CancellationError {
-            if Task.isCancelled {
-                throw CancellationError()
-            }
-            throw OpenClawChatTransportSendError.notDispatched
+        // Untagged channel cancellation can follow a send. Only the guard above
+        // proves this wrapper rejected the request before dispatch.
+        let data = try await lease.client.request(
+            method: method,
+            params: params,
+            timeoutMs: timeoutMs,
+            ifCurrentConnectionGeneration: lease.socketGeneration)
+        guard await self.isCurrentServerLease(lease) else {
+            throw CancellationError()
         }
+        return data
     }
 }
 
@@ -1522,7 +1526,9 @@ extension GatewayConnection {
         if let phase {
             params["phase"] = AnyCodable(phase)
         }
-        try? await self.requestVoid(method: .talkMode, params: params)
+        // Phase broadcasts report UI state; a failed notification must not start
+        // the Gateway or restart its tunnel. Talk startup owns that recovery.
+        _ = try? await self.request(method: Method.talkMode.rawValue, params: params, retryTransportFailures: false)
     }
 
     // MARK: - VoiceWake

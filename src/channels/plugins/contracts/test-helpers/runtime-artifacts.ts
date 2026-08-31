@@ -8,8 +8,22 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { listBundledChannelPluginMetadata } from "../../../../plugins/bundled-channel-runtime.js";
 import { resolvePluginRuntimeModulePath } from "../../../../plugins/runtime/runtime-plugin-boundary.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../../../../test-utils/bundled-plugin-public-surface.js";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
+
+/** Loads a public source artifact when a host contract must mock its transport dependency. */
+export async function importBundledChannelContractSourceArtifact<T extends object>(
+  pluginId: string,
+  artifactBasename: string,
+): Promise<T> {
+  const moduleId = resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId,
+    artifactBasename,
+  });
+  return (await import(moduleId)) as T;
+}
 
 function resolveBundledChannelWorkspaceArtifactPath(
   pluginId: string,

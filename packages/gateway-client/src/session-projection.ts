@@ -295,7 +295,7 @@ function entryMatches(
     !pending.identity.isImported &&
     !authoritative.identity.isImported &&
     pending.pendingRunId &&
-    pending.pendingRunId === authoritative.identity.runId &&
+    pending.pendingRunId === (authoritative.identity.sendId ?? authoritative.identity.runId) &&
     (pending.identity.sequence === null ||
       authoritative.identity.sequence === null ||
       pending.identity.sequence === authoritative.identity.sequence),
@@ -322,14 +322,29 @@ function insertEntry(
           const candidate = entry.identity?.sequence;
           return candidate !== undefined && candidate !== null && candidate > sequence;
         });
-  if (nextIndex < 0 && incoming.identity?.role === "user" && incoming.identity.runId) {
+  if (sequence !== undefined && sequence !== null && nextIndex < 0) {
+    nextIndex = entries.length;
+  }
+  if (incoming.identity?.role === "user" && incoming.identity.runId) {
     const runId = incoming.identity.runId;
     const terminalMessage = runs?.[runId]?.message;
-    nextIndex = entries.findIndex(
-      (entry) =>
-        entry.identity?.role === "assistant" &&
-        (entry.identity.runId === runId || entry.message === terminalMessage),
-    );
+    const belongsToRun = (entry: SessionProjectionEntry) =>
+      entry.identity?.role === "assistant" &&
+      (entry.identity.runId === runId || entry.message === terminalMessage);
+    if (sequence !== undefined && sequence !== null) {
+      // A run can deliver several replies before its prompt. Move every early
+      // unsequenced reply together; durable sequence always wins over run ownership.
+      const before: SessionProjectionEntry[] = [];
+      const replies: SessionProjectionEntry[] = [];
+      for (const entry of entries.slice(0, nextIndex)) {
+        (entry.identity?.sequence === null && belongsToRun(entry) ? replies : before).push(entry);
+      }
+      return [...before, incoming, ...replies, ...entries.slice(nextIndex)];
+    }
+    const terminalIndex = entries.findIndex(belongsToRun);
+    if (terminalIndex >= 0 && (nextIndex < 0 || terminalIndex < nextIndex)) {
+      nextIndex = terminalIndex;
+    }
   }
   return nextIndex < 0
     ? [...entries, incoming]
@@ -362,7 +377,11 @@ export function projectLiveSessionMessage(
     // durable row would lose the ID every later snapshot reconciles against.
     return state;
   }
-  if (existing?.pending && incoming.identity.sequence !== null) {
+  if (
+    existing &&
+    incoming.identity.sequence !== null &&
+    (existing.pending || existing.identity?.sequence === null)
+  ) {
     const sequence = incoming.identity.sequence;
     const violatesOrder = state.entries.some(
       ({ identity }, index) =>

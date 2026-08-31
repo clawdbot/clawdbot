@@ -382,7 +382,10 @@ describe("imessage setup status", () => {
       message: "imsg not found. Install now?",
       initialValue: true,
     });
-    expect(installIMessageCliMock).toHaveBeenCalledWith(expect.anything(), { upgrade: false });
+    expect(installIMessageCliMock).toHaveBeenCalledWith(expect.anything(), {
+      upgrade: false,
+      cliPath: "imsg",
+    });
     expect(note).toHaveBeenCalledWith("Installed imsg at /opt/homebrew/bin/imsg", "iMessage");
     expect(result).toEqual({
       credentialValues: {
@@ -415,12 +418,34 @@ describe("imessage setup status", () => {
       message: "imsg detected. Reinstall/update now?",
       initialValue: false,
     });
-    expect(installIMessageCliMock).toHaveBeenCalledWith(expect.anything(), { upgrade: true });
+    expect(installIMessageCliMock).toHaveBeenCalledWith(expect.anything(), {
+      upgrade: true,
+      cliPath: "/opt/homebrew/bin/imsg",
+    });
     expect(result).toEqual({
       credentialValues: {
         cliPath: "/opt/homebrew/bin/imsg",
       },
     });
+  });
+
+  it("prepare preserves a detected PATH imsg that Homebrew does not manage", async () => {
+    setupToolsMocks.detectBinary.mockResolvedValueOnce(true);
+    installIMessageCliMock.mockResolvedValueOnce({ ok: true });
+    const confirm = vi.fn(async () => true);
+    const note = vi.fn(async () => {});
+
+    const result = await prepareIMessage({ platform: "darwin", confirm, note });
+
+    expect(installIMessageCliMock).toHaveBeenCalledWith(expect.anything(), {
+      upgrade: true,
+      cliPath: "imsg",
+    });
+    expect(note).toHaveBeenCalledWith(
+      "Using existing imsg at imsg; Homebrew does not manage this binary.",
+      "iMessage",
+    );
+    expect(result).toBeUndefined();
   });
 
   it("setup wizard proxy delegates imsg install preparation", async () => {

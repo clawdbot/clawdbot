@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { createQaGatewayChild, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -21,6 +21,7 @@ import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
+  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../../../src/infra/node-runner-inventory.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
@@ -49,7 +50,7 @@ async function waitUntil<T>(read: () => Promise<T | undefined>): Promise<T> {
   throw new Error("timed out waiting for paired worker node state");
 }
 
-export type WireGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+export type WireGateway = QaGatewayChild;
 type WireGatewayEvent = { event: string; payload?: unknown };
 export type WireNodeRead = {
   nodeId: string;
@@ -277,6 +278,7 @@ type WireWorkerHostOptions = {
   bundlePrewarm?: boolean;
   bundleRetention?: boolean;
   bundleStatus?: boolean;
+  environmentSession?: boolean;
   onInvoke?: (frame: NodeInvokeRequestPayload) => void;
   afterInvoke?: (frame: NodeInvokeRequestPayload, host: PairedNodeWorkerHost) => Promise<void>;
 };
@@ -290,7 +292,7 @@ export type PairedNodeWorkerHost = {
   readonly bundleInstaller: NodeWorkerBundleInstaller;
   readonly workspace: NodeWorkerWorkspaceRuntime;
   readonly client: GatewayClient | undefined;
-  connect(): Promise<void>;
+  connect(options?: { environmentSession?: boolean }): Promise<void>;
   disconnect(): Promise<void>;
   publishInventory(): Promise<void>;
   waitForInvokes(): Promise<void>;
@@ -316,6 +318,7 @@ export async function createPairedNodeWorkerHost(
   const workspace = new NodeWorkerWorkspaceRuntime({ root: nodeHostRoot, env: nodeEnv });
   const bundleInstaller = new NodeWorkerBundleInstaller({ root: nodeHostRoot, env: nodeEnv });
   let capacity = { total: options.capacity ?? 2, available: 0 };
+  let environmentSession = options.environmentSession ?? true;
   let client: GatewayClient | undefined;
   let closing = false;
   const invokeTasks = new Set<Promise<void>>();
@@ -331,6 +334,9 @@ export async function createPairedNodeWorkerHost(
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
     workerHost: {
       enabled: true as const,
+      ...(environmentSession
+        ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
+        : {}),
       capacity,
       ...(options.bundlePrewarm ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION } : {}),
       ...(options.bundleRetention ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION } : {}),
@@ -379,10 +385,11 @@ export async function createPairedNodeWorkerHost(
     invokeTasks.add(task);
   };
 
-  const connect = async () => {
+  const connect = async (connection?: { environmentSession?: boolean }) => {
     if (closing) {
       throw new Error("paired worker node is closing");
     }
+    environmentSession = connection?.environmentSession ?? environmentSession;
     const open = () =>
       connectWireClient({
         gateway: options.gateway,
@@ -444,9 +451,11 @@ export async function createPairedNodeWorkerHost(
         const receipts = await Promise.all(
           [...launchIds].map(async (launchId) => await supervisor.status(launchId)),
         );
-        return receipts.every(
-          (receipt) => receipt !== undefined && !["pending", "running"].includes(receipt.state),
-        )
+        // Finished turns do not prove the physical worker or container has been removed.
+        return capacity.available === capacity.total &&
+          receipts.every(
+            (receipt) => receipt !== undefined && !["pending", "running"].includes(receipt.state),
+          )
           ? true
           : undefined;
       });
@@ -500,6 +509,7 @@ export async function createPairedNodeWorkerHost(
 }
 
 export async function startPairedNodeWorkerGateway(params: {
+  owner: ReturnType<typeof createQaGatewayChild>;
   providerBaseUrl: string;
   executionIdentity?: boolean;
   repoRoot?: string;
@@ -508,7 +518,7 @@ export async function startPairedNodeWorkerGateway(params: {
   controlUiEnabled?: boolean;
   fullAccess?: boolean;
 }): Promise<WireGateway> {
-  return await startQaGatewayChild({
+  return await params.owner.start({
     repoRoot: params.repoRoot ?? process.cwd(),
     useRepoCli: params.useRepoCli ?? true,
     providerBaseUrl: `${params.providerBaseUrl}/v1`,

@@ -1,18 +1,20 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { settleReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import type { ReplyDispatchRuntimeInfo } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedBuildEmbeddedRunPayloads,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
+let state: OpenClawTestState;
 const GENERIC_TIMEOUT = "LLM request timed out.";
 const AUTHORITATIVE_TIMEOUT =
   "Provider timed out after the request started. Retry the turn, or increase its configured timeout.";
@@ -29,11 +31,15 @@ beforeAll(async () => {
   ({ createReplyDispatcher } = await import("../../auto-reply/reply/reply-dispatcher.js"));
 });
 
-beforeEach(() => {
-  resetSharedRunIntegrationHarnessMocks();
-});
-
 describe("provider timeout final delivery", () => {
+  beforeEach(async () => {
+    resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "terminal-timeout-delivery" });
+  });
+  afterEach(async () => {
+    await state?.cleanup();
+  });
   it.each([
     {
       label: "one final timeout",
@@ -83,7 +89,7 @@ describe("provider timeout final delivery", () => {
       useOpenAIPlatformAuthFixture();
 
       const result = await runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         provider: "openai",
         model: "gpt-5.4",
         runId: "provider-idle-timeout-single-final-delivery",

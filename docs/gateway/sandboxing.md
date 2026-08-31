@@ -26,11 +26,11 @@ Not sandboxed:
 
 Three independent settings control sandbox behavior:
 
-| Setting | Key                               | Values                                            | Default  |
-| ------- | --------------------------------- | ------------------------------------------------- | -------- |
-| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`                          | `off`    |
-| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared`                      | `agent`  |
-| Backend | `agents.defaults.sandbox.backend` | `docker`, `podman`, `ssh`, `openshell`, `daytona` | `docker` |
+| Setting | Key                               | Values                                 | Default  |
+| ------- | --------------------------------- | -------------------------------------- | -------- |
+| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`               | `off`    |
+| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared`           | `agent`  |
+| Backend | `agents.defaults.sandbox.backend` | `docker`, `podman`, `ssh`, `openshell` | `docker` |
 
 **Mode** controls when sandboxing applies:
 
@@ -51,18 +51,29 @@ execution or Gateway/node host overrides cannot bypass it. The default
 - `session`: one container per session.
 - `shared`: one container shared by all sandboxed sessions (per-agent `docker`/`ssh`/`browser` overrides are ignored under this scope).
 
-Sessions whose creator role requires sandboxing use the creator's authenticated
-principal as their isolation boundary instead. Different guests on the same
-agent receive separate sandbox environments and workspaces, regardless of the
-configured scope. Sessions created by the same guest reuse that guest's
-environment and workspace, including when the configured scope is `session`.
+Required sandboxes with proven Gateway-profile creators use that profile as
+their isolation boundary. Different guests on the same agent receive separate
+environments and workspaces, regardless of configured scope. Sessions created
+by the same profile reuse its existing environment and workspace, including
+when the configured scope is `session`; this upgrade does not rekey those paths.
+Channel, unknown, and other non-profile creators instead receive a separate
+required sandbox per canonical session. A matching raw ID cannot reuse a
+profile's resources. Required sandboxing and the read-only workspace cap remain
+in force; backend failure never falls back to host execution.
 Sessions without a role-required sandbox keep the configured scope behavior.
+
+The [creator namespace migration](/reference/database-schemas#creator-namespace-migration)
+does not delete or adopt old ambiguous workspaces or containers. Such sessions
+start with separate resources after upgrade. Preserve any needed old data
+before normal sandbox retention or manual cleanup, then recover selected files
+explicitly as an operator; do not copy an entire ambiguous environment into a
+trusted profile workspace automatically.
 
 Non-shared runtime identity also includes the resolved agent workspace path. This prevents co-hosted workspaces that reuse the same agent or session keys from sharing Docker, browser, SSH, OpenShell, or plugin-provided sandbox state. `shared` scope intentionally remains workspace-independent.
 
 The first use after upgrading from an older release creates non-shared runtimes and sandbox workspaces under the workspace-qualified identity. Existing non-shared runtimes are not adopted; this is an intentional one-time reset. They can age out through configured prune settings or be removed with `openclaw sandbox recreate`; the next use provisions the current identity.
 
-**Backend** controls which runtime executes sandboxed tools. Docker and Podman share `agents.defaults.sandbox.docker`; SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`; Daytona-specific config lives under `plugins.entries.daytona.config`.
+**Backend** controls which runtime executes sandboxed tools. Docker and Podman share `agents.defaults.sandbox.docker`; SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`.
 
 |                     | Docker or Podman backend                  | SSH                            | OpenShell                                           |
 | ------------------- | ----------------------------------------- | ------------------------------ | --------------------------------------------------- |
@@ -213,6 +224,13 @@ A containerized Gateway creates sibling sandboxes through the host's local Podma
 
 Use `backend: "ssh"` to sandbox `exec`, file tools, and media reads on an arbitrary SSH-accessible machine.
 
+The remote environment must provide `/bin/sh`, `python3`, and GNU-compatible
+`stat` (`-c`) and `readlink` (`-f`) for the filesystem bridge. These utilities
+must be available to the non-interactive SSH command, not just an interactive
+login shell. The Gateway host does not need these remote utilities: a macOS or
+Windows Gateway can use an SSH target that supplies them. This is a remote
+utility contract, not a Linux-only Gateway requirement.
+
 ```json5
 {
   agents: {
@@ -282,39 +300,6 @@ Use `backend: "openshell"` to sandbox tools in an OpenShell-managed remote envir
 `openclaw sandbox list`/`recreate`/prune all treat OpenShell runtimes the same as Docker runtimes; prune logic is backend-aware.
 
 For the full prerequisites, configuration reference, workspace-mode comparison, and lifecycle details, see [OpenShell](/gateway/openshell).
-
-## Daytona backend
-
-Use `backend: "daytona"` to sandbox tools in [Daytona](https://www.daytona.io) cloud sandboxes. OpenClaw creates one Daytona sandbox per sandbox scope through the Daytona API and runs exec and file tools over the Daytona toolbox API (HTTPS); no SSH keys or inbound connectivity are required. The workspace model is remote-canonical like the SSH backend: seeded once at creation, re-seeded by `openclaw sandbox recreate`.
-
-```json5
-{
-  agents: {
-    defaults: {
-      sandbox: {
-        mode: "all",
-        backend: "daytona",
-        scope: "session",
-        workspaceAccess: "rw",
-      },
-    },
-  },
-  plugins: {
-    entries: {
-      daytona: {
-        enabled: true,
-        config: {
-          apiKey: { source: "env", provider: "default", id: "DAYTONA_API_KEY" },
-        },
-      },
-    },
-  },
-}
-```
-
-New sandboxes block all network egress by default (matching the Docker no-network default); opt in with `networkBlockAll: false` or the allow-list options. Idle sandboxes auto-stop on the Daytona side (default 15 minutes) and restart on next use. Current limitations: sandbox browser is not supported, and `sandbox.docker.*` settings do not apply to this backend.
-
-For the full prerequisites, configuration reference, cost controls, and lifecycle details, see [Daytona](/gateway/daytona).
 
 ## Workspace access
 
@@ -497,7 +482,13 @@ commands shown below instead.
     scripts/sandbox-common-setup.sh
     ```
 
-    From an npm install, build the default image first (see above), then build the common image on top using [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) from the repository.
+    From an npm install, build the default image first (see above). Download [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) and the root [`package.json`](https://github.com/openclaw/openclaw/blob/main/package.json) from the same OpenClaw commit or tag into an empty directory. Keep their filenames, then run from that directory:
+
+    ```bash
+    docker build -t openclaw-sandbox-common:bookworm-slim -f Dockerfile.common .
+    ```
+
+    `package.json` supplies the pinned pnpm version and must be in the build context, even with `--build-arg INSTALL_PNPM=0`. It is a read-only build input; you do not need a source checkout or a host pnpm installation.
 
     Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:bookworm-slim`.
 
@@ -626,7 +617,6 @@ Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.
 ## Related
 
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
-- [Daytona](/gateway/daytona) -- cloud sandbox backend setup, cost controls, and config reference
 - [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
 - [Sandbox configuration](/gateway/config-agents#agentsdefaultssandbox)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"

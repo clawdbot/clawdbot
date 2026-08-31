@@ -2,12 +2,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { startSqliteConcurrentWriter } from "./sqlite-concurrent-writer.test-support.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationInProcess,
@@ -15,12 +16,15 @@ import {
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
 
-const workers: Worker[] = [];
+const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     vi.restoreAllMocks();
-    await Promise.all(workers.splice(0).map(async (worker) => await worker.terminate()));
-    cleanup();
+    try {
+      await Promise.all(writers.splice(0).map((writer) => writer.stop()));
+    } finally {
+      cleanup();
+    }
   });
 });
 
@@ -80,24 +84,6 @@ function readLogicalFamily(pathname: string): Map<string, Buffer> {
   const family = readFamily(pathname);
   family.delete("-shm");
   return family;
-}
-
-function waitForWorkerMessage(worker: Worker, expected: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const onError = (error: Error) => {
-      worker.off("message", onMessage);
-      reject(error);
-    };
-    const onMessage = (message: unknown) => {
-      if (message !== expected) {
-        return;
-      }
-      worker.off("error", onError);
-      resolve();
-    };
-    worker.once("error", onError);
-    worker.on("message", onMessage);
-  });
 }
 
 type PosixLock = {
@@ -510,7 +496,9 @@ describe("prepareSqliteReadOnlyLocation", () => {
         "CREATE TABLE probe (payload BLOB); INSERT INTO probe VALUES (zeroblob(8192));",
       );
       database.close();
-      const moduleUrl = pathToFileURL(path.resolve("src/infra/sqlite-readonly-location.ts")).href;
+      const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+      const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
+      const moduleUrl = new URL(`./sqlite-readonly-location${extension}`, workerUrl).href;
       const script = `
         const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
         try {
@@ -527,8 +515,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
           'ulimit -f 1; exec "$@"',
           "openclaw-sqlite-snapshot-quota",
           process.execPath,
-          "--import",
-          "tsx",
+          ...resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
           "--input-type=module",
           "-e",
           script,
@@ -661,55 +648,31 @@ describe("prepareSqliteReadOnlyLocation", () => {
       INSERT INTO payload VALUES (zeroblob(16777216));
       PRAGMA wal_checkpoint(TRUNCATE);
     `);
-    const worker = new Worker(
-      `
-        const { parentPort, workerData } = require("node:worker_threads");
-        const { DatabaseSync } = require("node:sqlite");
-        const database = new DatabaseSync(workerData);
-        database.exec("PRAGMA busy_timeout = 30000; PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-        const insert = database.prepare("INSERT INTO writes DEFAULT VALUES");
-        let running = true;
-        parentPort.on("message", (message) => {
-          if (message === "stop") {
-            running = false;
-          }
-        });
-        parentPort.postMessage("ready");
-        function writeBatch() {
-          if (!running) {
-            database.close();
-            parentPort.postMessage("stopped");
-            return;
-          }
-          database.exec("BEGIN IMMEDIATE;");
-          for (let index = 0; index < 32; index += 1) {
-            insert.run();
-          }
-          database.exec("COMMIT;");
-          setImmediate(writeBatch);
-        }
-        writeBatch();
-      `,
-      { eval: true, workerData: databasePath },
-    );
-    workers.push(worker);
+    seed.close();
+    const writer = startSqliteConcurrentWriter(databasePath, "WAL");
+    writers.push(writer);
     try {
-      await waitForWorkerMessage(worker, "ready");
+      const ready = await writer.waitFor("ready");
+      expect(ready.commits).toBeGreaterThan(0);
+      expect(writer.pid).not.toBe(process.pid);
 
       const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
       const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      expect(snapshot.prepare("SELECT COUNT(*) AS count FROM payload").get()).toEqual({ count: 1 });
-      snapshot.close();
-      expect(prepared.cleanup()).toBe(true);
-    } finally {
-      worker.postMessage("stop", []);
-      await worker.terminate();
-      const workerIndex = workers.indexOf(worker);
-      if (workerIndex >= 0) {
-        workers.splice(workerIndex, 1);
+      try {
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expect(snapshot.prepare("SELECT COUNT(*) AS count FROM payload").get()).toEqual({
+          count: 1,
+        });
+        expect(
+          snapshot.prepare("SELECT COUNT(*) AS count FROM writes").get()?.count,
+        ).toBeGreaterThan(0);
+      } finally {
+        snapshot.close();
+        expect(prepared.cleanup()).toBe(true);
       }
-      seed.close();
+      expect((await writer.progress()).commits).toBeGreaterThan(ready.commits);
+    } finally {
+      await writer.stop();
     }
   });
 
@@ -748,6 +711,49 @@ describe("prepareSqliteReadOnlyLocation", () => {
     writer.close();
   });
 
+  it("rolls back contended MEMORY writes before committing another batch", async () => {
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const reader = new sqlite.DatabaseSync(databasePath);
+    reader.exec(
+      "CREATE TABLE pair (name TEXT PRIMARY KEY, value INTEGER NOT NULL); INSERT INTO pair VALUES ('left', 0), ('right', 0); BEGIN;",
+    );
+    expect(reader.prepare("SELECT value FROM pair ORDER BY name").all()).toEqual([
+      { value: 0 },
+      { value: 0 },
+    ]);
+    const writer = startSqliteConcurrentWriter(databasePath, "MEMORY", 0);
+    writers.push(writer);
+    try {
+      // Hold a native reader until COMMIT reports BUSY. Only the producer
+      // wait is disabled; real locking and rollback still own the outcome.
+      expect(await writer.waitFor("busy")).toEqual({
+        event: "busy",
+        commits: 0,
+        transaction: false,
+      });
+      expect(reader.prepare("SELECT value FROM pair ORDER BY name").all()).toEqual([
+        { value: 0 },
+        { value: 0 },
+      ]);
+      reader.exec("ROLLBACK");
+      expect((await writer.waitFor("ready")).commits).toBeGreaterThan(0);
+      expect((await writer.progress()).commits).toBeGreaterThan(1);
+      await writer.stop();
+      const values = reader
+        .prepare("SELECT value FROM pair ORDER BY name")
+        .all()
+        .map((row) => row.value);
+      expect(values).toHaveLength(2);
+      expect(values[0]).toBeGreaterThan(0);
+      expect(values[0]).toBe(values[1]);
+      expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    } finally {
+      reader.close();
+      await writer.stop();
+    }
+  });
+
   it("backs up live MEMORY-journal transactions atomically", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
@@ -758,59 +764,32 @@ describe("prepareSqliteReadOnlyLocation", () => {
       CREATE TABLE payload (data BLOB NOT NULL);
       INSERT INTO payload VALUES (zeroblob(8388608));
     `);
-    const worker = new Worker(
-      `
-        const { parentPort, workerData } = require("node:worker_threads");
-        const { DatabaseSync } = require("node:sqlite");
-        const database = new DatabaseSync(workerData);
-        database.exec("PRAGMA busy_timeout = 30000; PRAGMA journal_mode = MEMORY;");
-        const update = database.prepare("UPDATE pair SET value = ? WHERE name = ?");
-        let running = true;
-        let sequence = 0;
-        parentPort.on("message", (message) => {
-          if (message === "stop") {
-            running = false;
-          }
-        });
-        parentPort.postMessage("ready");
-        function writePair() {
-          if (!running) {
-            database.close();
-            return;
-          }
-          sequence += 1;
-          database.exec("BEGIN IMMEDIATE;");
-          update.run(sequence, "left");
-          update.run(sequence, "right");
-          database.exec("COMMIT;");
-          setImmediate(writePair);
-        }
-        writePair();
-      `,
-      { eval: true, workerData: databasePath },
-    );
-    workers.push(worker);
+    seed.close();
+    const writer = startSqliteConcurrentWriter(databasePath, "MEMORY");
+    writers.push(writer);
     try {
-      await waitForWorkerMessage(worker, "ready");
+      const ready = await writer.waitFor("ready");
+      expect(ready.commits).toBeGreaterThan(0);
+      expect(writer.pid).not.toBe(process.pid);
 
       const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
       const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      const values = snapshot
-        .prepare("SELECT value FROM pair ORDER BY name")
-        .all()
-        .map((row) => (row as { value: number }).value);
-      expect(values[0]).toBe(values[1]);
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      snapshot.close();
-      expect(prepared.cleanup()).toBe(true);
-    } finally {
-      worker.postMessage("stop", []);
-      await worker.terminate();
-      const workerIndex = workers.indexOf(worker);
-      if (workerIndex >= 0) {
-        workers.splice(workerIndex, 1);
+      try {
+        const values = snapshot
+          .prepare("SELECT value FROM pair ORDER BY name")
+          .all()
+          .map((row) => (row as { value: number }).value);
+        expect(values).toHaveLength(2);
+        expect(values[0]).toBeGreaterThan(0);
+        expect(values[0]).toBe(values[1]);
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      } finally {
+        snapshot.close();
+        expect(prepared.cleanup()).toBe(true);
       }
-      seed.close();
+      expect((await writer.progress()).commits).toBeGreaterThan(ready.commits);
+    } finally {
+      await writer.stop();
     }
   });
 

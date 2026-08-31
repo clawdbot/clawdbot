@@ -1,12 +1,15 @@
 // Doctor cron storage repair mechanics for legacy stores, run logs, payloads, and Codex refs.
-import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../../agents/agent-scope-config.js";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "../../../../packages/normalization-core/src/string-coerce.js";
+import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
+  loadCronQuarantinedJobs,
   resolveCronJobsStorePath,
   saveCronJobsStore,
   saveCronJobsStoreWithMetadata,
@@ -43,11 +46,7 @@ import {
   hasLegacyCronMigrationReceiptReadOnly,
   markLegacyCronMigrationSourceRemoved,
 } from "./migration-ledger.js";
-import {
-  mergeLegacyCronJobs,
-  mergeRuntimeEntryIntoConfigJob,
-  needsSqliteProjectionBackfill,
-} from "./repair-plan.js";
+import { mergeLegacyCronJobs, mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import {
   assertCronStateSchemaSupported,
@@ -57,6 +56,7 @@ import {
   collectStoredCronCodexRuntimePolicyTargets,
   cronCodexRuntimePolicyTargetKey,
   normalizeStoredCronJobs,
+  recoverValidQuarantinedCronScheduleJobs,
   type CronCodexRuntimePolicyTarget,
 } from "./store-migration.js";
 
@@ -73,8 +73,8 @@ export type LegacyCronRepairState = {
   legacyMigrationSource?: LegacyCronMigrationSource;
   legacyMigrationAlreadyImported: boolean;
   legacyImportCount: number;
-  sqliteProjectionBackfillCount: number;
   invalidConfigRows: QuarantinedCronConfigJob[];
+  persistedQuarantine: CronQuarantinedJob[];
   projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
   rawJobs: Array<Record<string, unknown>>;
 };
@@ -136,50 +136,31 @@ export async function loadLegacyCronRepairState(params: {
   ) {
     return null;
   }
+  let persistedQuarantine: CronQuarantinedJob[];
+  try {
+    persistedQuarantine = loadCronQuarantinedJobs(storePath, params.env);
+  } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
+    persistedQuarantine = [];
+  }
 
   const loaded = params.readOnly
     ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath, params.env)
     : await loadCronJobsStoreWithConfigJobs(storePath);
-  const runtimeDefaultAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
+  const runtimeDefaultAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   const projectedOwnersByJobId = new Map(
     loaded.store.jobs.map((job) => [job.id, projectCronOwner(job, runtimeDefaultAgentId)]),
   );
-  const currentEntries = loaded.configJobs.map((job, index) => ({
-    sourceIndex: loaded.configJobIndexes[index] ?? index,
-    job: mergeRuntimeEntryIntoConfigJob({
-      job,
-      runtimeEntry: loaded.configJobRuntimeEntries[index],
-    }),
-    projectedJob: loaded.store.jobs[index],
-  }));
-  const invalidConfigRows: QuarantinedCronConfigJob[] = [];
-  for (const row of loaded.invalidConfigRows) {
-    if (row.job && !getInvalidPersistedCronJobReason(row.job)) {
-      // Early SQLite builds omitted projection columns but retained a complete
-      // job_json definition; doctor must backfill that job instead of deleting it.
-      currentEntries.push({
-        sourceIndex: row.sourceIndex,
-        job: mergeRuntimeEntryIntoConfigJob({
-          job: row.job,
-          runtimeEntry: { state: row.state, updatedAtMs: row.updatedAtMs },
-        }),
-        projectedJob: undefined,
-      });
-      continue;
-    }
-    invalidConfigRows.push(row);
-  }
-  currentEntries.sort((left, right) => left.sourceIndex - right.sourceIndex);
+  const invalidConfigRows: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   const currentJobs =
-    currentEntries.length > 0
-      ? currentEntries.map((entry) => entry.job)
+    loaded.configJobs.length > 0
+      ? loaded.configJobs.map((job, index) =>
+          mergeRuntimeEntryIntoConfigJob({
+            job,
+            runtimeEntry: loaded.configJobRuntimeEntries[index],
+          }),
+        )
       : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
-  const sqliteProjectionBackfillCount = currentEntries.filter((entry) =>
-    needsSqliteProjectionBackfill({
-      configJob: entry.job,
-      projectedJob: entry.projectedJob,
-    }),
-  ).length;
   let rawJobs = currentJobs;
   let legacyImportCount = 0;
   let legacyMigrationSource: LegacyCronMigrationSource | undefined;
@@ -211,8 +192,8 @@ export async function loadLegacyCronRepairState(params: {
     legacyMigrationSource,
     legacyMigrationAlreadyImported,
     legacyImportCount,
-    sqliteProjectionBackfillCount,
     invalidConfigRows,
+    persistedQuarantine,
     projectedOwnersByJobId,
     rawJobs,
   };
@@ -224,11 +205,30 @@ export async function applyLegacyCronStoreRepair(params: {
   normalized?: ReturnType<typeof normalizeStoredCronJobs>;
   migrateCodexModelRefs?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+  recoverQuarantinedScheduleJobs?: boolean;
 }): Promise<LegacyCronRepairResult> {
   assertCronStateSchemaSupported();
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];
+  const quarantineEntriesToRevalidate =
+    params.recoverQuarantinedScheduleJobs === true
+      ? [...state.persistedQuarantine, ...(state.legacyQuarantine?.jobs ?? [])]
+      : [];
+  const persistedQuarantineEntrySet = new Set<QuarantinedCronConfigJob | CronQuarantinedJob>(
+    state.persistedQuarantine,
+  );
+  const quarantineRecovery = recoverValidQuarantinedCronScheduleJobs(
+    quarantineEntriesToRevalidate,
+    new Set(
+      state.rawJobs
+        .map((job) => normalizeOptionalStringifiedId(job.id))
+        .filter((id): id is string => id !== undefined),
+    ),
+  );
+  if (quarantineRecovery.recoveredJobs.length > 0) {
+    state.rawJobs.push(...quarantineRecovery.recoveredJobs);
+  }
   const runtimePolicyPlan =
     params.migrateCodexModelRefs === true
       ? planCronCodexRefRewriteAgainstPersistedConfig({
@@ -242,12 +242,13 @@ export async function applyLegacyCronStoreRepair(params: {
     (runtimePolicyPlan?.blockedTargets ?? []).map(cronCodexRuntimePolicyTargetKey),
   );
   const normalized =
-    params.normalized ??
-    normalizeStoredCronJobs(state.rawJobs, {
-      migrateCodexModelRefs: params.migrateCodexModelRefs,
-      shouldMigrateCodexRuntimePolicyTarget: (target) =>
-        !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
-    });
+    params.normalized && quarantineRecovery.recoveredJobs.length === 0
+      ? params.normalized
+      : normalizeStoredCronJobs(state.rawJobs, {
+          migrateCodexModelRefs: params.migrateCodexModelRefs,
+          shouldMigrateCodexRuntimePolicyTarget: (target) =>
+            !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
+        });
   warnings.push(
     ...normalized.unsupportedLegacyTriggerScriptJobs.map(
       (job) =>
@@ -266,11 +267,11 @@ export async function applyLegacyCronStoreRepair(params: {
 
   const storeChanged =
     (state.legacyStoreDetected && !state.legacyMigrationAlreadyImported) ||
-    state.sqliteProjectionBackfillCount > 0 ||
     state.invalidConfigRows.length > 0 ||
     normalized.mutated ||
     notifyMigration.changed ||
-    dreamingMigration.changed;
+    dreamingMigration.changed ||
+    quarantineRecovery.recoveredJobs.length > 0;
   const changed =
     state.legacyStoreDetected ||
     state.legacyRunLogDetected ||
@@ -281,7 +282,11 @@ export async function applyLegacyCronStoreRepair(params: {
   }
 
   const quarantineEntries: (QuarantinedCronConfigJob | CronQuarantinedJob)[] = [
-    ...(state.legacyQuarantine?.jobs ?? []),
+    ...(params.recoverQuarantinedScheduleJobs === true
+      ? quarantineRecovery.retainedEntries.filter(
+          (entry) => !persistedQuarantineEntrySet.has(entry),
+        )
+      : (state.legacyQuarantine?.jobs ?? [])),
     ...state.invalidConfigRows,
     ...normalized.removedJobs.map((entry) => ({
       sourceIndex: entry.sourceIndex,
@@ -291,6 +296,9 @@ export async function applyLegacyCronStoreRepair(params: {
   ];
   const quarantine =
     quarantineEntries.length > 0 ? { entries: quarantineEntries, nowMs: Date.now() } : undefined;
+  const deleteQuarantineEntries = quarantineRecovery.recoveredEntries.filter((entry) =>
+    persistedQuarantineEntrySet.has(entry),
+  );
 
   if (storeChanged || quarantine) {
     try {
@@ -307,9 +315,13 @@ export async function applyLegacyCronStoreRepair(params: {
             store,
             (db) => acquireLegacyCronMigrationReceipt(db, migrationSource),
             quarantine,
+            deleteQuarantineEntries,
           );
         } else {
-          await saveCronJobsStore(state.storePath, store, quarantine ? { quarantine } : undefined);
+          await saveCronJobsStore(state.storePath, store, {
+            ...(quarantine ? { quarantine } : {}),
+            ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
+          });
         }
       } else if (quarantine) {
         saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
@@ -324,6 +336,12 @@ export async function applyLegacyCronStoreRepair(params: {
         ],
       };
     }
+  }
+
+  if (quarantineRecovery.recoveredJobs.length > 0) {
+    changes.push(
+      `Recovered ${pluralize(quarantineRecovery.recoveredJobs.length, "quarantined automation")} after current schedule validation passed.`,
+    );
   }
 
   if (state.legacyQuarantine) {

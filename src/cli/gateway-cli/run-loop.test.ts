@@ -1,5 +1,8 @@
 // Gateway run loop tests cover foreground gateway lifecycle and restart behavior.
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
@@ -685,24 +688,49 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, runtime, exited } = await createSignaledLoopHarness();
       const sigterm = captureSignal("SIGTERM");
+      const { emitDiagnosticsTimelineEvent, flushDiagnosticsTimeline } =
+        await import("../../infra/diagnostics-timeline.js");
+      const tempDirs = createTempDirTracker();
+      const timelinePath = join(tempDirs.make("openclaw-gateway-stop-"), "timeline.jsonl");
+      let timelineAtLogFlush: string | undefined;
+      close.mockImplementationOnce(async () => {
+        emitDiagnosticsTimelineEvent(
+          { type: "mark", name: "gateway.stop" },
+          {
+            env: {
+              OPENCLAW_DIAGNOSTICS: "timeline",
+              OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+            },
+          },
+        );
+      });
       flushLogger.mockImplementationOnce(async () => {
         expect(runtime.exit).not.toHaveBeenCalled();
+        timelineAtLogFlush = existsSync(timelinePath)
+          ? readFileSync(timelinePath, "utf8")
+          : undefined;
       });
 
-      sigterm();
+      try {
+        sigterm();
 
-      await expect(exited).resolves.toBe(0);
-      expect(close).toHaveBeenCalledWith({
-        reason: "gateway stopping",
-        restartExpectedMs: null,
-      });
-      expect(start).toHaveBeenCalledWith({
-        startupStartedAt: expect.any(Number),
-        requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
-      });
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-      expect(flushLogger).toHaveBeenCalledOnce();
-      expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
+        await expect(exited).resolves.toBe(0);
+        expect(close).toHaveBeenCalledWith({
+          reason: "gateway stopping",
+          restartExpectedMs: null,
+        });
+        expect(start).toHaveBeenCalledWith({
+          startupStartedAt: expect.any(Number),
+          requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
+        });
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(flushLogger).toHaveBeenCalledOnce();
+        expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
+        expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
+      } finally {
+        flushDiagnosticsTimeline();
+        tempDirs.cleanup();
+      }
     });
   });
 
@@ -721,6 +749,33 @@ describe("runGatewayLoop", () => {
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "shutdown step failed (gateway server close): close owner failed",
+      );
+    });
+  });
+
+  it("exits instead of starting a new lifecycle when restart close fails", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const close = vi.fn<GatewayCloseFn>(async () => {
+        throw new TypeError("close owner failed");
+      });
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      await runLoopWithStart({ start, runtime });
+      await waitForStart(started);
+
+      captureSignal("SIGUSR1")();
+
+      await waitForLoopCondition(
+        () => runtime.exit.mock.calls.length > 0 || start.mock.calls.length > 1,
+        "expected restart close failure to exit or start a new lifecycle",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      await expect(exited).resolves.toBe(1);
+      expect(start).toHaveBeenCalledOnce();
       expect(gatewayLog.error).toHaveBeenCalledWith(
         "shutdown step failed (gateway server close): close owner failed",
       );
@@ -1202,6 +1257,13 @@ describe("runGatewayLoop", () => {
       detail: "OPENCLAW_NO_RESPAWN",
     });
     markUpdateRestartSentinelFailure.mockClear();
+    let releaseFirstCronTaskDrain: (() => void) | undefined;
+    waitForActiveCronTaskRuns.mockImplementationOnce(
+      async () =>
+        await new Promise<{ drained: true; active: 0 }>((resolve) => {
+          releaseFirstCronTaskDrain = () => resolve({ drained: true, active: 0 });
+        }),
+    );
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const timedOutSnapshot = createActiveWorkSnapshot({ activeTasks: 2, embeddedRuns: 1 }, [
@@ -1244,11 +1306,17 @@ describe("runGatewayLoop", () => {
       });
 
       let resolveSecond: (() => void) | null = null;
+      let secondAgentEventGeneration: string | undefined;
+      let secondRestartDrainSignal: AbortSignal | undefined;
       const startedSecond = new Promise<void>((resolve) => {
         resolveSecond = resolve;
       });
       start.mockImplementationOnce(async () => {
         expect(lifecycleSlot.size).toBe(0);
+        secondAgentEventGeneration = agentEventsActual.getAgentEventLifecycleGeneration();
+        secondRestartDrainSignal = gatewayWorkAdmissionActual.getGatewayRestartDrainSignal();
+        expect(secondRestartDrainSignal.aborted).toBe(false);
+        lifecycleSlot.set("second", 2);
         resolveSecond?.();
         return createGatewayServer(closeSecond);
       });
@@ -1280,16 +1348,15 @@ describe("runGatewayLoop", () => {
 
       sigusr1();
 
+      await waitForLoopCondition(
+        () => waitForActiveCronTaskRuns.mock.calls.length === 1,
+        "expected first restart to reach cron task drain",
+      );
+      sigusr1();
+      releaseFirstCronTaskDrain?.();
       await startedSecond;
-      const secondAgentEventGeneration = agentEventsActual.getAgentEventLifecycleGeneration();
       expect(secondAgentEventGeneration).not.toBe(firstAgentEventGeneration);
-      expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
-      expect(start).toHaveBeenCalledTimes(2);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
 
-      expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
       expect(waitForGatewayActiveWork.mock.calls[0]?.[0]).toBeLessThanOrEqual(
         DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS,
       );
@@ -1297,34 +1364,8 @@ describe("runGatewayLoop", () => {
         "active-work drain timeout reached; proceeding with restart: 2 active background task run(s); 1 active embedded run(s)",
       );
       expectRestartCloseCall(closeFirst, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
-      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
-      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
-      expect(waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
-      expect(waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
-      expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(1);
-      expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(1);
-      expect(resetCronActiveJobs).toHaveBeenCalledTimes(1);
-      expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
-      expect(resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(1);
-      expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
-      expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(1);
-      expect(reloadTaskRuntimeStateFromStore.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
-        start.mock.invocationCallOrder[1] ?? Infinity,
-      );
-      expect(advanceCronActiveJobGeneration.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
-        abortActiveCronTaskRuns.mock.invocationCallOrder[0] ?? Infinity,
-      );
-      expect(waitForActiveCronJobs.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
-        retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity,
-      );
-      expect(retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
-        resetCronActiveJobs.mock.invocationCallOrder[0] ?? Infinity,
-      );
-
-      lifecycleSlot.set("second", 2);
-      sigusr1();
-
       await startedThird;
+      expect(secondRestartDrainSignal?.aborted).toBe(true);
       const thirdAgentEventGeneration = agentEventsActual.getAgentEventLifecycleGeneration();
       expect(thirdAgentEventGeneration).not.toBe(secondAgentEventGeneration);
       expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
@@ -1344,6 +1385,18 @@ describe("runGatewayLoop", () => {
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
       expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
+      expect(reloadTaskRuntimeStateFromStore.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        start.mock.invocationCallOrder[1] ?? Infinity,
+      );
+      expect(advanceCronActiveJobGeneration.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        abortActiveCronTaskRuns.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(waitForActiveCronJobs.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        resetCronActiveJobs.mock.invocationCallOrder[0] ?? Infinity,
+      );
 
       sigterm();
       await expect(exited).resolves.toBe(0);
@@ -1898,6 +1951,7 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start } = await createSignaledLoopHarness();
       const sigusr1 = captureSignal("SIGUSR1");
+      const restartDrainSignal = gatewayWorkAdmissionActual.getGatewayRestartDrainSignal();
 
       sigusr1();
       await new Promise<void>((resolve) => {
@@ -1906,6 +1960,8 @@ describe("runGatewayLoop", () => {
 
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
+      expect(restartDrainSignal.aborted).toBe(false);
+      expect(gatewayWorkAdmissionActual.isGatewayRestartDraining()).toBe(false);
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(

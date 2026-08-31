@@ -6,8 +6,14 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { mergeModelCost } from "../config/model-cost.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
+import {
+  modelKey,
+  createConfiguredProviderCatalogModelIdNormalizer,
+  type ModelManifestNormalizationContext,
+} from "./model-ref-shared.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 export function normalizeProviderMapKeys<T>(
@@ -44,6 +50,11 @@ export type ExistingProviderConfig = ProviderConfig & {
   api?: string;
 };
 
+export type SourceModelFields = ReadonlyMap<
+  string,
+  { inputOmitted: boolean; cost: ProviderConfig["models"][number]["cost"] | undefined }
+>;
+
 function getProviderModelId(model: unknown): string {
   if (!model || typeof model !== "object") {
     return "";
@@ -56,6 +67,12 @@ function getProviderModelId(model: unknown): string {
 export function mergeProviderModels(
   implicit: ProviderConfig,
   explicit: ProviderConfig,
+  options?: {
+    providerId: string;
+    sourceModelFields?: SourceModelFields;
+    manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
+    preserveConfiguredModelMembership?: boolean;
+  },
 ): ProviderConfig {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
@@ -88,6 +105,7 @@ export function mergeProviderModels(
       .filter(([id]) => Boolean(id)),
   );
   const seen = new Set<string>();
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(options);
 
   const mergedModels = explicitModels.map((explicitModel) => {
     const id = getProviderModelId(explicitModel);
@@ -98,6 +116,29 @@ export function mergeProviderModels(
     const implicitModel = implicitById.get(id);
     if (!implicitModel) {
       return explicitModel;
+    }
+    const sourceFields = options?.sourceModelFields?.get(
+      modelKey(normalizeProviderId(options.providerId), normalizeModelId(options.providerId, id)),
+    );
+    // Materialized defaults are not authored pins. Reuse raw source cost in both
+    // merge passes so the final pass cannot restore an older catalog schedule.
+    const cost = mergeModelCost(
+      implicitModel.cost,
+      sourceFields ? sourceFields.cost : explicitModel.cost,
+    );
+    const input =
+      sourceFields?.inputOmitted && implicitModel.input !== undefined
+        ? implicitModel.input
+        : "input" in explicitModel
+          ? explicitModel.input
+          : implicitModel.input;
+    if (options?.preserveConfiguredModelMembership) {
+      return Object.assign(
+        {},
+        explicitModel,
+        { cost },
+        sourceFields?.inputOmitted ? { input } : {},
+      );
     }
 
     const contextWindow =
@@ -127,7 +168,8 @@ export function mergeProviderModels(
       {},
       explicitModel,
       {
-        input: "input" in explicitModel ? explicitModel.input : implicitModel.input,
+        input,
+        cost,
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
@@ -137,13 +179,15 @@ export function mergeProviderModels(
     );
   });
 
-  for (const implicitModel of implicitModels) {
-    const id = getProviderModelId(implicitModel);
-    if (!id || seen.has(id)) {
-      continue;
+  if (!options?.preserveConfiguredModelMembership) {
+    for (const implicitModel of implicitModels) {
+      const id = getProviderModelId(implicitModel);
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      mergedModels.push(implicitModel);
     }
-    seen.add(id);
-    mergedModels.push(implicitModel);
   }
 
   return {
@@ -165,11 +209,19 @@ export function mergeProviderModels(
 export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
+  sourceModelFields?: SourceModelFields;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): Record<string, ProviderConfig> {
   const out = normalizeProviderMapKeys(params.implicit);
   for (const [providerKey, explicit] of Object.entries(normalizeProviderMapKeys(params.explicit))) {
     const implicit = out[providerKey];
-    out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
+    out[providerKey] = implicit
+      ? mergeProviderModels(implicit, explicit, {
+          providerId: providerKey,
+          sourceModelFields: params.sourceModelFields,
+          manifestPlugins: params.manifestPlugins,
+        })
+      : explicit;
   }
   return out;
 }

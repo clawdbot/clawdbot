@@ -223,7 +223,7 @@ conflicts and definitive no-ops. These mechanics are `attribution-only`; the
 public generic display remains unverified rather than presenting their private
 reason or target as trusted evidence.
 
-Direct session-sharing methods and `/dock-*` commands do not admit model runs,
+Direct session-sharing methods do not admit model runs,
 so they do not synthesize run selectors. Sharing events preserve a verified
 profile actor when one exists; an expected but unresolved profile is reported
 as unknown, while omitted principal evidence is unattributed. Neither state is
@@ -233,8 +233,7 @@ real principal id, `addedByState: "unknown"` reports explicit principal-less
 evidence, and omission means no actor evidence was supplied. Internal storage
 markers are never returned by the Gateway. Beta-only `local-operator` and
 `operator.admin` member-attribution values are discarded as absent evidence;
-they are not migrated or presented as principals. Docking retains its normal
-visible command result and session-route update without run-audit attribution.
+they are not migrated or presented as principals.
 
 For an admitted run with message auditing enabled, run inspection also adapts
 the outbound message lifecycle. It deterministically merges the lazy progress
@@ -454,7 +453,7 @@ Outbound `queued` and `platform-started` records live in the narrowly owned
 `outbound_message_progress` table. The table is created idempotently only on
 the first enabled progress write, remains absent after startup, read-only
 inspection, disabled collection, and terminal-only delivery, and does not
-advance the current state schema version 9. Missing under read-only inspection means no
+advance the state schema version. Missing under read-only inspection means no
 retained progress. It is capped at 200,000 rows with the same 30-day retention.
 Terminal `message.outbound.finished` rows stay in `audit_events`, so a compatible
 older Gateway can open and use the database while ignoring the additive table.

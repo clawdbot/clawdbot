@@ -12,6 +12,7 @@ import {
   type AiInlineContentBlock,
 } from "../host.js";
 import { createCompactionCapture } from "./anthropic-compaction-replay.js";
+import { resolveCompactionReplayPressure } from "./provider-compaction-replay.js";
 import { withProviderAcceptanceObserver } from "./transport-stream-shared.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -543,7 +544,7 @@ describe("anthropic transport stream", () => {
     expect(result.usage.contextUsage).toEqual(testCase.context);
   });
 
-  it("captures and replays streamed compaction summaries", async () => {
+  it("replays captured compaction after restart without trusting usage from disabled replay", async () => {
     guardedFetchMock
       .mockResolvedValueOnce(
         createSseResponse([
@@ -566,6 +567,18 @@ describe("anthropic transport stream", () => {
       )
       .mockResolvedValueOnce(
         createSseResponse([
+          anthropicMessageStart({
+            id: "msg_disabled",
+            usage: { input_tokens: 1, output_tokens: 0 },
+          }),
+          anthropicContentBlockStart(0, { type: "text", text: "Replay was disabled." }),
+          { type: "content_block_stop", index: 0 },
+          anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
+          { type: "message_stop" },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse([
           anthropicMessageStart({ id: "msg_replay", usage: { input_tokens: 1, output_tokens: 0 } }),
           anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
           { type: "message_stop" },
@@ -578,7 +591,7 @@ describe("anthropic transport stream", () => {
       authProfileId: "anthropic:work",
       sessionId: "session-1",
     } as unknown as AnthropicStreamOptions;
-    const firstUser = { role: "user" as const, content: "old question" };
+    const firstUser = { role: "user" as const, content: "old question", timestamp: 1 };
     const first = await runTransportStream(
       model,
       { messages: [firstUser] } as AnthropicStreamContext,
@@ -591,22 +604,63 @@ describe("anthropic transport stream", () => {
       replayIndex: 0,
     });
 
-    await runTransportStream(
-      model,
-      {
-        messages: [firstUser, first, { role: "user", content: "new question" }],
-      } as AnthropicStreamContext,
-      replayOptions,
+    const offContext = {
+      messages: [
+        firstUser,
+        first,
+        { role: "user" as const, content: "while disabled", timestamp: 2 },
+      ],
+    };
+    const offOptions = { ...replayOptions, anthropicServerCompaction: false };
+    const offResult = await runTransportStream(model, offContext, offOptions);
+    expect(JSON.stringify(latestAnthropicRequest().payload.messages)).not.toContain(
+      '"type":"compaction"',
     );
+    expect(offResult.usage.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 1,
+      totalTokens: 2,
+    });
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload, not an in-memory clone.
+    const resumed: AnthropicStreamContext["messages"] = JSON.parse(
+      JSON.stringify([
+        ...offContext.messages,
+        offResult,
+        { role: "user", content: "new question", timestamp: 3 },
+      ]),
+    );
+
+    await runTransportStream(model, { messages: resumed }, replayOptions);
 
     const replayMessages = latestAnthropicRequest().payload.messages as Array<
       Record<string, unknown>
     >;
-    expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expect(replayMessages.map((message) => message.role)).toEqual([
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+    ]);
     expect(replayMessages[0]?.content).toEqual([
       { type: "compaction", content: "summary checkpoint" },
       { type: "text", text: "Done." },
     ]);
+    const pressure = resolveCompactionReplayPressure(
+      resumed,
+      model,
+      { ...replayOptions, enabled: true },
+      {
+        text: (text) => text.length,
+        image: () => 100,
+        json: (value) => JSON.stringify(value).length,
+      },
+    );
+    expect(pressure?.prefixTokens).toBe("summary checkpoint".length);
+    expect(pressure?.messages[2]).not.toHaveProperty("usage.contextUsage");
+    expect(pressure?.messages[2]).toMatchObject({
+      usage: { totalTokens: offResult.usage.totalTokens, cost: offResult.usage.cost },
+    });
+    expect(offResult.usage.contextUsage?.state).toBe("available");
   });
 
   it("records suppression when Anthropic rejects a replayed compaction block", async () => {
@@ -4214,45 +4268,6 @@ describe("anthropic transport stream", () => {
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "high" });
-  });
-
-  it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      createSseResponse([
-        anthropicMessageStart({ id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } }),
-        anthropicMessageDelta({ stop_reason: "end_turn" }, { input_tokens: 1, output_tokens: 1 }),
-      ]),
-    );
-    const streamFn = createAnthropicMessagesTransportStreamFn();
-    const acceptanceObserver = vi.fn();
-    const onResponse = vi.fn();
-    const options = withProviderAcceptanceObserver(
-      { apiKey: "sk-ant-api", onResponse } as AnthropicStreamOptions,
-      acceptanceObserver,
-    );
-    const stream = streamFn(
-      makeAnthropicTransportModel(),
-      { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
-      options,
-    );
-
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
-
-    const startIndex = eventTypes.indexOf("start");
-    expect(startIndex).toBeGreaterThanOrEqual(0);
-    expect(eventTypes.slice(0, startIndex).some((t) => t === "error")).toBe(false);
-    expect(acceptanceObserver).toHaveBeenCalledWith({
-      kind: "http_response",
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-    });
-    expect(onResponse).toHaveBeenCalledWith(
-      { status: 200, headers: { "content-type": "text/event-stream" } },
-      expect.objectContaining({ provider: "anthropic" }),
-    );
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

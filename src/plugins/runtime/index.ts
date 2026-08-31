@@ -1,7 +1,6 @@
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
 // Plugin runtime entrypoint assembles runtime helpers available to activated plugins.
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveStateDir } from "../../config/paths.js";
 import {
   generateImage as generateRuntimeImage,
   listRuntimeImageGenerationProviders,
@@ -24,16 +23,15 @@ import {
 } from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
+import { createRuntimeBase } from "./runtime-base.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
-import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
-import { createRuntimeSystem } from "./runtime-system.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
-import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
+import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
 const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("./runtime-tts-request.js"));
@@ -256,7 +254,10 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
 }
 
 // Loaded by path from the plugin loader, so static export analysis cannot see this contract.
-export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
+export const createPluginRuntime: PluginRuntimeFactory = (
+  _options = {},
+  base = createRuntimeBase(),
+) => {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
   const tasks = createRuntimeTasks({
@@ -268,7 +269,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
     gateway: _options.gateway ?? createRuntimeGateway(),
-    config: createRuntimeConfig(),
+    config: base.config,
     agent,
     hooks: _options.hooks ?? {
       dispatchHookAgentTurn: async () => {
@@ -279,7 +280,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     nodes: _options.nodes ?? createUnavailableNodesRuntime(),
     sandbox: createRuntimeSandbox(agent),
     worktrees: createRuntimeWorktrees(),
-    system: createRuntimeSystem(),
+    system: base.system,
     media: createRuntimeMedia(),
     webSearch: {
       listProviders: listWebSearchProviders,
@@ -292,28 +293,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     ),
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
-    state: {
-      resolveStateDir,
-      openBlobStore: () => {
-        throw new Error("openBlobStore is only available through the plugin runtime proxy.");
-      },
-      openKeyedStore: () => {
-        throw new Error("openKeyedStore is only available through the plugin runtime proxy.");
-      },
-      openSyncKeyedStore: () => {
-        throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy.");
-      },
-      openChannelIngressQueue: () => {
-        throw new Error(
-          "openChannelIngressQueue is only available through the plugin runtime proxy.",
-        );
-      },
-      openChannelIngressDrain: () => {
-        throw new Error(
-          "openChannelIngressDrain is only available through the plugin runtime proxy.",
-        );
-      },
-    },
+    state: base.state,
     tasks,
   } satisfies Omit<
     PluginRuntime,
@@ -347,6 +327,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   defineCachedValue(runtime, "llm", createRuntimeLlmFacade);
 
   return runtime as unknown as PluginRuntime;
-}
+};
 
 export type { PluginRuntime } from "./types.js";

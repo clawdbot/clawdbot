@@ -8,7 +8,9 @@ import {
   resolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
@@ -123,16 +125,17 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   const agentDir =
     params.agentDir ?? resolveAgentDir(config, explicitOrDefaultAgentId as string, params.env);
   const matchingAgentIds =
-    params.agentDir === undefined
+    explicitOrDefaultAgentId !== undefined
       ? []
       : listAgentIds(config).filter(
-          (candidateAgentId) => resolveAgentDir(config, candidateAgentId) === agentDir,
+          (candidateAgentId) => resolveAgentDir(config, candidateAgentId, params.env) === agentDir,
         );
   const agentId =
     explicitOrDefaultAgentId ?? (matchingAgentIds.length === 1 ? matchingAgentIds[0] : undefined);
   const explicitWorkspaceDir = params.workspaceDir === undefined ? undefined : params.workspaceDir;
   const activationWorkspaceDir =
-    explicitWorkspaceDir ?? (agentId ? resolveAgentWorkspaceDir(config, agentId) : undefined);
+    explicitWorkspaceDir ??
+    (agentId ? resolveAgentWorkspaceDir(config, agentId, params.env) : undefined);
   const full: PreparedModelRuntimeInput = {
     ...(agentId ? { agentId } : {}),
     agentDir,
@@ -163,7 +166,7 @@ export function getPreparedModelCatalogOwnerSnapshot(
   if (publishedFull && preparedModelRuntimeConfigsMatch(publishedFull.config, full.config)) {
     return publishedFull;
   }
-  if (activationFull && activationFull.workspaceDir !== full.workspaceDir) {
+  if (activationFull.workspaceDir !== full.workspaceDir) {
     const activatedFull = getPreparedModelRuntimeSnapshot(activationFull);
     if (activatedFull && preparedModelRuntimeConfigsMatch(activatedFull.config, full.config)) {
       return activatedFull;
@@ -176,7 +179,7 @@ export function getPreparedModelCatalogOwnerSnapshot(
   if (publishedExact && preparedModelRuntimeConfigsMatch(publishedExact.config, exact.config)) {
     return publishedExact;
   }
-  if (!activationExact || activationExact.workspaceDir === exact.workspaceDir) {
+  if (activationExact.workspaceDir === exact.workspaceDir) {
     return undefined;
   }
   const activatedExact = getPreparedModelRuntimeSnapshot(activationExact);
@@ -248,22 +251,6 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
       return lease.snapshot;
     } finally {
       lease.release();
-    }
-  }
-  if (exact !== full) {
-    const fullCandidates =
-      activationFull.workspaceDir === full.workspaceDir ? [full] : [full, activationFull];
-    for (const candidate of fullCandidates) {
-      try {
-        const preparedFull = await prepareModelRuntimeSnapshot(candidate);
-        if (acceptsPreparedSnapshotConfig(preparedFull, full, configPolicy)) {
-          return preparedFull;
-        }
-      } catch (error) {
-        if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
-          throw error;
-        }
-      }
     }
   }
   try {
@@ -362,14 +349,9 @@ export async function loadProviderScopedThinkingCatalog(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
+  /** Input preparation must resolve modalities for this route, independently of reasoning. */
+  requiredInputRoute?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
 }): Promise<ModelCatalogEntry[]> {
-  const { loadManifestModelCatalog } = await import("./model-catalog.js");
-  const manifestCatalog = normalizeThinkingCatalogProviders(
-    loadManifestModelCatalog({
-      config: params.config,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    }),
-  );
   const scopedParams = {
     config: params.config,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -378,8 +360,19 @@ export async function loadProviderScopedThinkingCatalog(params: {
     readOnly: true,
     providerDiscoveryProviderIds: [params.provider],
   } satisfies LoadPreparedModelCatalogParams;
-  const entryResolved = (catalog: readonly ModelCatalogEntry[]) =>
-    hasResolvedThinkingCatalogEntry({ catalog, provider: params.provider, model: params.model });
+  const entryResolved = (catalog: readonly ModelCatalogEntry[]) => {
+    if (params.requiredInputRoute === undefined) {
+      return hasResolvedThinkingCatalogEntry({
+        catalog,
+        provider: params.provider,
+        model: params.model,
+      });
+    }
+    const entry = findModelInCatalog(catalog, params.provider, params.model);
+    return (
+      entry?.input !== undefined && modelTransportRoutesMatch(entry, params.requiredInputRoute)
+    );
+  };
   const augmentHarnessCatalog = async (snapshot: ModelCatalogSnapshot) => {
     const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
     const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
@@ -395,12 +388,20 @@ export async function loadProviderScopedThinkingCatalog(params: {
       defaultModel: `${params.provider}/${params.model}`,
       snapshot,
     });
-    return normalizeThinkingCatalogProviders(augmented.entries);
+    const entries = normalizeThinkingCatalogProviders(augmented.entries);
+    return params.requiredInputRoute !== undefined && !entryResolved(entries) ? [] : entries;
   };
   const publishedCatalog = getPreparedModelCatalogSnapshot(scopedParams);
   if (publishedCatalog && entryResolved(publishedCatalog.entries)) {
     return await augmentHarnessCatalog(publishedCatalog);
   }
+  const { loadManifestModelCatalog } = await import("./model-catalog.js");
+  const manifestCatalog = normalizeThinkingCatalogProviders(
+    loadManifestModelCatalog({
+      config: params.config,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    }),
+  );
   if (entryResolved(manifestCatalog)) {
     return await augmentHarnessCatalog({
       entries: manifestCatalog,

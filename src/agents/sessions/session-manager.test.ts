@@ -16,6 +16,8 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
@@ -756,7 +758,8 @@ describe("SessionManager.open", () => {
     const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-prompt-release-rebound";
-    const sessionKey = "agent:main:dashboard:sqlite-prompt-release-rebound";
+    const sensitivePeer = "+15551234567";
+    const sessionKey = `agent:main:whatsapp:direct:${sensitivePeer}\n\x1b[31mspoof`;
     const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
@@ -777,19 +780,25 @@ describe("SessionManager.open", () => {
       { sessionId: "replacement-session", updatedAt: 20 },
     );
 
-    try {
-      sessionManager.appendCompaction("late summary", assistant.messageId, 42);
-      throw new Error("expected rebound compaction persistence to fail");
-    } catch (error) {
-      expect(error).toMatchObject({
-        cause: {
-          actualSessionId: "replacement-session",
-          code: "session-rebound",
-          expectedSessionId: sessionId,
-          sessionKey,
-        },
-      });
-    }
+    const expectedCause = {
+      actualSessionIdHash: redactIdentifier("replacement-session"),
+      agentIdHash: redactIdentifier(scope.agentId),
+      code: "session-rebound",
+      expectedSessionIdHash: redactIdentifier(sessionId),
+      sessionKeyHash: redactIdentifier(sessionKey),
+    };
+    const captureError = (run: () => unknown): unknown => {
+      try {
+        run();
+      } catch (error) {
+        return error;
+      }
+      throw new Error("expected rebound transcript persistence to fail");
+    };
+    const compactionError = captureError(() =>
+      sessionManager.appendCompaction("late summary", assistant.messageId, 42),
+    );
+    expect(compactionError).toMatchObject({ cause: expectedCause });
 
     const entriesBeforeRejectedAppends = sessionManager.getEntries();
     const leafBeforeRejectedAppends = sessionManager.getLeafId();
@@ -797,12 +806,26 @@ describe("SessionManager.open", () => {
     expect(() => sessionManager.branchWithSummary(null, "late summary")).toThrow(
       "entry was not persisted",
     );
-    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
-      "entry was not persisted",
-    );
-    expect(() =>
+    const eventError = captureError(() => sessionManager.appendModelChange("openai", "gpt-5.5"));
+    const messageError = captureError(() =>
       sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
-    ).toThrow("message was not persisted");
+    );
+    for (const error of [eventError, messageError]) {
+      expect(error).toMatchObject({ cause: expectedCause });
+      const operatorFacingReason = formatErrorMessage(error);
+      for (const hash of Object.values(expectedCause).filter((value) =>
+        value.startsWith("sha256:"),
+      )) {
+        expect(operatorFacingReason).toContain(hash);
+      }
+      expect(operatorFacingReason).not.toContain(sessionKey);
+      expect(operatorFacingReason).not.toContain(sensitivePeer);
+      expect(operatorFacingReason).not.toContain("spoof");
+      expect(operatorFacingReason).not.toContain(sessionId);
+      expect(operatorFacingReason).not.toContain("replacement-session");
+      expect(operatorFacingReason).not.toContain("\n");
+      expect(operatorFacingReason).not.toContain("\x1b");
+    }
     expect(sessionManager.getEntries()).toEqual(entriesBeforeRejectedAppends);
     expect(sessionManager.getLeafId()).toBe(leafBeforeRejectedAppends);
     expect(sessionManager.getAppendParentId()).toBe(appendParentBeforeRejectedAppends);

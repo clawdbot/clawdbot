@@ -257,6 +257,9 @@ export async function ensureLoaded(
   loadedCronStoreRevisions.set(state, getCronJobsStoreRevision(state.deps.storePath));
 
   if (quarantinedConfigJobs.length > 0) {
+    // Config decoding and runtime validation reject rows in separate passes;
+    // restore their original durable order before writing operator-visible quarantine.
+    quarantinedConfigJobs.sort((left, right) => left.sourceIndex - right.sourceIndex);
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
     try {
       if (await persist(state)) {
