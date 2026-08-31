@@ -10,7 +10,7 @@ import { validateConfigObject } from "../../../config/validation.js";
  * launcher-bound config. The test gateway consumes the validated projection;
  * the original tracked bytes remain available for independent attestation.
  */
-export function prepareReturnCovenantGatewayConfig(raw: unknown): OpenClawConfig {
+function prepareReturnCovenantGatewayConfig(raw: unknown): OpenClawConfig {
   const migration = applyLegacyDoctorMigrations(raw, undefined, {
     pluginContracts: false,
   });

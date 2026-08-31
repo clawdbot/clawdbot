@@ -18,7 +18,6 @@ import {
   parseReturnCovenantPlan,
   RETURN_COVENANT_DRIVER_PROTOCOL,
   RETURN_COVENANT_DRIVER_READY_SCHEMA,
-  RETURN_COVENANT_ROW_ID,
   ReturnCovenantProtocolError,
   sha256ReturnCovenant,
   type ReturnCovenantDriverAttestation,
@@ -42,7 +41,7 @@ type IsolatedRuntime = {
   statePath: string;
 };
 
-export type ReturnCovenantLaunchEnvironment = {
+type ReturnCovenantLaunchEnvironment = {
   attestationPath?: string;
   candidateSha?: string;
   docsHarnessSha?: string;
@@ -435,12 +434,4 @@ export async function runReturnCovenantFixtureDriver(
       cause: error,
     });
   }
-}
-
-export function returnCovenantDriverIdentity() {
-  return {
-    protocol: RETURN_COVENANT_DRIVER_PROTOCOL,
-    readySchema: RETURN_COVENANT_DRIVER_READY_SCHEMA,
-    rowId: RETURN_COVENANT_ROW_ID,
-  };
 }

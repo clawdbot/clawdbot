@@ -94,6 +94,8 @@ const repositoryScriptEntries = [
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-gates-lock.mts!",
+  // Accepted return-covenant harnesses execute this tracked product fixture by path.
+  "scripts/return-covenant-fixture-driver.mjs!",
   "scripts/pr-lib/ci-dispatch.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
@@ -150,6 +152,8 @@ const rootEntries = [
   "src/entry.ts!",
   // Built as the official image's Docker HEALTHCHECK entrypoint.
   "src/docker-healthcheck.ts!",
+  // Private tsdown entry loaded by the tracked return-covenant fixture script.
+  "src/auto-reply/continuation/return-covenant-fixture/entry.ts!",
   // Uploaded in the worker bundle and launched by rsync; no static host import exists.
   "src/worker/workspace-rsync-receiver.ts!",
   // Shipped compatibility facade for statusCommand and getStatusSummary.

@@ -28,7 +28,6 @@ import {
   type ReturnCovenantCaseState,
   type ReturnCovenantFixtureContext,
 } from "./case-state.js";
-import { sha256ReturnCovenant } from "./protocol.js";
 
 const HOLD_WINDOW_MS = 60 * 60 * 1000;
 
@@ -288,8 +287,4 @@ export async function acceptPostCompactionReturnCovenantCase(params: {
   ) {
     throw new Error("post-compaction delegate handoff did not persist");
   }
-}
-
-export function returnCovenantHeldResultFingerprint(state: ReturnCovenantCaseState): string {
-  return sha256ReturnCovenant(`${state.acceptance?.heldResultId ?? ""}:${state.deliveryId ?? ""}`);
 }

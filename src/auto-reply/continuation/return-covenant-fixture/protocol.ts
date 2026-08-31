@@ -4,16 +4,16 @@ import { z } from "zod";
 
 export const RETURN_COVENANT_DRIVER_PROTOCOL = "openclaw.k6.return-covenant-fixture-driver.v1";
 export const RETURN_COVENANT_DRIVER_READY_SCHEMA = "openclaw.k6.return-covenant-driver-ready.v1";
-export const RETURN_COVENANT_DRIVER_ATTESTATION_SCHEMA =
+const RETURN_COVENANT_DRIVER_ATTESTATION_SCHEMA =
   "openclaw.k6.return-covenant-driver-attestation.v1";
-export const RETURN_COVENANT_ROW_ID = "R-CD-RETURN-COVENANT-AUTHORITY";
+const RETURN_COVENANT_ROW_ID = "R-CD-RETURN-COVENANT-AUTHORITY";
 
 const SHA40 = /^[0-9a-f]{40}$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const RUN_ID = /^rcv-[0-9a-f]{32}$/u;
 const CASE_HANDLE = /^[a-z0-9-]{16,128}$/u;
 
-export const RETURN_COVENANT_CASE_IDS = [
+const RETURN_COVENANT_CASE_IDS = [
   "allowed-ordinary-new",
   "allowed-ordinary-reset",
   "allowed-provider-fallback",
@@ -28,9 +28,9 @@ export const RETURN_COVENANT_CASE_IDS = [
   "forbidden-explicit-revocation",
 ] as const;
 
-export type ReturnCovenantCaseId = (typeof RETURN_COVENANT_CASE_IDS)[number];
+type ReturnCovenantCaseId = (typeof RETURN_COVENANT_CASE_IDS)[number];
 export type ReturnCovenantForm = "typed-tool" | "bracket-token";
-export type ReturnCovenantPhase =
+type ReturnCovenantPhase =
   | "prepare"
   | "dispatch"
   | "transition"

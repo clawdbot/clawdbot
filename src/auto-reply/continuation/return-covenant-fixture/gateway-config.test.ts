@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createReturnCovenantGatewayConfigSnapshot,
-  prepareReturnCovenantGatewayConfig,
-} from "./gateway-config.js";
+import { createReturnCovenantGatewayConfigSnapshot } from "./gateway-config.js";
 
 describe("return-covenant gateway config", () => {
   it("migrates the accepted legacy runtime field in memory without changing source bytes", () => {
@@ -17,7 +14,12 @@ describe("return-covenant gateway config", () => {
       plugins: { entries: { codex: { enabled: true } } },
     };
     const original = structuredClone(raw);
-    expect(prepareReturnCovenantGatewayConfig(raw)).toMatchObject({
+    expect(
+      createReturnCovenantGatewayConfigSnapshot({
+        path: "/isolated/openclaw.json",
+        raw,
+      }).config,
+    ).toMatchObject({
       gateway: { mode: "local" },
       agents: {
         defaults: { model: "openai/gpt-5.6-luna" },
@@ -48,8 +50,9 @@ describe("return-covenant gateway config", () => {
 
   it("rejects config that remains invalid after canonical migration", () => {
     expect(() =>
-      prepareReturnCovenantGatewayConfig({
-        gateway: { mode: "invalid" },
+      createReturnCovenantGatewayConfigSnapshot({
+        path: "/isolated/openclaw.json",
+        raw: { gateway: { mode: "invalid" } },
       }),
     ).toThrow(/gateway config is invalid/u);
   });

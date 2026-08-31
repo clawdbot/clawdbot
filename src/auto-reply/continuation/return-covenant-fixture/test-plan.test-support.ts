@@ -6,7 +6,6 @@ import {
   type ReturnCovenantDriverAttestation,
   type ReturnCovenantEffects,
   type ReturnCovenantForm,
-  type ReturnCovenantPhase,
   type ReturnCovenantPhaseRequest,
   type ReturnCovenantPlan,
 } from "./protocol.js";
@@ -182,7 +181,7 @@ export function createReturnCovenantTestRequest(params: {
   caseHandle?: string;
   casePlan: ReturnCovenantPlan["cases"][number];
   form: ReturnCovenantForm;
-  phase: ReturnCovenantPhase;
+  phase: ReturnCovenantPhaseRequest["phase"];
   plan: ReturnCovenantPlan;
   acceptance?: {
     capturedAuthorityGeneration: string;

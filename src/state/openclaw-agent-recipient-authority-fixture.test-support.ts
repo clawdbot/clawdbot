@@ -3,7 +3,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { withLegacySessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
 import { sessionParticipantsSchemaSql } from "./openclaw-agent-session-participants-schema.js";
 
-export type RecipientAuthorityV18FixtureLineage = "covenant" | "upstream";
+type RecipientAuthorityV18FixtureLineage = "covenant" | "upstream";
 
 type RecipientAuthorityV18FixtureParams = {
   database: DatabaseSync;
