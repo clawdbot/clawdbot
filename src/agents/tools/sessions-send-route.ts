@@ -39,7 +39,6 @@ function isLegacyTerminalAcpOneShot(params: {
   if (
     !params.entry ||
     params.acpMeta ||
-    params.entry.acp ||
     params.entry.status !== "done" ||
     !Number.isFinite(params.entry.endedAt) ||
     !isRequesterParentOfEntry(params)

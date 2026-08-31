@@ -2549,6 +2549,52 @@ describe("sessions tools", () => {
     ).toBe(false);
   });
 
+  it("sessions_send rejects terminal ACP one-shots with embedded-only legacy metadata", async () => {
+    const requesterKey = "agent:main:cron:job-embedded-legacy-oneshot";
+    const targetKey = "agent:claude:acp:embedded-legacy-child";
+    loadSessionEntryByKeyMock.mockReturnValue({
+      sessionId: "embedded-legacy-acp-child-session",
+      updatedAt: 1,
+      spawnedBy: requesterKey,
+      parentSessionKey: requesterKey,
+      status: "done",
+      endedAt: 2,
+      acp: {
+        backend: "acpx",
+        agent: "claude",
+        runtimeSessionName: "legacy-embedded",
+        mode: "oneshot",
+        state: "idle",
+        lastActivityAt: 1,
+      },
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        acp: { enabled: true, allowedAgents: ["claude"] },
+      },
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("resume-embedded-legacy-acp-oneshot", {
+      sessionKey: targetKey,
+      message: "continue",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("resume metadata is no longer available");
+    expect(
+      callGatewayMock.mock.calls.some((call) => (call[0] as GatewayCall).method === "agent"),
+    ).toBe(false);
+  });
+
   it("sessions_send preserves deleted-agent errors for unconfigured ACP-shaped sessions", async () => {
     const requesterKey = "agent:main:cron:job-deleted-agent";
     const targetKey = "agent:deleted-agent:acp:legacy-child";
