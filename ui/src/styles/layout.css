@@ -220,6 +220,12 @@ html.openclaw-native-web-chrome .sidebar-brand__desktop-control {
   display: none;
 }
 
+/* Only new-session remains in the sidebar on native web-chrome hosts; keep it
+   against the approved right padding instead of beside the fit-content card. */
+html.openclaw-native-web-chrome .sidebar-brand__actions {
+  margin-left: auto;
+}
+
 .macos-titlebar-controls {
   position: fixed;
   top: 0;

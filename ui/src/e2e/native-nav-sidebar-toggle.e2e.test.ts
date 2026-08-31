@@ -433,6 +433,21 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
     await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
+    const sidebarBrand = page.locator(".sidebar-brand");
+    const sidebarNewThread = sidebarBrand.locator(".sidebar-brand__new-thread");
+    await expect.poll(() => sidebarNewThread.isVisible()).toBe(true);
+    await expect
+      .poll(async () => {
+        const [brandBox, newThreadBox] = await Promise.all([
+          sidebarBrand.boundingBox(),
+          sidebarNewThread.boundingBox(),
+        ]);
+        if (!brandBox || !newThreadBox) {
+          return null;
+        }
+        return Math.round(brandBox.x + brandBox.width - (newThreadBox.x + newThreadBox.width));
+      })
+      .toBe(4);
 
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
