@@ -538,7 +538,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
     });
   } else if (
     params.config &&
-    persistedIndex.policyHash !== resolveInstalledPluginIndexPolicyHash(params.config)
+    persistedIndex.policyHash !== resolveInstalledPluginIndexPolicyHash(params.config, params.env)
   ) {
     diagnostics.push({
       level: "warn",
