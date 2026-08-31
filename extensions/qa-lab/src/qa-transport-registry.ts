@@ -69,7 +69,7 @@ export async function prepareQaTransportAdapterFactories(params: {
       }
       await factory.prepareSelectedScenarios(scenarioIds);
       // Child partitions carry ready factories, so cold preparation cannot reenter their timers.
-      const ready = { ...factory };
+      const ready = Object.assign({}, factory);
       delete ready.prepareSelectedScenarios;
       return ready;
     }),

@@ -161,7 +161,10 @@ describe("live transport suite runtime", () => {
         initializationStarted.promise.then(() => "initialization"),
         workersStarted.promise.then(() => "workers"),
         settled.then((error) => {
-          if (error) throw error;
+          if (error instanceof Error) {
+            throw error;
+          }
+          expect(error).toBeUndefined();
           return "settled";
         }),
       ]);
