@@ -212,8 +212,8 @@ const planSchema = z
       "covenant-v18-upgrade",
       "participant-v18-upgrade",
       "idempotent-v19-reopen",
-    ]) {
-      if (!profiles.has(profile as ReturnCovenantPlan["cases"][number]["databaseProfile"])) {
+    ] as const) {
+      if (!profiles.has(profile)) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["cases"],
@@ -486,22 +486,19 @@ function assertRequestIdentity(
   request: ReturnCovenantPhaseRequest,
   plan: ReturnCovenantPlan,
 ): void {
-  const expected = {
-    runId: plan.runId,
-    rowId: plan.rowId,
-    candidateSha: plan.target.candidateSha,
-    productTreeSha: plan.target.productTreeSha,
-    docsHarnessSha: plan.target.docsHarnessSha,
-    runtimeConfigSha256: plan.target.runtimeConfigSha256,
-    runtimeArtifactManifestSha256: plan.target.runtimeArtifactManifestSha256,
-  };
-  for (const [key, value] of Object.entries(expected)) {
-    if (request[key as keyof typeof request] !== value) {
-      throw new ReturnCovenantProtocolError(
-        "identity-mismatch",
-        `phase request ${key} does not match the frozen plan`,
-      );
-    }
+  if (
+    request.runId !== plan.runId ||
+    request.rowId !== plan.rowId ||
+    request.candidateSha !== plan.target.candidateSha ||
+    request.productTreeSha !== plan.target.productTreeSha ||
+    request.docsHarnessSha !== plan.target.docsHarnessSha ||
+    request.runtimeConfigSha256 !== plan.target.runtimeConfigSha256 ||
+    request.runtimeArtifactManifestSha256 !== plan.target.runtimeArtifactManifestSha256
+  ) {
+    throw new ReturnCovenantProtocolError(
+      "identity-mismatch",
+      "phase request identity does not match the frozen plan",
+    );
   }
   if (request.phase === "cleanup-run") {
     return;

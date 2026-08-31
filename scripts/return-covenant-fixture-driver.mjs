@@ -9,7 +9,18 @@ try {
   if (process.argv.length === 3 && process.argv[2] === "gateway") {
     await runReturnCovenantFixtureGateway();
   } else {
-    await runReturnCovenantFixtureDriver(process.argv.slice(2));
+    await runReturnCovenantFixtureDriver(process.argv.slice(2), {
+      launchEnvironment: {
+        candidateSha: process.env.OPENCLAW_CANDIDATE_SHA,
+        productTreeSha: process.env.OPENCLAW_PRODUCT_TREE_SHA,
+        docsHarnessSha: process.env.OPENCLAW_PROOFS_DOCS_REF,
+        runtimeArtifactManifestSha256: process.env.OPENCLAW_RETURN_COVENANT_RUNTIME_ARTIFACT_SHA256,
+        launchNonce: process.env.OPENCLAW_RETURN_COVENANT_LAUNCH_NONCE,
+        phaseSigningKey: process.env.OPENCLAW_RETURN_COVENANT_PHASE_KEY,
+        phaseKeyFingerprint: process.env.OPENCLAW_RETURN_COVENANT_PHASE_KEY_FINGERPRINT,
+        attestationPath: process.env.OPENCLAW_RETURN_COVENANT_ATTESTATION_PATH,
+      },
+    });
   }
 } catch (error) {
   const message = error instanceof Error ? (error.stack ?? error.message) : String(error);

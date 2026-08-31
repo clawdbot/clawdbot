@@ -1,6 +1,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../../../infra/node-sqlite.js";
 import {
@@ -47,9 +48,7 @@ const fixtureShapeByProfile = {
 } as const satisfies Record<ReturnCovenantDatabaseProfile, string>;
 
 function readVersion(database: ReturnType<typeof openOpenClawAgentDatabase>["db"]): number {
-  const row = database.prepare("PRAGMA user_version").get() as
-    | { user_version?: unknown }
-    | undefined;
+  const row = asOptionalRecord(database.prepare("PRAGMA user_version").get());
   if (row?.user_version !== OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw new Error("return-covenant fixture did not reach agent schema v19");
   }
@@ -60,18 +59,16 @@ function assertAgentDatabaseHealthy(
   database: ReturnType<typeof openOpenClawAgentDatabase>["db"],
 ): void {
   readVersion(database);
-  const metadata = database
-    .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-    .get() as { schema_version?: unknown } | undefined;
+  const metadata = asOptionalRecord(
+    database.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+  );
   if (metadata?.schema_version !== OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw new Error("return-covenant fixture agent schema metadata is not v19");
   }
   if (database.prepare("PRAGMA foreign_key_check").all().length > 0) {
     throw new Error("return-covenant fixture agent database failed foreign-key validation");
   }
-  const integrity = database.prepare("PRAGMA integrity_check").get() as
-    | { integrity_check?: unknown }
-    | undefined;
+  const integrity = asOptionalRecord(database.prepare("PRAGMA integrity_check").get());
   if (integrity?.integrity_check !== "ok") {
     throw new Error("return-covenant fixture agent database failed integrity validation");
   }
@@ -146,9 +143,11 @@ async function prepareProfile(params: {
         ensureOpenClawAgentDatabaseSchema(migrationDatabase, options);
       });
       assertAgentDatabaseHealthy(migrationDatabase);
-      const migrated = migrationDatabase
-        .prepare("SELECT epoch FROM session_recipient_authority WHERE session_key = ?")
-        .get(validSessionKey) as { epoch?: unknown } | undefined;
+      const migrated = asOptionalRecord(
+        migrationDatabase
+          .prepare("SELECT epoch FROM session_recipient_authority WHERE session_key = ?")
+          .get(validSessionKey),
+      );
       if (migrated?.epoch !== staged.expectedEpoch) {
         throw new Error(`${params.profile} did not preserve its accepted authority epoch`);
       }
@@ -164,17 +163,17 @@ async function prepareProfile(params: {
     const reopened = openOpenClawAgentDatabase(options);
     assertAgentDatabaseHealthy(reopened.db);
   } else if (params.profile === "idempotent-v19-reopen") {
-    const before = initial.db
-      .prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'")
-      .get() as { updated_at?: unknown } | undefined;
+    const before = asOptionalRecord(
+      initial.db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
+    );
     if (!closeOpenClawAgentDatabaseByPath(databasePath)) {
       throw new Error("could not close the v19 reopen fixture");
     }
     const reopened = openOpenClawAgentDatabase(options);
     assertAgentDatabaseHealthy(reopened.db);
-    const after = reopened.db
-      .prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'")
-      .get() as { updated_at?: unknown } | undefined;
+    const after = asOptionalRecord(
+      reopened.db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
+    );
     if (before?.updated_at !== after?.updated_at) {
       throw new Error("idempotent v19 reopen rewrote schema ownership metadata");
     }
@@ -191,9 +190,7 @@ export async function prepareReturnCovenantDatabaseProfiles(params: {
   plan: ReturnCovenantPlan;
 }): Promise<PreparedReturnCovenantDatabaseProfiles> {
   const stateDatabase = openOpenClawStateDatabase({ env: params.env });
-  const globalVersion = stateDatabase.db.prepare("PRAGMA user_version").get() as
-    | { user_version?: unknown }
-    | undefined;
+  const globalVersion = asOptionalRecord(stateDatabase.db.prepare("PRAGMA user_version").get());
   if (globalVersion?.user_version !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error("return-covenant fixture did not create global schema v15");
   }

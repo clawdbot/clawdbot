@@ -42,6 +42,17 @@ type IsolatedRuntime = {
   statePath: string;
 };
 
+export type ReturnCovenantLaunchEnvironment = {
+  attestationPath?: string;
+  candidateSha?: string;
+  docsHarnessSha?: string;
+  launchNonce?: string;
+  phaseKeyFingerprint?: string;
+  phaseSigningKey?: string;
+  productTreeSha?: string;
+  runtimeArtifactManifestSha256?: string;
+};
+
 function fixtureRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
   return {
     ...config,
@@ -60,6 +71,7 @@ function fixtureRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
 }
 
 async function validateIsolatedRuntime(params: {
+  launchEnvironment: ReturnCovenantLaunchEnvironment;
   plan: ReturnCovenantPlan;
 }): Promise<IsolatedRuntime> {
   for (const name of FORBIDDEN_AMBIENT_ENV) {
@@ -92,12 +104,7 @@ async function validateIsolatedRuntime(params: {
     throw new Error("return-covenant runtime config differs from the frozen plan");
   }
   const config = projectReturnCovenantRuntimeConfig(rawConfig);
-  const identities = {
-    candidateSha: process.env.OPENCLAW_CANDIDATE_SHA,
-    productTreeSha: process.env.OPENCLAW_PRODUCT_TREE_SHA,
-    docsHarnessSha: process.env.OPENCLAW_PROOFS_DOCS_REF,
-    runtimeArtifactManifestSha256: process.env.OPENCLAW_RETURN_COVENANT_RUNTIME_ARTIFACT_SHA256,
-  };
+  const identities = params.launchEnvironment;
   if (
     identities.candidateSha !== params.plan.target.candidateSha ||
     identities.productTreeSha !== params.plan.target.productTreeSha ||
@@ -209,14 +216,18 @@ function readyReceipt(params: {
   };
 }
 
-export async function runReturnCovenantFixtureDriver(argv: readonly string[]): Promise<void> {
+export async function runReturnCovenantFixtureDriver(
+  argv: readonly string[],
+  options: { launchEnvironment: ReturnCovenantLaunchEnvironment },
+): Promise<void> {
   const args = parseReturnCovenantDriverArgs(argv);
   const plan = parseReturnCovenantPlan(await readReturnCovenantJsonFile(args.planPath));
-  const runtime = await validateIsolatedRuntime({ plan });
-  const launchNonce = process.env.OPENCLAW_RETURN_COVENANT_LAUNCH_NONCE;
-  const phaseSigningKey = process.env.OPENCLAW_RETURN_COVENANT_PHASE_KEY;
-  const phaseKeyFingerprint = process.env.OPENCLAW_RETURN_COVENANT_PHASE_KEY_FINGERPRINT;
-  const attestationPath = process.env.OPENCLAW_RETURN_COVENANT_ATTESTATION_PATH;
+  const runtime = await validateIsolatedRuntime({
+    launchEnvironment: options.launchEnvironment,
+    plan,
+  });
+  const { attestationPath, launchNonce, phaseKeyFingerprint, phaseSigningKey } =
+    options.launchEnvironment;
   if (
     !launchNonce ||
     launchNonce.length < 24 ||
