@@ -442,6 +442,7 @@ function createRelay(options?: {
           ? " --pre-tool-use-unavailable noop"
           : ""
       }${commandOptions?.timeoutMs ? ` --timeout ${commandOptions.timeoutMs}` : ""}`,
+    claimTurn: () => undefined,
     renew: () => undefined,
     unregister: () => undefined,
   };

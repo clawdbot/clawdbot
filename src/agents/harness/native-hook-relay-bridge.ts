@@ -4,9 +4,13 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import {
   isNativeHookRelayBridgeStaleRegistrationError,
+  NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
 } from "./native-hook-relay-client.js";
-import { nativeHookRelayState } from "./native-hook-relay-state.js";
+import {
+  nativeHookRelayRegistrationsById,
+  nativeHookRelayState,
+} from "./native-hook-relay-state.js";
 import {
   clearNativeHookRelayBridgeRecordsForTests,
   deleteNativeHookRelayBridgeRecordIfOwned,
@@ -34,11 +38,11 @@ const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 export {
   isRetryableNativeHookRelayBridgeLookupError,
-  NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
 } from "./native-hook-relay-client.js";
 
 const { relays, relayBridges } = nativeHookRelayState;
+const relayRegistrationsById = nativeHookRelayRegistrationsById;
 
 type InvokeNativeHookRelay = (
   params: InvokeNativeHookRelayParams,
@@ -48,7 +52,6 @@ type NativeHookRelayBridgeRequestAuth = {
   provider: NativeHookRelayProvider;
   relayId: string;
   token: string;
-  registration: ActiveNativeHookRelayRegistration;
   bridge: NativeHookRelayBridgeRegistration;
   invokeRelay: InvokeNativeHookRelay;
 };
@@ -58,89 +61,155 @@ export function registerNativeHookRelayBridge(
   stateDbPath: string,
   invokeRelay: InvokeNativeHookRelay,
 ): void {
-  // Liveness checks stay outside the write transaction. The store rereads each
-  // authoritative row before deletion so renewal or replacement wins the race.
-  try {
-    const pruned = pruneNativeHookRelayBridgeRecords({
-      currentPid: process.pid,
-      isPidDead: isPidDefinitelyDead,
-      stateDbPath,
-    });
-    for (const row of pruned) {
-      log.debug("pruned stale native hook relay bridge record", {
-        relayId: row.relayId,
-        stalePid: row.pid,
-        currentPid: process.pid,
-        reason: row.reason,
-      });
+  const relayId = registration.relayId;
+  const existing = relayBridges.get(relayId);
+  if (existing) {
+    if (existing.server.listening) {
+      // Reuse the live bridge so re-registration never interrupts in-flight
+      // hook subprocesses from sibling runs on the same relayId. Refresh the
+      // record so its expiry covers the new registration.
+      refreshNativeHookRelayBridgeRecord(relayId);
+      return;
     }
-  } catch (error) {
-    log.debug("native hook relay bridge record prune skipped", { error });
+    if (existing.pendingListen) {
+      // Server is still starting; its listen callback publishes the record
+      // with relay-wide expiry once bound.
+      return;
+    }
+    // The previous bridge server closed or failed. Replace it, leaving the old
+    // record in place briefly so racing hook subprocesses retry instead of
+    // observing a missing relay.
+    unregisterNativeHookRelayBridge(relayId, {
+      deferBridgeRecordRemovalMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
+      expectedBridge: existing,
+    });
+  } else {
+    // Liveness checks stay outside the write transaction. The store rereads
+    // each authoritative row before deletion so renewal or replacement wins
+    // the race.
+    try {
+      const pruned = pruneNativeHookRelayBridgeRecords({
+        currentPid: process.pid,
+        isPidDead: isPidDefinitelyDead,
+        stateDbPath,
+      });
+      for (const row of pruned) {
+        log.debug("pruned stale native hook relay bridge record", {
+          relayId: row.relayId,
+          stalePid: row.pid,
+          currentPid: process.pid,
+          reason: row.reason,
+        });
+      }
+    } catch (error) {
+      log.debug("native hook relay bridge record prune skipped", { error });
+    }
   }
-  unregisterNativeHookRelayBridge(registration.relayId);
   const token = randomUUID();
   const server = createServer();
   const bridge: NativeHookRelayBridgeRegistration = {
-    relayId: registration.relayId,
+    relayId,
     stateDbPath,
     token,
     server,
+    pendingListen: true,
   };
   server.on("request", (req, res) => {
     void handleNativeHookRelayBridgeRequest(req, res, {
       provider: registration.provider,
-      relayId: registration.relayId,
+      relayId,
       token,
-      registration,
       bridge,
       invokeRelay,
     });
   });
-  relayBridges.set(registration.relayId, bridge);
+  relayBridges.set(relayId, bridge);
   server.on("error", (error) => {
-    log.debug("native hook relay bridge server error", { error, relayId: registration.relayId });
+    bridge.pendingListen = false;
+    log.debug("native hook relay bridge server error", { error, relayId });
   });
   server.listen(0, "127.0.0.1", () => {
-    if (relayBridges.get(registration.relayId) !== bridge) {
+    bridge.pendingListen = false;
+    if (relayBridges.get(relayId) !== bridge) {
       return;
     }
     try {
-      writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
+      writeNativeHookRelayBridgeRecordForRelay(relayId, bridge);
     } catch (error) {
       log.debug("failed to publish native hook relay bridge record", {
         error,
-        relayId: registration.relayId,
+        relayId,
       });
     }
   });
   server.unref();
 }
 
-function writeNativeHookRelayBridgeRecordForRegistration(
-  registration: ActiveNativeHookRelayRegistration,
+/**
+ * One bridge serves every live registration for the relayId, so the record
+ * must outlive the longest-lived one. A shared-state registration written by
+ * an older module copy lives only in `relays`; keep the record alive for it
+ * too.
+ */
+export function resolveNativeHookRelayBridgeRecordExpiresAtMs(
+  relayId: string,
+  floorExpiresAtMs?: number,
+): number | undefined {
+  let expiresAtMs = floorExpiresAtMs;
+  for (const registration of relayRegistrationsById.get(relayId) ?? []) {
+    if (expiresAtMs === undefined || registration.expiresAtMs > expiresAtMs) {
+      expiresAtMs = registration.expiresAtMs;
+    }
+  }
+  const current = relays.get(relayId);
+  if (current && (expiresAtMs === undefined || current.expiresAtMs > expiresAtMs)) {
+    expiresAtMs = current.expiresAtMs;
+  }
+  return expiresAtMs;
+}
+
+function writeNativeHookRelayBridgeRecordForRelay(
+  relayId: string,
   bridge: NativeHookRelayBridgeRegistration,
 ): void {
-  const record = resolveNativeHookRelayBridgeRecord(registration, bridge);
+  const expiresAtMs = resolveNativeHookRelayBridgeRecordExpiresAtMs(relayId);
+  if (expiresAtMs === undefined) {
+    return;
+  }
+  const record = resolveNativeHookRelayBridgeRecord(relayId, bridge, expiresAtMs);
   if (!record) {
     return;
   }
   writeNativeHookRelayBridgeRecord({ record, stateDbPath: bridge.stateDbPath });
 }
 
+/** Republish the shared record after registration-set changes on a live bridge. */
+export function refreshNativeHookRelayBridgeRecord(relayId: string): void {
+  const bridge = relayBridges.get(relayId);
+  if (!bridge || !bridge.server.listening) {
+    return;
+  }
+  try {
+    writeNativeHookRelayBridgeRecordForRelay(relayId, bridge);
+  } catch (error) {
+    log.debug("failed to publish native hook relay bridge record", { error, relayId });
+  }
+}
+
 function resolveNativeHookRelayBridgeRecord(
-  registration: ActiveNativeHookRelayRegistration,
+  relayId: string,
   bridge: NativeHookRelayBridgeRegistration,
-  expiresAtMs = registration.expiresAtMs,
+  expiresAtMs: number,
 ): NativeHookRelayBridgeRecord | undefined {
   const address = bridge.server.address();
   if (!address || typeof address === "string") {
     log.debug("native hook relay bridge server address unavailable", {
-      relayId: registration.relayId,
+      relayId,
     });
     return undefined;
   }
   return {
-    relayId: registration.relayId,
+    relayId,
     pid: process.pid,
     hostname: "127.0.0.1",
     port: address.port,
@@ -154,7 +223,7 @@ export function renewNativeHookRelayBridgeRecord(
   bridge: NativeHookRelayBridgeRegistration,
   expiresAtMs: number,
 ): "renewed" | "unavailable" | "ownership-changed" {
-  const record = resolveNativeHookRelayBridgeRecord(registration, bridge, expiresAtMs);
+  const record = resolveNativeHookRelayBridgeRecord(registration.relayId, bridge, expiresAtMs);
   if (!record) {
     return "unavailable";
   }
@@ -251,8 +320,13 @@ async function handleNativeHookRelayBridgeRequest(
 }
 
 function isCurrentNativeHookRelayBridgeRequest(auth: NativeHookRelayBridgeRequestAuth): boolean {
+  // The bridge outlives individual registrations; a request is current while
+  // this bridge is still installed and any registration is live. Per-request
+  // generation resolution happens in invokeNativeHookRelay and fails closed.
+  // `relays` alone can hold a registration written by an older module copy.
   return (
-    relays.get(auth.relayId) === auth.registration && relayBridges.get(auth.relayId) === auth.bridge
+    relayBridges.get(auth.relayId) === auth.bridge &&
+    ((relayRegistrationsById.get(auth.relayId)?.size ?? 0) > 0 || relays.has(auth.relayId))
   );
 }
 

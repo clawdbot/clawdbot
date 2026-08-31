@@ -836,6 +836,9 @@ export async function runCodexAppServerSideQuestion(
         }),
     );
     turnId = turnResponse.turn.id;
+    // Bind the side turn's hooks to this side relay so they can never fall
+    // through to a session sibling's registration.
+    nativeHookRelay?.claimTurn(turnId);
     collector.setTurn(childThreadId, turnId);
     nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       { ...sideRunParams, agentId: sessionAgentId },
