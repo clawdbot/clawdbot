@@ -1,6 +1,7 @@
 // Doctor-only import for the retired exec approvals JSON store.
 import { isDeepStrictEqual } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -45,13 +46,8 @@ type MigrationDecision =
   | "receipt-authoritative";
 
 function normalizeLegacyNullableUsageMetadata(raw: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return raw;
-  }
-  if (!isRecord(parsed) || !isRecord(parsed.agents)) {
+  const parsed = safeParseJsonRecord(raw);
+  if (!parsed || !isRecord(parsed.agents)) {
     return raw;
   }
 
@@ -64,15 +60,13 @@ function normalizeLegacyNullableUsageMetadata(raw: string): string {
       if (!isRecord(entry)) {
         continue;
       }
-      // Older writers stored never-used optional metadata as null. Repair it only at
-      // Doctor import so canonical persisted-policy validation remains fail-closed.
-      if (entry.lastUsedAt === null) {
-        delete entry.lastUsedAt;
-        changed = true;
-      }
-      if (entry.lastUsedCommand === null) {
-        delete entry.lastUsedCommand;
-        changed = true;
+      // Legacy files can contain null usage metadata. Repair only these fields at
+      // import so canonical policy validation remains strict.
+      for (const key of ["lastUsedAt", "lastUsedCommand"]) {
+        if (entry[key] === null) {
+          delete entry[key];
+          changed = true;
+        }
       }
     }
   }

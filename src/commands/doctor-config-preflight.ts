@@ -411,31 +411,23 @@ export async function runDoctorConfigPreflight(
     if (gatewayStartupCheckpointRequired && !freshConfigGuardAllowed) {
       throwStartupMigrationGuardRejected();
     }
-    if (
-      stateDirMigrations &&
-      stateMigrationsAllowed &&
-      freshConfigGuardAllowed &&
-      options.doctorOnlyStateMigrations === true
-    ) {
-      const { detectLegacyExecApprovals, migrateLegacyExecApprovals } =
-        await import("../infra/state-migrations.exec-approvals.js");
-      const stateDir = resolveStateDir(process.env);
-      // Exec approvals are state-root policy. Repair them before config validity
-      // decides which config-dependent migration graph is safe to run.
-      noteStartupStateMigrationResult(
-        await measurePreflightStep("exec-approvals-migration", () =>
-          migrateLegacyExecApprovals({
-            detected: detectLegacyExecApprovals({
-              stateDir,
-              doctorOnlyStateMigrations: true,
-            }),
-            stateDir,
-            env: process.env,
-          }),
-        ),
-      );
-    }
     if (stateDirMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
+      if (options.doctorOnlyStateMigrations === true) {
+        const { detectLegacyExecApprovals, migrateLegacyExecApprovals } =
+          await import("../infra/state-migrations.exec-approvals.js");
+        const stateDir = resolveStateDir(process.env);
+        // Exec approvals are state-root policy. Repair them before config validity
+        // decides which config-dependent migration graph is safe to run.
+        noteStartupStateMigrationResult(
+          await measurePreflightStep("exec-approvals-migration", () =>
+            migrateLegacyExecApprovals({
+              detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
+              stateDir,
+              env: process.env,
+            }),
+          ),
+        );
+      }
       if (gatewayStartupCheckpointRequired && (snapshot.valid || automaticStartupRepair)) {
         if (!startupMigrationLease) {
           throw new Error("Startup plugin host-link repair requires the startup migration lease.");
