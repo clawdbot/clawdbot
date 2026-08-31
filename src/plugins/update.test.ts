@@ -1893,20 +1893,32 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
-  it.each(
-    [
-      {
-        updateChannel: "beta" as const,
-        coreVersion: "2026.8.1-beta.3",
-        newerVersion: "2026.8.1-beta.4",
-      },
-      {
-        updateChannel: "extended-stable" as const,
-        coreVersion: "2026.7.33",
-        newerVersion: "2026.7.34",
-      },
-    ].flatMap((scenario) => [false, true].map((dryRun) => ({ ...scenario, dryRun }))),
-  )(
+  it.each([
+    {
+      updateChannel: "beta" as const,
+      coreVersion: "2026.8.1-beta.3",
+      newerVersion: "2026.8.1-beta.4",
+      dryRun: false,
+    },
+    {
+      updateChannel: "beta" as const,
+      coreVersion: "2026.8.1-beta.3",
+      newerVersion: "2026.8.1-beta.4",
+      dryRun: true,
+    },
+    {
+      updateChannel: "extended-stable" as const,
+      coreVersion: "2026.7.33",
+      newerVersion: "2026.7.34",
+      dryRun: false,
+    },
+    {
+      updateChannel: "extended-stable" as const,
+      coreVersion: "2026.7.33",
+      newerVersion: "2026.7.34",
+      dryRun: true,
+    },
+  ])(
     "reports core-aligned floating $updateChannel updates as current (dryRun=$dryRun)",
     async ({ updateChannel, coreVersion, newerVersion, dryRun }) => {
       const { config } = createNpmUpdateFixture({
