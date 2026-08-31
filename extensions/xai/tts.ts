@@ -463,6 +463,7 @@ export async function xaiTTS(params: {
     },
     timeoutMs,
     fetchFn: fetch,
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(ttsBaseUrl),
     auditContext: "xai tts",
   });
   try {
