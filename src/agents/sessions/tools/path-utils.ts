@@ -6,6 +6,7 @@
 import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandHomePrefix, resolveOsHomeDir } from "../../../infra/home-dir.js";
+import { preserveAtPrefixedRelativePath } from "../../path-policy.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -34,8 +35,9 @@ export function expandOsHomePrefix(filePath: string): string {
   return home ? expandHomePrefix(filePath, { home }) : filePath;
 }
 
-function expandPath(filePath: string): string {
-  const normalized = normalizeAtPrefix(filePath);
+function expandPath(filePath: string, cwd: string): string {
+  const preserved = preserveAtPrefixedRelativePath(filePath, cwd);
+  const normalized = normalizeAtPrefix(preserved);
   if (normalized.startsWith("file://")) {
     try {
       return fileURLToPath(normalized);
@@ -51,7 +53,7 @@ function expandPath(filePath: string): string {
  * Handles ~ expansion and absolute paths.
  */
 export function resolveToCwd(filePath: string, cwd: string): string {
-  const expanded = expandPath(filePath);
+  const expanded = expandPath(filePath, cwd);
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 

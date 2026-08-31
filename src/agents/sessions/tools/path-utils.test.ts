@@ -1,8 +1,12 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getReadPathVariants, resolveToCwd } from "./path-utils.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("resolveToCwd", () => {
   const cwd = path.resolve("workspace");
@@ -21,6 +25,14 @@ describe("resolveToCwd", () => {
   it("resolves valid file URLs to their filesystem path", () => {
     const target = path.resolve(cwd, "notes.txt");
     expect(resolveToCwd(pathToFileURL(target).href, cwd)).toBe(target);
+  });
+
+  it("preserves an existing literal @-prefixed filename while keeping shorthand", async () => {
+    const cwd = tempDirs.make("openclaw-at-path-");
+    await fs.writeFile(path.join(cwd, "@literal.txt"), "literal", "utf8");
+
+    expect(resolveToCwd("@literal.txt", cwd)).toBe(path.join(cwd, "@literal.txt"));
+    expect(resolveToCwd("@missing.txt", cwd)).toBe(path.join(cwd, "missing.txt"));
   });
 
   it("keeps malformed file URLs on the ordinary relative-path path", () => {
