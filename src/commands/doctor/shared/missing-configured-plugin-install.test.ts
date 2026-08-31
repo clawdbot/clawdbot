@@ -4145,6 +4145,124 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     },
   );
 
+  it("rolls back a deferred updater payload rejected by the fresh-generation check", async () => {
+    const installDir = path.join(
+      tempDirs.make("openclaw-plugin-stub-repair-"),
+      "node_modules",
+      "codex",
+    );
+    fs.mkdirSync(installDir, { recursive: true });
+    createColdPluginFixture({
+      rootDir: installDir,
+      pluginId: "codex",
+      packageName: "@openclaw/codex",
+      packageVersion: VERSION,
+    });
+    const stagedArtifactDir = tempDirs.make("openclaw-plugin-staged-repair-");
+    createColdPluginFixture({
+      rootDir: stagedArtifactDir,
+      pluginId: "codex",
+      packageName: "@openclaw/codex",
+      packageVersion: VERSION,
+    });
+    const records = {
+      codex: {
+        source: "npm" as const,
+        spec: "@openclaw/codex",
+        resolvedName: "@openclaw/codex",
+        resolvedSpec: `@openclaw/codex@${VERSION}`,
+        resolvedVersion: VERSION,
+        version: VERSION,
+        integrity: "sha512-old-codex",
+        installPath: installDir,
+      },
+    };
+    const pluginMetadata = {
+      id: "codex",
+      packageName: "@openclaw/codex",
+      packageVersion: VERSION,
+      providers: ["codex"],
+      channels: [],
+      origin: "global" as const,
+      rootDir: installDir,
+      packageDependencies: { "@example/required-runtime": "^1.0.0" },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [pluginMetadata],
+      diagnostics: [],
+      byPluginId: new Map([["codex", pluginMetadata]]),
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "codex",
+        label: "Codex",
+        install: {
+          npmSpec: "@openclaw/codex",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+    const { updateNpmInstalledPlugins: updateNpmInstalledPluginsActual } = await vi.importActual<
+      typeof import("../../../plugins/update.js")
+    >("../../../plugins/update.js");
+    mocks.updateNpmInstalledPlugins.mockImplementationOnce(updateNpmInstalledPluginsActual);
+    const installResult = successfulInstall({
+      pluginId: "codex",
+      npmSpec: "@openclaw/codex",
+      version: VERSION,
+      targetDir: installDir,
+      resolution: { integrity: "sha512-rejected-active-root" },
+    });
+    let committed = false;
+    const commit = vi.fn(async () => {
+      committed = true;
+    });
+    const rollback = vi.fn(async () => {});
+    mocks.installPluginFromNpmSpec.mockImplementationOnce(
+      async (callbacks: MockNpmInstallCallbacks) => {
+        await invokeMockNpmInstallPrecommit({
+          callbacks,
+          artifact: {
+            pluginId: "codex",
+            stagedArtifactDir,
+            mode: "update",
+          },
+          npmResolution: installResult.npmResolution,
+        });
+        if (!isPluginInstallCommitDeferred(callbacks)) {
+          committed = true;
+          return installResult;
+        }
+        return attachPluginInstallTransaction(installResult, { commit, rollback });
+      },
+    );
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(committed).toBe(false);
+    expect(commit).not.toHaveBeenCalled();
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(hasRetainedManagedNpmInstallMarker(installDir)).toBe(false);
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(result.changes).toEqual([]);
+    expect(result.repairedPluginIds).toBeUndefined();
+    expect(result.failedPluginIds).toEqual(["codex"]);
+    expect(result.records).toBe(records);
+    expect(result.warnings).toEqual([expect.stringContaining("fresh managed generation")]);
+  });
+
   it.each([
     {
       name: "all record identities are non-official",
