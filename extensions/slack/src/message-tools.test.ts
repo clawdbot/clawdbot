@@ -216,6 +216,7 @@ describe("Slack message tools", () => {
       "pin",
       "unpin",
       "list-pins",
+      "bookmark",
       "member-info",
       "emoji-list",
     ]);
@@ -287,6 +288,7 @@ describe("Slack message tools", () => {
       "pin",
       "unpin",
       "list-pins",
+      "bookmark",
       "member-info",
       "emoji-list",
     ]);
@@ -316,6 +318,7 @@ describe("Slack message tools", () => {
       "pin",
       "unpin",
       "list-pins",
+      "bookmark",
       "member-info",
       "emoji-list",
     ]);
@@ -330,6 +333,7 @@ describe("Slack message tools", () => {
             reactions: false,
             messages: false,
             pins: false,
+            bookmarks: false,
             memberInfo: false,
             emojiList: false,
           },
@@ -340,6 +344,7 @@ describe("Slack message tools", () => {
                 reactions: false,
                 messages: false,
                 pins: false,
+                bookmarks: false,
                 memberInfo: false,
                 emojiList: false,
               },
@@ -350,6 +355,7 @@ describe("Slack message tools", () => {
                 reactions: true,
                 messages: true,
                 pins: false,
+                bookmarks: false,
                 memberInfo: false,
                 emojiList: false,
               },
@@ -459,8 +465,10 @@ describe("Slack message tools", () => {
       : discovery.schema
         ? [discovery.schema]
         : [];
-    const propertyNames = schemas.flatMap((entry) => Object.keys(entry.properties));
-    expect(propertyNames).not.toContain("emoji");
+    const reactionSchema = schemas.find((entry) =>
+      entry.actions?.some((action) => action === "react" || action === "reactions"),
+    );
+    expect(reactionSchema).toBeUndefined();
   });
 
   it("describes Slack reply broadcasts as send-only thread hints", () => {
@@ -511,6 +519,7 @@ describe("Slack message tools", () => {
               reactions: false,
               messages: false,
               pins: false,
+              bookmarks: false,
               memberInfo: false,
               emojiList: false,
             },

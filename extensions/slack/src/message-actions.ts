@@ -58,6 +58,9 @@ export function listSlackMessageActions(
     actions.add("unpin");
     actions.add("list-pins");
   }
+  if (isActionEnabled("bookmarks")) {
+    actions.add("bookmark");
+  }
   if (isActionEnabled("memberInfo")) {
     actions.add("member-info");
   }

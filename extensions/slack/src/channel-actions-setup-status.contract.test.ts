@@ -25,6 +25,7 @@ const slackDefaultActions = [
   "pin",
   "unpin",
   "list-pins",
+  "bookmark",
   "member-info",
   "emoji-list",
 ] as const;
