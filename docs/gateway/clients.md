@@ -5,6 +5,7 @@ read_when:
   - Implementing Gateway reconnect, history, approvals, or device pairing
   - Updating a third-party client for a new Gateway wire version
 title: "Building a Gateway client"
+doc-schema-version: 1
 ---
 
 Use the published Gateway packages to build operator dashboards, WebChat clients,
@@ -17,30 +18,42 @@ For frame shapes, the handshake, errors, and the complete method surface, read t
 
 ## Install the packages
 
+The verified published beta is `2026.9.1-beta.1` for both packages. Install that
+exact version; it is a prerelease, not a stable release:
+
 ```bash
-npm install @openclaw/gateway-client @openclaw/gateway-protocol
+npm install --save-exact @openclaw/gateway-client@2026.9.1-beta.1 @openclaw/gateway-protocol@2026.9.1-beta.1
 ```
 
-<Note>
-These packages ship with OpenClaw release trains. During the initial rollout, npm
-may return `E404` until the first package-bearing OpenClaw release is published;
-install them only after the registry pages below resolve.
-</Note>
+<Warning>
+As verified on August 30, 2026, unqualified installs select the `latest` tag,
+which points to the reserved `0.0.0` placeholder for both packages. Those
+artifacts contain only a README and package manifest, with no JavaScript or
+TypeScript declarations. Installation succeeds, but package imports fail.
+</Warning>
+
+Package versions follow the OpenClaw release train and are separate from the wire
+protocol version. This beta exports wire version `4`; that does not guarantee
+compatibility with every Gateway release. Pin and test the client and Gateway
+versions together, and check the [wire-version rules](/gateway/clients#track-protocol-versions)
+before upgrading. The client pins the matching protocol package version.
 
 - [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
   provides schemas, runtime validators, TypeScript types, client identity and
   capability registries, structured error readers, and protocol version constants.
   Its npm tarball also includes the generated
-  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@beta/protocol.schema.json)
-  machine-readable contract.
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@2026.9.1-beta.1/protocol.schema.json)
+  machine-readable contract. Download it as a file; it is not an exported package
+  import subpath.
 - [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
   is the reference connection implementation. Import the package root for the Node
   client and `@openclaw/gateway-client/browser` for the browser-safe protocol,
   device-auth, and reconnect helpers.
 
-The Node entry owns its WebSocket transport. A browser host supplies a WebSocket
-adapter plus persistent storage and signing callbacks for the device identity and
-device token.
+These beta packages declare Node.js `>=22.19.0`. The Node entry includes the `ws`
+transport; device identity, signing, and device-token storage remain host-owned
+through `GatewayClientHostDeps`. A browser host supplies a WebSocket adapter plus
+persistent storage and signing callbacks for the device identity and device token.
 
 ## Choose scopes and pair the device
 
@@ -95,8 +108,8 @@ import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info";
 const caps = [GATEWAY_CLIENT_CAPS.TOOL_EVENTS];
 ```
 
-The current registry contains `approvals`, `exec-approvals`, `inline-widgets`,
-`run-tool-bindings`, `session-scoped-events`, `plugin-approvals`,
+The current registry contains `agent-kind`, `approvals`, `exec-approvals`,
+`inline-widgets`, `plugin-approvals`, `run-tool-bindings`, `session-scoped-events`,
 `task-suggestions`, `terminal-offset-seq`, `tool-events`, `ui-commands`, and
 `usage-refreshing`.
 Advertise only capabilities the client actually implements.

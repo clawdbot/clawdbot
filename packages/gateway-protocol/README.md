@@ -23,9 +23,16 @@ protocol-version decision and coordinated client follow-through. See
 
 ## Install
 
+Use the verified beta with an exact pin:
+
 ```bash
-npm install @openclaw/gateway-protocol
+npm install --save-exact @openclaw/gateway-protocol@2026.9.1-beta.1
 ```
+
+This beta declares Node.js `>=22.19.0`. See the canonical
+[installation guide](https://docs.openclaw.ai/gateway/clients#install-the-packages)
+for the matching client package, the current `latest` placeholder warning, and
+package/wire-version rules. Test this prerelease with the Gateway version you deploy.
 
 ## Entry points
 
@@ -144,9 +151,12 @@ boundary before reading nested values.
 
 ### Machine-readable schema
 
-`protocol.schema.json` ships in the npm tarball as the generated machine-readable
+[`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@2026.9.1-beta.1/protocol.schema.json)
+ships in the npm tarball as the generated machine-readable
 contract. It contains the frame union, named schema definitions, and core method
 metadata. It is generated during `prepack` and is not committed to the repository.
+Download it as a file; `@openclaw/gateway-protocol/protocol.schema.json` is not an
+exported package import subpath.
 
 ### Method discovery
 
