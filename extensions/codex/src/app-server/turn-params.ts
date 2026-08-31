@@ -83,9 +83,17 @@ export function buildTurnStartParams(
   const currentSenderContext =
     params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  const additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
+  let additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
     ? { openclaw_current_sender: { kind: "untrusted", value: currentSenderContext } }
     : undefined;
+  if (params.permissionChange?.notice) {
+    // Application context is a developer message in Codex 0.151.0 and also
+    // reaches native-preserved threads without overriding their turn settings.
+    additionalContext = {
+      ...additionalContext,
+      openclaw_permission_change: { kind: "application", value: params.permissionChange.notice },
+    };
+  }
   return {
     threadId: options.threadId,
     // codex-rs/app-server-protocol/src/protocol/v2/turn.rs:292-324 at 91d6f48992ad defines

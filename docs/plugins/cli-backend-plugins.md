@@ -265,7 +265,11 @@ available to `resolveExecutionArgs(ctx)` for native CLI flags.
 backend owns a vendor-supported SDK for the installed CLI. The transport
 receives the exact prepared command, arguments, environment, prompt, session,
 and tool availability; it yields the backend's existing structured stream
-records. Native tool actions must use the provided, run-bound
+records. Optional `promptContext.prependContext` and `promptContext.appendContext`
+are private prompt-build additions, separate from the ordinary `prompt`. Transport
+them through the native SDK's private context mechanism; never record them as
+operator-authored input. OpenClaw's policy and observation hooks still receive the
+complete logical prompt. Native tool actions must use the provided, run-bound
 `requestToolPermission` callback rather than creating independent approval
 authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Explicit credential forwarding, paired-node execution, and

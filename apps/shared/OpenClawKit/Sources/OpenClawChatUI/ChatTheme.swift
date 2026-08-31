@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var openClawChatDesktopLayout = false
+}
+
 #if os(macOS)
 import AppKit
 #else

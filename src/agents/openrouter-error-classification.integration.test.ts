@@ -2,8 +2,18 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { resolveProviderHookPlugin } from "../plugins/provider-hook-runtime.js";
 import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
+
+// This integration suite deliberately exercises the real bundled OpenRouter
+// failover hooks, and the first hook materialization compiles the plugin
+// sources in this worker (import-bound; src/agents/CLAUDE.md). Warm it once
+// under an explicit hook budget so the per-test 120s timeout measures
+// classification behavior, not cold compile under CI load.
+beforeAll(() => {
+  resolveProviderHookPlugin({ provider: "openrouter" });
+}, 300_000);
 import { formatAssistantErrorText } from "./embedded-agent-helpers/error-text.js";
 import { resolveFailoverStatus, resolveModelFallbackError } from "./failover-error.js";
 

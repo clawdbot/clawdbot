@@ -16,10 +16,6 @@ import {
   resolveSkillHistoryScanHasMore,
 } from "./history-scan-progress.js";
 import { buildSkillHistoryScanPrompt } from "./history-scan-prompt.js";
-import {
-  resolveSkillHistoryScanReviewOutcome,
-  resolveSkillHistoryScanRunFailure,
-} from "./history-scan-review-outcome.js";
 import { getSkillHistoryScanStatus, type SkillHistoryScanResult } from "./history-scan-state.js";
 import {
   formatSkillHistoryScanTranscript,
@@ -29,6 +25,10 @@ import {
 import { collectSkillHistoryScanBatch } from "./history-scan-transcript.js";
 import { runSkillHistoryScan } from "./history-scan.js";
 import { resolveSkillWorkshopProjectionBudgets } from "./model-context-budget.js";
+import {
+  resolveSkillHistoryScanReviewOutcome,
+  assertSkillReviewRunSucceeded,
+} from "./review-outcome.js";
 
 function summary(sessionKey: string, overrides: Partial<SessionEntrySummary["entry"]> = {}) {
   return {
@@ -425,17 +425,17 @@ describe("Skill Workshop history scan", () => {
   });
 
   it("treats run-level terminal metadata as a scan failure", () => {
-    expect(
-      resolveSkillHistoryScanRunFailure({
+    expect(() =>
+      assertSkillReviewRunSucceeded({
         meta: {
           durationMs: 1,
           error: { kind: "retry_limit", message: "model retries exhausted" },
         },
       }),
-    ).toEqual(new Error("model retries exhausted"));
-    expect(
-      resolveSkillHistoryScanRunFailure({ meta: { durationMs: 1 }, payloads: [{ text: "done" }] }),
-    ).toBeUndefined();
+    ).toThrow("model retries exhausted");
+    expect(() =>
+      assertSkillReviewRunSucceeded({ meta: { durationMs: 1 }, payloads: [{ text: "done" }] }),
+    ).not.toThrow();
   });
 
   it("aborts a batch without considering a transcript that cannot be read", async () => {

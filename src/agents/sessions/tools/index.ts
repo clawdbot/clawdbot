@@ -5,13 +5,14 @@
  */
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolDefinition } from "../extensions/types.js";
-import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.js";
-import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.js";
-import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.js";
-import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.js";
-import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.js";
-import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.js";
-import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.js";
+import { type BashToolOptions, createBashToolDefinition } from "./bash.js";
+import { createEditToolDefinition, type EditToolOptions } from "./edit.js";
+import { createFindToolDefinition, type FindToolOptions } from "./find.js";
+import { createGrepToolDefinition, type GrepToolOptions } from "./grep.js";
+import { createLsToolDefinition, type LsToolOptions } from "./ls.js";
+import { createReadToolDefinition, type ReadToolOptions } from "./read.js";
+import { wrapToolDefinition, wrapToolDefinitions } from "./tool-definition-wrapper.js";
+import { createWriteToolDefinition, type WriteToolOptions } from "./write.js";
 export {
   type BashSpawnContext,
   type BashSpawnHook,
@@ -143,24 +144,7 @@ export function createToolDefinition(
 
 /** Creates one executable built-in tool by stable tool name. */
 export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptions): Tool {
-  switch (toolName) {
-    case "read":
-      return createReadTool(cwd, options?.read);
-    case "bash":
-      return createBashTool(cwd, options?.bash);
-    case "edit":
-      return createEditTool(cwd, options?.edit);
-    case "write":
-      return createWriteTool(cwd, options?.write);
-    case "grep":
-      return createGrepTool(cwd, options?.grep);
-    case "find":
-      return createFindTool(cwd, options?.find);
-    case "ls":
-      return createLsTool(cwd, options?.ls);
-    default:
-      throw new Error(`Unknown tool name: ${String(toolName)}`);
-  }
+  return wrapToolDefinition(createToolDefinition(toolName, cwd, options));
 }
 
 /** Creates the mutable coding tool definitions used by agent coding sessions. */
@@ -201,33 +185,24 @@ export function createAllToolDefinitions(
 
 /** Creates the mutable coding tools used by local agent sessions. */
 export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
-  return [
-    createReadTool(cwd, options?.read),
-    createBashTool(cwd, options?.bash),
-    createEditTool(cwd, options?.edit),
-    createWriteTool(cwd, options?.write),
-  ];
+  return wrapToolDefinitions(createCodingToolDefinitions(cwd, options));
 }
 
 /** Creates read-only discovery tools for restricted sessions. */
 export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[] {
-  return [
-    createReadTool(cwd, options?.read),
-    createGrepTool(cwd, options?.grep),
-    createFindTool(cwd, options?.find),
-    createLsTool(cwd, options?.ls),
-  ];
+  return wrapToolDefinitions(createReadOnlyToolDefinitions(cwd, options));
 }
 
 /** Creates all built-in tools keyed by tool name. */
 export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
+  const definitions = createAllToolDefinitions(cwd, options);
   return {
-    read: createReadTool(cwd, options?.read),
-    bash: createBashTool(cwd, options?.bash),
-    edit: createEditTool(cwd, options?.edit),
-    write: createWriteTool(cwd, options?.write),
-    grep: createGrepTool(cwd, options?.grep),
-    find: createFindTool(cwd, options?.find),
-    ls: createLsTool(cwd, options?.ls),
+    read: wrapToolDefinition(definitions.read),
+    bash: wrapToolDefinition(definitions.bash),
+    edit: wrapToolDefinition(definitions.edit),
+    write: wrapToolDefinition(definitions.write),
+    grep: wrapToolDefinition(definitions.grep),
+    find: wrapToolDefinition(definitions.find),
+    ls: wrapToolDefinition(definitions.ls),
   };
 }

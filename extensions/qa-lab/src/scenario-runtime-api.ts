@@ -60,6 +60,7 @@ export type QaScenarioRuntimeDeps = {
   readEffectiveTools: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
   readRawQaSessionStore: QaScenarioRuntimeFunction;
+  seedQaSessionEntries: QaScenarioRuntimeFunction;
   seedQaSessionTranscript: QaScenarioRuntimeFunction;
   readGatewayLogs: QaScenarioRuntimeFunction;
   markGatewayLogCursor: QaScenarioRuntimeFunction;

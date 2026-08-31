@@ -306,6 +306,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       reply: markCommandReplyForDelivery(
         await buildStatusReply({
           cfg: params.cfg,
+          agentId: params.agentId,
           command,
           sessionEntry: targetSessionEntry,
           sessionKey: sessionState.sessionKey,

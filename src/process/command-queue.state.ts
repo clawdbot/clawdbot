@@ -12,6 +12,7 @@ export type CommandLaneTaskMarker = Readonly<{
 export type QueuePriority = -1 | 0 | 1;
 
 export type QueueEntry = {
+  queued?: true;
   task: (marker: CommandLaneTaskMarker) => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
@@ -81,7 +82,8 @@ function getPriorityRing(queue: LaneQueue, priority: QueuePriority): QueueRing {
 function appendQueueRing(ring: QueueRing, entry: QueueEntry): void {
   if (ring.length === ring.entries.length) {
     const nextCapacity = Math.max(INITIAL_QUEUE_RING_CAPACITY, ring.length * 2);
-    const nextEntries: Array<QueueEntry | undefined> = Array.from({ length: nextCapacity });
+    // oxlint-disable-next-line unicorn/no-new-array -- Reserve sparse capacity; head and length delimit occupied slots.
+    const nextEntries = new Array<QueueEntry | undefined>(nextCapacity);
     for (let index = 0; index < ring.length; index += 1) {
       nextEntries[index] = ring.entries[(ring.head + index) % ring.entries.length];
     }
@@ -121,6 +123,7 @@ export function enqueueLaneQueue(queue: LaneQueue, entry: QueueEntry): number {
     ring.length +
     (entry.priority <= 0 ? queue.foreground.length : 0) +
     (entry.priority < 0 ? queue.normal.length : 0);
+  entry.queued = true;
   appendQueueRing(ring, entry);
   queue.length += 1;
   return queuedAhead;
@@ -140,6 +143,7 @@ export function dequeueLaneQueue(queue: LaneQueue): QueueEntry | undefined {
     dequeueQueueRing(queue.normal) ??
     dequeueQueueRing(queue.background);
   if (entry) {
+    delete entry.queued;
     queue.length -= 1;
   }
   return entry;

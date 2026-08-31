@@ -66,7 +66,11 @@ function extractImageBlocks(content: unknown): ExtractedImages {
  * Download a media file from URL to local storage.
  * Returns the local path where the file was saved.
  */
-async function downloadMedia(url: string, mediaDir?: string): Promise<DownloadedMedia | null> {
+async function downloadMedia(
+  url: string,
+  mediaDir?: string,
+  maxBytes?: number,
+): Promise<DownloadedMedia | null> {
   try {
     // Validate URL is http/https before fetching
     const parsedUrl = new URL(url);
@@ -77,7 +81,7 @@ async function downloadMedia(url: string, mediaDir?: string): Promise<Downloaded
 
     const fetchOptions = {
       url,
-      maxBytes: MAX_IMAGE_BYTES,
+      maxBytes: Math.min(maxBytes ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
       ...TLON_MEDIA_FETCH_TIMEOUTS,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
@@ -140,13 +144,14 @@ function getExtensionFromUrl(url: string): string | null {
 export async function downloadMessageImages(
   content: unknown,
   mediaDir?: string,
+  maxBytes?: number,
 ): Promise<TlonInboundMediaDownload> {
   const { images, unavailableCount: overCapCount } = extractImageBlocks(content);
   const attachments: TlonInboundMedia[] = [];
   let unavailableCount = overCapCount;
 
   for (const image of images) {
-    const downloaded = await downloadMedia(image.url, mediaDir);
+    const downloaded = await downloadMedia(image.url, mediaDir, maxBytes);
     if (downloaded) {
       attachments.push({
         path: downloaded.localPath,

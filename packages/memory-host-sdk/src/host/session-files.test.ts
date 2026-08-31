@@ -1008,20 +1008,29 @@ describe("buildSessionEntry", () => {
     expect(entry.generatedByCronRun).toBe(true);
   });
 
-  it("skips blank lines and invalid JSON without breaking lineMap", async () => {
-    const jsonlLines = [
-      "",
-      "not valid json",
-      JSON.stringify({ type: "message", message: { role: "user", content: "First" } }),
-      "",
-      JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
-    ];
-    const filePath = path.join(tmpDir, "gaps.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+  it.each([false, true])(
+    "preserves blank/malformed archive line ordinals (compressed=%s)",
+    async (compressed) => {
+      const jsonlLines = [
+        "",
+        "not valid json",
+        JSON.stringify({ type: "message", message: { role: "user", content: "First" } }),
+        "",
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
+        "",
+      ];
+      const raw = jsonlLines.join("\n");
+      const encoded = compressed ? encodeSessionArchiveContent(raw) : { bytes: raw, suffix: "" };
+      const filePath = path.join(
+        tmpDir,
+        `gaps.jsonl.reset.2026-07-01T10-00-00.000Z${encoded.suffix}`,
+      );
+      fsSync.writeFileSync(filePath, encoded.bytes);
 
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    expect(entry.lineMap).toStrictEqual([3, 5]);
-  });
+      const entry = requireSessionEntry(await buildSessionEntry(filePath));
+      expect(entry.lineMap).toStrictEqual([3, 5]);
+    },
+  );
 
   it("strips inbound metadata when a user envelope is split across text blocks", async () => {
     const jsonlLines = [

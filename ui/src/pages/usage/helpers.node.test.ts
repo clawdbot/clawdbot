@@ -140,7 +140,7 @@ describe("usage-helpers", () => {
   it("supports every has predicate and warns on unknown values", () => {
     const populated = {
       key: "populated",
-      contextWeight: 1,
+      hasContextWeight: true,
       modelProvider: "openai",
       model: "gpt-5.2",
       usage: {

@@ -50,7 +50,7 @@ const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
 // Catalog refresh is fail-soft: one unhealthy machine must not hold the whole sidebar.
 // The node invoke keeps running so cold native discovery can warm the next poll.
-const NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS = 8_000;
+const NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS = 20_000;
 const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 
@@ -146,6 +146,7 @@ export async function readLocalClaudeTranscriptPage(
           const item = parseTranscriptLine(line, readBoundedString);
           fragments = [];
           if (item) {
+            item.resumeCursor = encodeOffset(position + index + 1 + line.length);
             found.push({ item, start: position + index + 1 });
             if (found.length > params.limit) {
               break;
@@ -163,6 +164,7 @@ export async function readLocalClaudeTranscriptPage(
           const line = Buffer.concat([prefix, ...fragments.toReversed()]);
           const item = parseTranscriptLine(line, readBoundedString);
           if (item) {
+            item.resumeCursor = encodeOffset(line.length);
             found.push({ item, start: 0 });
           }
         }

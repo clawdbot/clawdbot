@@ -92,6 +92,9 @@
           "id": "openclaw-qqbot",
           "label": "QQ Bot"
         },
+        "setupFeatures": {
+          "configPromotion": "preserve-root"
+        },
         "contracts": {
           "tools": ["qqbot_platform_api", "qqbot_remind"]
         },

@@ -9,6 +9,7 @@ import {
   NODE_PORTAL_ATTACH_PATH,
 } from "../../shared/node-desktop-stream.js";
 import type { NodeRegistry } from "../node-registry.js";
+import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 
 const DEFAULT_TICKET_TTL_MS = 60_000;
 const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
@@ -40,6 +41,7 @@ type TicketEntry = {
   settled: boolean;
   socket?: Duplex;
   ws?: WebSocket;
+  stopKeepalive?: () => void;
 };
 
 type TicketNodeRegistry = Pick<
@@ -172,6 +174,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     }
     entry.settled = true;
     entry.reject(error);
+    entry.stopKeepalive?.();
     entry.ws?.close(1008, `node ${entry.kind} attach rejected`);
     entry.socket?.destroy();
   };
@@ -325,6 +328,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
       wss.handleUpgrade(req, socket, head, (ws) => {
         entry.socket = undefined;
         entry.ws = ws;
+        entry.stopKeepalive = startWebSocketKeepalive(ws);
         const attached = readAttachedStream(ws, kind, (error) => rejectTicket(ticket, error));
         void (async () => {
           try {

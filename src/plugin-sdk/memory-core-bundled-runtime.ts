@@ -177,6 +177,7 @@ export type ShortTermDreamingStats = {
 };
 
 type ApiFacadeModule = {
+  MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE: string;
   configureMemoryCoreDreamingState: (
     openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
   ) => void;
@@ -231,6 +232,11 @@ function loadRuntimeFacadeModule(): RuntimeFacadeModule {
     createPluginStateKeyedStore<T>("memory-core", options),
   );
   return module;
+}
+
+/** Returns the memory-core-owned recovery message for an absent local provider plugin. */
+export function getMissingLocalMemoryEmbeddingProviderMessage(): string {
+  return loadApiFacadeModule().MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE;
 }
 
 const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig);

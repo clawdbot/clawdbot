@@ -97,6 +97,112 @@ describe("openclaw-github-link-hovercard-provider", () => {
     vi.restoreAllMocks();
   });
 
+  it("stacks co-author faces after the author and counts the rest", async () => {
+    const avatar =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
+    const request = vi.fn().mockResolvedValue({
+      additions: 71,
+      avatarDataUrl: avatar,
+      changedFiles: 8,
+      coAuthorCount: 5,
+      coAuthors: [
+        { login: "steipete", avatarDataUrl: avatar },
+        { login: "ada", avatarDataUrl: avatar },
+        { login: "mira", avatarDataUrl: avatar },
+      ],
+      createdAt: "2026-07-04T05:03:47Z",
+      deletions: 109,
+      kind: "pull",
+      login: "roboclaw-bot",
+      mergedAt: "2026-07-04T09:53:52Z",
+      number: 131440,
+      owner: "OpenClaw",
+      repo: "OpenClaw",
+      state: "closed",
+      title: "fix(ui): open people cards from one row",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/pull/131440",
+      "#131440",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    const stack = document.querySelector<HTMLElement>(".github-link-hovercard__coauthors");
+    expect(stack?.querySelectorAll("img")).toHaveLength(3);
+    // Two co-authors beyond the three fetched faces.
+    expect(stack?.querySelector(".github-link-hovercard__coauthors-more")?.textContent).toBe("+2");
+    expect(stack?.getAttribute("title")).toBe("Co-authored by steipete, ada, mira");
+    // Faces are decorative; the group is the only thing assistive tech can read.
+    expect(stack?.getAttribute("role")).toBe("img");
+    expect(stack?.getAttribute("aria-label")).toBe("Co-authored by steipete, ada, mira");
+    expect([...(stack?.querySelectorAll("img") ?? [])].every((img) => img.alt === "")).toBe(true);
+    // The stack sits after the author, never inside the metrics.
+    expect(stack?.previousElementSibling?.classList.contains("github-link-hovercard__author")).toBe(
+      true,
+    );
+  });
+
+  it("counts a co-author whose avatar failed to inline into the overflow", async () => {
+    const avatar =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
+    const request = vi.fn().mockResolvedValue({
+      createdAt: "2026-07-04T05:03:47Z",
+      coAuthorCount: 5,
+      coAuthors: [
+        { login: "steipete", avatarDataUrl: avatar },
+        { login: "ada", avatarDataUrl: avatar },
+        // Avatar inlining is optional and can fail for one person.
+        { login: "mira" },
+      ],
+      kind: "pull",
+      login: "roboclaw-bot",
+      number: 131442,
+      owner: "OpenClaw",
+      repo: "OpenClaw",
+      state: "open",
+      title: "fix(ui): one row",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/pull/131442",
+      "#131442",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    const stack = document.querySelector<HTMLElement>(".github-link-hovercard__coauthors");
+    expect(stack?.querySelectorAll("img")).toHaveLength(2);
+    // Two faces plus "+3" accounts for all five; "+2" would drop the faceless one.
+    expect(stack?.querySelector(".github-link-hovercard__coauthors-more")?.textContent).toBe("+3");
+  });
+
+  it("omits the co-author stack when a pull request has none", async () => {
+    const request = vi.fn().mockResolvedValue({
+      createdAt: "2026-07-04T05:03:47Z",
+      kind: "pull",
+      login: "roboclaw-bot",
+      number: 131441,
+      owner: "OpenClaw",
+      repo: "OpenClaw",
+      state: "open",
+      title: "fix(ui): one row",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/pull/131441",
+      "#131441",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    expect(document.querySelector(".github-link-hovercard__coauthors")).toBeNull();
+  });
+
   it("renders and caches pull request details without changing the link", async () => {
     const request = vi.fn().mockResolvedValue({
       additions: 101,

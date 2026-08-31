@@ -54,6 +54,7 @@ export type {
   TranscriptEntryAnchor,
   TranscriptTurnAdmission,
 } from "../config/sessions/session-accessor.js";
+export { hasPromptImageInput } from "../media/prompt-image-input.js";
 
 export {
   formatSessionTranscriptMemoryHitKey,
@@ -153,8 +154,11 @@ export type SessionTranscriptStrictMessageAppendResult<TMessage> =
 export type SessionTranscriptAssistantMirrorAppendParams = SessionTranscriptReadParams & {
   config?: OpenClawConfig;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   idempotencyKey?: string;
   mediaUrls?: string[];
+  signal?: AbortSignal;
   text?: string;
   updateMode?: SessionTranscriptUpdateMode;
 };
@@ -290,6 +294,7 @@ export async function readLatestAssistantTextByIdentity(
 export async function appendAssistantMirrorMessageByIdentity(
   params: SessionTranscriptAssistantMirrorAppendParams,
 ): Promise<SessionTranscriptMirrorAppendResult> {
+  params.signal?.throwIfAborted();
   const text = resolveMirroredTranscriptText({
     ...(params.mediaUrls !== undefined ? { mediaUrls: params.mediaUrls } : {}),
     ...(params.text !== undefined ? { text: params.text } : {}),
@@ -303,6 +308,7 @@ export async function appendAssistantMirrorMessageByIdentity(
     text,
   });
   return await withTranscriptWriteLock(params, async (locked) => {
+    params.signal?.throwIfAborted();
     const currentEntry = loadSessionEntry(params);
     if (!currentEntry?.sessionId) {
       return { ok: false, reason: "missing active session", code: "blocked" };
@@ -315,6 +321,7 @@ export async function appendAssistantMirrorMessageByIdentity(
       sessionId: currentEntry.sessionId,
     };
     const target = await resolveSessionTranscriptRuntimeTarget(scope);
+    params.signal?.throwIfAborted();
     const latestEquivalentAssistantId =
       !params.idempotencyKey && isDeliveryMirrorAssistantMessage(message)
         ? findLatestEquivalentAssistantMessageId(
@@ -329,6 +336,7 @@ export async function appendAssistantMirrorMessageByIdentity(
         messageId: latestEquivalentAssistantId,
       };
     }
+    params.signal?.throwIfAborted();
     const appendResult = await locked.appendMessage({
       ...(params.config !== undefined ? { config: params.config } : {}),
       ...(params.idempotencyKey ? { idempotencyLookup: "scan" as const } : {}),
@@ -338,6 +346,7 @@ export async function appendAssistantMirrorMessageByIdentity(
       return { ok: false, reason: "message skipped", code: "blocked" };
     }
     if (params.updateMode !== "none" && appendResult.appended) {
+      params.signal?.throwIfAborted();
       await publishTranscriptUpdate(scope, {
         agentId: target.agentId,
         messageId: appendResult.messageId,

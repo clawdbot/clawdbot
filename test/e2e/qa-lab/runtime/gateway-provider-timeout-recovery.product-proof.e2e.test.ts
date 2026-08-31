@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const RESPONSE_MARKER = "PROVIDER_TIMEOUT_RECOVERY_PROOF_OK";
@@ -185,7 +186,9 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
       async () => {
         const provider = await startControlledProvider();
         cleanups.push(() => provider.stop());
-        const gateway = await startQaGatewayChild({
+        const gatewayOwner = createQaGatewayChild();
+        cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+        const gateway = await gatewayOwner.start({
           repoRoot: process.cwd(),
           command: {
             executablePath: process.execPath,
@@ -232,7 +235,6 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
             };
           },
         });
-        cleanups.push(() => gateway.stop());
 
         const baseline = (await gateway.call(
           "diagnostics.stability",

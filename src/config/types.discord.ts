@@ -38,7 +38,8 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   requireMention?: boolean;
   /**
-   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * If true, drop messages addressed to another identity by mention or bot reply, but not this
+   * bot (not @everyone/@here).
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
@@ -71,7 +72,8 @@ export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
   /**
-   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * If true, drop messages addressed to another identity by mention or bot reply, but not this
+   * bot (not @everyone/@here).
    * Default: false.
    */
   ignoreOtherMentions?: boolean;

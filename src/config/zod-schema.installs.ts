@@ -66,4 +66,22 @@ export const PluginInstallRecordShape = {
   marketplaceName: z.string().optional(),
   marketplaceSource: z.string().optional(),
   marketplacePlugin: z.string().optional(),
+  acceptedSurface: z
+    .object({
+      channels: z.array(z.string().min(1)),
+      providers: z.array(z.string().min(1)),
+      tools: z.array(z.string().min(1)),
+      contracts: z.array(z.string().min(1)),
+      hooks: z.array(z.string().min(1)),
+      mcpServers: z.array(z.string().min(1)),
+      cliCommands: z.array(z.string().min(1)),
+      cliBackends: z.array(z.string().min(1)),
+      skills: z.array(z.string().min(1)),
+      dangerousConfigFlags: z.array(z.string().min(1)),
+    })
+    .strict()
+    .optional(),
+  acceptedSurfaceHash: z.string().optional(),
+  acceptedSurfaceAt: z.string().optional(),
+  acceptedSurfaceIntegrity: z.string().optional(),
 } as const;

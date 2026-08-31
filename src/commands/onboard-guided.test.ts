@@ -758,6 +758,8 @@ describe("runGuidedOnboarding", () => {
         ],
       }),
     );
+    expect(activate).toHaveBeenNthCalledWith(1, expect.not.objectContaining({ prompter }));
+    expect(activate).toHaveBeenNthCalledWith(2, expect.objectContaining({ prompter }));
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     const retryNotes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(retryNotes).toContain("These didn't work just now:");
@@ -803,6 +805,7 @@ describe("runGuidedOnboarding", () => {
         kind: "api-key",
         authChoice: "apiKey",
         apiKey: enteredValue,
+        prompter,
       }),
     );
     expect(text).toHaveBeenLastCalledWith(expect.objectContaining({ sensitive: true }));

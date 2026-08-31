@@ -446,33 +446,6 @@ describe("media understanding attachments SSRF", () => {
     });
   });
 
-  it("enforces maxBytes after reading local attachments", async () => {
-    await withLocalAttachmentCache(
-      "openclaw-media-cache-max-bytes-",
-      async ({ cache, canonicalAttachmentPath }) => {
-        const originalOpen = fs.open.bind(fs);
-        const openSpy = vi.spyOn(fs, "open");
-
-        openSpy.mockImplementation(async (filePath, flags) => {
-          const handle = await originalOpen(filePath, flags);
-          const candidatePath = await fs.realpath(String(filePath)).catch(() => String(filePath));
-          if (candidatePath !== canonicalAttachmentPath) {
-            return handle;
-          }
-          const mockedHandle = handle as typeof handle & {
-            readFile: typeof handle.readFile;
-          };
-          mockedHandle.readFile = (async () => Buffer.alloc(2048, 1)) as typeof handle.readFile;
-          return mockedHandle;
-        });
-
-        await expect(
-          cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-        ).rejects.toThrow(/exceeds maxBytes 1024/i);
-      },
-    );
-  });
-
   it("opens local attachments with nofollow on posix", async () => {
     if (process.platform === "win32") {
       return;

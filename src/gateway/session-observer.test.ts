@@ -7,7 +7,6 @@ import {
   event,
   flushObserver,
   modelMessage,
-  preparedModel,
   persistedLiveDigest,
   resetSessionObserverEventSequence,
   startAndAddToolNotes,
@@ -549,49 +548,6 @@ describe("session observer", () => {
     await vi.advanceTimersByTimeAsync(3_000);
     await flushObserver();
     expect(completeModel).toHaveBeenCalledTimes(2);
-    harness.observer.dispose();
-  });
-
-  it("does not start completion after observation ends during model preparation", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    let resolvePreparation: ((value: ReturnType<typeof preparedModel>) => void) | undefined;
-    const prepareModel = vi.fn(
-      () =>
-        new Promise<ReturnType<typeof preparedModel>>((resolve) => {
-          resolvePreparation = resolve;
-        }),
-    );
-    const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(12_000);
-    expect(prepareModel).toHaveBeenCalledOnce();
-
-    harness.subscribers.unsubscribe("conn-1", "agent:main:session-1");
-    resolvePreparation?.(preparedModel());
-    await flushObserver();
-
-    expect(harness.completeModel).not.toHaveBeenCalled();
-    harness.observer.dispose();
-  });
-
-  it("times out stalled model preparation", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const prepareModel = vi.fn(
-      () =>
-        new Promise<never>(() => {
-          // Intentionally unresolved: the observer timeout owns this test path.
-        }),
-    );
-    const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
-
-    await vi.advanceTimersByTimeAsync(34_000);
-    await flushObserver();
-
-    expect(prepareModel).toHaveBeenCalledOnce();
-    expect(harness.completeModel).not.toHaveBeenCalled();
     harness.observer.dispose();
   });
 

@@ -93,6 +93,9 @@ export function resolveExplicitModelWithRegistry(params: {
       return { kind: "suppressed" };
     }
     const staticCatalogModel = params.getStaticCatalogModel?.();
+    // Inline config owns transport and sizing; the current registry owns the lower price schedule.
+    const catalogCost =
+      modelRegistry.find(provider, modelId)?.cost ?? staticCatalogModel?.cost ?? inlineMatch.cost;
     return {
       kind: "resolved",
       source: "configured",
@@ -103,7 +106,10 @@ export function resolveExplicitModelWithRegistry(params: {
         workspaceDir,
         model: applyConfiguredProviderOverrides({
           provider,
-          discoveredModel: mergeStaticCatalogInlineModel(staticCatalogModel, inlineMatch as Model),
+          discoveredModel: {
+            ...mergeStaticCatalogInlineModel(staticCatalogModel, inlineMatch as Model),
+            cost: catalogCost,
+          },
           providerConfig,
           modelId,
           cfg,

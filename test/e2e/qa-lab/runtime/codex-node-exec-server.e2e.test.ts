@@ -6,13 +6,17 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild, startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
+import {
+  createQaGatewayChild,
+  startQaMockOpenAiServer,
+} from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   approvePairing,
@@ -432,15 +436,16 @@ describe("Codex paired-device exec-server carrier", () => {
 
       let provider: ProofProvider | undefined;
       let published: PublishedWireWorkspace | undefined;
+      const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let requester: GatewayClient | undefined;
       let reviewer: GatewayClient | undefined;
       let node: CapturedChild | undefined;
 
-      try {
+      const runProof = async () => {
         provider = await startProofProvider(nodeHome);
         published = await createPublishedWireWorkspace(path.join(root, "workspace"));
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot: process.cwd(),
           command: {
             executablePath: process.execPath,
@@ -811,14 +816,15 @@ describe("Codex paired-device exec-server carrier", () => {
             workerChildLaunched: false,
           }),
         );
-      } finally {
+      };
+      await runQaGatewayFixture(runProof, async () => {
         const connectionCleanup = await Promise.allSettled([
           stopChild(node),
           requester?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
           reviewer?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
         ]);
         const resourceCleanup = await Promise.allSettled([
-          gateway?.stop() ?? Promise.resolve(),
+          stopQaGatewayFixture(gatewayOwner),
           published ? closeWireServer(published.server) : Promise.resolve(),
           provider?.stop() ?? Promise.resolve(),
         ]);
@@ -828,7 +834,7 @@ describe("Codex paired-device exec-server carrier", () => {
         if (failures.length) {
           throw new AggregateError(failures, "Codex paired-node proof cleanup failed");
         }
-      }
+      });
     },
   );
 });

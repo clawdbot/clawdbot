@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import type { runDependencyVulnerabilityGate } from "./dependency-vulnerability-gate.mts";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 
 /**
@@ -12,7 +13,7 @@ import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
  */
 export const DEPENDENCY_EVIDENCE_REPORTS = [
   {
-    name: "npm advisory vulnerability gate",
+    name: "Dependency advisory vulnerability gate",
     command: "pnpm deps:vuln:gate",
     policy: "hard-blocking",
     json: "dependency-vulnerability-gate.json",
@@ -195,7 +196,7 @@ async function readJson<T>(filePath: string): Promise<T> {
  */
 export async function collectDependencyEvidenceSummaryCounts(evidenceDir: string) {
   const [vulnerability, transitiveRisk, ownershipSurface, dependencyChanges] = await Promise.all([
-    readJson<{ blockers: unknown[]; findings: unknown[] }>(
+    readJson<Awaited<ReturnType<typeof runDependencyVulnerabilityGate>>>(
       reportPath(evidenceDir, "dependency-vulnerability-gate.json"),
     ),
     readJson<{
@@ -218,6 +219,10 @@ export async function collectDependencyEvidenceSummaryCounts(evidenceDir: string
   return {
     vulnerabilityBlockers: vulnerability.blockers.length,
     vulnerabilityFindings: vulnerability.findings.length,
+    vulnerabilityCoverage: vulnerability.coverage,
+    upstreamOnlyVulnerabilityFindings: vulnerability.findings.filter(
+      (finding) => finding.source === "github-repository",
+    ).length,
     transitiveRiskSignals: transitiveRisk.findingCount,
     workspaceExcludedTransitiveSignals: transitiveRisk.workspaceExcludedFindingCount,
     transitiveMetadataFailures: transitiveRisk.metadataFailures.length,
@@ -232,6 +237,30 @@ export async function collectDependencyEvidenceSummaryCounts(evidenceDir: string
 
 type EvidenceSummaryCounts = Awaited<ReturnType<typeof collectDependencyEvidenceSummaryCounts>>;
 type EvidenceSummaryParams = { baseRef: string; counts: EvidenceSummaryCounts };
+
+function renderVulnerabilityEvidenceSummary(counts: EvidenceSummaryCounts) {
+  const { npm, upstream } = counts.vulnerabilityCoverage;
+  return [
+    `- npm advisory coverage: ${npm}`,
+    `- Upstream public repository advisory coverage: ${upstream.status}`,
+    `- Upstream source: \`${upstream.source}\``,
+    `- Upstream package versions mapped: ${upstream.mappedPackageVersions}/${upstream.packageVersions}`,
+    `- Upstream repositories checked: ${upstream.checkedRepositories}/${upstream.repositories}`,
+    `- Advisory vulnerability hard blockers: ${counts.vulnerabilityBlockers}`,
+    `- Advisory vulnerability total findings: ${counts.vulnerabilityFindings}`,
+    `- Upstream-only vulnerability findings: ${counts.upstreamOnlyVulnerabilityFindings}`,
+    `- Upstream coverage issues: ${upstream.issues.length}`,
+    ...upstream.issues.slice(0, 25).map(({ subject, reason }) => `  - ${subject}: ${reason}`),
+    ...(upstream.issues.length > 25
+      ? [
+          `  - ${upstream.issues.length - 25} more coverage issues; see dependency-vulnerability-gate.json.`,
+        ]
+      : []),
+    "",
+    "Coverage is limited to these advisory sources; zero findings do not prove that dependencies are unaffected.",
+    "",
+  ];
+}
 
 /**
  * Renders the dependency evidence Markdown summary.
@@ -249,8 +278,7 @@ export function renderDependencyEvidenceSummary({
     "",
     "## Summary",
     "",
-    `- npm advisory vulnerability hard blockers: ${counts.vulnerabilityBlockers}`,
-    `- npm advisory vulnerability total findings: ${counts.vulnerabilityFindings}`,
+    ...renderVulnerabilityEvidenceSummary(counts),
     `- Transitive manifest reported risk signals: ${counts.transitiveRiskSignals}`,
     `- Workspace-policy excluded transitive signals: ${counts.workspaceExcludedTransitiveSignals}`,
     `- Transitive manifest metadata failures: ${counts.transitiveMetadataFailures}`,
@@ -282,7 +310,7 @@ export function renderDependencyEvidenceStepSummary({
     "",
     `- Evidence artifact: \`${evidenceArtifactName}\``,
     `- Dependency change baseline: \`${baseRef}\``,
-    `- npm advisory vulnerability hard blockers: \`${counts.vulnerabilityBlockers}\``,
+    ...renderVulnerabilityEvidenceSummary(counts),
     `- Transitive manifest reported risk signals: \`${counts.transitiveRiskSignals}\``,
     `- Workspace-policy excluded transitive signals: \`${counts.workspaceExcludedTransitiveSignals}\``,
     `- Ownership/install surface lockfile packages: \`${counts.ownershipLockfilePackages}\``,
@@ -381,6 +409,10 @@ async function generateDependencyReleaseEvidence({
 
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(outputDir, { recursive: true });
+  // Publish the artifact location before a blocking report exits so CI can retain its evidence.
+  if (githubOutput) {
+    await appendFile(githubOutput, `dir=${outputDir}\n`, "utf8");
+  }
 
   const releaseSha = commandOutput("git", ["rev-parse", "HEAD"], rootDir, execFileSyncImpl);
   if (!releaseSha) {
@@ -434,10 +466,6 @@ async function generateDependencyReleaseEvidence({
       "utf8",
     );
   }
-  if (githubOutput) {
-    await appendFile(githubOutput, `dir=${outputDir}\n`, "utf8");
-  }
-
   return { manifest, counts, outputDir };
 }
 
@@ -518,7 +546,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       process.exitCode = exitCode;
     },
     (error: unknown) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(
+        `${error instanceof Error ? error.message : String(error)}\n[dependency-release-evidence] FAILED (exit 1)\n`,
+      );
       process.exitCode = 1;
     },
   );

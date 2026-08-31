@@ -1,8 +1,6 @@
 /** CLI commands for listing, inspecting, and cancelling TaskFlow records. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -11,13 +9,13 @@ import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { truncateUtf16WithEllipsis as truncate } from "../shared/text-truncate.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
 import {
   isTerminalTaskFlow,
   TASK_FLOW_STATUSES,
   type TaskFlowRecord,
-  type TaskFlowStatus,
 } from "../tasks/task-flow-registry.types.js";
 import {
   getTaskFlowById,
@@ -29,25 +27,16 @@ import {
   formatTaskStatusDetail,
   isTaskStatusIssue,
 } from "../tasks/task-status.js";
+import { formatTaskStatusCell, TASK_STATUS_CELL_WIDTH } from "./task-status-cell.js";
+import { formatTextCell } from "./text-format.js";
 
 const ID_PAD = 10;
-const STATUS_PAD = 10;
 const MODE_PAD = 14;
 const REV_PAD = 6;
 const CTRL_PAD = 20;
 
 function formatFlowLookupMiss(lookup: string): string {
   return `TaskFlow not found: ${sanitizeTerminalText(lookup)}. Run ${formatCliCommand("openclaw tasks flow list")} to see recent flow ids.`;
-}
-
-function truncate(value: string, maxChars: number) {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  if (maxChars <= 1) {
-    return truncateUtf16Safe(value, maxChars);
-  }
-  return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function safeFlowDisplayText(value: string | undefined, maxChars?: number): string {
@@ -58,12 +47,6 @@ function safeFlowDisplayText(value: string | undefined, maxChars?: number): stri
   return typeof maxChars === "number" ? truncate(sanitized, maxChars) : sanitized;
 }
 
-function formatFlowTableCell(value: string | undefined, width: number): string {
-  const text = safeFlowDisplayText(value);
-  const fitted = visibleWidth(text) > width ? `${truncateToVisibleWidth(text, width - 1)}…` : text;
-  return `${fitted}${" ".repeat(width - visibleWidth(fitted))}`;
-}
-
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
   return safeFlowDisplayText(normalizeOptionalString(value), maxChars);
 }
@@ -72,31 +55,11 @@ function formatFlowTimestamp(value: number | undefined | null): string {
   return timestampMsToIsoString(value) ?? "n/a";
 }
 
-function formatFlowStatusCell(status: TaskFlowStatus, rich: boolean) {
-  const padded = status.padEnd(STATUS_PAD);
-  if (!rich) {
-    return padded;
-  }
-  if (status === "succeeded") {
-    return theme.success(padded);
-  }
-  if (status === "failed" || status === "lost") {
-    return theme.error(padded);
-  }
-  if (status === "running") {
-    return theme.accentBright(padded);
-  }
-  if (status === "blocked") {
-    return theme.warn(padded);
-  }
-  return theme.muted(padded);
-}
-
 function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
   const header = [
     "TaskFlow".padEnd(ID_PAD),
     "Mode".padEnd(MODE_PAD),
-    "Status".padEnd(STATUS_PAD),
+    "Status".padEnd(TASK_STATUS_CELL_WIDTH),
     "Rev".padEnd(REV_PAD),
     "Controller".padEnd(CTRL_PAD),
     "Tasks".padEnd(14),
@@ -110,9 +73,9 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
       [
         shortToken(flow.flowId).padEnd(ID_PAD),
         flow.syncMode.padEnd(MODE_PAD),
-        formatFlowStatusCell(flow.status, rich),
+        formatTaskStatusCell(flow.status, rich),
         String(flow.revision).padEnd(REV_PAD),
-        formatFlowTableCell(flow.controllerId, CTRL_PAD),
+        formatTextCell(safeFlowDisplayText(flow.controllerId), CTRL_PAD),
         counts.padEnd(14),
         safeFlowDisplayText(flow.goal, 80),
       ].join(" "),

@@ -171,8 +171,8 @@ describe("route preload gateway provenance", () => {
 
     expect(data.gateway).toBe(mutable.gateway);
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
-    expect(data.client).toBe(originalClient);
-    expect(originalRequest).toHaveBeenCalled();
+    expect(data.client).toBeNull();
+    expect(originalRequest).not.toHaveBeenCalled();
     expect(replacementRequest).not.toHaveBeenCalled();
   });
 

@@ -6,6 +6,7 @@ import {
   captureGatewayRootWorkAdmissionContinuationScope,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
+  getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDrainError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -28,6 +29,7 @@ afterEach(resetGatewayWorkAdmission);
 
 it("classifies draining errors only while an authoritative restart signal or drain is active", () => {
   const error = new GatewayDrainingError();
+  const firstDrainSignal = getGatewayRestartDrainSignal();
 
   expect(isGatewayRestartDrainError(error)).toBe(false);
   expect(isGatewayRestartDrainError(new Error("GatewayDrainingError"))).toBe(false);
@@ -44,6 +46,14 @@ it("classifies draining errors only while an authoritative restart signal or dra
 
   markGatewayRestartDraining();
   expect(isGatewayRestartDrainError(error)).toBe(true);
+  expect(firstDrainSignal.aborted).toBe(true);
+
+  resetGatewayWorkAdmission();
+  const nextDrainSignal = getGatewayRestartDrainSignal();
+  expect(nextDrainSignal).not.toBe(firstDrainSignal);
+  expect(nextDrainSignal.aborted).toBe(false);
+  markGatewayRestartDraining();
+  expect(nextDrainSignal.aborted).toBe(true);
 });
 
 it("counts one nested root chain once and excludes the preparing caller", async () => {
