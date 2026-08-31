@@ -10,10 +10,7 @@ import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-stat
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  crabboxCommandError,
-  permanentCrabboxCommandError,
-} from "./crabbox-worker-command-error.js";
+import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import {
   type CrabboxCommandRunner,
   isUnrecognizedLease,
@@ -329,7 +326,7 @@ async function runProvisionSetupAndWaitReady(
         }),
     );
     if (result.termination !== "exit" || result.code !== 0) {
-      throw permanentCrabboxCommandError(params.phase, result);
+      throw new WorkerProviderError(crabboxCommandError(params.phase, result).message);
     }
   } catch (error) {
     return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);

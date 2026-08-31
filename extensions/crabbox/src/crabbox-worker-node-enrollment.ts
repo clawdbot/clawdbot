@@ -47,6 +47,7 @@ const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
 process.umask(0o077);
+let phase = "preparation";
 (async () => {
   const stateDir = path.join(os.homedir(), ".openclaw", "cloud-workers", leaseId);
   const runtimeRoot = path.join(os.homedir(), ".openclaw-worker", "node-runtimes");
@@ -85,6 +86,7 @@ process.umask(0o077);
     fs.unlinkSync(pidFile);
   }
   const verifyRuntime = (root) => {
+    phase = "runtime verification";
     if (!fs.lstatSync(root).isDirectory() || fs.realpathSync(root) !== root) throw new Error("Cloud worker bootstrap runtime path is unsafe");
     const packageRoot = path.join(root, "node_modules", "openclaw");
     const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
@@ -100,6 +102,7 @@ process.umask(0o077);
   } else {
     const stage = fs.mkdtempSync(path.join(stateDir, "node-bootstrap-"));
     try {
+      phase = "download";
       if (!token) throw new Error("Cloud worker bootstrap download authority is unavailable");
       const url = new URL(bootstrap.url);
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || (bootstrap.tlsFingerprint && url.protocol !== "https:")) throw new Error("Cloud worker bootstrap artifact transport is invalid");
@@ -137,6 +140,7 @@ process.umask(0o077);
         }
       } finally { response.destroy(); await output.close(); }
       if (bytes !== bootstrap.bytes || hash.digest("hex") !== bootstrap.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
+      phase = "installation";
       const installDir = path.join(stage, "runtime");
       fs.mkdirSync(installDir, { mode: 0o700 });
       // npm 12 requires a project policy even when ignore-scripts is false.
@@ -157,6 +161,7 @@ process.umask(0o077);
       fs.renameSync(installDir, runtimeDir);
     } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   }
+  phase = "activation";
   try {
     if (!fs.lstatSync(runtimeLink).isSymbolicLink()) throw new Error("Cloud worker runtime pointer is occupied");
     fs.unlinkSync(runtimeLink);
@@ -171,6 +176,7 @@ process.umask(0o077);
     fs.writeFileSync(setupFile, setupCode + "\\n", { mode: 0o600 });
   }
   const args = mode === "connect" ? ["connect", "--target-file", setupFile] : ["node", "run"];
+  phase = "node launch";
   const log = fs.openSync(path.join(stateDir, "node.log"), "a", 0o600);
   let child;
   try {
@@ -180,7 +186,7 @@ process.umask(0o077);
     catch (error) { process.kill(-child.pid, "SIGTERM"); throw error; }
     child.unref();
   } finally { fs.closeSync(log); }
-})().catch((error) => { console.error(error.message); process.exitCode = 1; });
+})().catch((error) => { console.error("Cloud worker node bootstrap " + phase + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message); process.exitCode = 1; });
 CRABBOX_NODE_ENROLLMENT_SCRIPT`;
   return {
     command,
