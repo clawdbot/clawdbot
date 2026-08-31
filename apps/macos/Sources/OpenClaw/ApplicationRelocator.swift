@@ -1086,32 +1086,18 @@ extension ApplicationRelocator {
     }
 
     private nonisolated static func gatekeeperAllowsExecution(at bundleURL: URL) -> Bool {
-        let flags = SecAssessmentFlags(kSecAssessmentFlagEnforce) |
-            SecAssessmentFlags(kSecAssessmentFlagIgnoreCache) |
-            SecAssessmentFlags(kSecAssessmentFlagNoCache)
-        let context = [
-            kSecAssessmentContextKeyOperation: kSecAssessmentOperationTypeExecute,
-        ] as CFDictionary
-        var assessmentError: Unmanaged<CFError>?
-        guard let assessment = SecAssessmentCreate(
-            bundleURL as CFURL,
-            flags,
-            context,
-            &assessmentError)
-        else {
-            _ = assessmentError?.takeRetainedValue()
+        let assessment = Process()
+        assessment.executableURL = URL(fileURLWithPath: "/usr/sbin/spctl")
+        assessment.arguments = ["--assess", "--type", "execute", bundleURL.path]
+        assessment.standardOutput = FileHandle.nullDevice
+        assessment.standardError = FileHandle.nullDevice
+        do {
+            try assessment.run()
+            assessment.waitUntilExit()
+            return assessment.terminationReason == .exit && assessment.terminationStatus == 0
+        } catch {
             return false
         }
-        var resultError: Unmanaged<CFError>?
-        guard let result = SecAssessmentCopyResult(
-            assessment,
-            flags,
-            &resultError) as NSDictionary?
-        else {
-            _ = resultError?.takeRetainedValue()
-            return false
-        }
-        return result[kSecAssessmentAssessmentVerdict] as? Bool == true
     }
 
     static func releaseQuarantine(
