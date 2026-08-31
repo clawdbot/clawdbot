@@ -202,7 +202,7 @@ Use the same `accountId` in both calls. Omit it from both to select the default 
 - `{ status: "retry", reason }`: an existing task, start, or stop still owns the account (`task-owned`, `start-in-flight`, or `stop-in-flight`). A running account can return `task-owned` with `started: true`; another start was unnecessary. Wait for an in-flight stop to finish before starting again.
 - `{ status: "skipped", reason }`: startup was skipped, for example because the account is `disabled`, `unconfigured`, or `unlinked`. Repair the named account condition before retrying. Other manager reasons are `unsupported`, `autostart-suppressed`, `ambient-suppressed`, `secret-unavailable`, and `manual-stop`; the manual RPC bypasses automatic-start suppression but does not bypass account configuration or secret checks.
 
-An unavailable configured secret still returns an RPC error instead of starting with another credential.
+Accounts explicitly disabled in channel or account configuration are skipped without resolving inactive credentials. An unavailable configured secret on an enabled account still returns an RPC error instead of starting with another credential.
 
 Unlike this recovery path, `openclaw channels logout` clears the account's credentials and requires login again; `openclaw gateway restart` restarts the whole Gateway. See [Restart recovery](/gateway/restart-recovery) for the crash-loop breaker and its manual `channels.start` override.
 
