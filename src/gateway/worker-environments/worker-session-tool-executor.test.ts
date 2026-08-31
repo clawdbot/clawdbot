@@ -11,6 +11,7 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
@@ -712,13 +713,9 @@ describe("worker spawn startup composition", () => {
       try {
         await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
           const startup = await loadGatewayWorkerEnvironmentStartupState();
+          const registry = createEmptyPluginRegistry();
           const runtime = await createGatewayWorkerEnvironmentRuntime({
-            getPluginRegistry: () => ({
-              workerProviders: new Map(),
-              plugins: [],
-              agentHarnesses: [],
-              nodeHostCommands: [],
-            }),
+            getPluginRegistry: () => registry,
             getPortalRuntime: () => undefined,
             resolveGatewayContext,
             desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
