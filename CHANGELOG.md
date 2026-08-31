@@ -201,6 +201,8 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.8.1
 
+> **Release correction:** The package published as `2026.9.1-beta.1` was incorrectly versioned and is actually `2026.8.1-beta.4`. It should not be interpreted as newer than stable `2026.8.1`.
+
 ### Highlights
 
 - **Find past conversations:** search visible conversation text by exact words or phrases and reopen the surrounding messages from a matching result. (#105057, #105635, #105585) Thanks @hercial61.
