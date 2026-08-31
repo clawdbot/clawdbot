@@ -58,14 +58,23 @@ describe("legacy package executable entrypoint", () => {
   });
 
   it("completes pending lifecycle before loading the CLI entry graph", async () => {
+    const calls: string[] = [];
     vi.mocked(existsSync).mockImplementation((value) =>
       String(value).endsWith(".openclaw-lifecycle-pending"),
     );
+    vi.mocked(completePendingPackageLifecycle).mockImplementation(async () => {
+      calls.push("lifecycle");
+      return true;
+    });
+    vi.mocked(tryHandleRootVersionFastPath).mockImplementation(() => {
+      calls.push("version");
+      return false;
+    });
 
     await import("./index.js?pending-package-lifecycle" as "./index.js");
 
     expect(completePendingPackageLifecycle).toHaveBeenCalledOnce();
-    expect(completePendingPackageLifecycle).toHaveBeenCalledBefore(tryHandleRootVersionFastPath);
+    expect(calls).toEqual(["lifecycle", "version"]);
   });
 
   it("does not load the CLI entry graph when lifecycle completion fails", async () => {
