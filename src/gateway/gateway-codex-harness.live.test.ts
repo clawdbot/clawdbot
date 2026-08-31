@@ -458,8 +458,8 @@ function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): str
             // One truncated 300 KB tool result is only a few thousand tokens.
             "model_auto_compact_token_limit=4000",
             "tool_output_token_limit=10000",
-        ]
-      : undefined;
+          ]
+        : undefined;
   const openAiBaseUrl = process.env.OPENAI_BASE_URL?.trim();
   if (openAiBaseUrl) {
     return buildCodexHarnessAppServerArgs([
