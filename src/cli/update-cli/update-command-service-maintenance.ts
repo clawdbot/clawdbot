@@ -85,7 +85,13 @@ export function resolvePreparedGatewayUpdatePolicy(
 
 export type ManagedGatewayUpdateVerdict =
   | { kind: "absent" | "foreign" }
-  | { kind: "owned"; root: string; fingerprint: string; refreshDefinition: boolean }
+  | {
+      kind: "owned";
+      root: string;
+      fingerprint: string;
+      refreshDefinition: boolean;
+      requiresInstallRootRefresh?: boolean;
+    }
   | { kind: "unresolved"; root: string; fingerprint: string }
   | { kind: "unavailable"; message: string };
 
@@ -166,11 +172,36 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   state: GatewayServiceState;
   root: string;
   preManagedServiceStop?: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
+  allowInstallRootChange?: boolean;
 }): Promise<ManagedGatewayUpdateVerdict> {
   const before = params.preManagedServiceStop;
   const verdict = before?.serviceUpdateVerdict;
   assertGatewayServiceManagementAllowedForUpdate(params.state.env);
   const inspection = await inspectManagedGatewayServiceBeforeUpdate(params);
+  if (
+    params.allowInstallRootChange &&
+    before &&
+    verdict?.kind === "owned" &&
+    verdict.refreshDefinition &&
+    (inspection.kind === "foreign" || inspection.kind === "unresolved") &&
+    (params.state.definitionMutationCapability?.kind ?? "writable") === "writable"
+  ) {
+    const retained = await inspectManagedGatewayServiceBeforeUpdate({
+      state: params.state,
+      root: verdict.root,
+    });
+    // A verified core install can replace its root before rewriting the launcher.
+    // Pin the original command even when pnpm has removed its old package directory.
+    if (
+      matchesStoppedService(
+        { ...before, serviceUpdateVerdict: { ...verdict, refreshDefinition: false } },
+        params.state,
+        retained,
+      )
+    ) {
+      return { ...verdict, requiresInstallRootRefresh: true };
+    }
+  }
   if (
     before &&
     verdict &&
@@ -563,7 +594,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
 
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   preManagedServiceStop: PreManagedServiceStop | undefined;
-  root?: string;
   jsonMode: boolean;
   nodeRunner?: string;
   timeoutMs?: number;
@@ -586,17 +616,17 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       requireEffective: true,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
     });
-    // Recovery follows the verified installation or the update's returned replacement root.
+    // A failed candidate can name a different root without replacing the serving installation.
     await revalidateManagedGatewayServiceAfterUpdate({
       state,
-      root: params.root ?? verdict.root,
+      root: verdict.root,
       preManagedServiceStop: before,
     });
     // The installed CLI owns the current config dialect and restart health check.
     // Recovery preserves the service definition and never bypasses its guards.
     await runUpdatedInstallGatewayCommand(
       {
-        result: { root: params.root ?? verdict.root },
+        result: { root: verdict.root },
         opts: { json: params.jsonMode },
         invocationEnv: before.serviceEnv,
         serviceEnv: state.env,

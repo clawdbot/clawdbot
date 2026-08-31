@@ -1,7 +1,5 @@
 // Update failures and control-plane results share one reporting boundary.
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { EXTENDED_STABLE_TAG_UNSUPPORTED_REASON } from "../../infra/update-channels.js";
-import type { ExtendedStableFailureReason } from "../../infra/update-check.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
   resolveManagedServiceUpdateFailureExitCode,
@@ -16,11 +14,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 export async function reportPreMutationUpdateFailure(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
-  reason:
-    | ExtendedStableFailureReason
-    | typeof EXTENDED_STABLE_TAG_UNSUPPORTED_REASON
-    | "npm lifecycle policy preflight"
-    | "unsupported-package-target";
+  reason: string;
   message?: string;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;

@@ -543,6 +543,13 @@ channel is `extended-stable`, use
 `--channel stable --tag <known-good-version>` because exact one-off tags cannot
 be combined with the `extended-stable` selector.
 
+Downgrade finalization runs in the installed target when it supports the update
+handoff. After successful validation, current targets save the configuration with
+their own version, including when a one-off `--tag` leaves the channel unchanged.
+This allows later Gateway restarts without an older-binary override. Older targets
+that lack this finalization behavior can still refuse service activation because
+the configuration records a newer writer; follow the reported recovery guidance.
+
 Package updates stage and verify the candidate before activation. If the
 filesystem swap or command-shim replacement fails, OpenClaw restores the old
 package automatically. After a successful swap, a later Gateway health failure

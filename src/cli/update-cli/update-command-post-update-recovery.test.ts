@@ -120,7 +120,7 @@ describe("failed Git update recovery restart", () => {
 
       await finishFailedUpdate({ ...failedResult({ serviceRestartSafe: true }), status });
 
-      expect(mocks.restart).toHaveBeenCalledWith(expect.objectContaining({ root: "/repo" }));
+      expect(mocks.restart).toHaveBeenCalledOnce();
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expect(mocks.writeSentinel.mock.lastCall?.[0].result.durationMs).toBe(0);
       expect(mocks.printResult).toHaveBeenCalledOnce();

@@ -395,7 +395,7 @@ describe("update orchestration lifecycle ownership", () => {
     },
   );
 
-  it("keeps a failed final doctor fatal even when strict validation succeeds", async () => {
+  it("retains a final doctor failure while activating a strictly valid install", async () => {
     await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
     await invoke("current-process");
     expect(mocks.print.mock.lastCall?.[0]).toMatchObject({
@@ -403,7 +403,7 @@ describe("update orchestration lifecycle ownership", () => {
       postUpdate: { plugins: { reason: "post-plugin-doctor-execution-failed" } },
     });
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.restart).toHaveBeenCalledOnce();
     expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
     expectDoctorDiagnostics();
     expect(await events()).toEqual(["post-attempt", "post-acquired", "validate"]);

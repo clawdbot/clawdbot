@@ -110,7 +110,6 @@ export async function finishUpdate(params: {
     // before restarting; rewriting a consumed sentinel could deliver it twice.
     if (recoverService) {
       await maybeRestartServiceAfterFailedMutableUpdate({
-        root: result.root,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
         nodeRunner: params.packageUpdateNodeRunner,
@@ -365,16 +364,14 @@ export async function finishUpdate(params: {
       }
     : params.result;
 
-  if (postCorePluginUpdate?.status === "error") {
+  if (
+    postCorePluginUpdate?.status === "error" &&
+    postCorePluginUpdate.reason !== POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON
+  ) {
     if (!(await restoreWindowsAutoStart(resultWithPostUpdate))) {
       return;
     }
-    // If strict config became valid despite a fresh-doctor process failure, restore the service
-    // stopped by this update. Invalid post-migration config intentionally remains stopped.
-    await reportResult(
-      resultWithPostUpdate,
-      postCorePluginUpdate.reason === POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
-    );
+    await reportResult(resultWithPostUpdate);
     defaultRuntime.exit(1);
     return;
   }
@@ -427,6 +424,7 @@ export async function finishUpdate(params: {
         state: serviceState,
         root: postUpdateRoot,
         preManagedServiceStop: params.preManagedServiceStop,
+        allowInstallRootChange: true,
       });
       gatewayServiceEnv = serviceState.env;
       skipLegacyServiceRestart =
@@ -446,6 +444,9 @@ export async function finishUpdate(params: {
           serviceLoaded: serviceState.loadState.status === "loaded",
           serviceStoppedForUpdate: params.preManagedServiceStop?.stopped,
           serviceMatchesUpdateRoot: serviceUpdateVerdict.kind === "owned",
+          requiresInstallRootRefresh:
+            serviceUpdateVerdict.kind === "owned" &&
+            serviceUpdateVerdict.requiresInstallRootRefresh,
         })
       ) {
         gatewayServiceInstallEnv = resolveManagedGatewayServiceProcessEnv(
@@ -502,7 +503,10 @@ export async function finishUpdate(params: {
 
   await writeControlPlaneUpdateRestartSentinelBestEffort({
     meta: params.controlPlaneUpdateSentinelMeta,
-    result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
+    result:
+      resultWithPostUpdate.status === "error"
+        ? resultWithPostUpdate
+        : buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
     jsonMode: Boolean(params.opts.json),
   });
 
@@ -589,6 +593,13 @@ export async function finishUpdate(params: {
     }
   }
 
+  if (resultWithPostUpdate.status === "error") {
+    // The recovering Gateway may have consumed the recorded Doctor failure.
+    // Keep that outcome without publishing a second notification after activation.
+    printFinalResult(completedResult(resultWithPostUpdate));
+    defaultRuntime.exit(1);
+    return;
+  }
   await reportResult(resultWithPostUpdate);
   if (!params.opts.json) {
     const recoveryEnv = params.ownedManagedUpdateEnv ?? process.env;
