@@ -1,5 +1,6 @@
 /** sessions_search visibility, bounds, redaction, and input tests. */
 import path from "node:path";
+import type { TObject } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -10,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
+import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
@@ -177,6 +179,51 @@ describe("sessions_search tool", () => {
     await expect(tool.execute("call-3", { query: "x".repeat(4097) })).rejects.toThrow(
       "query must not exceed 4096 characters",
     );
+  });
+
+  it("rejects an empty query at the schema level without naming follow-up tools", () => {
+    const tool = createTool({});
+    // Catalog-level schema validation must reject query:"" and whitespace-only
+    // queries before execute; otherwise the model gets a deep ToolInputError
+    // instead of a standard schema violation and loops into exec digging on
+    // temporal prompts. The pattern also covers "   " (trim-empty) that a
+    // bare minLength:1 would let through to the runtime trim-and-throw path.
+    expect(Value.Check(tool.parameters, { query: "" })).toBe(false);
+    expect(Value.Check(tool.parameters, { query: "   " })).toBe(false);
+    expect(Value.Check(tool.parameters, { query: "loan" })).toBe(true);
+    expect(Value.Check(tool.parameters, { query: "  loan  " })).toBe(true);
+    // Parameter descriptions are not rewritten by finalization, so statically
+    // naming sessions_list/sessions_history advertises tools authorization may
+    // filter out — hallucination bait. Final-set-aware routing lives in tool.description.
+    const querySchema = (tool.parameters as TObject).properties.query as { description?: string };
+    expect(querySchema.description).toContain("non-empty");
+    expect(querySchema.description).not.toContain("sessions_list");
+    expect(querySchema.description).not.toContain("sessions_history");
+  });
+
+  it("keeps the blank-query guarantee after provider schema normalization", async () => {
+    // Gemini-family finalization strips `pattern` (and other unsupported
+    // keywords), so the schema guard is provider-dependent. The finalized
+    // schema for Google no longer rejects blank queries at the catalog, and
+    // the executor must still reject them with an actionable error there.
+    const finalizedForGoogle = normalizeToolParameters(createTool({}), {
+      modelProvider: "google",
+    });
+    const googleQuerySchema = (finalizedForGoogle.parameters as TObject).properties.query as Record<
+      string,
+      unknown
+    >;
+    expect(googleQuerySchema.pattern).toBeUndefined();
+    expect(Value.Check(finalizedForGoogle.parameters, { query: "" })).toBe(true);
+    await expect(finalizedForGoogle.execute!("t1", { query: "   " })).rejects.toThrow(
+      /query must not be empty; retry with non-empty keywords/,
+    );
+
+    // Providers that keep `pattern` reject the blank query at the catalog.
+    const finalizedForOpenAi = normalizeToolParameters(createTool({}), {
+      modelProvider: "openai",
+    });
+    expect(Value.Check(finalizedForOpenAi.parameters, { query: "" })).toBe(false);
   });
 
   it("filters invisible hits before applying the limit", async () => {

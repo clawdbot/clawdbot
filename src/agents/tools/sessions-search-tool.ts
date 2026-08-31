@@ -52,7 +52,14 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
   "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
-  query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
+  query: Type.String({
+    // Reject empty and whitespace-only queries at the schema so the catalog
+    // returns a standard validation error before execute trims and throws —
+    // otherwise a whitespace-only query keeps the schema/runtime mismatch.
+    pattern: "\\S",
+    maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS,
+    description: "Required non-empty keywords to match in past user and assistant text.",
+  }),
   sessionKey: Type.Optional(Type.String()),
   limit: optionalPositiveIntegerSchema({ maximum: SESSIONS_SEARCH_MAX_LIMIT }),
 });
@@ -357,7 +364,12 @@ export function createSessionsSearchTool(opts?: {
       const params = args as Record<string, unknown>;
       const query = readToolStringParam(params, "query")?.trim() ?? "";
       if (!query) {
-        throw new ToolInputError("query must not be empty");
+        // Gemini-family finalization strips the schema `pattern`, so blank
+        // queries from those providers land here instead of the catalog
+        // validator; the error must stay model-actionable on that path.
+        throw new ToolInputError(
+          "query must not be empty; retry with non-empty keywords to match in past session text",
+        );
       }
       if (query.length > SESSIONS_SEARCH_MAX_QUERY_CHARS) {
         throw new ToolInputError(

@@ -1170,7 +1170,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Search visible past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+        "description": "Search visible past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context. For a time range (e.g. 'yesterday') list sessions with sessions_list, then read sessions_history.",
         "inputSchema": {
           "properties": {
             "limit": {
@@ -1179,7 +1179,9 @@
               "type": "integer"
             },
             "query": {
+              "description": "Required non-empty keywords to match in past user and assistant text.",
               "maxLength": 4096,
+              "pattern": "\\S",
               "type": "string"
             },
             "sessionKey": {

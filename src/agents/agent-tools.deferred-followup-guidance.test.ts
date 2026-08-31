@@ -304,6 +304,35 @@ describe("createOpenClawCodingTools availability guidance", () => {
     );
   });
 
+  it("routes temporal recall to sessions_list only when listing is also authorized", () => {
+    // A time-range prompt ("yesterday") needs sessions_list to enumerate by time
+    // then sessions_history to read — a path keyword search cannot provide. The
+    // route must appear only when sessions_list survived authorization alongside
+    // sessions_history; otherwise the model is directed toward a gated tool.
+    const [withList] = applyToolAvailabilityDescriptions([
+      {
+        name: "sessions_search",
+        description: describeSessionsSearchTool({}),
+      },
+      { name: "sessions_history", description: "history" },
+      { name: "sessions_list", description: "list" },
+    ] as AnyAgentTool[]);
+    const [withoutList] = applyToolAvailabilityDescriptions([
+      {
+        name: "sessions_search",
+        description: describeSessionsSearchTool({}),
+      },
+      { name: "sessions_history", description: "history" },
+    ] as AnyAgentTool[]);
+
+    expect(withList?.description).toContain("a time range");
+    expect(withList?.description).toContain(
+      "list sessions with sessions_list, then read sessions_history",
+    );
+    expect(withoutList?.description).toContain("Follow up with sessions_history");
+    expect(withoutList?.description).not.toContain("a time range");
+  });
+
   it("restores conversation lookup guidance only when lookup is authorized", () => {
     const [tool] = applyToolAvailabilityDescriptions([
       createConversationsSendTool(),

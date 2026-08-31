@@ -47,6 +47,15 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
       description = description.replace(original, expanded);
     }
   }
+  // Route temporal recall (e.g. "yesterday") to sessions_list -> sessions_history,
+  // a path keyword search cannot provide. Gated on both follow-ups surviving
+  // authorization: sessions_history expanded the text above, sessions_list gates this.
+  if (tool.name === "sessions_search" && availableTools.has("sessions_list")) {
+    description = description.replace(
+      "Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+      "Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context. For a time range (e.g. 'yesterday') list sessions with sessions_list, then read sessions_history.",
+    );
+  }
   if (tool.name === "sessions_send") {
     const deliveryTools = ["conversations_send", "conversations_turn"].filter((name) =>
       availableTools.has(name),
