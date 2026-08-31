@@ -1,3 +1,4 @@
+import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 
 const HISTORICAL_AGENT_LEASE_SCHEMA = `CREATE TABLE IF NOT EXISTS state_leases (
@@ -116,5 +117,36 @@ export function historicalV14AgentSchemaSql(): string {
     historicalV15AgentSchemaSql(),
     "\nCREATE TABLE IF NOT EXISTS session_suggestions (",
     "CREATE TABLE IF NOT EXISTS board_tabs (",
+  );
+}
+
+/**
+ * A v17 database from a binary that predates the same-version additive session
+ * convergence: the canonical v17 contract (legacy session_participants) minus
+ * the objects `ensureSessionAdditiveColumns` installs, minus the two
+ * context-pending indexes whose columns it adds. Not exact release bytes — the
+ * lineage that stamped v17 before the route-context convergence is not
+ * captured here; the stamped version plus these missing objects are what the
+ * v17 canonical guard asserts on.
+ */
+export function historicalV17AgentSchemaSql(): string {
+  let sql = withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL)
+    .replace("  route_context_json TEXT,\n", "")
+    .replace("  context_eligible INTEGER,\n", "")
+    .replace("  project_id TEXT,\n", "");
+  sql = removeSchemaRange(
+    sql,
+    "-- Older same-version writers preserve the envelope while updating the association.",
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation",
+  );
+  sql = removeSchemaRange(
+    sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending",
+    "CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts",
+  );
+  return removeSchemaRange(
+    sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_identity_sequence",
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent",
   );
 }

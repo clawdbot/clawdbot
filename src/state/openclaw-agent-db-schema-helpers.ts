@@ -194,6 +194,19 @@ export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): v
   db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- Idempotent additive lazy ensure.
 }
 
+/**
+ * Install every same-version additive session object. Databases opened by a
+ * binary older than a later same-version addition converge here, so canonical
+ * schema guards must run this before asserting the current shape — the guard
+ * would otherwise demand as a precondition exactly the objects it exists to
+ * validate.
+ */
+export function convergeSameVersionSessionSchema(db: DatabaseSync): void {
+  ensureSessionAdditiveColumns(db);
+  ensureSessionEntryValidityProjection(db);
+  ensureSessionKeyContractSchemaInTransaction(db);
+}
+
 export function repairAndAssertOpenClawAgentV14SchemaForMigration(
   database: DatabaseSync,
   options: { agentId: string; pathname: string },
@@ -218,9 +231,7 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     );
   }
 
-  ensureSessionAdditiveColumns(database);
-  ensureSessionEntryValidityProjection(database);
-  ensureSessionKeyContractSchemaInTransaction(database);
+  convergeSameVersionSessionSchema(database);
 
   // v14 always owned the core schema. Board and collaboration groups were
   // lazy, but a partially present group still has to be complete and canonical.

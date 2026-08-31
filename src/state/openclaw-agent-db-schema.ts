@@ -36,11 +36,11 @@ import {
   assertOpenClawAgentCurrentRuntimeSchema,
   assertSupportedAgentSchemaVersion,
   assertAgentSchemaVersion,
+  convergeSameVersionSessionSchema,
   hasRetiredAgentStateLeaseSchema,
   hasPendingMemoryChunkMetadataMigration,
   migrateRetiredAgentStateLeaseSchema,
   migratedSessionColumn,
-  ensureSessionKeyContractSchemaInTransaction,
   readExistingAgentSchemaMeta,
   repairAndAssertOpenClawAgentV14SchemaForMigration,
 } from "./openclaw-agent-db-schema-helpers.js";
@@ -588,9 +588,7 @@ function ensureAgentSchema(
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
-        ensureSessionAdditiveColumns(db);
-        ensureSessionEntryValidityProjection(db);
-        ensureSessionKeyContractSchemaInTransaction(db);
+        convergeSameVersionSessionSchema(db);
         if (hasPendingMemoryChunkMetadataMigration(db)) {
           migrateMemoryChunkMetadataSchema(db);
           db.exec(schemaSql);
@@ -717,12 +715,20 @@ export function ensureOpenClawAgentDatabaseSchema(
     // Keep canonical index recovery reachable before rebuilding the v17 identity table.
     verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
       allowMissingColumns: true,
-      validateAfterRepair: () =>
+      validateAfterRepair: () => {
+        // A v17 database from a binary predating the same-version additive
+        // session objects is missing exactly what the canonical assertion
+        // demands; converge first or every such database stays stranded on the
+        // version the doctor message itself prescribes fixing. Inside this
+        // savepoint the repair, convergence, and assertion commit or roll back
+        // as one step.
+        convergeSameVersionSessionSchema(db);
         assertAgentSchemaVersion(
           db,
           { agentId, pathname, version: AGENT_MEDIA_SCHEMA_VERSION },
           legacySql,
-        ),
+        );
+      },
     });
   }
   assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
