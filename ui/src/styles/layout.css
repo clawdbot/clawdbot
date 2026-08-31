@@ -4115,11 +4115,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
      panels set these vars; they are 0 when closed. */
   margin-bottom: calc(
     var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
-      var(--oc-custodian-reserve-bottom, 0px)
+      var(--oc-assistant-reserve-bottom, 0px)
   );
   margin-right: calc(
     var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
-      var(--oc-custodian-reserve-right, 0px)
+      var(--oc-assistant-reserve-right, 0px)
   );
   transition:
     margin-bottom 0.16s ease,

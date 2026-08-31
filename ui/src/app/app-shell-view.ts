@@ -23,7 +23,6 @@ import {
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import { buildHomeWorkContext } from "../pages/chat/chat-work-context.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -643,7 +642,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .sessionPage=${activeRoute === "chat"}
         .pageSessionKey=${host.activeSessionKey}
         .pageAgentId=${selectedAgentId}
-        .workContext=${buildHomeWorkContext(context, activeRoute, host.activeSessionKey)}
+        .workPage=${activeRoute}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
       ></openclaw-assistant-panel>
       ${isOptionalElementDefined(host.execApprovalElement)
