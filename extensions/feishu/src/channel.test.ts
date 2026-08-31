@@ -24,7 +24,6 @@ const sendStickerFeishuMock = vi.hoisted(() => vi.fn());
 const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 const editMessageFeishuMock = vi.hoisted(() => vi.fn());
 const deleteMessageFeishuMock = vi.hoisted(() => vi.fn());
-const getBotOpenIdFeishuMock = vi.hoisted(() => vi.fn());
 const createPinFeishuMock = vi.hoisted(() => vi.fn());
 const listPinsFeishuMock = vi.hoisted(() => vi.fn());
 const removePinFeishuMock = vi.hoisted(() => vi.fn());
@@ -68,7 +67,6 @@ vi.mock("./channel.runtime.js", () => ({
     addReactionFeishu: addReactionFeishuMock,
     createPinFeishu: createPinFeishuMock,
     deleteMessageFeishu: deleteMessageFeishuMock,
-    getBotOpenIdFeishu: getBotOpenIdFeishuMock,
     editMessageFeishu: editMessageFeishuMock,
     getChatInfo: getChatInfoMock,
     getChatMembers: getChatMembersMock,
@@ -3001,10 +2999,10 @@ describe("feishuPlugin actions", () => {
       chatType: "group",
       content: "delete me",
       contentType: "text",
-      senderOpenId: "ou_bot123",
+      senderId: "cli_bot",
       senderType: "app",
     });
-    getBotOpenIdFeishuMock.mockResolvedValueOnce("ou_bot123");
+    probeFeishuMock.mockResolvedValueOnce({ ok: true, appId: "cli_bot" });
     deleteMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_delete" });
 
     const result = await feishuPlugin.actions?.handleAction?.({
@@ -3055,10 +3053,10 @@ describe("feishuPlugin actions", () => {
       chatType: "group",
       content: "other app msg",
       contentType: "text",
-      senderOpenId: "ou_other_app",
+      senderId: "cli_other_app",
       senderType: "app",
     });
-    getBotOpenIdFeishuMock.mockResolvedValueOnce("ou_bot123");
+    probeFeishuMock.mockResolvedValueOnce({ ok: true, appId: "cli_bot" });
 
     await expect(
       feishuPlugin.actions?.handleAction?.({

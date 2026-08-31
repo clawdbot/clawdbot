@@ -12,7 +12,6 @@ const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
   deleteMessageFeishu: vi.fn(),
-  getBotOpenIdFeishu: vi.fn(),
   sendCardFeishu: sendCardFeishuMock,
 }));
 

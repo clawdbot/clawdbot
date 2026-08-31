@@ -1453,16 +1453,21 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             });
             // Feishu allows group admins to recall others' messages, so the API
             // contract alone is insufficient. Verify the message was sent by
-            // this configured bot by comparing the sender's open_id to the
-            // bot's open_id obtained from the bot-info endpoint.
-            if (message.senderType !== "app" || !message.senderOpenId) {
+            // this configured bot. For app-sent messages the Feishu message.get
+            // sender is { sender_type: "app", id_type: "app_id", id: <app_id> },
+            // so the ownership check compares that app_id to the configured
+            // bot's app_id from the cached bot-info probe (probeFeishu), the
+            // canonical identity source shared with health checks.
+            if (message.senderType !== "app" || !message.senderId) {
               throw new Error("Feishu delete only allows messages sent by the bot.");
             }
-            const botOpenId = await runtime.getBotOpenIdFeishu({
-              cfg: ctx.cfg,
-              accountId: ctx.accountId ?? undefined,
-            });
-            if (message.senderOpenId !== botOpenId) {
+            const probe = await runtime.probeFeishu(account);
+            if (!probe.ok || !probe.appId) {
+              throw new Error(
+                `Feishu delete could not verify bot identity: ${probe.error ?? "missing bot app_id"}`,
+              );
+            }
+            if (message.senderId !== probe.appId) {
               throw new Error("Feishu delete only allows messages sent by the bot.");
             }
             const result = await runtime.deleteMessageFeishu({

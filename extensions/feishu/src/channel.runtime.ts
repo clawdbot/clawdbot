@@ -26,7 +26,6 @@ import {
 import {
   deleteMessageFeishu as deleteMessageFeishuImpl,
   editMessageFeishu as editMessageFeishuImpl,
-  getBotOpenIdFeishu as getBotOpenIdFeishuImpl,
   getMessageFeishu as getMessageFeishuImpl,
   sendCardFeishu as sendCardFeishuImpl,
   sendMessageFeishu as sendMessageFeishuImpl,
@@ -50,7 +49,6 @@ export const feishuChannelRuntime = {
   getFeishuMemberInfo: getFeishuMemberInfoImpl,
   deleteMessageFeishu: deleteMessageFeishuImpl,
   editMessageFeishu: editMessageFeishuImpl,
-  getBotOpenIdFeishu: getBotOpenIdFeishuImpl,
   getMessageFeishu: getMessageFeishuImpl,
   sendCardFeishu: sendCardFeishuImpl,
   sendMessageFeishu: sendMessageFeishuImpl,
