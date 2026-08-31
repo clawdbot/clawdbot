@@ -179,10 +179,11 @@ the ADC path.
 
 ## Available models
 
-Use the `google-vertex/` prefix with any bundled Vertex AI model:
+Use the `google-vertex/` prefix when selecting a model:
 
 | Model                  | ID                                     |
 | :--------------------- | :------------------------------------- |
+| Gemini 3.7 Flash       | `google-vertex/gemini-3.7-flash`       |
 | Gemini 3.6 Flash       | `google-vertex/gemini-3.6-flash`       |
 | Gemini 3.5 Flash       | `google-vertex/gemini-3.5-flash`       |
 | Gemini 3.5 Flash-Lite  | `google-vertex/gemini-3.5-flash-lite`  |
