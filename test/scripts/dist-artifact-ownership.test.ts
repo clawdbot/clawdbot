@@ -65,6 +65,18 @@ function installCompiler(root: string, afterEmit = "") {
   fs.chmodSync(compiler, 0o755);
 }
 
+function installBuildCheckpoint(root: string, checkpoint: string) {
+  // Both build launch paths must reach the fixture's same completion barrier.
+  write(
+    root,
+    "node_modules/tsdown/dist/run.mjs",
+    `import { createRequire } from 'node:module';
+    const require = createRequire(import.meta.url);
+    ${checkpoint}`,
+  );
+  write(root, "pnpm.cjs", 'import("./node_modules/tsdown/dist/run.mjs");\n');
+}
+
 function installScripts(root: string, scripts: string[]) {
   for (const script of scripts) {
     write(
@@ -96,7 +108,7 @@ function installScripts(root: string, scripts: string[]) {
     path.join(root, "scripts/windows-cmd-helpers.mjs"),
   );
   fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
-  for (const name of ["tsx", "tsdown", "typescript", "@typescript", "@openclaw/fs-safe"]) {
+  for (const name of ["tsx", "typescript", "@typescript", "@openclaw/fs-safe"]) {
     fs.mkdirSync(path.dirname(path.join(root, "node_modules", name)), { recursive: true });
     fs.symlinkSync(
       path.join(sourceRoot, "node_modules", name),
@@ -425,7 +437,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         if (directory !== ".") {
           fs.symlinkSync(path.join(root, "node_modules"), path.join(cwd, "node_modules"));
         }
-        write(root, "pnpm.cjs", checkpoint("build-started"));
+        installBuildCheckpoint(root, checkpoint("build-started"));
         const writerArgs = [
           "-p",
           path.join(root, "tsconfig.plugin-sdk.dts.json"),
@@ -518,7 +530,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         root,
         `require('node:fs').writeFileSync('compiler.pid', String(process.pid)); ${checkpoint("orphan-ready")}`,
       );
-      write(root, "pnpm.cjs", checkpoint("orphan-build-started"));
+      installBuildCheckpoint(root, checkpoint("orphan-build-started"));
       const owner = write(
         root,
         "owner.mts",
@@ -566,7 +578,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         path.join(sourceRoot, "node_modules/tsx"),
         path.join(root, "node_modules/tsx"),
       );
-      write(root, "pnpm.cjs", checkpoint("nested-build-started"));
+      installBuildCheckpoint(root, checkpoint("nested-build-started"));
       const owner = write(
         root,
         "owner.mts",
@@ -609,7 +621,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       `,
       );
       fs.chmodSync(compiler, 0o755);
-      write(root, "pnpm.cjs", checkpoint("shard-build-started"));
+      installBuildCheckpoint(root, checkpoint("shard-build-started"));
       write(root, "dist/still-consumed.txt", "owned");
       const shards = start(root, path.join(root, "scripts/run-tsgo-core-test-shards.mts"), [
         "ui",
@@ -687,7 +699,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       );
       fs.chmodSync(lint, 0o755);
       write(root, "dist/still-consumed.txt", "owned by lint");
-      write(root, "pnpm.cjs", checkpoint("lint-build-started"));
+      installBuildCheckpoint(root, checkpoint("lint-build-started"));
       const consumer = start(root, path.join(root, "scripts/run-oxlint.mts"), [
         "--tsconfig",
         "extensions/tsconfig.json",
