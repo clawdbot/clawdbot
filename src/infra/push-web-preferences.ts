@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   WebPushDetailLevel,
+  WebPushDeliveryMode,
   WebPushDevicePreferences,
   WebPushNotificationCategory,
   WebPushNotificationPreferences,
@@ -20,11 +21,11 @@ export function normalizeWebPushDisplayLabel(value: unknown): string | undefined
 
 const DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES: WebPushNotificationPreferences = {
   categories: {
-    approvalRequested: true,
-    agentFinished: false,
-    agentQuestion: false,
-    scheduledTaskFailed: false,
-    backgroundTaskFailed: false,
+    approvalRequested: "always",
+    agentFinished: "never",
+    agentQuestion: "never",
+    scheduledTaskFailed: "never",
+    backgroundTaskFailed: "never",
   },
   detailLevel: "private",
   quietHours: {
@@ -56,6 +57,14 @@ const CATEGORY_TO_KEY: Record<WebPushNotificationCategory, CategoryKey> = {
 
 function detailLevel(value: unknown): WebPushDetailLevel | undefined {
   return value === "private" || value === "identified" || value === "detailed" ? value : undefined;
+}
+
+function deliveryMode(value: unknown): WebPushDeliveryMode | undefined {
+  if (value === "never" || value === "unfocused" || value === "always") {
+    return value;
+  }
+  // The preference surface was briefly available on main with booleans.
+  return typeof value === "boolean" ? (value ? "always" : "never") : undefined;
 }
 
 function normalizeAgentIds(value: unknown): string[] | undefined {
@@ -110,12 +119,10 @@ function normalizeCategoryDefaults(value: unknown): WebPushNotificationPreferenc
   const categories = Object.fromEntries(
     CATEGORY_KEYS.map((key) => [
       key,
-      typeof source[key] === "boolean"
-        ? source[key]
-        : DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.categories[key],
+      deliveryMode(source[key]) ?? DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.categories[key],
     ]),
   );
-  // SAFETY: CATEGORY_KEYS exhaustively enumerates every required category boolean.
+  // SAFETY: CATEGORY_KEYS exhaustively enumerates every required category mode.
   return categories as WebPushNotificationPreferences["categories"];
 }
 
@@ -139,9 +146,10 @@ export function normalizeWebPushDevicePreferences(value: unknown): WebPushDevice
   const categorySource = isRecord(source.categories) ? source.categories : undefined;
   const categories = categorySource
     ? Object.fromEntries(
-        CATEGORY_KEYS.flatMap((key) =>
-          typeof categorySource[key] === "boolean" ? [[key, categorySource[key]]] : [],
-        ),
+        CATEGORY_KEYS.flatMap((key) => {
+          const mode = deliveryMode(categorySource[key]);
+          return mode ? [[key, mode]] : [];
+        }),
       )
     : undefined;
   const normalizedDetailLevel = detailLevel(source.detailLevel);
@@ -173,12 +181,12 @@ export function resolveEffectiveWebPushPreferences(params: {
   };
 }
 
-export function webPushCategoryEnabled(
+export function webPushCategoryDeliveryMode(
   preferences: ReturnType<typeof resolveEffectiveWebPushPreferences>,
   category: WebPushNotificationCategory,
-): boolean {
+): WebPushDeliveryMode {
   const key = CATEGORY_TO_KEY[category];
-  return key !== undefined && preferences.enabled && preferences.categories[key];
+  return key === undefined || !preferences.enabled ? "never" : preferences.categories[key];
 }
 
 export function isWebPushQuietHours(

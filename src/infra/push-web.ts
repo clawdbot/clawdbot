@@ -196,6 +196,7 @@ export async function clearBoundWebPushSubscription(params: {
 type WebPushPayload = {
   title: string;
   body?: string;
+  focusPolicy?: "always" | "unfocused";
   renotify?: boolean;
   tag?: string;
   url?: string;

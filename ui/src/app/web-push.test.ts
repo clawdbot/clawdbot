@@ -92,14 +92,16 @@ function gatewayHarness() {
   };
 }
 
-function notificationPreferences(approvalRequested: boolean): WebPushNotificationPreferences {
+function notificationPreferences(
+  approvalRequested: "never" | "always",
+): WebPushNotificationPreferences {
   return {
     categories: {
       approvalRequested,
-      agentFinished: false,
-      agentQuestion: false,
-      scheduledTaskFailed: false,
-      backgroundTaskFailed: false,
+      agentFinished: "never",
+      agentQuestion: "never",
+      scheduledTaskFailed: "never",
+      backgroundTaskFailed: "never",
     },
     detailLevel: "private",
     quietHours: { enabled: false, startMinute: 1_320, endMinute: 420, timeZone: "UTC" },
@@ -213,8 +215,8 @@ describe("web push Gateway reconciliation", () => {
 
   it("serializes rapid preference edits without dropping the latest full object", async () => {
     const firstSave = createDeferred();
-    const first = notificationPreferences(true);
-    const second = notificationPreferences(false);
+    const first = notificationPreferences("always");
+    const second = notificationPreferences("never");
     let stored = first;
     let saveCount = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
@@ -258,14 +260,30 @@ describe("web push Gateway reconciliation", () => {
       ["push.web.preferences.set", expect.objectContaining({ preferences: first })],
       ["push.web.preferences.set", expect.objectContaining({ preferences: second })],
     ]);
+    expect(request.mock.calls.filter(([method]) => method === "push.web.preferences.get")).toEqual([
+      [
+        "push.web.preferences.get",
+        {
+          endpoint: "https://push.example.test/subscription",
+          deliveryModes: true,
+        },
+      ],
+      [
+        "push.web.preferences.get",
+        {
+          endpoint: "https://push.example.test/subscription",
+          deliveryModes: true,
+        },
+      ],
+    ]);
     expect(capability.snapshot.preferences?.user).toEqual(second);
     capability.dispose();
   });
 
   it("refreshes matching defaults without publishing a stale invalidation", async () => {
-    const initial = notificationPreferences(true);
-    const stale = { ...notificationPreferences(true), detailLevel: "detailed" as const };
-    const latest = notificationPreferences(false);
+    const initial = notificationPreferences("always");
+    const stale = { ...notificationPreferences("always"), detailLevel: "detailed" as const };
+    const latest = notificationPreferences("never");
     const firstRefresh = createDeferred<ReturnType<typeof preferenceResult>>();
     let preferenceRead = 0;
     const request = vi.fn(async (method: string) => {
@@ -329,7 +347,7 @@ describe("web push Gateway reconciliation", () => {
         return { subscriptionId: "subscription-1" };
       }
       if (method === "push.web.preferences.get") {
-        return preferenceResult(notificationPreferences(false));
+        return preferenceResult(notificationPreferences("never"));
       }
       return {};
     });
@@ -346,7 +364,7 @@ describe("web push Gateway reconciliation", () => {
 
     await vi.waitFor(() => expect(vapidRead).toBe(2));
     await vi.waitFor(() =>
-      expect(capability.snapshot.preferences?.user).toEqual(notificationPreferences(false)),
+      expect(capability.snapshot.preferences?.user).toEqual(notificationPreferences("never")),
     );
     firstKey.resolve(encodedVapidKey([4, 9, 8, 7]));
     await Promise.resolve();
@@ -467,8 +485,8 @@ describe("web push Gateway reconciliation", () => {
 
   it("ignores a stale preference action after switching Gateways", async () => {
     const firstSave = createDeferred();
-    const stalePreferences = notificationPreferences(true);
-    const currentPreferences = notificationPreferences(false);
+    const stalePreferences = notificationPreferences("always");
+    const currentPreferences = notificationPreferences("never");
     const firstRequest = vi.fn(async (method: string) => {
       if (method === "push.web.vapidPublicKey") {
         return { vapidPublicKey: encodedVapidKey([4, 1, 2, 3]) };
@@ -528,7 +546,7 @@ describe("web push Gateway reconciliation", () => {
 
   it("keeps the current Gateway error when a queued stale action begins", async () => {
     const firstSave = createDeferred();
-    const preferences = notificationPreferences(true);
+    const preferences = notificationPreferences("always");
     let saveCount = 0;
     const firstRequest = vi.fn(async (method: string) => {
       if (method === "push.web.vapidPublicKey") {
@@ -607,7 +625,7 @@ describe("web push Gateway reconciliation", () => {
           return { vapidPublicKey: encodedVapidKey([4, 9, 8, 7]) };
         }
         if (method === "push.web.preferences.get") {
-          return preferenceResult(notificationPreferences(true));
+          return preferenceResult(notificationPreferences("always"));
         }
         return { subscriptionId: "subscription-1", removed: true };
       });

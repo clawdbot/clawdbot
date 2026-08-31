@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { WebPushNotificationCategory } from "../../packages/gateway-protocol/src/schema/push.js";
+import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   WEB_PUSH_USER_PREFERENCES_KEY,
@@ -9,7 +11,7 @@ import {
   normalizeWebPushDisplayLabel,
   resolveEffectiveWebPushPreferences,
   webPushAgentAllowed,
-  webPushCategoryEnabled,
+  webPushCategoryDeliveryMode,
 } from "../infra/push-web-preferences.js";
 import {
   listBoundWebPushSubscriptions,
@@ -19,6 +21,7 @@ import {
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { getUserPreferences } from "../state/user-preferences.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
 import { READ_SCOPE } from "./operator-scopes.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
@@ -109,6 +112,32 @@ function preferenceFor(subscription: BoundWebPushSubscription, stateDir?: string
   return resolveEffectiveWebPushPreferences({ user, device: subscription.devicePreferences });
 }
 
+function eventNotificationUrl(
+  cfg: OpenClawConfig,
+  sessionKeys: readonly string[],
+  agentId?: string,
+): string | undefined {
+  if (sessionKeys.length !== 1) {
+    return undefined;
+  }
+  const path = buildControlUiSessionPath({
+    namespace: "chat",
+    sessionKey: sessionKeys[0] ?? "",
+    fallbackAgentId: agentId,
+    exactKey: true,
+  });
+  if (!path) {
+    return undefined;
+  }
+  const publicOrigin = resolveGatewayPublicOrigin(cfg);
+  if (!publicOrigin) {
+    return path.slice(1);
+  }
+  const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
+  const gatewayUrl = `${publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:")}${controlUiBasePath}`;
+  return `${path.slice(1)}#${new URLSearchParams({ gatewayUrl })}`;
+}
+
 /** Routes attention events to offline browsers without expanding live session visibility. */
 export function createEventWebPushDelivery(params: {
   getRuntimeConfig: () => OpenClawConfig;
@@ -139,21 +168,29 @@ export function createEventWebPushDelivery(params: {
           opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
         );
         const agentLabel = normalizeWebPushDisplayLabel(agentId);
+        const sessionKeys = opts?.sessionKeys ?? [];
+        const url = eventNotificationUrl(cfg, sessionKeys, agentId);
         const groups = new Map<
           string,
-          { title: string; body: string; subscriptions: BoundWebPushSubscription[] }
+          {
+            title: string;
+            body: string;
+            focusPolicy: "always" | "unfocused";
+            subscriptions: BoundWebPushSubscription[];
+          }
         >();
         for (const target of targets) {
           const subscription = target.subscription;
           const preferences = preferenceFor(subscription, params.stateDir);
+          const deliveryMode = webPushCategoryDeliveryMode(preferences, notification.category);
           if (
-            !webPushCategoryEnabled(preferences, notification.category) ||
+            deliveryMode === "never" ||
             isWebPushQuietHours(preferences) ||
             !webPushAgentAllowed(preferences, agentId)
           ) {
             continue;
           }
-          const sessionKeys = opts?.sessionKeys ?? [];
+          const focusPolicy = deliveryMode === "unfocused" ? "unfocused" : "always";
           if (
             sessionKeys.length > 0 &&
             !canReceiveSessionEvent({
@@ -178,10 +215,13 @@ export function createEventWebPushDelivery(params: {
               ? notification.body
               : (notification.identifiedBody ??
                 (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
-          const key = JSON.stringify({ title, body });
-          const group = groups.get(key) ?? { title, body, subscriptions: [] };
-          group.subscriptions.push(subscription);
-          groups.set(key, group);
+          const key = JSON.stringify({ title, body, focusPolicy });
+          const group = groups.get(key);
+          if (group) {
+            group.subscriptions.push(subscription);
+          } else {
+            groups.set(key, { title, body, focusPolicy, subscriptions: [subscription] });
+          }
         }
         const topic = createHash("sha256")
           .update(notification.tag)
@@ -196,6 +236,8 @@ export function createEventWebPushDelivery(params: {
                 body: group.body,
                 tag: notification.tag,
                 renotify: false,
+                focusPolicy: group.focusPolicy,
+                ...(url ? { url } : {}),
               },
               deliveryOptions: {
                 TTL: EVENT_PUSH_TTL_SECONDS,

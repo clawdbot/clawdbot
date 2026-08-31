@@ -45,10 +45,10 @@ function boundSubscription(deviceId: string) {
       label: "",
       detailLevel: "identified",
       categories: {
-        agentFinished: true,
-        agentQuestion: true,
-        scheduledTaskFailed: true,
-        backgroundTaskFailed: true,
+        agentFinished: "always",
+        agentQuestion: "always",
+        scheduledTaskFailed: "always",
+        backgroundTaskFailed: "always",
       },
     },
   };
@@ -92,6 +92,35 @@ describe("event Web Push classification", () => {
     preparedWebPushSendMock.mockClear();
     delivery.handleEvent("chat", { state: "delta", runId: "run-1" });
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+  });
+
+  it("routes unfocused-only turn notifications to the exact session", async () => {
+    const subscription = boundSubscription("browser-device");
+    subscription.devicePreferences.categories = {
+      ...subscription.devicePreferences.categories,
+      agentFinished: "unfocused",
+    };
+    listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
+    const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+
+    delivery.handleEvent(
+      "chat",
+      { state: "final", runId: "run-1" },
+      {
+        agentId: "main",
+        sessionKeys: ["agent:main:webchat:direct:turn-1"],
+      },
+    );
+
+    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          focusPolicy: "unfocused",
+          url: "chat/main/webchat/direct/turn-1",
+        }),
+      }),
+    );
   });
 
   it("does not treat injected transcript updates as agent completion", async () => {

@@ -352,6 +352,7 @@ export async function getWebPushPreferences(
   const subscription = await requireExistingSubscription();
   const result = await client.request("push.web.preferences.get", {
     endpoint: subscription.endpoint,
+    deliveryModes: true,
   });
   // SAFETY: the Gateway validates and owns the closed preferences result contract.
   return result as WebPushPreferencesResult;

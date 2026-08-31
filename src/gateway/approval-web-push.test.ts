@@ -207,6 +207,7 @@ describe("approval Web Push delivery", () => {
       payload: {
         title: "OpenClaw approval requested",
         body: "Open OpenClaw to review this request.",
+        focusPolicy: "always",
         renotify: false,
         tag: "openclaw-approval-exec:approval.1",
         url: "approve/exec%3Aapproval.1#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator",

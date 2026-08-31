@@ -4,6 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { pushHandlers } from "./push.js";
 
@@ -650,6 +651,140 @@ describe("bound Web Push handlers", () => {
     expect(firstRespondCall(respond)).toEqual([true, { scope: "device", preferences }, undefined]);
   });
 
+  it("negotiates Boolean reads for an already-open pre-upgrade Control UI", async () => {
+    vi.mocked(getUserPreferences).mockReturnValue({
+      "notifications.web.v1": {
+        categories: {
+          approvalRequested: "always",
+          agentFinished: "never",
+          agentQuestion: "unfocused",
+          scheduledTaskFailed: "never",
+          backgroundTaskFailed: "always",
+        },
+      },
+    });
+    const subscription = expectDefined(
+      findBoundWebPushSubscriptionByEndpoint({
+        endpoint: "https://push.example.test/subscription",
+      }),
+      "bound subscription fixture",
+    );
+    vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+      ...subscription,
+      userProfileId: "profile-owner",
+    });
+    const legacy = createBoundWebPushInvokeParams(
+      "push.web.preferences.get",
+      { endpoint: "https://push.example.test/subscription" },
+      { userProfileId: "profile-owner" },
+    );
+    const current = createBoundWebPushInvokeParams(
+      "push.web.preferences.get",
+      {
+        endpoint: "https://push.example.test/subscription",
+        deliveryModes: true,
+      },
+      { userProfileId: "profile-owner" },
+    );
+
+    await legacy.invoke();
+    await current.invoke();
+
+    expect(firstRespondCall(legacy.respond)?.[1]).toMatchObject({
+      user: {
+        categories: {
+          approvalRequested: true,
+          agentFinished: false,
+          agentQuestion: true,
+          scheduledTaskFailed: false,
+          backgroundTaskFailed: true,
+        },
+      },
+    });
+    expect(firstRespondCall(current.respond)?.[1]).toMatchObject({
+      user: {
+        categories: {
+          approvalRequested: "always",
+          agentFinished: "never",
+          agentQuestion: "unfocused",
+          scheduledTaskFailed: "never",
+          backgroundTaskFailed: "always",
+        },
+      },
+    });
+  });
+
+  it("normalizes boolean category saves from pre-upgrade Control UI clients", async () => {
+    const legacyCategories = {
+      approvalRequested: true,
+      agentFinished: false,
+      agentQuestion: true,
+      scheduledTaskFailed: false,
+      backgroundTaskFailed: true,
+    };
+    const expectedCategories = {
+      approvalRequested: "always",
+      agentFinished: "never",
+      agentQuestion: "always",
+      scheduledTaskFailed: "never",
+      backgroundTaskFailed: "always",
+    };
+    const shared = {
+      detailLevel: "private",
+      quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+      agentIds: [],
+    };
+    const user = createBoundWebPushInvokeParams(
+      "push.web.preferences.set",
+      {
+        endpoint: "https://push.example.test/subscription",
+        scope: "user",
+        preferences: { categories: legacyCategories, ...shared },
+      },
+      { userProfileId: "profile-owner" },
+    );
+    const device = createBoundWebPushInvokeParams("push.web.preferences.set", {
+      endpoint: "https://push.example.test/subscription",
+      scope: "device",
+      preferences: { enabled: true, label: "Work browser", categories: legacyCategories },
+    });
+
+    const subscription = expectDefined(
+      findBoundWebPushSubscriptionByEndpoint({
+        endpoint: "https://push.example.test/subscription",
+      }),
+      "bound subscription fixture",
+    );
+    vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+      ...subscription,
+      userProfileId: "profile-owner",
+    });
+    await user.invoke();
+    vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+      ...subscription,
+      userProfileId: null,
+    });
+    await device.invoke();
+
+    expect(setUserPreferences).toHaveBeenCalledWith("profile-owner", {
+      "notifications.web.v1": {
+        categories: expectedCategories,
+        ...shared,
+      },
+    });
+    expect(setWebPushSubscriptionPreferences).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferences: {
+          enabled: true,
+          label: "Work browser",
+          categories: expectedCategories,
+        },
+      }),
+    );
+    expect(firstRespondCall(user.respond)?.[0]).toBe(true);
+    expect(firstRespondCall(device.respond)?.[0]).toBe(true);
+  });
+
   it("fails closed when the subscription binding changes during the update", async () => {
     vi.mocked(setWebPushSubscriptionPreferences).mockReturnValue(false);
     const { respond, invoke } = createBoundWebPushInvokeParams("push.web.preferences.set", {
@@ -681,11 +816,11 @@ describe("bound Web Push handlers", () => {
         scope === "user"
           ? {
               categories: {
-                approvalRequested: true,
-                agentFinished: false,
-                agentQuestion: false,
-                scheduledTaskFailed: false,
-                backgroundTaskFailed: false,
+                approvalRequested: "always",
+                agentFinished: "never",
+                agentQuestion: "never",
+                scheduledTaskFailed: "never",
+                backgroundTaskFailed: "never",
               },
               detailLevel: "private",
               quietHours: {

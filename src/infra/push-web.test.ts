@@ -339,7 +339,7 @@ describe("subscription CRUD", () => {
         preferences: {
           enabled: true,
           label: "Slot 1",
-          categories: { agentQuestion: true },
+          categories: { agentQuestion: "always" },
         },
         stateDir: tmpDir,
       }),
@@ -350,7 +350,7 @@ describe("subscription CRUD", () => {
       devicePreferences: {
         enabled: true,
         label: "Slot 1",
-        categories: { agentQuestion: true },
+        categories: { agentQuestion: "always" },
       },
     });
 

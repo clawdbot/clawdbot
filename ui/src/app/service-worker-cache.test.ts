@@ -595,6 +595,88 @@ describe("Control UI service worker notification scope", () => {
 
   it.each([
     {
+      name: "suppresses the focused destination",
+      focusPolicy: "unfocused" as const,
+      focusedClientIndex: 0,
+      clientUrl: `${nestedScope}chat/main/target`,
+      target: "chat/main/target",
+      suppressed: true,
+    },
+    {
+      name: "shows for a different focused chat",
+      focusPolicy: "unfocused" as const,
+      focusedClientIndex: 0,
+      clientUrl: `${nestedScope}chat/main/other`,
+      target: "chat/main/target",
+      suppressed: false,
+    },
+    {
+      name: "shows when the destination is not focused",
+      focusPolicy: "unfocused" as const,
+      focusedClientIndex: -1,
+      clientUrl: `${nestedScope}chat/main/target`,
+      target: "chat/main/target",
+      suppressed: false,
+    },
+    {
+      name: "shows an always notification for the focused destination",
+      focusPolicy: "always" as const,
+      focusedClientIndex: 0,
+      clientUrl: `${nestedScope}chat/main/target`,
+      target: "chat/main/target",
+      suppressed: false,
+    },
+  ])("$name", async ({ focusPolicy, focusedClientIndex, clientUrl, target, suppressed }) => {
+    const worker = createNotificationServiceWorker(nestedScope, [clientUrl], {
+      focusedClientIndex,
+    });
+
+    const notification = await worker.dispatchPushMaybe({
+      title: "OpenClaw agent finished",
+      body: "An agent completed its response.",
+      focusPolicy,
+      url: target,
+    });
+
+    expect(notification === null).toBe(suppressed);
+  });
+
+  it("suppresses an untargeted unfocused-only notification while OpenClaw is focused", async () => {
+    const worker = createNotificationServiceWorker(nestedScope, [`${nestedScope}settings`], {
+      focusedClientIndex: 0,
+    });
+
+    await expect(
+      worker.dispatchPushMaybe({
+        title: "OpenClaw background task failed",
+        body: "A background task needs attention.",
+        focusPolicy: "unfocused",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("shows the notification when a focused stale client cannot report its route", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const worker = createNotificationServiceWorker(
+      nestedScope,
+      [`${nestedScope}chat/main/target`],
+      { focusedClientIndex: 0, respondToLocationProbe: false },
+    );
+
+    const notification = worker.dispatchPushMaybe({
+      title: "OpenClaw agent finished",
+      body: "An agent completed its response.",
+      focusPolicy: "unfocused",
+      url: "chat/main/target",
+    });
+    await vi.advanceTimersByTimeAsync(150);
+
+    await expect(notification).resolves.not.toBeNull();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    {
       name: "root",
       scope: rootScope,
       clientUrl: `${rootScope}?session=42#current-session`,
@@ -709,6 +791,7 @@ type NotificationClickScenario = {
 type ServiceWorkerPushPayload = {
   title: string;
   body: string;
+  focusPolicy?: "always" | "unfocused";
   renotify?: boolean;
   tag?: string;
   url?: string;
@@ -738,13 +821,24 @@ type ServiceWorkerNotificationEventStub = {
 function createNotificationServiceWorker(
   scope: string,
   clientUrls: string[],
-  options: { rejectNavigation?: boolean } = {},
+  options: {
+    focusedClientIndex?: number;
+    rejectNavigation?: boolean;
+    respondToLocationProbe?: boolean;
+  } = {},
 ) {
   const listeners = new Map<string, (event: ServiceWorkerNotificationEventStub) => void>();
-  const windowClients = clientUrls.map((url) => {
+  const windowClients = clientUrls.map((url, index) => {
     const focus = vi.fn(async () => undefined);
     return {
       url,
+      focused: options.focusedClientIndex === index,
+      visibilityState: options.focusedClientIndex === index ? "visible" : "hidden",
+      postMessage: vi.fn((_message: unknown, ports: MessagePort[]) => {
+        if (options.respondToLocationProbe !== false) {
+          ports[0]?.postMessage({ url });
+        }
+      }),
       focus,
       navigate: vi.fn(async (_url: string) => {
         if (options.rejectNavigation) {
@@ -776,8 +870,11 @@ function createNotificationServiceWorker(
   };
   const context = vm.createContext({
     URL,
+    MessageChannel,
     caches: {},
+    clearTimeout,
     fetch: vi.fn(),
+    setTimeout,
     self: serviceWorkerGlobal,
   });
 
@@ -788,7 +885,7 @@ function createNotificationServiceWorker(
   return {
     clients,
     windowClients,
-    async dispatchPush(payload: ServiceWorkerPushPayload) {
+    async dispatchPushMaybe(payload: ServiceWorkerPushPayload) {
       const listener = listeners.get("push");
       if (!listener) {
         throw new Error("Service worker did not register a push handler");
@@ -811,11 +908,14 @@ function createNotificationServiceWorker(
       await completion;
 
       const notification = showNotification.mock.calls.at(-1);
+      return notification ? { title: notification[0], options: notification[1] } : null;
+    },
+    async dispatchPush(payload: ServiceWorkerPushPayload) {
+      const notification = await this.dispatchPushMaybe(payload);
       if (!notification) {
         throw new Error("Service worker push did not show a notification");
       }
-
-      return { title: notification[0], options: notification[1] };
+      return notification;
     },
     async dispatchNotificationClick(data: { url: string; explicitUrl?: boolean }) {
       const listener = listeners.get("notificationclick");

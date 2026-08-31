@@ -45,6 +45,36 @@ import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+function legacyWebPushCategoryFlags(
+  categories: Partial<ReturnType<typeof normalizeWebPushNotificationPreferences>["categories"]>,
+) {
+  return Object.fromEntries(
+    Object.entries(categories).map(([category, mode]) => [category, mode !== "never"]),
+  );
+}
+
+function legacyWebPushPreferencesResult(params: {
+  durableIdentity: boolean;
+  user: ReturnType<typeof normalizeWebPushNotificationPreferences>;
+  device: ReturnType<typeof normalizeWebPushDevicePreferences>;
+  effective: ReturnType<typeof resolveEffectiveWebPushPreferences>;
+}) {
+  return {
+    durableIdentity: params.durableIdentity,
+    user: { ...params.user, categories: legacyWebPushCategoryFlags(params.user.categories) },
+    device: {
+      ...params.device,
+      ...(params.device.categories
+        ? { categories: legacyWebPushCategoryFlags(params.device.categories) }
+        : {}),
+    },
+    effective: {
+      ...params.effective,
+      categories: legacyWebPushCategoryFlags(params.effective.categories),
+    },
+  };
+}
+
 function hasValidWebPushQuietHoursTimeZone(preferences: {
   quietHours?: { timeZone: string };
 }): boolean {
@@ -297,17 +327,17 @@ export const pushHandlers: GatewayRequestHandlers = {
         ]
       : undefined;
     const user = normalizeWebPushNotificationPreferences(storedUser);
+    const device = normalizeWebPushDevicePreferences(subscription.devicePreferences);
+    const effective = resolveEffectiveWebPushPreferences({ user, device });
+    const result = {
+      durableIdentity: Boolean(currentProfileId),
+      user,
+      device,
+      effective,
+    };
     respond(
       true,
-      {
-        durableIdentity: Boolean(currentProfileId),
-        user,
-        device: subscription.devicePreferences,
-        effective: resolveEffectiveWebPushPreferences({
-          user,
-          device: subscription.devicePreferences,
-        }),
-      },
+      params.deliveryModes ? result : legacyWebPushPreferencesResult(result),
       undefined,
     );
   },

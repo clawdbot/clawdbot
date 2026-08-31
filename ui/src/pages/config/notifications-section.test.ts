@@ -7,11 +7,11 @@ import { renderNotificationsSection } from "./notifications-section.ts";
 
 const userPreferences = {
   categories: {
-    approvalRequested: true,
-    agentFinished: false,
-    agentQuestion: false,
-    scheduledTaskFailed: false,
-    backgroundTaskFailed: false,
+    approvalRequested: "always" as const,
+    agentFinished: "never" as const,
+    agentQuestion: "never" as const,
+    scheduledTaskFailed: "never" as const,
+    backgroundTaskFailed: "never" as const,
   },
   detailLevel: "private" as const,
   quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
@@ -74,6 +74,38 @@ describe("native notification test outcome", () => {
 });
 
 describe("Web Push preference saves", () => {
+  it("offers never, unfocused, and always for every notification category", () => {
+    const container = document.createElement("div");
+    render(
+      renderNotificationsSection({
+        connected: true,
+        webPush: {
+          supported: true,
+          permission: "granted",
+          subscription: "registered",
+          loading: false,
+          preferences: {
+            durableIdentity: true,
+            user: userPreferences,
+            device: { enabled: true, label: "phone" },
+            effective: { ...userPreferences, enabled: true, label: "phone" },
+          },
+        },
+      }),
+      container,
+    );
+
+    const categorySelects = [...container.querySelectorAll("select")].filter((select) =>
+      [...select.options].some((option) => option.textContent === "Only when unfocused"),
+    );
+    expect(categorySelects).toHaveLength(10);
+    for (const select of categorySelects) {
+      expect([...select.options].map((option) => option.textContent)).toEqual(
+        expect.arrayContaining(["Never", "Only when unfocused", "Always"]),
+      );
+    }
+  });
+
   it("disables every preference control while a save is in flight", () => {
     const container = document.createElement("div");
 

@@ -31,6 +31,9 @@ if (isProd && "serviceWorker" in navigator) {
     if (event.data?.type === "sw-version-probe") {
       event.ports[0]?.postMessage({ version: currentControlUiBuildId });
     }
+    if (event.data?.type === "sw-location-probe") {
+      event.ports[0]?.postMessage({ url: window.location.href });
+    }
   });
   void navigator.serviceWorker
     .register(swUrl, { updateViaCache: "none" })

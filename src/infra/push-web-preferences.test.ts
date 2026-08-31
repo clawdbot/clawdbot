@@ -5,18 +5,18 @@ import {
   normalizeWebPushNotificationPreferences,
   resolveEffectiveWebPushPreferences,
   webPushAgentAllowed,
-  webPushCategoryEnabled,
+  webPushCategoryDeliveryMode,
 } from "./push-web-preferences.js";
 
 describe("Web Push notification preferences", () => {
   it("keeps new attention categories opt-in while preserving approval notifications", () => {
     const preferences = normalizeWebPushNotificationPreferences(undefined);
     expect(preferences.categories).toEqual({
-      approvalRequested: true,
-      agentFinished: false,
-      agentQuestion: false,
-      scheduledTaskFailed: false,
-      backgroundTaskFailed: false,
+      approvalRequested: "always",
+      agentFinished: "never",
+      agentQuestion: "never",
+      scheduledTaskFailed: "never",
+      backgroundTaskFailed: "never",
     });
   });
 
@@ -26,7 +26,7 @@ describe("Web Push notification preferences", () => {
       ...defaults,
       categories: {
         ...defaults.categories,
-        agentQuestion: true,
+        agentQuestion: "unfocused" as const,
       },
       detailLevel: "identified" as const,
     };
@@ -35,15 +35,30 @@ describe("Web Push notification preferences", () => {
       device: {
         enabled: true,
         label: "Slot 1",
-        categories: { agentQuestion: false, backgroundTaskFailed: true },
+        categories: { agentQuestion: "never", backgroundTaskFailed: "always" },
       },
     });
 
     expect(effective.label).toBe("Slot 1");
     expect(effective.detailLevel).toBe("identified");
-    expect(webPushCategoryEnabled(effective, "agent-question")).toBe(false);
-    expect(webPushCategoryEnabled(effective, "background-task-failed")).toBe(true);
-    expect(user.categories.agentQuestion).toBe(true);
+    expect(webPushCategoryDeliveryMode(effective, "agent-question")).toBe("never");
+    expect(webPushCategoryDeliveryMode(effective, "background-task-failed")).toBe("always");
+    expect(user.categories.agentQuestion).toBe("unfocused");
+  });
+
+  it("migrates the short-lived boolean preference shape to delivery modes", () => {
+    expect(
+      normalizeWebPushNotificationPreferences({
+        categories: { approvalRequested: false, agentFinished: true },
+      }).categories,
+    ).toMatchObject({ approvalRequested: "never", agentFinished: "always" });
+    expect(
+      normalizeWebPushDevicePreferences({
+        enabled: true,
+        label: "",
+        categories: { agentQuestion: true },
+      }).categories,
+    ).toEqual({ agentQuestion: "always" });
   });
 
   it("handles overnight quiet hours in the configured time zone", () => {

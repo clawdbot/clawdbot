@@ -13,6 +13,7 @@ const CACHE_VERSION =
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const CONTROL_CACHE_LIMIT = 3;
 const CLIENT_VERSION_TIMEOUT_MS = 1_000;
+const CLIENT_LOCATION_TIMEOUT_MS = 150;
 
 function isControlUiChatClient(url) {
   const clientUrl = new URL(url);
@@ -65,6 +66,72 @@ function readClientVersion(client) {
     });
     channel.port1.start();
     client.postMessage({ type: "sw-version-probe", version: CACHE_VERSION }, [channel.port2]);
+  });
+}
+
+function readClientLocation(client) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const timeout = setTimeout(() => resolve(null), CLIENT_LOCATION_TIMEOUT_MS);
+    channel.port1.addEventListener("message", (event) => {
+      clearTimeout(timeout);
+      resolve(typeof event.data?.url === "string" ? event.data.url : null);
+    });
+    channel.port1.start();
+    try {
+      client.postMessage({ type: "sw-location-probe" }, [channel.port2]);
+    } catch {
+      clearTimeout(timeout);
+      resolve(null);
+    }
+  });
+}
+
+async function shouldSuppressNotification(data) {
+  if (data.focusPolicy !== "unfocused") {
+    return false;
+  }
+  const windowClients = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  });
+  const focusedClients = windowClients.filter(
+    (client) => client.focused && client.visibilityState === "visible",
+  );
+  if (!data.url) {
+    return focusedClients.length > 0;
+  }
+
+  const scopeUrl = new URL(self.registration.scope);
+  const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
+  let targetUrl;
+  try {
+    targetUrl = new URL(data.url, new URL(scopePath, scopeUrl));
+  } catch {
+    return false;
+  }
+  if (
+    targetUrl.origin !== scopeUrl.origin ||
+    (targetUrl.pathname !== scopeUrl.pathname && !targetUrl.pathname.startsWith(scopePath))
+  ) {
+    return false;
+  }
+
+  const locations = await Promise.all(focusedClients.map((client) => readClientLocation(client)));
+  return locations.some((location) => {
+    if (!location) {
+      return false;
+    }
+    try {
+      const clientUrl = new URL(location);
+      return (
+        clientUrl.origin === targetUrl.origin &&
+        clientUrl.pathname === targetUrl.pathname &&
+        clientUrl.search === targetUrl.search
+      );
+    } catch {
+      return false;
+    }
   });
 }
 
@@ -202,7 +269,13 @@ self.addEventListener("push", (event) => {
     },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    shouldSuppressNotification(data)
+      .catch(() => false)
+      .then((suppress) =>
+        suppress ? undefined : self.registration.showNotification(title, options),
+      ),
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {

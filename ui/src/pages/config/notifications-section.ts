@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import type {
   WebPushDevicePreferences,
+  WebPushDeliveryMode,
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type {
@@ -71,6 +72,21 @@ function detailLevel(value: string): WebPushNotificationPreferences["detailLevel
   return value === "identified" || value === "detailed" ? value : "private";
 }
 
+function deliveryMode(value: string): WebPushDeliveryMode {
+  return value === "unfocused" || value === "always" ? value : "never";
+}
+
+function renderDeliveryModeOptions(includeInherit = false) {
+  return html`
+    ${includeInherit
+      ? html`<option value="inherit">${t("configView.notifications.inherit")}</option>`
+      : nothing}
+    <option value="never">${t("configView.notifications.never")}</option>
+    <option value="unfocused">${t("configView.notifications.onlyWhenUnfocused")}</option>
+    <option value="always">${t("configView.notifications.always")}</option>
+  `;
+}
+
 function renderUserNotificationPreferences(
   preferences: WebPushNotificationPreferences,
   onChange: (preferences: WebPushNotificationPreferences) => void,
@@ -86,17 +102,18 @@ function renderUserNotificationPreferences(
         ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
           renderSettingsRow({
             title: label(),
-            control: html`<input
-              type="checkbox"
-              .checked=${preferences.categories[key]}
+            control: html`<select
+              .value=${preferences.categories[key]}
               @change=${(event: Event) =>
                 patch({
                   categories: {
                     ...preferences.categories,
-                    [key]: inputTarget(event).checked,
+                    [key]: deliveryMode(selectTarget(event).value),
                   },
                 })}
-            />`,
+            >
+              ${renderDeliveryModeOptions()}
+            </select>`,
           }),
         )}
         ${renderSettingsRow({
@@ -360,23 +377,19 @@ function renderDeviceNotificationPreferences(
             control: html`<select
               .value=${preferences.categories?.[key] === undefined
                 ? "inherit"
-                : preferences.categories[key]
-                  ? "on"
-                  : "off"}
+                : preferences.categories[key]}
               @change=${(event: Event) => {
                 const value = selectTarget(event).value;
                 const categories = { ...preferences.categories };
                 if (value === "inherit") {
                   delete categories[key];
                 } else {
-                  categories[key] = value === "on";
+                  categories[key] = deliveryMode(value);
                 }
                 patch({ categories });
               }}
             >
-              <option value="inherit">${t("configView.notifications.inherit")}</option>
-              <option value="on">${t("configForm.enumOn")}</option>
-              <option value="off">${t("configForm.enumOff")}</option>
+              ${renderDeliveryModeOptions(true)}
             </select>`,
           }),
         )}

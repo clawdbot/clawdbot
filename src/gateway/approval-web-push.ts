@@ -11,7 +11,7 @@ import {
   normalizeWebPushDisplayLabel,
   resolveEffectiveWebPushPreferences,
   webPushAgentAllowed,
-  webPushCategoryEnabled,
+  webPushCategoryDeliveryMode,
 } from "../infra/push-web-preferences.js";
 import {
   deleteWebPushApprovalDeliveryTargets,
@@ -141,7 +141,7 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
     const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
     const source = isRecord(params.record.request) ? params.record.request : undefined;
     const agentId = normalizeOptionalString(source?.agentId);
-    return webPushCategoryEnabled(preferences, "approval-requested") &&
+    return webPushCategoryDeliveryMode(preferences, "approval-requested") !== "never" &&
       !isWebPushQuietHours(preferences) &&
       webPushAgentAllowed(preferences, agentId) &&
       isApprovalRecordVisibleToClient({
@@ -180,34 +180,48 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
   const agentLabel = normalizeWebPushDisplayLabel(agentId);
   const requestGroups = new Map<
     string,
-    { copy: ReturnType<typeof approvalNotificationCopy>; subscriptions: BoundWebPushSubscription[] }
+    {
+      copy: ReturnType<typeof approvalNotificationCopy>;
+      focusPolicy: "always" | "unfocused";
+      subscriptions: BoundWebPushSubscription[];
+    }
   >();
   for (const subscription of subscriptions) {
     const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
     const copy = approvalNotificationCopy({ terminal: false, preferences, agentLabel });
-    const key = JSON.stringify(copy);
-    const group = requestGroups.get(key) ?? { copy, subscriptions: [] };
-    group.subscriptions.push(subscription);
-    requestGroups.set(key, group);
+    const deliveryMode = webPushCategoryDeliveryMode(preferences, "approval-requested");
+    if (deliveryMode === "never") {
+      continue;
+    }
+    const focusPolicy = deliveryMode === "unfocused" ? "unfocused" : "always";
+    const key = JSON.stringify({ copy, focusPolicy });
+    const group = requestGroups.get(key);
+    if (group) {
+      group.subscriptions.push(subscription);
+    } else {
+      requestGroups.set(key, { copy, focusPolicy, subscriptions: [subscription] });
+    }
   }
   const results = (
     await Promise.all(
-      [...requestGroups.values()].map(({ copy, subscriptions: groupedSubscriptions }) =>
-        sendWebPushNotifications({
-          subscriptions: groupedSubscriptions,
-          payload: {
-            ...copy,
-            renotify: false,
-            tag: approvalWebPushTag(params.record.id),
-            url: approvalWebPushUrl(cfg, params.record.id),
-          },
-          deliveryOptions: {
-            TTL: ttlSeconds,
-            urgency: "high",
-            timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
-            topic: approvalWebPushTopic(params.record.id),
-          },
-        }),
+      [...requestGroups.values()].map(
+        ({ copy, focusPolicy, subscriptions: groupedSubscriptions }) =>
+          sendWebPushNotifications({
+            subscriptions: groupedSubscriptions,
+            payload: {
+              ...copy,
+              renotify: false,
+              tag: approvalWebPushTag(params.record.id),
+              url: approvalWebPushUrl(cfg, params.record.id),
+              focusPolicy,
+            },
+            deliveryOptions: {
+              TTL: ttlSeconds,
+              urgency: "high",
+              timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
+              topic: approvalWebPushTopic(params.record.id),
+            },
+          }),
       ),
     )
   ).flat();

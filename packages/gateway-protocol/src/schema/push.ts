@@ -53,12 +53,20 @@ export const WebPushDetailLevelSchema = Type.String({
   enum: ["private", "identified", "detailed"],
 });
 
+export const WebPushDeliveryModeSchema = Type.String({
+  enum: ["never", "unfocused", "always"],
+});
+
+// Keep writes additive across a Gateway/UI rolling upgrade. Reads expose only
+// canonical modes; an older open UI may still submit the former booleans.
+const WebPushDeliveryModeInputSchema = Type.Union([WebPushDeliveryModeSchema, Type.Boolean()]);
+
 const WebPushCategoryPreferencesSchema = closedObject({
-  approvalRequested: Type.Boolean(),
-  agentFinished: Type.Boolean(),
-  agentQuestion: Type.Boolean(),
-  scheduledTaskFailed: Type.Boolean(),
-  backgroundTaskFailed: Type.Boolean(),
+  approvalRequested: WebPushDeliveryModeSchema,
+  agentFinished: WebPushDeliveryModeSchema,
+  agentQuestion: WebPushDeliveryModeSchema,
+  scheduledTaskFailed: WebPushDeliveryModeSchema,
+  backgroundTaskFailed: WebPushDeliveryModeSchema,
 });
 
 const WebPushQuietHoursSchema = closedObject({
@@ -80,11 +88,45 @@ export const WebPushDevicePreferencesSchema = closedObject({
   label: Type.String({ maxLength: 80 }),
   categories: Type.Optional(
     closedObject({
-      approvalRequested: Type.Optional(Type.Boolean()),
-      agentFinished: Type.Optional(Type.Boolean()),
-      agentQuestion: Type.Optional(Type.Boolean()),
-      scheduledTaskFailed: Type.Optional(Type.Boolean()),
-      backgroundTaskFailed: Type.Optional(Type.Boolean()),
+      approvalRequested: Type.Optional(WebPushDeliveryModeSchema),
+      agentFinished: Type.Optional(WebPushDeliveryModeSchema),
+      agentQuestion: Type.Optional(WebPushDeliveryModeSchema),
+      scheduledTaskFailed: Type.Optional(WebPushDeliveryModeSchema),
+      backgroundTaskFailed: Type.Optional(WebPushDeliveryModeSchema),
+    }),
+  ),
+  detailLevel: Type.Optional(WebPushDetailLevelSchema),
+  quietHours: Type.Optional(WebPushQuietHoursSchema),
+  agentIds: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 128 }),
+  ),
+});
+
+const WebPushCategoryPreferenceInputsSchema = closedObject({
+  approvalRequested: WebPushDeliveryModeInputSchema,
+  agentFinished: WebPushDeliveryModeInputSchema,
+  agentQuestion: WebPushDeliveryModeInputSchema,
+  scheduledTaskFailed: WebPushDeliveryModeInputSchema,
+  backgroundTaskFailed: WebPushDeliveryModeInputSchema,
+});
+
+const WebPushNotificationPreferencesInputSchema = closedObject({
+  categories: WebPushCategoryPreferenceInputsSchema,
+  detailLevel: WebPushDetailLevelSchema,
+  quietHours: WebPushQuietHoursSchema,
+  agentIds: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 128 }),
+});
+
+const WebPushDevicePreferencesInputSchema = closedObject({
+  enabled: Type.Boolean(),
+  label: Type.String({ maxLength: 80 }),
+  categories: Type.Optional(
+    closedObject({
+      approvalRequested: Type.Optional(WebPushDeliveryModeInputSchema),
+      agentFinished: Type.Optional(WebPushDeliveryModeInputSchema),
+      agentQuestion: Type.Optional(WebPushDeliveryModeInputSchema),
+      scheduledTaskFailed: Type.Optional(WebPushDeliveryModeInputSchema),
+      backgroundTaskFailed: Type.Optional(WebPushDeliveryModeInputSchema),
     }),
   ),
   detailLevel: Type.Optional(WebPushDetailLevelSchema),
@@ -116,6 +158,7 @@ export const WebPushTestParamsSchema = closedObject({
 
 export const WebPushPreferencesGetParamsSchema = closedObject({
   endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
+  deliveryModes: Type.Optional(Type.Literal(true)),
 });
 
 const WebPushPreferencesEndpointSchema = Type.String({
@@ -128,12 +171,12 @@ export const WebPushPreferencesSetParamsSchema = Type.Union([
   closedObject({
     endpoint: WebPushPreferencesEndpointSchema,
     scope: Type.Literal("user"),
-    preferences: WebPushNotificationPreferencesSchema,
+    preferences: WebPushNotificationPreferencesInputSchema,
   }),
   closedObject({
     endpoint: WebPushPreferencesEndpointSchema,
     scope: Type.Literal("device"),
-    preferences: WebPushDevicePreferencesSchema,
+    preferences: WebPushDevicePreferencesInputSchema,
   }),
 ]);
 
@@ -155,6 +198,7 @@ export type WebPushTestParams = {
 };
 export type WebPushNotificationCategory = Static<typeof WebPushNotificationCategorySchema>;
 export type WebPushDetailLevel = Static<typeof WebPushDetailLevelSchema>;
+export type WebPushDeliveryMode = Static<typeof WebPushDeliveryModeSchema>;
 export type WebPushNotificationPreferences = Static<typeof WebPushNotificationPreferencesSchema>;
 export type WebPushDevicePreferences = Static<typeof WebPushDevicePreferencesSchema>;
 export type WebPushPreferencesGetParams = Static<typeof WebPushPreferencesGetParamsSchema>;
