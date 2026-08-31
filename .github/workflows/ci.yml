@@ -209,6 +209,7 @@ jobs:
           run_owner <<'PYTHON'
           # Generated from .github/actions/git-owner/owner.py; do not edit here.
           import base64
+          import json
           import os
           import re
           import runpy
@@ -572,6 +573,14 @@ jobs:
 
           def checkout():
               check_cancelled()
+              prerequisites = json.loads(os.environ.get("CHECKOUT_GIT_COMMITS_JSON", "null")) if kind == "linux-node" else None
+              if prerequisites is None:
+                  prerequisites = []
+              if not isinstance(prerequisites, list) or any(
+                  not isinstance(commit, str) or not re.fullmatch("[0-9a-f]{40}", commit)
+                  for commit in prerequisites
+              ):
+                  raise ValueError("Invalid immutable test prerequisite commits")
               if reset:
                   os.makedirs(workspace, exist_ok=True)
                   # Every earlier Git group has been drained before deleting its workspace.
@@ -591,6 +600,9 @@ jobs:
               base = os.environ.get("CHECKOUT_BASE_SHA") if kind == "linux-node" else None
               if base:
                   refs.append(f"+{base}:refs/remotes/origin/ci-ratchet-base")
+              # Fetch full reader objects with the authenticated checkout, before its
+              # credential scope ends and test workers create historical worktrees.
+              refs.extend(prerequisites)
               fetch(workspace, *refs, prune=True, max_attempts=1 if reset else 3,
                     retry_codes=(124, 137) if kind == "skills" else ())
               run_git(workspace, "checkout", *(["--force"] if reset else []), "--detach",
@@ -1017,6 +1029,7 @@ jobs:
           fi
           node "${manifest_node_args[@]}" --input-type=module <<'EOF'
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
+          import { resolveTestGitCommits } from "./.ci-harness/.github/actions/git-owner/test-prerequisites.mjs";
 
           const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
           const checkoutRevision = process.env.OPENCLAW_CI_CHECKOUT_REVISION ?? "";
@@ -1351,6 +1364,7 @@ jobs:
                 env: shard.env,
                 includePatterns: shard.includePatterns,
                 pretest_build_mode: shard.pretestBuildMode,
+                git_commits: resolveTestGitCommits(shard),
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
@@ -2914,6 +2928,8 @@ jobs:
   checks-node-core-test-nondist-shard:
     permissions:
       contents: read
+    env:
+      CHECKOUT_GIT_COMMITS_JSON: ${{ toJson(matrix.git_commits) }}
     name: ${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
