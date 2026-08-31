@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildPluginCapabilityConsentReview } from "../../plugins/capability-consent.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { createPluginCapabilityConsentPrompter } from "../../wizard/plugin-capability-consent.js";
-import type { WizardSession } from "../../wizard/session.js";
+import { WizardSession } from "../../wizard/session.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
 import { systemAgentHandlers } from "./system-agent.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -109,6 +109,34 @@ describe("openclaw.setup provider resolution", () => {
   afterEach(() => {
     vi.resetAllMocks();
     resetCommandQueueStateForTest();
+  });
+
+  it.each([
+    [
+      "openclaw.setup.activate.start",
+      { sessionId: "retained-session", kind: "codex-cli", modelRef: "example/model" },
+    ],
+    ["openclaw.setup.auth.start", { sessionId: "retained-session", authChoice: "github-copilot" }],
+    ["openclaw.setup.prepare.start", { sessionId: "retained-session", authChoice: "ollama" }],
+  ] as const)("does not replace a retained wizard session through %s", async (method, params) => {
+    const { wizardSessions, context } = makeContext();
+    const retained = new WizardSession(async () => {});
+    wizardSessions.set(params.sessionId, retained);
+    await retained.whenSettled();
+    const { calls, respond } = makeRespond();
+
+    await systemAgentHandler(method)({ params, respond, context } as never);
+
+    expect(calls).toEqual([
+      {
+        ok: false,
+        payload: undefined,
+        error: expect.objectContaining({ message: "wizard session already exists" }),
+      },
+    ]);
+    expect(wizardSessions.get(params.sessionId)).toBe(retained);
+    expect(setupInferenceMocks.activateSetupInference).not.toHaveBeenCalled();
+    expect(providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider).not.toHaveBeenCalled();
   });
 
   it.each([true, false, "true", "cancel"])(

@@ -82,6 +82,7 @@ final class OnboardingAISetupModel {
     @ObservationIgnored private var activationWizardCompletion: CheckedContinuation<ActivateResult, Error>?
     @ObservationIgnored private var authSessionID: String?
     @ObservationIgnored private var authAttemptID = UUID()
+    @ObservationIgnored private var authRequestID: UUID?
     /// Only a just-completed provider flow may trust setupComplete without re-probing.
     @ObservationIgnored private var providerAuthReconciliationPending = false
 
@@ -540,13 +541,7 @@ final class OnboardingAISetupModel {
         self.detectedPrepareOptions = nil
         self.prepareAvailable = false
         self.candidatePresentation = [:]
-        self.activeAuthOption = nil
-        self.providerWizardKind = nil
-        self.authStep = nil
-        self.authError = nil
-        self.authBusy = false
-        self.authText = ""
-        self.authSessionID = nil
+        self.clearProviderAuth()
         self.authAttemptID = UUID()
         self.providerAuthReconciliationPending = false
         self.providerCatalogLoaded = false
@@ -839,7 +834,10 @@ extension OnboardingAISetupModel {
         }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         let persistedStateBeforeActivation = self.lastDetectedActivationState
-        let requestTimeoutMs = await activationRequestTimeoutMs(for: kind, serverLease: lease)
+        let requestTimeoutMs = await Self.activationRequestTimeoutMs(
+            for: kind,
+            gateway: self.gateway,
+            serverLease: lease)
         var supportsExactModel = false
         if !request.isManual {
             self.selectedKind = kind
@@ -989,10 +987,13 @@ extension OnboardingAISetupModel {
                 throw CancellationError()
             }
             do {
-                if await self.gateway.supportsServerMethod(
+                let supportsActivationWizard = await self.gateway.supportsServerMethod(
                     "openclaw.setup.activate.start",
                     ifCurrentServerLease: serverLease) == true
-                {
+                guard self.isCurrentAttempt(context), !Task.isCancelled else {
+                    throw CancellationError()
+                }
+                if supportsActivationWizard {
                     return try await self.requestActivationWizard(params: params, serverLease: serverLease)
                 }
                 let data = try await gateway.request(
@@ -1012,33 +1013,16 @@ extension OnboardingAISetupModel {
         }
     }
 
-    private func activationRequestTimeoutMs(
-        for kind: String,
-        serverLease: GatewayConnection.ServerLease) async -> Double
-    {
-        await self.gateway
-            .supportsServerMethod("openclaw.setup.activate.start", ifCurrentServerLease: serverLease) == true
-            ? OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs
-            : Self.activationRequestTimeoutMs(for: kind)
-    }
-
     private func requestActivationWizard(
         params: [String: AnyCodable],
         serverLease: GatewayConnection.ServerLease) async throws -> ActivateResult
     {
-        let option = AuthOption(
-            id: "activation",
-            brandId: nil,
-            label: "Connect your AI",
-            hint: nil,
-            groupLabel: nil,
-            icon: nil,
-            website: nil,
-            kind: "activation",
-            featured: false)
+        guard self.activationWizardCompletion == nil else {
+            throw OnboardingAISetupError.activationOutcomeUnavailable
+        }
         return try await withCheckedThrowingContinuation { continuation in
             self.activationWizardCompletion = continuation
-            self.startSetupWizard(option, kind: .activation, params: params, serverLease: serverLease)
+            self.startSetupWizard(.activation, kind: .activation, params: params, serverLease: serverLease)
         }
     }
 
@@ -1222,7 +1206,12 @@ extension OnboardingAISetupModel {
         let authSessionID = UUID().uuidString
         self.authAttemptID = authAttemptID
         self.authSessionID = authSessionID
+        let requestID = UUID()
+        self.authRequestID = requestID
         Task {
+            defer {
+                if self.authRequestID == requestID { self.authRequestID = nil }
+            }
             do {
                 let data = try await self.gateway.request(
                     method: kind.startMethod,
@@ -1336,6 +1325,11 @@ extension OnboardingAISetupModel {
             // The wizard may finish while cancellation is in flight; keep its terminal outcome.
             guard authAttemptID == self.authAttemptID, self.authSessionID == sessionID else { return }
             if self.activationWizardCompletion != nil, cancellation != .unresolved {
+                if cancellation == .absent, self.authRequestID != nil {
+                    // A terminal reply can outlive its purged server session. Only
+                    // its tracked request, never the Cancel button's busy state, owns that result.
+                    return
+                }
                 self.finishActivationWizard(.failure(cancellation == .cancelled
                         ? OnboardingAISetupError.activationCancelled
                         : OnboardingAISetupError.activationOutcomeUnavailable))
@@ -1376,7 +1370,12 @@ extension OnboardingAISetupModel {
         }
         let token = self.attemptToken
         let authAttemptID = self.authAttemptID
+        let requestID = UUID()
+        self.authRequestID = requestID
         Task {
+            defer {
+                if self.authRequestID == requestID { self.authRequestID = nil }
+            }
             do {
                 let data = try await self.gateway.request(
                     method: "wizard.next",
@@ -1565,6 +1564,7 @@ extension OnboardingAISetupModel {
         self.activeAuthOption = nil
         self.providerWizardKind = nil
         self.authSessionID = nil
+        self.authRequestID = nil
         self.authStep = nil
         self.authError = nil
         self.authBusy = false

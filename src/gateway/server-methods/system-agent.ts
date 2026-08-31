@@ -71,7 +71,10 @@ import {
   verifyGatewaySetupInference,
 } from "./system-agent-execution.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
-import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
+import {
+  rejectExistingSetupWizardSession,
+  startSetupActivationWizard,
+} from "./system-agent-setup-wizard.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -348,6 +351,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionId = params.sessionId;
+    if (rejectExistingSetupWizardSession({ sessionId, context, respond })) {
+      return;
+    }
     const session = await createAdmittedWizardSession(
       () =>
         new WizardSession(

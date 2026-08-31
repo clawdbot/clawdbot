@@ -204,6 +204,17 @@ extension OnboardingAISetupModel {
     }
 
     struct AuthOption: Identifiable, Equatable, Decodable {
+        static let activation = AuthOption(
+            id: "activation",
+            brandId: nil,
+            label: "Connect your AI",
+            hint: nil,
+            groupLabel: nil,
+            icon: nil,
+            website: nil,
+            kind: "activation",
+            featured: false)
+
         let id: String
         let brandId: String?
         let label: String
@@ -284,7 +295,7 @@ extension OnboardingAISetupModel {
     }
 
     func canSelectCandidate(kind: String) -> Bool {
-        guard !self.connected else { return false }
+        guard !self.connected, self.activeAuthOption == nil else { return false }
         return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
     }
 
@@ -374,6 +385,16 @@ extension OnboardingAISetupModel {
         return raw.isEmpty
             ? "The Gateway setup request failed."
             : "The Gateway setup request failed. Show details to inspect or copy the error."
+    }
+
+    static func activationRequestTimeoutMs(
+        for kind: String,
+        gateway: GatewayConnection,
+        serverLease: GatewayConnection.ServerLease) async -> Double
+    {
+        await gateway.supportsServerMethod("openclaw.setup.activate.start", ifCurrentServerLease: serverLease) == true
+            ? OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs
+            : self.activationRequestTimeoutMs(for: kind)
     }
 
     static func activationRequestTimeoutMs(for kind: String) -> Double {
