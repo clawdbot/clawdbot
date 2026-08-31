@@ -198,7 +198,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: retire the deprecated messaging-targets subpath.
       // +2: bounded provider streams and read-only SecretRef resolution.
       // +1: diagnostic flag checks without event, trace, or redaction initialization.
-      147,
+      // +1: canonical host exec-env sanitization for app-server extensions that spawn
+      //     a local bridge binary (./host-env-security).
+      148,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -329,7 +331,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      4353,
+      // +9: host exec-env sanitization surface re-exported by ./host-env-security.
+      4362,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -435,7 +438,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      2591,
+      // +9: host exec-env sanitization helpers re-exported by ./host-env-security.
+      2600,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
