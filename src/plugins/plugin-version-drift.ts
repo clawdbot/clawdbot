@@ -13,21 +13,12 @@ import {
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
 
-type PluginVersionDriftTargetResolution =
-  | {
-      status: "resolved";
-      packageName: string;
-      requestedTarget: string;
-      version: string;
-    }
-  | {
-      status: "unresolved";
-      packageName: string;
-      requestedTarget: string;
-      error: string;
-    };
+type PluginVersionDriftTargetResolution = {
+  packageName: string;
+  requestedTarget: string;
+} & ({ status: "resolved"; version: string } | { status: "unresolved"; error: string });
 
-export type PluginVersionDriftEntry = {
+type PluginVersionDriftEntry = {
   pluginId: string;
   installedVersion: string;
   gatewayVersion: string;
@@ -76,118 +67,38 @@ export function resolvePluginVersionDriftUpdateCommand(
   return `openclaw plugins update ${entry.pluginId}`;
 }
 
-export type PluginVersionDriftTargetFetcher = (params: {
-  packageName: string;
-  target: string;
-}) => Promise<{ version: string | null; error?: string }>;
-
-function unresolvedTarget(params: {
-  packageName: string;
-  requestedTarget: string;
-  error: string;
-}): PluginVersionDriftTargetResolution {
-  return {
-    status: "unresolved",
-    packageName: params.packageName,
-    requestedTarget: params.requestedTarget,
-    error: params.error,
-  };
-}
-
-async function resolveEntryTarget(params: {
-  entry: PluginVersionDriftEntry;
-  fetchTarget: PluginVersionDriftTargetFetcher;
-}): Promise<PluginVersionDriftEntry> {
-  const packageName = resolveExactNpmPinPackageName(params.entry);
+async function resolveEntryTarget(
+  entry: PluginVersionDriftEntry,
+): Promise<PluginVersionDriftEntry> {
+  const packageName = resolveExactNpmPinPackageName(entry);
   if (!packageName) {
-    return params.entry;
+    return entry;
   }
-
-  const requestedTarget = resolveOpenClawReleaseCohortVersion(params.entry.gatewayVersion);
+  const requestedTarget = resolveOpenClawReleaseCohortVersion(entry.gatewayVersion);
   const requestedSpec = `${packageName}@${requestedTarget}`;
-  if (parseRegistryNpmSpec(requestedSpec)?.selectorKind !== "exact-version") {
-    return {
-      ...params.entry,
-      targetResolution: unresolvedTarget({
-        packageName,
-        requestedTarget,
-        error: `gateway release cohort ${JSON.stringify(requestedTarget)} is not an exact npm version`,
-      }),
-    };
-  }
-
-  let status: Awaited<ReturnType<PluginVersionDriftTargetFetcher>>;
-  try {
-    status = await params.fetchTarget({
-      packageName,
-      target: requestedTarget,
-    });
-  } catch (err) {
-    return {
-      ...params.entry,
-      targetResolution: unresolvedTarget({
-        packageName,
-        requestedTarget,
-        error: `npm registry lookup failed: ${String(err)}`,
-      }),
-    };
-  }
-
-  const version = status.version?.trim();
-  if (!version) {
-    return {
-      ...params.entry,
-      targetResolution: unresolvedTarget({
-        packageName,
-        requestedTarget,
-        error: `npm registry did not resolve ${requestedSpec}${status.error ? `: ${status.error}` : ""}`,
-      }),
-    };
-  }
-  const resolvedSpec = `${packageName}@${version}`;
-  if (
-    parseRegistryNpmSpec(resolvedSpec)?.selectorKind !== "exact-version" ||
-    resolveOpenClawReleaseCohortVersion(version) !== requestedTarget
-  ) {
-    return {
-      ...params.entry,
-      targetResolution: unresolvedTarget({
-        packageName,
-        requestedTarget,
-        error: `npm registry resolved ${requestedSpec} to incompatible version ${JSON.stringify(version)}`,
-      }),
-    };
-  }
-
-  return {
-    ...params.entry,
-    targetResolution: {
-      status: "resolved",
-      packageName,
-      requestedTarget,
-      version,
-    },
-  };
+  // The registry helper owns request deadlines and converts lookup failures to data.
+  // Only its exact requested version can authorize a pinned repair command.
+  const result =
+    parseRegistryNpmSpec(requestedSpec)?.selectorKind === "exact-version"
+      ? await fetchNpmPackageTargetStatus({ packageName, target: requestedTarget })
+      : { version: null, error: "gateway release cohort is not an exact npm version" };
+  const targetResolution: PluginVersionDriftTargetResolution =
+    result.version === requestedTarget
+      ? { status: "resolved", packageName, requestedTarget, version: requestedTarget }
+      : {
+          status: "unresolved",
+          packageName,
+          requestedTarget,
+          error: `npm registry did not resolve ${requestedSpec}: ${result.error ?? `returned ${JSON.stringify(result.version)}`}`,
+        };
+  return { ...entry, targetResolution };
 }
 
-/** Resolve exact npm repair targets against the package registry before rendering commands. */
+/** Resolve exact npm repair targets only for diagnostics that display repair guidance. */
 export async function resolvePluginVersionDriftTargets(
   report: PluginVersionDriftReport,
-  options: { fetchTarget?: PluginVersionDriftTargetFetcher } = {},
 ): Promise<PluginVersionDriftReport> {
-  const fetchTarget: PluginVersionDriftTargetFetcher =
-    options.fetchTarget ??
-    ((params) =>
-      fetchNpmPackageTargetStatus({
-        packageName: params.packageName,
-        target: params.target,
-      }));
-  return {
-    ...report,
-    drifts: await Promise.all(
-      report.drifts.map((entry) => resolveEntryTarget({ entry, fetchTarget })),
-    ),
-  };
+  return { ...report, drifts: await Promise.all(report.drifts.map(resolveEntryTarget)) };
 }
 
 function isPluginEnabled(config: OpenClawConfig | undefined, pluginId: string): boolean {

@@ -590,12 +590,14 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           const targetResolution = entry.targetResolution;
           const detail =
             targetResolution?.status === "unresolved"
-              ? `${targetResolution.packageName}@${targetResolution.requestedTarget}: ${targetResolution.error}`
+              ? targetResolution.error
               : "npm registry target was not resolved";
           defaultRuntime.error(`- ${entry.pluginId}: ${detail}`);
         }
         defaultRuntime.error(
-          errorText("No install command was generated for unresolved plugin targets."),
+          errorText(
+            "No install command was generated for unresolved plugin targets. Retry gateway status --deep after checking registry availability.",
+          ),
         );
       }
       if (updateCommands.length === 1 && unresolvedRepairs.length === 0) {

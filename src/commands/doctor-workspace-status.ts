@@ -107,7 +107,7 @@ function pluginVersionDriftToHealthFindings(
     const targetResolution = entry.targetResolution;
     const targetError =
       targetResolution?.status === "unresolved"
-        ? `${targetResolution.packageName}@${targetResolution.requestedTarget}: ${targetResolution.error}`
+        ? targetResolution.error
         : "npm registry target was not resolved";
     return {
       checkId: WORKSPACE_STATUS_CHECK_ID,
@@ -118,7 +118,7 @@ function pluginVersionDriftToHealthFindings(
       requirement: "plugin-version-drift",
       fixHint: updateCommand
         ? `${formatCliCommand(updateCommand)} && ${formatCliCommand("openclaw gateway restart")}`
-        : `No install command generated; resolve the npm registry target first (${targetError}).`,
+        : `No install command generated; retry openclaw doctor after checking registry availability (${targetError}).`,
     };
   });
 }
@@ -234,7 +234,7 @@ function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
       const targetResolution = entry.targetResolution;
       const detail =
         targetResolution?.status === "unresolved"
-          ? `${targetResolution.packageName}@${targetResolution.requestedTarget}: ${targetResolution.error}`
+          ? targetResolution.error
           : "npm registry target was not resolved";
       return `Repair target resolution failed for ${entry.pluginId}: ${detail}. No install command generated.`;
     }),

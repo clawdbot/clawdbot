@@ -1502,40 +1502,36 @@ describe("gatherDaemonStatus", () => {
     expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
   });
 
-  it("resolves a pinned npm repair target through the registry before reporting it", async () => {
-    callGatewayStatusProbe.mockResolvedValueOnce({
-      ok: true,
-      url: "ws://127.0.0.1:19001",
-      error: null,
-      server: { version: "2026.7.1-2", connId: "c1" },
-    } as never);
-    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
-      brave: {
-        source: "npm",
-        spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
-        resolvedName: "@openclaw/brave-plugin",
-        resolvedVersion: "2026.7.1-beta.2",
-      },
-    } as never);
-    fetchNpmPackageTargetStatus.mockResolvedValueOnce({
-      target: "2026.7.1",
-      version: "2026.7.1",
-      nodeEngine: null,
-    });
+  it.each([false, true])(
+    "collects local drift without registry lookups (deep=%s)",
+    async (deep) => {
+      callGatewayStatusProbe.mockResolvedValueOnce({
+        ok: true,
+        url: "ws://127.0.0.1:19001",
+        error: null,
+        server: { version: "2026.7.1-2", connId: "c1" },
+      } as never);
+      loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+        brave: {
+          source: "npm",
+          spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
+          resolvedName: "@openclaw/brave-plugin",
+          resolvedVersion: "2026.7.1-beta.2",
+        },
+      } as never);
+      fetchNpmPackageTargetStatus.mockResolvedValueOnce({
+        target: "2026.7.1",
+        version: "2026.7.1",
+        nodeEngine: null,
+      });
 
-    const status = await gatherStatus({ deep: true });
+      const status = await gatherStatus({ deep });
 
-    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
-      packageName: "@openclaw/brave-plugin",
-      target: "2026.7.1",
-    });
-    expect(status.pluginVersionDrift?.drifts[0]?.targetResolution).toEqual({
-      status: "resolved",
-      packageName: "@openclaw/brave-plugin",
-      requestedTarget: "2026.7.1",
-      version: "2026.7.1",
-    });
-  });
+      expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+      expect(status.pluginVersionDrift?.drifts[0]?.pluginId).toBe("brave");
+      expect(status.pluginVersionDrift?.drifts[0]?.targetResolution).toBeUndefined();
+    },
+  );
 
   it("reads install records from the merged daemon service environment, not the CLI process env", async () => {
     await gatherStatus({ deep: true });
