@@ -318,23 +318,6 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
         readJson(path.join(getVolumeSessionsDir(stateDir, agentId), "sessions.json")),
       ]),
     );
-    // Baseline setup may leave the oldest shared store for the candidate to migrate.
-    // Combine only the known specimens here; survival still requires canonical rows.
-    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
-    if (fs.existsSync(legacyStorePath)) {
-      const entries = Object.values(readJson(legacyStorePath));
-      assert(
-        entries.length === PREEXISTING_SESSION_FIXTURES.length,
-        "legacy fixture count changed",
-      );
-      for (const { agentId, sessionId, sessionKey } of PREEXISTING_SESSION_FIXTURES) {
-        const entry = entries.find((candidate) => candidate.sessionId === sessionId);
-        assert(entry, `legacy fixture missing: ${sessionId}`);
-        const store = stores.get(agentId);
-        assert(!Object.hasOwn(store, sessionKey), `duplicate baseline fixture: ${sessionKey}`);
-        store[sessionKey] = entry;
-      }
-    }
     assertVolumeSessionStores(stores, fixtures, "volume baseline");
     for (const fixture of fixtures) {
       if (fixture.missingTranscript) {

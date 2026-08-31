@@ -1087,70 +1087,90 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
-  it("seeds recent ordered legacy session timestamps", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
-    try {
-      const stateDir = join(root, "state");
-      const workspace = join(root, "workspace");
-      mkdirSync(stateDir, { recursive: true });
-      mkdirSync(workspace, { recursive: true });
+  it.each(["base", "sqlite-volume"])(
+    "seeds recent ordered session timestamps for %s",
+    (scenario) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
+      try {
+        const stateDir = join(root, "state");
+        const workspace = join(root, "workspace");
+        mkdirSync(stateDir, { recursive: true });
+        mkdirSync(workspace, { recursive: true });
 
-      const beforeSeed = Date.now();
-      execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
-        },
-        stdio: "pipe",
-      });
-      const afterSeed = Date.now();
+        const beforeSeed = Date.now();
+        execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
+          env: {
+            ...process.env,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+          },
+          stdio: "pipe",
+        });
+        const afterSeed = Date.now();
 
-      const sessions = JSON.parse(
-        readFileSync(join(stateDir, "sessions", "sessions.json"), "utf8"),
-      ) as Record<string, { sessionId?: unknown; updatedAt?: unknown }>;
-      const seededRows = [
-        sessions.main,
-        sessions["+15551234567"],
-        sessions["slack:channel:CUPGRADE"],
-      ];
-      expect(seededRows.map((row) => row?.sessionId)).toEqual([
-        "upgrade-main-session",
-        "upgrade-direct-session",
-        "upgrade-group-session",
-      ]);
+        const sessionsDir = join(
+          stateDir,
+          scenario === "sqlite-volume" ? "agents/main/sessions" : "sessions",
+        );
+        const otherStore = join(
+          stateDir,
+          scenario === "sqlite-volume" ? "sessions" : "agents/main/sessions",
+          "sessions.json",
+        );
+        expect(() => readFileSync(otherStore)).toThrow(/ENOENT/);
+        const sessions = JSON.parse(
+          readFileSync(join(sessionsDir, "sessions.json"), "utf8"),
+        ) as Record<string, { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }>;
+        const keys =
+          scenario === "sqlite-volume"
+            ? ["agent:main:main", "agent:main:+15551234567", "agent:main:slack:channel:cupgrade"]
+            : ["main", "+15551234567", "slack:channel:CUPGRADE"];
+        expect(Object.keys(sessions)).toEqual(keys);
+        const seededRows = keys.map((key) => sessions[key]);
+        expect(seededRows.map((row) => row?.sessionId)).toEqual([
+          "upgrade-main-session",
+          "upgrade-direct-session",
+          "upgrade-group-session",
+        ]);
 
-      const timestamps = seededRows.map((row) => row?.updatedAt);
-      for (const timestamp of timestamps) {
-        expect(typeof timestamp).toBe("number");
+        for (const row of seededRows) {
+          const transcriptPath = join(sessionsDir, `${String(row.sessionId)}.jsonl`);
+          expect(row.sessionFile).toBe(transcriptPath);
+          expect(JSON.parse(readFileSync(transcriptPath, "utf8")).id).toBe(row.sessionId);
+        }
+
+        const timestamps = seededRows.map((row) => row?.updatedAt);
+        for (const timestamp of timestamps) {
+          expect(typeof timestamp).toBe("number");
+        }
+        const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
+          number,
+          number,
+          number,
+        ];
+        expect(directUpdatedAt - mainUpdatedAt).toBe(100);
+        expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
+        expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
+        expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
+
+        const dayMs = 24 * 60 * 60 * 1000;
+        const thirtyDaysMs = 30 * dayMs;
+        for (const [timestamp, offset] of [
+          [mainUpdatedAt, 0],
+          [directUpdatedAt, 100],
+          [groupUpdatedAt, 200],
+        ] as const) {
+          expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
+          expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
+          expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
+          expect(timestamp).toBeLessThanOrEqual(afterSeed);
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
       }
-      const [mainUpdatedAt, directUpdatedAt, groupUpdatedAt] = timestamps as [
-        number,
-        number,
-        number,
-      ];
-      expect(directUpdatedAt - mainUpdatedAt).toBe(100);
-      expect(groupUpdatedAt - mainUpdatedAt).toBe(200);
-      expect(mainUpdatedAt).toBeLessThan(directUpdatedAt);
-      expect(directUpdatedAt).toBeLessThan(groupUpdatedAt);
-
-      const dayMs = 24 * 60 * 60 * 1000;
-      const thirtyDaysMs = 30 * dayMs;
-      for (const [timestamp, offset] of [
-        [mainUpdatedAt, 0],
-        [directUpdatedAt, 100],
-        [groupUpdatedAt, 200],
-      ] as const) {
-        expect(timestamp).toBeGreaterThanOrEqual(beforeSeed - dayMs + offset);
-        expect(timestamp).toBeLessThanOrEqual(afterSeed - dayMs + offset);
-        expect(timestamp).toBeGreaterThan(afterSeed - thirtyDaysMs);
-        expect(timestamp).toBeLessThanOrEqual(afterSeed);
-      }
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+    },
+  );
 
   it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));
