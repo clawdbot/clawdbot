@@ -225,13 +225,62 @@ it.each([
 );
 
 it.each([
-  ...(process.platform === "win32" ? [] : [{ kind: "linux-node", retained: false }]),
-  { kind: "platform", retained: false },
-  { kind: "platform", retained: true },
+  ...[
+    ...(process.platform === "win32" ? [] : [{ kind: "linux-node", retained: false }]),
+    { kind: "platform", retained: false },
+    { kind: "platform", retained: true },
+  ].map((entry) =>
+    Object.assign(entry, {
+      event: "push",
+      workflow: "same",
+      target: "selected",
+      code: 0,
+      fetches: 1,
+    }),
+  ),
+  ...(process.platform === "win32"
+    ? []
+    : [
+        { event: "push", workflow: "same", target: "selected", code: 0, fetches: 2 },
+        { event: "pull_request", workflow: "same", target: "selected", code: 0, fetches: 2 },
+        { event: "pull_request", workflow: "previous", target: "selected", code: 0, fetches: 2 },
+        {
+          event: "workflow_dispatch",
+          workflow: "previous",
+          target: "selected",
+          code: 0,
+          fetches: 2,
+        },
+        {
+          event: "workflow_dispatch",
+          workflow: "previous",
+          target: "missing-branch",
+          code: 0,
+          fetches: 3,
+        },
+        { event: "pull_request", workflow: "missing", target: "selected", code: 0, fetches: 2 },
+        { event: "push", workflow: "missing-action", target: "selected", code: 1, fetches: 2 },
+        {
+          event: "workflow_dispatch",
+          workflow: "previous",
+          target: "moved-event",
+          code: 0,
+          fetches: 3,
+        },
+        { event: "push", workflow: "same", target: "missing-sha", code: 128, fetches: 1 },
+        {
+          event: "workflow_dispatch",
+          workflow: "previous",
+          target: "missing-sha",
+          code: 1,
+          fetches: 2,
+        },
+      ].map((entry) => Object.assign(entry, { kind: "preflight", retained: false }))),
 ])(
-  "copies same-revision $kind harness actions (retained: $retained) without fetching again or mutating the candidate index",
-  async ({ kind, retained }) => {
-    const linux = kind === "linux-node";
+  "materializes $kind harness actions ($event, workflow=$workflow, target=$target, retained=$retained) without mutating the candidate",
+  async ({ kind, retained, event, workflow, target, code, fetches }) => {
+    const linux = kind !== "platform";
+    const preflight = kind === "preflight";
     const posix = process.platform !== "win32";
     const action = ".github/actions/setup-node-env/action.yml";
     const executable = ".github/actions/tool/line\nbreak.sh";
@@ -241,7 +290,14 @@ it.each([
       ".github/actions/tool/with space.txt": "literal action bytes\n",
       ...(posix ? { [executable]: "#!/bin/sh\nexit 0\n" } : {}),
     };
+    const candidateFiles = {
+      "candidate-only.txt": "candidate stays intact\n",
+      "extensions/browser/icon.png": "complete binary path\0\xff",
+      "ui/src/i18n/.i18n/de-DE.tm.jsonl": '{"fixture":"complete inventory"}\n',
+    };
     let revision = "";
+    let workflowRevision = "";
+    let candidateAction = files[action];
     await withCiCheckoutFixture(
       `${linux ? "linux:" : ""}configured`,
       (root) => {
@@ -269,20 +325,35 @@ it.each([
             encoding: "utf8",
           }).trim();
         run("init");
-        for (const [name, contents] of Object.entries(files)) {
+        for (const [name, contents] of Object.entries({ ...files, ...candidateFiles })) {
           mkdirSync(path.dirname(path.join(source, name)), { recursive: true });
           writeFileSync(path.join(source, name), contents);
         }
         // Archive export would omit or rewrite these trusted action bytes.
         writeFileSync(path.join(source, ".gitattributes"), "* -text export-ignore export-subst\n");
-        writeFileSync(path.join(source, "candidate-only.txt"), "candidate stays intact\n");
         if (posix) {
           chmodSync(path.join(source, executable), 0o755);
           symlinkSync("line\nbreak.sh", path.join(source, link));
         }
+        if (workflow === "missing-action") {
+          rmSync(path.join(source, action));
+        }
         run("add", "--all");
         run("commit", "--no-gpg-sign", "-m", "fixture revision");
         revision = run("rev-parse", "HEAD");
+        workflowRevision = revision;
+        if (workflow === "previous") {
+          candidateAction = "name: candidate action must not replace the trusted workflow\n";
+          writeFileSync(path.join(source, action), candidateAction);
+          run("add", action);
+          run("commit", "--no-gpg-sign", "-m", "selected candidate");
+          revision = run("rev-parse", "HEAD");
+        } else if (workflow === "missing") {
+          workflowRevision = "f".repeat(40);
+        }
+        if (target === "moved-event") {
+          run("branch", "event", workflowRevision);
+        }
         if (retained) {
           const staleAction = path.join(root, "workspace", ".ci-harness", action);
           mkdirSync(path.dirname(staleAction), { recursive: true });
@@ -298,14 +369,27 @@ it.each([
               ...gitEnv,
               CHECKOUT_KIND: kind,
               CHECKOUT_SHA: revision,
-              WORKFLOW_SHA: revision,
+              CHECKOUT_REF:
+                target === "missing-branch"
+                  ? "refs/heads/missing"
+                  : target === "missing-sha"
+                    ? "f".repeat(40)
+                    : revision,
+              CHECKOUT_FALLBACK_REF: revision,
+              CHECKOUT_EVENT_REF: target === "moved-event" ? "refs/heads/event" : "",
+              GITHUB_EVENT_NAME: event,
+              GITHUB_REPOSITORY: "fixture/checkout",
+              CHECKOUT_TOKEN: "fixture-read-only-token",
+              WORKFLOW_SHA: workflowRevision,
             },
           }),
         );
         writeFileSync(
           path.join(root, "checkout.sh"),
           renderGitTestClock(
-            readCiCheckoutStep(linux ? "checks-fast-core" : "checks-windows").run,
+            readCiCheckoutStep(
+              preflight ? "preflight" : linux ? "checks-fast-core" : "checks-windows",
+            ).run,
             {
               realClock: true,
             },
@@ -316,21 +400,39 @@ it.each([
         expect(result, `${stderr}\n${report.output}`).toEqual({ code: 0, signal: null });
         expect(report.error, report.output).toBeUndefined();
         expectCiCheckoutCleanup(report);
-        expect(report.code, report.output).toBe(0);
-        expect(report.commands.filter(({ args }) => args[0] === "fetch")).toHaveLength(1);
+        expect(report.code, report.output).toBe(code);
+        expect(report.commands.filter(({ args }) => args[0] === "fetch")).toHaveLength(fetches);
         const workspace = path.join(root, "workspace");
         const harness = path.join(workspace, ".ci-harness");
-        expect(existsSync(path.join(harness, ".git"))).toBe(false);
+        if (target === "missing-sha") {
+          expect(existsSync(path.join(root, "candidate-index"))).toBe(false);
+          expect(existsSync(harness)).toBe(false);
+          return;
+        }
         expect(readFileSync(path.join(workspace, ".git/index"))).toEqual(
           readFileSync(path.join(root, "candidate-index")),
         );
         expect(readFileSync(path.join(workspace, ".git/HEAD"), "utf8").trim()).toBe(revision);
-        expect(readFileSync(path.join(workspace, "candidate-only.txt"), "utf8")).toBe(
-          "candidate stays intact\n",
+        expect(readFileSync(path.join(workspace, ".git/config"), "utf8")).not.toContain(
+          "AUTHORIZATION",
         );
-        expect(existsSync(path.join(harness, "candidate-only.txt"))).toBe(false);
-        for (const [name, contents] of Object.entries(files)) {
+        for (const [name, contents] of Object.entries(candidateFiles)) {
           expect(readFileSync(path.join(workspace, name), "utf8")).toBe(contents);
+          expect(existsSync(path.join(harness, name))).toBe(false);
+        }
+        if (workflow === "missing-action") {
+          expect(existsSync(path.join(workspace, action))).toBe(false);
+          expect(existsSync(path.join(harness, action))).toBe(false);
+          return;
+        }
+        expect(readFileSync(path.join(workspace, action), "utf8")).toBe(candidateAction);
+        if (preflight && workflow !== "same") {
+          // A different workflow revision stays with the pinned Actions checkout.
+          expect(existsSync(harness)).toBe(false);
+          return;
+        }
+        expect(existsSync(path.join(harness, ".git"))).toBe(false);
+        for (const [name, contents] of Object.entries(files)) {
           expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
         }
         if (posix) {

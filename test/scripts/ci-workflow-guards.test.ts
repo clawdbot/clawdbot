@@ -128,6 +128,7 @@ function evaluateWorkflowExpression(
     runAttempt: number;
     steps?: Record<string, { outputs: Record<string, string> }>;
     targetContextRef?: string;
+    workflowSha?: string;
   },
 ) {
   if (typeof expression !== "string") {
@@ -156,6 +157,7 @@ function evaluateWorkflowExpression(
       event_name: context.eventName,
       repository: context.repository,
       run_attempt: context.runAttempt,
+      workflow_sha: context.workflowSha,
       event:
         context.headRepository || context.eventName === "pull_request"
           ? {
@@ -2444,8 +2446,9 @@ NODE
       '--body-file "${body_file}"',
       "--json autoMergeRequest",
       '--auto --squash --match-head-commit "${published_commit}"',
-    ])
+    ]) {
       expect(actionPublishStep.run).toContain(contract);
+    }
     for (const forbidden of [
       "gh auth setup-git",
       "gh pr list",
@@ -3743,7 +3746,6 @@ NODE
       "docker-seed-e2e": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "sqlite-session-lifecycle": "blacksmith-8vcpu-ubuntu-2404",
-      "macos-node": "blacksmith-6vcpu-macos-15",
       "macos-swift": "blacksmith-12vcpu-macos-26",
       "ios-build": "blacksmith-12vcpu-macos-26",
       "ios-screenshot-shard": "blacksmith-12vcpu-macos-26",
@@ -6146,7 +6148,7 @@ server.listen(0, "127.0.0.1", () => {
     const calls = [
       ...`${gate}\n${commit}`.matchAll(/(?:run_git|git_output)\(([\s\S]*?)\)(?=\.rstrip|\n|$)/gu),
     ].map((match) => match[1]!);
-    const fetches = calls.filter((call) => /^workspace, "fetch"/u.test(call));
+    const fetches = calls.filter((call) => call.startsWith('workspace, "fetch"'));
     expect(fetches).toEqual([
       'workspace, "fetch", "--no-tags", "origin", "main", timeout=120, reclaim_locks=True',
       'workspace, "fetch", "--no-tags", "origin", target, timeout=120, reclaim_locks=True',
@@ -6544,6 +6546,53 @@ server.listen(0, "127.0.0.1", () => {
   it("keeps manual candidates separate from trusted cache authority", () => {
     const workflow = readCiWorkflow();
     const preflight = workflow.jobs.preflight;
+    const checkoutStep = expectDefined(
+      preflight.steps.find((step: WorkflowStep) => step.name === "Checkout"),
+      "preflight checkout owner",
+    );
+    expect(checkoutStep.env?.WORKFLOW_SHA).toBe("${{ github.workflow_sha }}");
+    const harnessSteps = preflight.steps.filter(
+      (step: WorkflowStep) =>
+        step.uses?.startsWith("actions/checkout@") && step.with?.path === ".ci-harness",
+    );
+    expect(harnessSteps).toHaveLength(1);
+    const harnessStep = expectDefined(harnessSteps[0], "different-revision harness checkout");
+    expect(harnessStep).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: {
+        ref: "${{ github.workflow_sha }}",
+        path: ".ci-harness",
+        "sparse-checkout": ".github/actions",
+        "persist-credentials": false,
+      },
+    });
+    const resolvedIndex = preflight.steps.findIndex(
+      (step: WorkflowStep) => step.id === "checkout_ref",
+    );
+    const harnessIndex = preflight.steps.indexOf(harnessStep);
+    const consumerIndex = preflight.steps.findIndex((step: WorkflowStep) =>
+      step.uses?.startsWith("./.ci-harness/"),
+    );
+    expect(preflight.steps.indexOf(checkoutStep)).toBeLessThan(resolvedIndex);
+    expect(resolvedIndex).toBeLessThan(harnessIndex);
+    expect(harnessIndex).toBeLessThan(consumerIndex);
+    const workflowSha = "a".repeat(40);
+    for (const eventName of ["push", "pull_request", "workflow_dispatch"] as const) {
+      for (const headRepository of ["openclaw/openclaw", "contributor/openclaw"]) {
+        for (const selectedSha of [workflowSha, "b".repeat(40)]) {
+          expect(
+            evaluateWorkflowExpression(harnessStep.if, {
+              eventName,
+              headRepository,
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              steps: { checkout_ref: { outputs: { sha: selectedSha } } },
+              workflowSha,
+            }),
+          ).toBe(selectedSha !== workflowSha);
+        }
+      }
+    }
     const trustStep = expectDefined(
       preflight.steps.find((step: WorkflowStep) => step.name === "Classify candidate cache trust"),
       "candidate cache trust step",
@@ -9724,14 +9773,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ];
     const result = runCiManifestFixture({
       bundledPlanner: true,
-      nodeTestShards: selections.map((selection, index) => ({
-        checkName: `tooling-${index}`,
-        configs: tooling.configs,
-        requiresDist: false,
-        runner: "ubuntu-24.04",
-        shardName: "groups" in selection ? "compact-small-1" : "core-tooling-1",
-        ...selection,
-      })),
+      nodeTestShards: selections.map((selection, index) =>
+        Object.assign(
+          {
+            checkName: `tooling-${index}`,
+            configs: tooling.configs,
+            requiresDist: false,
+            runner: "ubuntu-24.04",
+            shardName: "groups" in selection ? "compact-small-1" : "core-tooling-1",
+          },
+          selection,
+        ),
+      ),
     });
     expect(result.status, result.output).toBe(0);
     const matrix = JSON.parse(
@@ -10902,8 +10955,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       '":(exclude)docs/maturity/taxonomy.md"',
       "qa_evidence_run_id must be a numeric GitHub Actions run id",
       'publication_head = f"automation/maturity-scorecard-',
-    ])
+    ]) {
       expect(validateRefStep.run).toContain(fragment);
+    }
     expect(maturityWorkflow.jobs.validate_selected_ref.outputs).toMatchObject({
       publication_base: "${{ steps.validate.outputs.publication_base }}",
       publication_head: "${{ steps.validate.outputs.publication_head }}",
@@ -11925,10 +11979,10 @@ it("pins generated publisher and maturity owners before credentials and selected
   ]) {
     const workflow = parse(readFileSync(file, "utf8"));
     const publishers = Object.values(workflow.jobs).flatMap((job) => {
-      const steps = (job as { steps?: WorkflowStep[] }).steps ?? [];
-      return steps.flatMap((step, index) =>
+      const jobSteps = (job as { steps?: WorkflowStep[] }).steps ?? [];
+      return jobSteps.flatMap((step, index) =>
         step.uses === "./.github/actions/publish-generated-pr"
-          ? [{ index, length: steps.length }]
+          ? [{ index, length: jobSteps.length }]
           : [],
       );
     });
@@ -12031,7 +12085,9 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
     const index = steps.findIndex(({ name }) => name === "Prepare Git owner");
     expect(index).toBe(decision ? 1 : 0);
     expect(steps[index + 1]?.name).toBe(checkout);
-    if (decision) expect(steps[index - 1]?.name).toBe(decision);
+    if (decision) {
+      expect(steps[index - 1]?.name).toBe(decision);
+    }
     expect(steps[index]).toEqual({
       name: "Prepare Git owner",
       uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
@@ -12045,8 +12101,9 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
       Number(match[1]),
     );
     expect(ownerDeadlines.every((deadline) => deadline === 0)).toBe(true);
-    if (jobId !== "publish") expect(bodies).not.toMatch(/timeout=\d+/u);
-    else {
+    if (jobId !== "publish") {
+      expect(bodies).not.toMatch(/timeout=\d+/u);
+    } else {
       expect(bodies.match(/timeout=120/g)).toHaveLength(3);
       expect(bodies).not.toMatch(/timeout=(?!120)\d+/u);
       expect(bodies.match(/for attempt in range\(1, 6\)/gu)).toHaveLength(1);

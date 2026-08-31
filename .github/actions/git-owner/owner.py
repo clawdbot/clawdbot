@@ -361,48 +361,7 @@ def checkout_selected_ref():
     run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
 
 
-def checkout():
-    check_cancelled()
-    prerequisites = json.loads(os.environ.get("CHECKOUT_GIT_COMMITS_JSON", "null")) if kind == "linux-node" else None
-    if prerequisites is None:
-        prerequisites = []
-    if not isinstance(prerequisites, list) or any(
-        not isinstance(commit, str) or not re.fullmatch("[0-9a-f]{40}", commit)
-        for commit in prerequisites
-    ):
-        raise ValueError("Invalid immutable test prerequisite commits")
-    if reset:
-        os.makedirs(workspace, exist_ok=True)
-        # Every earlier Git group has been drained before deleting its workspace.
-        subprocess.run(["find", workspace, "-mindepth", "1", "-maxdepth", "1",
-                        "-exec", "rm", "-rf", "{}", "+"], check=True)
-    run_git(workspace, "init", workspace)
-    if kind in ("linux-node", "android"):
-        run_git(workspace, "config", "--global", "--add", "safe.directory", workspace)
-    run_git(workspace, "config", "gc.auto", "0")
-    run_git(workspace, "remote", "add", "origin", remote)
-    if kind in ("preflight", "manual"):
-        checkout_selected_ref()
-        return
-    target = "refs/remotes/origin/ci-target" if kind in ("linux-node", "android") else "refs/remotes/origin/checkout"
-    sha = "refs/heads/main" if kind == "clawhub" else os.environ["CHECKOUT_SHA"]
-    refs = [f"+{sha}:{target}"]
-    base = os.environ.get("CHECKOUT_BASE_SHA") if kind == "linux-node" else None
-    if base:
-        refs.append(f"+{base}:refs/remotes/origin/ci-ratchet-base")
-    # Fetch full reader objects with the authenticated checkout, before its
-    # credential scope ends and test workers create historical worktrees.
-    refs.extend(prerequisites)
-    fetch(workspace, *refs, prune=True, max_attempts=1 if reset else 3,
-          retry_codes=(124, 137) if kind == "skills" else ())
-    run_git(workspace, "checkout", *(["--force"] if reset else []), "--detach",
-            sha if kind in ("linux-node", "android") else target)
-    if kind == "android":
-        if not os.access(os.path.join(workspace, "apps/android/gradlew"), os.X_OK):
-            raise GitFailure(1)
-        return
-    if kind in ("clawhub", "skills"):
-        return
+def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
@@ -430,6 +389,53 @@ def checkout():
     if not os.path.isfile(os.path.join(harness, action)):
         raise GitFailure(1)
     check_cancelled()
+
+
+def checkout():
+    check_cancelled()
+    prerequisites = json.loads(os.environ.get("CHECKOUT_GIT_COMMITS_JSON", "null")) if kind == "linux-node" else None
+    if prerequisites is None:
+        prerequisites = []
+    if not isinstance(prerequisites, list) or any(
+        not isinstance(commit, str) or not re.fullmatch("[0-9a-f]{40}", commit)
+        for commit in prerequisites
+    ):
+        raise ValueError("Invalid immutable test prerequisite commits")
+    if reset:
+        os.makedirs(workspace, exist_ok=True)
+        # Every earlier Git group has been drained before deleting its workspace.
+        subprocess.run(["find", workspace, "-mindepth", "1", "-maxdepth", "1",
+                        "-exec", "rm", "-rf", "{}", "+"], check=True)
+    run_git(workspace, "init", workspace)
+    if kind in ("linux-node", "android"):
+        run_git(workspace, "config", "--global", "--add", "safe.directory", workspace)
+    run_git(workspace, "config", "gc.auto", "0")
+    run_git(workspace, "remote", "add", "origin", remote)
+    if kind in ("preflight", "manual"):
+        checkout_selected_ref()
+        if kind == "preflight" and resolve_ref("HEAD") == os.environ["WORKFLOW_SHA"]:
+            checkout_harness(os.environ["WORKFLOW_SHA"])
+        return
+    target = "refs/remotes/origin/ci-target" if kind in ("linux-node", "android") else "refs/remotes/origin/checkout"
+    sha = "refs/heads/main" if kind == "clawhub" else os.environ["CHECKOUT_SHA"]
+    refs = [f"+{sha}:{target}"]
+    base = os.environ.get("CHECKOUT_BASE_SHA") if kind == "linux-node" else None
+    if base:
+        refs.append(f"+{base}:refs/remotes/origin/ci-ratchet-base")
+    # Fetch full reader objects with the authenticated checkout, before its
+    # credential scope ends and test workers create historical worktrees.
+    refs.extend(prerequisites)
+    fetch(workspace, *refs, prune=True, max_attempts=1 if reset else 3,
+          retry_codes=(124, 137) if kind == "skills" else ())
+    run_git(workspace, "checkout", *(["--force"] if reset else []), "--detach",
+            sha if kind in ("linux-node", "android") else target)
+    if kind == "android":
+        if not os.access(os.path.join(workspace, "apps/android/gradlew"), os.X_OK):
+            raise GitFailure(1)
+        return
+    if kind in ("clawhub", "skills"):
+        return
+    checkout_harness(sha)
 
 
 def main():
