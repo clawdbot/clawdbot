@@ -31,8 +31,8 @@ coding/CLI sessions under **Coding**.
 ### Talk to Home while working
 
 Select **Talk to your Home agent** in the sidebar footer (or press
-<kbd>Cmd/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>) to open Home beside your
-current page. The assistant sidebar can dock on the right or bottom.
+`Cmd/Ctrl+Shift+H`) to open Home beside your current page. The assistant
+sidebar can dock on the right or bottom.
 It follows the agent selected in the sidebar's agent switcher, so there is one
 place to change agents. **Ask OpenClaw** remains a separate system-care
 conversation in the same sidebar.
