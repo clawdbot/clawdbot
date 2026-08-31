@@ -13,6 +13,10 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
+import {
+  attachPluginInstallTransaction,
+  isPluginInstallCommitDeferred,
+} from "../../../plugins/install-transaction.js";
 import type {
   PluginInstallArtifactConsentHandler,
   PluginNpmInstallArtifactPrecommitHandler,
@@ -2930,6 +2934,90 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect(result.warnings).toEqual([expect.stringContaining("release cohort")]);
     },
   );
+
+  it("rolls back a direct version-bound npm install when its record disagrees with precommit", async () => {
+    const targetDir = tempDirs.make("openclaw-doctor-rejected-runtime-record-");
+    fs.writeFileSync(
+      path.join(targetDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", version: VERSION }),
+    );
+    const installResult = successfulInstall({
+      pluginId: "codex",
+      npmSpec: "@openclaw/codex",
+      version: "2026.5.2",
+      targetDir,
+      resolution: {
+        version: VERSION,
+        resolvedSpec: `@openclaw/codex@${VERSION}`,
+      },
+    });
+    let precommitValidated = false;
+    let transactionState: "pending" | "committed" | "rolled-back" = "pending";
+    const commit = vi.fn(async () => {
+      transactionState = "committed";
+    });
+    const rollback = vi.fn(async () => {
+      transactionState = "rolled-back";
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    });
+    mocks.installPluginFromNpmSpec.mockImplementationOnce(
+      async (callbacks: MockNpmInstallCallbacks) => {
+        await invokeMockNpmInstallPrecommit({
+          callbacks,
+          artifact: {
+            pluginId: "codex",
+            stagedArtifactDir: targetDir,
+            mode: "install",
+          },
+          npmResolution: installResult.npmResolution,
+        });
+        precommitValidated = true;
+        if (!isPluginInstallCommitDeferred(callbacks)) {
+          transactionState = "committed";
+          return installResult;
+        }
+        return attachPluginInstallTransaction(installResult, { commit, rollback });
+      },
+    );
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "codex",
+        label: "Codex",
+        install: {
+          npmSpec: "@openclaw/codex",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingPluginInstallsForIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      pluginIds: ["codex"],
+      env: {},
+    });
+
+    expect(precommitValidated).toBe(true);
+    expect(transactionState).toBe("rolled-back");
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+    expect(fs.existsSync(targetDir)).toBe(false);
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(result.changes).toEqual([]);
+    expect(result.repairedPluginIds).toBeUndefined();
+    expect(result.pluginInventoryChanged).toBeUndefined();
+    expect(result.failedPluginIds).toEqual(["codex"]);
+    expect(result.records).toEqual({});
+    expect(result.warnings).toEqual([expect.stringContaining("release cohort")]);
+  });
 
   it.each(invalidVersionBoundNpmArtifactIdentities)(
     "rejects a direct version-bound npm artifact with invalid npm artifact identity ($name)",
