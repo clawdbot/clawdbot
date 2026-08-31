@@ -30,6 +30,8 @@ import {
   attachPluginInstallTransaction,
   copyPluginInstallTransactionRequest,
   resolvePluginInstallTransaction,
+  settlePluginInstallTransactions,
+  type PluginInstallTransaction,
 } from "../../../plugins/install-transaction.js";
 import {
   isUnavailableNpmTarget,
@@ -54,6 +56,27 @@ import { isPostCoreConvergencePass } from "./update-phase.js";
 function carryPluginInstallTransaction<T extends object>(source: object, target: T): T {
   const transaction = resolvePluginInstallTransaction(source);
   return transaction ? attachPluginInstallTransaction(target, transaction) : target;
+}
+
+export async function rollbackPluginInstallTransactionsAfterFailure(params: {
+  transactions: readonly PluginInstallTransaction[];
+  error: unknown;
+  message: string;
+  afterRollback?: () => Promise<void>;
+}): Promise<never> {
+  let rollbackFailure: { error: unknown } | undefined;
+  try {
+    await settlePluginInstallTransactions(params.transactions, "rollback");
+  } catch (error) {
+    rollbackFailure = { error };
+  }
+  await params.afterRollback?.();
+  if (rollbackFailure) {
+    const aggregate = new AggregateError([params.error, rollbackFailure.error], params.message);
+    aggregate.cause = params.error;
+    throw aggregate;
+  }
+  throw params.error;
 }
 
 function shouldFallbackClawHubToNpm(params: {

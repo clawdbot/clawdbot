@@ -40,6 +40,7 @@ import {
   isActionableClawHubSkippedOutcome,
   isClawHubReviewNotice,
   resolveRecordInstallPath,
+  rollbackPluginInstallTransactionsAfterFailure,
 } from "./missing-configured-plugin-install.install.js";
 import {
   forceNpmInstallRecordRepair,
@@ -168,17 +169,11 @@ async function repairMissingPluginInstalls(params: {
         },
       );
     } catch (error) {
-      try {
-        await settlePluginInstallTransactions(pendingInstallTransactions, "rollback");
-      } catch (rollbackError) {
-        const aggregate = new AggregateError(
-          [error, rollbackError],
-          "Plugin repair failed and payload rollback failed",
-        );
-        aggregate.cause = error;
-        throw aggregate;
-      }
-      throw error;
+      await rollbackPluginInstallTransactionsAfterFailure({
+        transactions: pendingInstallTransactions,
+        error,
+        message: "Plugin repair failed and payload rollback failed",
+      });
     }
     // The index already names the active payload. Losing ownership here must
     // retain its rollback backup rather than settle either side under a stale lease.
@@ -468,24 +463,13 @@ async function repairMissingPluginInstallsWithLease(
             : updateParams,
         );
       } catch (error) {
-        let rollbackFailed = false;
-        let rollbackError: unknown;
-        try {
-          await settlePluginInstallTransactions(dependencyRepairTransactions, "rollback");
-        } catch (caught) {
-          rollbackFailed = true;
-          rollbackError = caught;
-        }
-        await clearDependencyRepairRetention(retainedDependencyRepairInstallPaths.keys());
-        if (rollbackFailed) {
-          const aggregate = new AggregateError(
-            [error, rollbackError],
-            "Plugin dependency repair failed and payload rollback failed",
-          );
-          aggregate.cause = error;
-          throw aggregate;
-        }
-        throw error;
+        await rollbackPluginInstallTransactionsAfterFailure({
+          transactions: dependencyRepairTransactions,
+          error,
+          message: "Plugin dependency repair failed and payload rollback failed",
+          afterRollback: () =>
+            clearDependencyRepairRetention(retainedDependencyRepairInstallPaths.keys()),
+        });
       }
 
       const completedDependencyRepairPluginIds = new Set<string>();
