@@ -10,10 +10,6 @@ import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import { renderNewSessionLink } from "../components/new-session-link.ts";
 import {
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
-  HOME_PANEL_TOGGLE_EVENT,
-} from "../components/panel-toggle-contract.ts";
-import {
   renderLazySettingsSidebar,
   type SettingsSidebarModule,
 } from "../components/settings-sidebar-lazy.ts";
@@ -65,6 +61,7 @@ import {
   normalizeCatalogOpenTarget,
   normalizeChatSendShortcut,
 } from "./settings.ts";
+import { renderCollapsedAssistantToggles } from "./shell-assistant-toggles.ts";
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
@@ -507,30 +504,11 @@ export function renderApplicationShell(host: ShellViewHost) {
                   ${icons.search}
                 </button>
               </openclaw-tooltip>
-              ${navCollapsed && homePanelAvailable
-                ? html`<openclaw-tooltip .content=${t("assistantPanel.toggle")}>
-                    <button
-                      type="button"
-                      class="shell-chrome-controls__button shell-chrome-controls__home"
-                      aria-label=${t("assistantPanel.toggle")}
-                      @click=${() => window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT))}
-                    >
-                      ${icons.home}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing}
-              ${navCollapsed && custodianPanelAvailable
-                ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
-                    <button
-                      type="button"
-                      class="shell-chrome-controls__button shell-chrome-controls__custodian"
-                      aria-label=${t("nav.askOpenClaw")}
-                      @click=${() =>
-                        window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
-                    >
-                      ${icons.lobster}
-                    </button>
-                  </openclaw-tooltip>`
+              ${navCollapsed
+                ? renderCollapsedAssistantToggles({
+                    homeAvailable: homePanelAvailable,
+                    custodianAvailable: custodianPanelAvailable,
+                  })
                 : nothing}
             </div>
           `

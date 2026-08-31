@@ -16,6 +16,10 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
   isPresenceViewerIdle,
@@ -385,7 +389,8 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
         : nothing}
       <span class="sidebar-footer-actions">
         ${isHomePanelAvailable(host.sessionDataContext?.gateway)
-          ? html`<openclaw-tooltip .content=${t("assistantPanel.toggle")}
+          ? html`<openclaw-tooltip
+              .content=${`${t("assistantPanel.toggle")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.homePanel)})`}
               ><button
                 type="button"
                 class="sidebar-brand__icon sidebar-footer-bar__home"

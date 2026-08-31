@@ -51,3 +51,7 @@ export type PanelToggleElement = HTMLElement & {
 export function isTerminalPanelShortcut(event: KeyboardEvent): boolean {
   return matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel, event);
 }
+
+export function isHomePanelShortcut(event: KeyboardEvent): boolean {
+  return matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.homePanel, event);
+}

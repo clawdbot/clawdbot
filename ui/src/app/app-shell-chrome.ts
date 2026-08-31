@@ -16,6 +16,7 @@ import {
   HOME_PANEL_TOGGLE_EVENT,
   DEBUG_OVERLAY_REQUEST_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
+  isHomePanelShortcut,
   isTerminalPanelShortcut,
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -410,6 +411,13 @@ export class ShellChromeOwner {
     ) {
       event.preventDefault();
       window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT));
+      return;
+    }
+    // Unlike the terminal panel, the assistant panel never handles its own
+    // keydown, so the shell owns this chord on every route.
+    if (isHomePanelShortcut(event) && isHomePanelAvailable(host.context?.gateway)) {
+      event.preventDefault();
+      window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
       return;
     }
     if (event.defaultPrevented) {

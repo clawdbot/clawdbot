@@ -142,6 +142,7 @@ export const en: TranslationMap = {
       zoomOut: "Zoom out",
       zoomReset: "Reset zoom",
       terminalPanel: "Toggle terminal panel",
+      homePanel: "Talk to your Home agent",
       workspaceFiles: "Toggle workspace files",
       approveOnce: "Approve once",
       approveAlways: "Always allow",
