@@ -353,7 +353,8 @@ export function buildEmbeddedRunPayloads(params: {
               ? [fallbackAnswerText]
               : [];
   const preparedAnswerDirectives =
-    shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText || !hasAssistantTextPayload
+    answerTexts.length === 1 &&
+    (shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText || !hasAssistantTextPayload)
       ? fallbackAnswerDirectiveState
       : null;
   let hasUserFacingReply =

@@ -30,7 +30,6 @@ import {
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
-  createOverflowRunParams,
   resetRunOverflowCompactionHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
@@ -41,8 +40,10 @@ import {
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
-let overflowBaseRunParams: ReturnType<typeof createOverflowRunParams>;
 let fixture: Awaited<ReturnType<typeof createSharedRunIntegrationSession>> | undefined;
+let overflowBaseRunParams: Awaited<
+  ReturnType<typeof createSharedRunIntegrationSession>
+>["runParams"];
 
 function mockOverflowRetrySuccess(params: {
   runEmbeddedAttempt: {
