@@ -30,7 +30,7 @@ import {
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { parseMentions } from "./mentions.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
-import { readMSTeamsPresentationCard } from "./presentation.js";
+import { prepareMSTeamsReplyPayload, readMSTeamsPresentationCard } from "./presentation.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
@@ -231,11 +231,16 @@ export function renderReplyPayloadsToMessages(
       channel: "msteams",
     });
 
-  for (const payload of replies) {
-    // A prepared presentation already carries its text inside the card, so the card is
-    // the whole message - the same thing `sendPayload` does on the outbound path. It is
-    // also content in its own right: a controls-only reply has no text or media and
-    // would otherwise be skipped, producing no Teams activity at all.
+  for (const rawPayload of replies) {
+    // Core resolves presentations inside the outbound send pipeline only, so replies the
+    // monitor delivers itself still carry portable controls. Resolving at the reply
+    // path's one renderer keeps both Teams paths on the same card, and runs after the
+    // stream controller has taken the text Teams already showed.
+    const payload = prepareMSTeamsReplyPayload(rawPayload);
+    // A resolved presentation carries its text inside the card, so the card is the whole
+    // message - the same thing `sendPayload` does on the outbound path. It is also
+    // content in its own right: a controls-only reply has no text or media and would
+    // otherwise be skipped, producing no Teams activity at all.
     const card = readMSTeamsPresentationCard(payload);
     if (card) {
       out.push({ card });

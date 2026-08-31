@@ -386,6 +386,22 @@ describe("createTeamsReplyStreamController", () => {
     });
   });
 
+  it("strips text but keeps the controls a reply offers when text was streamed", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+    ctrl.onPartialReply({ text: "streamed" });
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open run", value: "open" }] }],
+    };
+
+    // The stream carries text only. Dropping the whole payload here dropped the
+    // buttons with it, so a streamed reply reached Teams without its controls.
+    expect(ctrl.preparePayload({ text: "streamed", presentation })).toEqual({
+      text: undefined,
+      presentation,
+    });
+  });
+
   it("allows fallback delivery for second text segment after tool calls", () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });

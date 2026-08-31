@@ -1,10 +1,12 @@
 // Msteams plugin module implements presentation behavior.
 import {
   adaptMessagePresentationForChannel,
+  isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
   resolveMessagePresentationButtonAction,
   type MessagePresentation,
+  type MessagePresentationBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   asOptionalRecord,
@@ -135,6 +137,9 @@ export function renderMSTeamsPresentationPayload(params: {
   };
 }
 
+const countPresentationDataBlocks = (blocks: readonly MessagePresentationBlock[]): number =>
+  blocks.filter((block) => block.type === "table" || block.type === "chart").length;
+
 /** Reads the Adaptive Card a prepared reply carries, if any. */
 export function readMSTeamsPresentationCard(
   payload: ReplyPayload,
@@ -160,12 +165,25 @@ export function prepareMSTeamsReplyPayload(payload: ReplyPayload): ReplyPayload 
   const { presentation: _presentation, presentationTextMode, ...rest } = payload;
   // "fallback" text already renders these controls as prose; the card replaces it.
   const textIsFallback = presentationTextMode === "fallback";
+  const adapted = adaptMessagePresentationForChannel({
+    presentation,
+    capabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
+  });
+  // Core applies this rule before its own renderer, so both Teams paths keep the
+  // same answer: once every structured data block has degraded to text and nothing
+  // interactive remains, the producer's authored fallback beats block flattening.
+  if (
+    textIsFallback &&
+    payload.text?.trim() &&
+    !presentation.blocks.some(isMessagePresentationInteractiveBlock) &&
+    countPresentationDataBlocks(presentation.blocks) > 0 &&
+    countPresentationDataBlocks(adapted.blocks) === 0
+  ) {
+    return rest;
+  }
   const rendered = renderMSTeamsPresentationPayload({
     payload: textIsFallback ? { ...rest, text: undefined } : rest,
-    presentation: adaptMessagePresentationForChannel({
-      presentation,
-      capabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
-    }),
+    presentation: adapted,
   });
   if (rendered) {
     return rendered;

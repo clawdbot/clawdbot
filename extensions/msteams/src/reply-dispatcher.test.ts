@@ -37,8 +37,6 @@ vi.mock("./revoked-context.js", () => ({
   withRevokedProxyFallback: async ({ run }: { run: () => Promise<unknown> }) => await run(),
 }));
 
-const { readMSTeamsPresentationCard } = await import("./presentation.js");
-
 /**
  * Mock for the SDK's `ctx.stream` (IStreamer). The migration uses
  * `ctx.stream.update()` for informative status, `.emit()` for token chunks,
@@ -1042,23 +1040,19 @@ describe("createMSTeamsReplyDispatcher", () => {
     await finalization;
   });
 
-  it("resolves a reply's presentation into a Teams card before delivering it", async () => {
-    // The turn adapter owns this preparation: core renders presentations inside the
-    // outbound send pipeline, which replies delivered here never enter.
+  it("hands a reply's controls to the renderer even after the text was streamed", async () => {
     const dispatcher = createDispatcher();
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open run", value: "open" }] }],
+    };
 
-    const prepared = await dispatcher.delivery.preparePayload?.(
-      {
-        text: "Deploy finished",
-        presentation: {
-          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
-        },
-      },
-      { kind: "final" },
-    );
+    await dispatcher.dispatcherOptions.onReplyStart?.();
+    await triggerPartialReply("Deploy finished");
+    await dispatcherOptions().deliver({ text: "Deploy finished", presentation });
 
-    expect(readMSTeamsPresentationCard(prepared ?? {})?.actions).toEqual([
-      { type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } },
-    ]);
+    // The stream already showed the text, so only the controls remain to deliver.
+    // Before this, the streamed final was dropped whole and they never rendered.
+    const [renderedPayloads] = renderReplyPayloadsToMessagesMock.mock.calls.at(-1) ?? [];
+    expect(renderedPayloads).toEqual([{ text: undefined, presentation }]);
   });
 });

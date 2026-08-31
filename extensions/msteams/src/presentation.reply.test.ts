@@ -25,34 +25,67 @@ const cardOf = readMSTeamsPresentationCard;
 
 describe("msteams reply presentation", () => {
   it("carries a reply's buttons into the card the reply path sends", () => {
-    const prepared = prepareMSTeamsReplyPayload({
-      text: "Deploy finished",
-      presentation: PRESENTATION,
-    });
-
-    expect(cardOf(prepared)).toEqual({
-      type: "AdaptiveCard",
-      version: "1.4",
-      body: [
-        { type: "TextBlock", text: "Deploy finished", wrap: true },
-        { type: "TextBlock", text: "Deploy", weight: "Bolder", size: "Medium", wrap: true },
-        { type: "TextBlock", text: "Finished", wrap: true },
-      ],
-      actions: [{ type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } }],
-    });
-    // The card already carries the text, so it is the whole message - the same shape
-    // `sendPayload` produces on the outbound path.
-    expect(renderReply(prepared)).toEqual([{ card: cardOf(prepared) }]);
+    // The renderer resolves the portable presentation itself - it is the one place
+    // the reply path turns a payload into Teams messages.
+    expect(renderReply({ text: "Deploy finished", presentation: PRESENTATION })).toEqual([
+      {
+        card: {
+          type: "AdaptiveCard",
+          version: "1.4",
+          body: [
+            { type: "TextBlock", text: "Deploy finished", wrap: true },
+            { type: "TextBlock", text: "Deploy", weight: "Bolder", size: "Medium", wrap: true },
+            { type: "TextBlock", text: "Finished", wrap: true },
+          ],
+          actions: [
+            { type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } },
+          ],
+        },
+      },
+    ]);
   });
 
   it("renders a controls-only reply instead of producing no message at all", () => {
-    const prepared = prepareMSTeamsReplyPayload({ presentation: PRESENTATION });
+    // Two replies arrive in this shape: one whose only content is its controls, and a
+    // streamed reply whose text the stream already delivered. Without a card neither has
+    // text or media, so the renderer skipped it and the user saw nothing.
+    const messages = renderReply({ presentation: PRESENTATION });
 
-    // Without a card this payload has no text and no media, so the renderer skipped it
-    // and the dispatcher reported no_visible_result - the user saw nothing.
-    const messages = renderReply(prepared);
     expect(messages).toHaveLength(1);
-    expect(messages[0]?.card).toBeDefined();
+    expect(messages[0]?.card?.body).toEqual([
+      { type: "TextBlock", text: "Deploy", weight: "Bolder", size: "Medium", wrap: true },
+      { type: "TextBlock", text: "Finished", wrap: true },
+    ]);
+    expect(messages[0]?.card?.actions).toEqual([
+      { type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } },
+    ]);
+  });
+
+  it("keeps the producer's authored fallback for a presentation Teams cannot render", () => {
+    const authored = "Runs by region:\n- EU: 12\n- US: 9";
+    const prepared = prepareMSTeamsReplyPayload({
+      text: authored,
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          {
+            type: "table",
+            caption: "Runs by region",
+            headers: ["Region", "Runs"],
+            rows: [
+              ["EU", "12"],
+              ["US", "9"],
+            ],
+          },
+        ],
+      },
+    });
+
+    // Teams cannot render tables, so every block degrades to text and the card would
+    // only re-flatten it. Core skips its renderer here to keep the authored fallback
+    // verbatim; the reply path has to reach the same answer.
+    expect(cardOf(prepared)).toBeUndefined();
+    expect(prepared.text).toBe(authored);
   });
 
   it("degrades the controls to text when the reply carries media", () => {

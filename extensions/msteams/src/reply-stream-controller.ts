@@ -12,6 +12,7 @@ import {
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { hasReplyContent } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { extractMessageId } from "./media-helpers.js";
@@ -200,9 +201,25 @@ export function createTeamsReplyStreamController(params: {
     return { ...payload, text: remainingText || undefined };
   };
 
+  // A native stream carries the reply's text and nothing else. Media and portable
+  // controls are separate content, so the text-free remainder still goes to block
+  // delivery; dropping the whole payload would drop them with the streamed text.
+  const suppressedFinalRemainder = (payload: ReplyPayload): Maybe<ReplyPayload> => {
+    const remainder = { ...payload, text: undefined };
+    return hasReplyContent(remainder) ? remainder : undefined;
+  };
+
+  // Whatever that remainder already delivered must not return through the fallback,
+  // which re-sends only the text the stream may have failed to deliver.
   const fallbackPayloadForSuppressedFinal = (payload: ReplyPayload): ReplyPayload => {
-    const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-    return hasMedia ? { ...payload, mediaUrl: undefined, mediaUrls: undefined } : payload;
+    const {
+      mediaUrl: _mediaUrl,
+      mediaUrls: _mediaUrls,
+      presentation: _presentation,
+      presentationTextMode: _presentationTextMode,
+      ...textOnly
+    } = payload;
+    return textOnly;
   };
 
   const finalStreamActivity = (text?: string) => ({
@@ -512,11 +529,10 @@ export function createTeamsReplyStreamController(params: {
       // latched mid-flight, deliver only a provider-acknowledged remainder;
       // preserve the full reply when delivery was not acknowledged.
       if (tokensEmitted && !streamFailed) {
-        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
         streamFinalizationPending = true;
         tokensEmitted = false;
-        return hasMedia ? { ...payload, text: undefined } : undefined;
+        return suppressedFinalRemainder(payload);
       }
       if (streamFailed) {
         // Trim the provider-acknowledged prefix only from the failed segment.
@@ -539,8 +555,7 @@ export function createTeamsReplyStreamController(params: {
           nativeDispatchStarted = true;
           pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
           streamFinalizationPending = true;
-          const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-          return hasMedia ? { ...payload, text: undefined } : undefined;
+          return suppressedFinalRemainder(payload);
         } catch (err) {
           if (isStreamCancelledError(err)) {
             canceledLocally = true;

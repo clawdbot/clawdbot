@@ -42,7 +42,6 @@ import {
   sendMSTeamsMessages,
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
-import { prepareMSTeamsReplyPayload } from "./presentation.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -440,9 +439,6 @@ export function createMSTeamsReplyDispatcher(params: {
   };
   const delivery: ChannelInboundTurnPlan["delivery"] = {
     observeMessageSent: true,
-    // Core renders presentations inside the outbound send pipeline only, so this path
-    // resolves them before either branch reads channelData.
-    preparePayload: prepareMSTeamsReplyPayload,
     deliver: async (payload) => {
       const preparedPayload = streamController.preparePayload(payload);
       const native = streamController.claimNativeDelivery();
