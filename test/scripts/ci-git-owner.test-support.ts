@@ -42,6 +42,7 @@ const moved = "d".repeat(40);
 const merge = "e".repeat(40);
 const defaults: Record<string, string> = {
   CHECKOUT_REPO: "fixture/checkout",
+  CHECKOUT_TOKEN: "",
   CHECKOUT_REF: candidate,
   CHECKOUT_SHA: candidate,
   CHECKOUT_FALLBACK_REF: candidate,
