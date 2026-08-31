@@ -495,7 +495,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       expect(testing.activeRuns.size).toBe(0);
       await expect(
         harness.tools[1]!.execute("closed-sibling", { runId: parked.runId }),
-      ).rejects.toThrow(/unavailable|expired/);
+      ).rejects.toBe(handoffReason);
     } finally {
       harness.dispose();
     }

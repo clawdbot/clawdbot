@@ -10,10 +10,14 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
-import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
+import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import {
+  consumeRepairableCodeModeFailure,
+  createCodeModePermissionChangeReason,
+} from "./code-mode-repair-provenance.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   createCodeModeHarness,
   fakeTool,
@@ -69,11 +73,21 @@ async function runCodeModeAgent(params: {
   harness?:
     | ReturnType<typeof createCodeModeHarness>
     | ReturnType<typeof createSubscribedCodeModeHarness>;
-  configureAgent?: (agent: Agent) => void;
+  abortSignal?: AbortSignal;
+  configureAgent?: (
+    agent: Agent,
+    harness: { tools: AnyAgentTool[]; ctx: Parameters<typeof createCodeModeTools>[0] },
+  ) => void;
 }) {
   const harness =
     params.harness ?? createCodeModeHarness({ codeModeSkills: params.codeModeSkills });
-  const { config, catalogRef, tools } = harness;
+  const { config, catalogRef } = harness;
+  const ctx = "ctx" in harness ? harness.ctx : harness;
+  const tools = params.abortSignal
+    ? createCodeModeTools({ ...ctx, abortSignal: params.abortSignal }).map((tool) =>
+        wrapToolWithAbortSignal(tool, params.abortSignal),
+      )
+    : harness.tools;
   const sessionId = "sessionId" in harness ? harness.sessionId : "session-code-mode";
   const sessionKey = "sessionKey" in harness ? harness.sessionKey : "agent:main:main";
   const runId = "runId" in harness ? harness.runId : "run-code-mode";
@@ -124,7 +138,7 @@ async function runCodeModeAgent(params: {
       return stream;
     },
   });
-  params.configureAgent?.(agent);
+  params.configureAgent?.(agent, { tools, ctx });
   installCodeModeOutcomeHook({
     agent,
     onReconciliationCandidate: () => {
@@ -303,6 +317,97 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(effects).toEqual(scenario === "earlier mutation" ? ["completed"] : []);
     // Replacing details before the outcome boundary must leave the original proof unused.
     expect(consumeRepairableCodeModeFailure(waitDetails)).toBe(scenario === "copied details");
+  });
+
+  it("continues after an operator permission change without replaying earlier mutations", async () => {
+    const generation = new AbortController();
+    const parked = createDeferred();
+    const applied: string[] = [];
+    const recordEffect = pluginToolWithExecute("record_effect", "Record an effect", async () => {
+      applied.push("prior mutation");
+      return jsonResult({ recorded: true });
+    });
+    const pending = pluginToolWithExecute(
+      "pending_action",
+      "Wait for permission",
+      async (_id, _input, signal) => {
+        if (!signal) {
+          throw new Error("Expected owning tool signal");
+        }
+        const cancelled = createDeferred<never>();
+        const onAbort = () => cancelled.reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+        parked.resolve();
+        try {
+          return await cancelled.promise;
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+        }
+      },
+    );
+    const inspect = pluginToolWithExecute(
+      "inspect_state",
+      "Inspect authoritative state",
+      async () => jsonResult({ applied: [...applied] }),
+    );
+    const finish = pluginToolWithExecute("finish_task", "Finish remaining work", async () => {
+      applied.push("remaining mutation");
+      return jsonResult({ finished: true });
+    });
+    let changePermissions!: () => void;
+    let retainedControl!: AnyAgentTool;
+    const running = runCodeModeAgent({
+      hiddenTools: [recordEffect, pending, inspect, finish],
+      abortSignal: generation.signal,
+      configureAgent: (agent, harness) => {
+        retainedControl = harness.tools[0]!;
+        agent.prepareNextTurn = async () => ({
+          context: {
+            systemPrompt: agent.state.systemPrompt,
+            tools: agent.state.tools,
+            messages: agent.state.messages,
+          },
+        });
+        changePermissions = () => {
+          generation.abort(createCodeModePermissionChangeReason());
+          agent.state.tools = createCodeModeTools({
+            ...harness.ctx,
+            abortSignal: new AbortController().signal,
+          });
+        };
+      },
+      programs: [
+        'await record_effect({}); json("prior mutation completed"); return await pending_action({});',
+        "return await inspect_state({});",
+        "return await finish_task({});",
+      ],
+    });
+    await parked.promise;
+    changePermissions();
+    const { agent, providerContexts, reconciliationCandidates } = await running;
+
+    expect(providerContexts).toHaveLength(4);
+    expect(reconciliationCandidates).toBe(0);
+    expect(applied).toEqual(["prior mutation", "remaining mutation"]);
+    expect(recordEffect.execute).toHaveBeenCalledOnce();
+    expect(pending.execute).toHaveBeenCalledOnce();
+    expect(inspect.execute).toHaveBeenCalledOnce();
+    expect(finish.execute).toHaveBeenCalledOnce();
+    expect(agent.state.messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "exec",
+        details: expect.objectContaining({
+          status: "failed",
+          code: "aborted",
+          error: expect.stringContaining("Permission change"),
+          output: [{ type: "json", value: "prior mutation completed" }],
+        }),
+      }),
+    );
+    await expect(retainedControl.execute("stale-control", { code: "return 1;" })).rejects.toThrow(
+      "Aborted",
+    );
   });
 
   it.each([

@@ -72,19 +72,18 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       systemPromptText: "",
     };
   }
-  const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
-    config: attempt.config,
-    agentId: params.sessionAgentId,
-    sessionKey: attempt.sessionKey,
-    permissionMode: attempt.permissionMode,
-    sandboxAvailable: params.sandbox?.enabled === true,
-    execOverrides: attempt.execOverrides,
-  });
-  const sandboxInfo = buildEmbeddedSandboxInfo(
-    params.sandbox,
-    attempt.bashElevated,
-    sandboxInfoExecPolicy,
-  );
+  const resolveSandboxInfo = () => {
+    const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
+      config: attempt.config,
+      agentId: params.sessionAgentId,
+      sessionKey: attempt.sessionKey,
+      permissionMode: attempt.permissionMode,
+      sandboxAvailable: params.sandbox?.enabled === true,
+      execOverrides: attempt.execOverrides,
+    });
+    return buildEmbeddedSandboxInfo(params.sandbox, attempt.bashElevated, sandboxInfoExecPolicy);
+  };
+  const sandboxInfo = resolveSandboxInfo();
   const reasoningTagHint = isReasoningTagProvider(attempt.provider, {
     config: attempt.config,
     workspaceDir: params.effectiveWorkspace,
@@ -94,17 +93,20 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     model: attempt.model,
     runtimeHandle: params.getProviderRuntimeHandle(),
   });
-  const toolSchemaDirectoryPrompt = params.toolSearchDirectoryEnabled
-    ? buildToolSchemaDirectoryPrompt({
-        config: attempt.config,
-        runtimeConfig: params.toolSearchRuntimeConfig,
-        agentId: params.sessionAgentId,
-        sessionKey: params.sandboxSessionKey,
-        sessionId: attempt.sessionId,
-        runId: attempt.runId,
-        catalogRef: params.toolSearchCatalogRef,
-      })
-    : undefined;
+  const resolveToolSchemaDirectoryPrompt = () =>
+    params.toolSearchDirectoryEnabled
+      ? buildToolSchemaDirectoryPrompt({
+          config: attempt.config,
+          runtimeConfig: params.toolSearchRuntimeConfig,
+          agentId: params.sessionAgentId,
+          sessionKey: params.sandboxSessionKey,
+          sessionId: attempt.sessionId,
+          runId: attempt.runId,
+          catalogRef: params.toolSearchCatalogRef,
+        })
+      : undefined;
+
+  const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();
 
   const activeProcessSessions = listActiveProcessSessionReferences({
     scopeKey: resolveProcessToolScopeKey({
@@ -177,23 +179,37 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     });
   const includeMemorySection =
     !params.activeContextEngine || params.activeContextEngine.info.id === "legacy";
-  const preparedMemoryPrompt = await prepareAgentMemoryPrompt({
-    enabled: effectivePromptMode === "full" && includeMemorySection,
-    toolNames: params.effectiveTools.map((tool) => tool.name),
-    capabilityToolNames: params.capabilityToolNames,
-    citationsMode: attempt.config?.memory?.citations,
-    agentId: runtimeInfo.agentId,
-    agentSessionKey: runtimeInfo.sessionKey,
-    sandboxed: sandboxInfo?.enabled === true,
-  });
-  const preparedWatchedSessions = prepareWatchedSessionsPrompt({
-    enabled: effectivePromptMode === "full",
-    config: attempt.config,
-    sessionKey: attempt.sessionKey,
-    sandboxed: sandboxInfo?.enabled === true,
-    toolNames: params.effectiveTools.map((tool) => tool.name),
-    capabilityToolNames: params.capabilityToolNames,
-  });
+  const prepareToolContextSections = async (
+    tools: PromptTools,
+    capabilityToolNames: Iterable<string>,
+    sandboxed: boolean,
+  ) => {
+    const toolContext = {
+      toolNames: tools.map((tool) => tool.name),
+      capabilityToolNames,
+      sandboxed,
+    };
+    return {
+      preparedMemoryPrompt: await prepareAgentMemoryPrompt({
+        ...toolContext,
+        enabled: effectivePromptMode === "full" && includeMemorySection,
+        citationsMode: attempt.config?.memory?.citations,
+        agentId: runtimeInfo.agentId,
+        agentSessionKey: runtimeInfo.sessionKey,
+      }),
+      preparedWatchedSessions: prepareWatchedSessionsPrompt({
+        ...toolContext,
+        enabled: effectivePromptMode === "full",
+        config: attempt.config,
+        sessionKey: attempt.sessionKey,
+      }),
+    };
+  };
+  const { preparedMemoryPrompt, preparedWatchedSessions } = await prepareToolContextSections(
+    params.effectiveTools,
+    params.capabilityToolNames,
+    sandboxInfo?.enabled === true,
+  );
   const activeProjectKeys = attempt.preparedModelRuntime?.activeProjectKeys ?? [];
   const projectMemoryBootstrap =
     effectivePromptMode === "full" && activeProjectKeys.length > 0
@@ -215,7 +231,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       .filter((value): value is string => Boolean(value))
       .join("\n\n") || undefined;
 
-  const attemptSystemPrompt = buildAttemptSystemPrompt({
+  const promptInputs: Parameters<typeof buildAttemptSystemPrompt>[0] = {
     isRawModelRun: params.isRawModelRun,
     transformProviderSystemPrompt: (transformParams) =>
       transformProviderSystemPrompt({
@@ -287,8 +303,9 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         agentId: params.sessionAgentId,
       },
     },
-  });
-  const systemPromptReport = buildSystemPromptReport({
+  };
+  const attemptSystemPrompt = buildAttemptSystemPrompt(promptInputs);
+  const reportInputs: Parameters<typeof buildSystemPromptReport>[0] = {
     source: "run",
     generatedAt: Date.now(),
     sessionId: attempt.sessionId,
@@ -314,13 +331,85 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     injectedWorkspaceFiles: params.bootstrap.bootstrapInjectionStats,
     skillsPrompt: params.skillsPrompt,
     tools: params.effectiveTools,
-  });
+  };
+  const systemPromptReport = buildSystemPromptReport(reportInputs);
   params.markStage("system-prompt");
+
+  let permissionPromptPreparation:
+    | {
+        mode: EmbeddedRunAttemptParams["permissionMode"];
+        tools: PromptTools;
+        capabilities: string[];
+        promise: Promise<(currentSystemPrompt: string) => string>;
+      }
+    | undefined;
 
   return {
     runtimeChannel,
     runtimeInfo,
     systemPromptReport,
     systemPromptText: attemptSystemPrompt.systemPrompt,
+    preparePermissionPrompt: (effectiveTools: PromptTools = params.effectiveTools) => {
+      const mode = attempt.permissionMode;
+      const capabilities = [...params.capabilityToolNames].toSorted();
+      if (
+        permissionPromptPreparation &&
+        permissionPromptPreparation.mode === mode &&
+        permissionPromptPreparation.tools === effectiveTools &&
+        permissionPromptPreparation.capabilities.length === capabilities.length &&
+        permissionPromptPreparation.capabilities.every(
+          (name, index) => name === capabilities[index],
+        )
+      ) {
+        return permissionPromptPreparation.promise;
+      }
+      // Prepare once per tool/policy generation. Memory supplements may await;
+      // keep their immutable context separate until the model boundary accepts it.
+      const tools = [...effectiveTools];
+      const refreshedSandboxInfo = resolveSandboxInfo();
+      const embeddedSystemPrompt = {
+        ...promptInputs.embeddedSystemPrompt,
+        tools,
+        capabilityToolNames: capabilities,
+        toolSchemaDirectoryPrompt: resolveToolSchemaDirectoryPrompt(),
+        sandboxInfo: refreshedSandboxInfo,
+      };
+      const promise = (async () => {
+        Object.assign(
+          embeddedSystemPrompt,
+          await prepareToolContextSections(
+            tools,
+            capabilities,
+            refreshedSandboxInfo?.enabled === true,
+          ),
+        );
+        const nextSystemPrompt = buildAttemptSystemPrompt({
+          ...promptInputs,
+          embeddedSystemPrompt,
+        });
+        const permissionNotice = `## Permission change\nThe operator changed workspace permissions to ${mode ?? "configured defaults"}. Continue the current task with the updated tools and permissions. Inspect interrupted actions before retrying; do not repeat completed actions.`;
+        return (currentSystemPrompt: string) => {
+          if (params.isRawModelRun) {
+            return currentSystemPrompt;
+          }
+          const systemPrompt = nextSystemPrompt.refreshSystemPrompt(
+            currentSystemPrompt,
+            permissionNotice,
+          );
+          Object.assign(
+            systemPromptReport,
+            buildSystemPromptReport({
+              ...reportInputs,
+              generatedAt: Date.now(),
+              systemPrompt,
+              tools,
+            }),
+          );
+          return systemPrompt;
+        };
+      })();
+      permissionPromptPreparation = { mode, tools: effectiveTools, capabilities, promise };
+      return promise;
+    },
   };
 }

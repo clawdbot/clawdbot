@@ -2479,7 +2479,7 @@ src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1
 src/commands/doctor-plugin-model-catalog.ts	1
 src/commands/doctor-plugin-registry.ts	1
-src/commands/doctor-post-upgrade.ts	5
+src/commands/doctor-post-upgrade.ts	1
 src/commands/doctor-prompter.ts	1
 src/commands/doctor-retired-phone-control.ts	1
 src/commands/doctor-sandbox-legacy-registry.ts	8

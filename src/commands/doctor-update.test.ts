@@ -1,6 +1,9 @@
 // Doctor update tests cover pre-doctor update prompts, state files, and declined update flows.
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
@@ -12,7 +15,6 @@ const originalServiceRepairPolicy = process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
 const mocks = vi.hoisted(() => ({
   createUpdateProgress: vi.fn(),
   gitMutationPolicy: vi.fn(),
-  isDefaultInstallIdentity: vi.fn(() => true),
   maybeRestartServiceAfterFailedMutableUpdate: vi.fn(),
   maybeStopManagedServiceBeforeMutableUpdate: vi.fn(),
   note: vi.fn(),
@@ -32,11 +34,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../cli/update-cli/progress.js", () => ({
   createUpdateProgress: mocks.createUpdateProgress,
 }));
-
-vi.mock("../config/paths.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
-  return { ...actual, isDefaultInstallIdentity: mocks.isDefaultInstallIdentity };
-});
 
 vi.mock("../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: async (root: string) => `${root}/dist/index.js`,
@@ -89,6 +86,15 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 
+function createManagedDoctorEnvironment(): NodeJS.ProcessEnv {
+  const stateDir = path.join(os.homedir(), ".openclaw-work");
+  return {
+    OPENCLAW_PROFILE: "work",
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+  };
+}
+
 async function runOffer(params?: {
   root?: string;
   confirm?: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -112,7 +118,7 @@ beforeEach(async () => {
   mocks.createUpdateProgress.mockReset();
   mocks.createUpdateProgress.mockReturnValue({ progress: {}, stop: vi.fn() });
   mocks.gitMutationPolicy.mockReset();
-  mocks.isDefaultInstallIdentity.mockReturnValue(true);
+  mockSystemAccountHome();
   mocks.maybeRestartServiceAfterFailedMutableUpdate.mockReset();
   mocks.maybeStopManagedServiceBeforeMutableUpdate.mockReset();
   mocks.note.mockReset();
@@ -128,7 +134,7 @@ beforeEach(async () => {
     start: vi.fn(),
     isLoaded: async () => false,
   });
-  mocks.readGatewayServiceState.mockResolvedValue({ env: { OPENCLAW_PROFILE: "work" } });
+  mocks.readGatewayServiceState.mockResolvedValue({ env: createManagedDoctorEnvironment() });
   mocks.revalidateManagedGatewayServiceAfterUpdate.mockImplementation(
     async ({ preManagedServiceStop }) => preManagedServiceStop.serviceUpdateVerdict,
   );
@@ -213,7 +219,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
   }) {
     const running = params.running ?? true;
     const owned = params.verdict.kind === "owned";
-    const serviceEnv = params.env ?? { OPENCLAW_PROFILE: "work" };
+    const serviceEnv = params.env ?? createManagedDoctorEnvironment();
     mocks.maybeStopManagedServiceBeforeMutableUpdate.mockImplementation(
       async ({ phase }: { phase: "inspect" | "prepare" }) => {
         const stopped = phase === "prepare" && running && (owned || params.stopUnresolved === true);
@@ -370,7 +376,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       mockManagedService({ verdict });
       mockUpdateResult({ status: "ok", mode: "git", root: "/repo/link" });
       const currentEnv = {
-        OPENCLAW_PROFILE: "work",
+        ...createManagedDoctorEnvironment(),
         ...(refreshDefinition ? { CURRENT_MANAGED_VALUE: "validated" } : {}),
       };
       mocks.readGatewayServiceState.mockResolvedValueOnce({ env: currentEnv });
@@ -438,7 +444,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         expect.objectContaining({
           expectedVersion: "2026.4.24",
           expectedBuildId: "new-build",
-          env: { OPENCLAW_PROFILE: "work" },
+          env: createManagedDoctorEnvironment(),
           requireRunningService: true,
         }),
       );
@@ -473,7 +479,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     "verifies the preserved doctor service port from $source",
     async ({ args, envPort, expected }) => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      const serviceEnv = { OPENCLAW_PROFILE: "work", OPENCLAW_GATEWAY_PORT: envPort };
+      const serviceEnv = { ...createManagedDoctorEnvironment(), OPENCLAW_GATEWAY_PORT: envPort };
       mockGitCheckout();
       mockManagedService({
         verdict: { kind: "owned", refreshDefinition: false, fingerprint: "opaque" },
@@ -609,7 +615,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     async (identityChanged) => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const serviceEnv = {
-        OPENCLAW_PROFILE: "work",
+        ...createManagedDoctorEnvironment(),
         OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work.service",
       };
       mockGitCheckout();
@@ -697,12 +703,12 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       inspected: true,
       runtimeInspected: true,
       running: true,
-      serviceEnv: { OPENCLAW_PROFILE: "work" },
+      serviceEnv: createManagedDoctorEnvironment(),
       serviceUpdateVerdict: { kind: "owned", refreshDefinition: false, fingerprint: "opaque" },
     }));
     mocks.maybeStopManagedServiceBeforeMutableUpdate.mockImplementationOnce(async () => {
       await mocks.stopGatewayService({
-        env: { OPENCLAW_PROFILE: "work" },
+        env: createManagedDoctorEnvironment(),
         stdout: process.stdout,
       });
       return {
@@ -710,7 +716,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
         inspected: true,
         runtimeInspected: true,
         running: true,
-        serviceEnv: { OPENCLAW_PROFILE: "work" },
+        serviceEnv: createManagedDoctorEnvironment(),
         serviceUpdateVerdict: { kind: "owned", refreshDefinition: false, fingerprint: "opaque" },
         blockMessage: "mutation preparation blocked",
       };

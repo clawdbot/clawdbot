@@ -959,6 +959,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 }
 
 type SandboxToolParams = {
+  abortSignal?: AbortSignal;
   root: string;
   bridge: SandboxFsBridge;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
@@ -1017,6 +1018,7 @@ export function createHostWorkspaceWriteTool(
   options?: {
     containmentRoot?: string;
     workspaceOnly?: boolean;
+    abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
     createTool?: typeof createWriteTool;
   },
@@ -1035,6 +1037,7 @@ export function createHostWorkspaceEditTool(
   options?: {
     containmentRoot?: string;
     workspaceOnly?: boolean;
+    abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
     createTool?: typeof createEditTool;
   },
@@ -1279,10 +1282,15 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
       resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
         resolveSandboxFileQueueKey(params, absolutePath, signal),
       mkdir: async (dir: string) => {
-        await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
+        await params.bridge.mkdirp({ filePath: dir, cwd: params.root, signal: params.abortSignal });
       },
       writeFile: async (absolutePath: string, content: string) => {
-        await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
+        await params.bridge.writeFile({
+          filePath: absolutePath,
+          cwd: params.root,
+          data: content,
+          signal: params.abortSignal,
+        });
       },
       readFile: (absolutePath: string) =>
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
@@ -1301,7 +1309,12 @@ function createSandboxEditOperations(params: SandboxToolParams) {
       readFile: (absolutePath: string) =>
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
       writeFile: (absolutePath: string, content: string) =>
-        params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+        params.bridge.writeFile({
+          filePath: absolutePath,
+          cwd: params.root,
+          data: content,
+          signal: params.abortSignal,
+        }),
       statFile: (absolutePath: string) =>
         params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
       access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
@@ -1364,6 +1377,7 @@ async function writeWorkspaceFile(
   getRoot: () => ReturnType<typeof fsRoot>,
   absolutePath: string,
   content: string,
+  abortSignal?: AbortSignal,
 ) {
   // Validate the path before starting the fs-safe root: call getRoot() (which opens the
   // root dir, rejecting if the workspace is missing) only after toCanonicalRelativeWorkspacePath
@@ -1377,13 +1391,16 @@ async function writeWorkspaceFile(
   if (targetStat?.isSymbolicLink()) {
     throw new FsSafeError("symlink", `refusing to write to symlink: ${absolutePath}`);
   }
-  await (await getRoot()).write(relative, content, { mkdir: true });
+  const rootHandle = await getRoot();
+  abortSignal?.throwIfAborted();
+  await rootHandle.write(relative, content, { mkdir: true });
 }
 
 function createHostWriteOperations(
   root: string,
   options?: {
     workspaceOnly?: boolean;
+    abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   },
 ) {
@@ -1395,9 +1412,11 @@ function createHostWriteOperations(
       {
         mkdir: async (dir: string) => {
           const resolved = resolveHostPath(dir);
+          options?.abortSignal?.throwIfAborted();
           await fs.mkdir(resolved, { recursive: true });
         },
-        writeFile: writeHostFile,
+        writeFile: (filePath: string, content: string) =>
+          writeHostFile(filePath, content, options?.abortSignal),
         readFile: async (absolutePath: string) =>
           fs.readFile(path.resolve(expandOsHomePrefix(absolutePath))),
         statFile: (absolutePath: string) =>
@@ -1419,10 +1438,11 @@ function createHostWriteOperations(
         const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
         const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
         await assertSandboxPath({ filePath: resolved, cwd: root, root });
+        options?.abortSignal?.throwIfAborted();
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: (absolutePath: string, content: string) =>
-        writeWorkspaceFile(root, getRoot, absolutePath, content),
+        writeWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
       readFile: async (absolutePath: string) => {
         // Canonicalize symlink parents like the write path: fs-safe 0.5.2
         // rejects intermediate symlinks by default, but in-workspace symlink
@@ -1443,6 +1463,7 @@ function createHostEditOperations(
   root: string,
   options?: {
     workspaceOnly?: boolean;
+    abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   },
 ) {
@@ -1455,7 +1476,8 @@ function createHostEditOperations(
         readFile: async (absolutePath: string) => {
           return await fs.readFile(resolveHostPath(absolutePath));
         },
-        writeFile: writeHostFile,
+        writeFile: (filePath: string, content: string) =>
+          writeHostFile(filePath, content, options?.abortSignal),
         statFile: (absolutePath: string) => statHostFile(resolveHostPath(absolutePath)),
         access: async (absolutePath: string) => {
           await fs.access(resolveHostPath(absolutePath));
@@ -1482,7 +1504,7 @@ function createHostEditOperations(
         return safeRead.buffer;
       },
       writeFile: (absolutePath: string, content: string) =>
-        writeWorkspaceFile(root, getRoot, absolutePath, content),
+        writeWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
       statFile: async (absolutePath: string) => {
         const relative = toRelativeWorkspacePath(root, absolutePath);
         return statHostFile(path.resolve(root, relative));

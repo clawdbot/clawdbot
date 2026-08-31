@@ -26,8 +26,23 @@ function rethrowPromptFinalizationFailure(failed: boolean, error: unknown): void
   }
 }
 
+/** @internal Host preparation runs after SDK prompt hooks and owns its run cancellation. */
+export const agentSessionSetPromptPreparation: unique symbol = Symbol.for(
+  "openclaw.agent-session.set-prompt-preparation",
+);
+
 export abstract class AgentSessionPrompting extends AgentSessionBase {
   private logicalPromptActive = false;
+  private promptPreparation?: () => Promise<void>;
+
+  [agentSessionSetPromptPreparation](prepare: (() => Promise<void>) | undefined): void {
+    this.promptPreparation = prepare;
+  }
+
+  override dispose(): void {
+    this.promptPreparation = undefined;
+    super.dispose();
+  }
 
   // =========================================================================
   // Prompting
@@ -44,14 +59,14 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     this.logicalPromptActive = true;
     let endedForTurnHandoff = false;
     try {
-      await this.agent.prompt(messages);
+      await this.runPreparedAgentLoop(() => this.agent.prompt(messages));
       while (true) {
         const action = await this.handlePostAgentRun();
         if (action !== "continue") {
           endedForTurnHandoff = action === "handoff";
           break;
         }
-        await this.agent.continue();
+        await this.runPreparedAgentLoop(() => this.agent.continue());
       }
     } finally {
       this.systemPromptOverride = undefined;
@@ -84,6 +99,18 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       rethrowPromptFinalizationFailure(flushFailed, flushError);
       rethrowPromptFinalizationFailure(terminalFailed, terminalError);
     }
+  }
+
+  private async runPreparedAgentLoop(run: () => Promise<void>): Promise<void> {
+    const prepare = this.promptPreparation;
+    if (prepare) {
+      await prepare();
+      if (prepare !== this.promptPreparation) {
+        throw new Error("Session prompt preparation is stale after replacement or disposal.");
+      }
+    }
+    // Start synchronously after the owner check; disposal must not reopen a core loop.
+    return run();
   }
 
   private async handlePostAgentRun(): Promise<PostAgentRunAction> {

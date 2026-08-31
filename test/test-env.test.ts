@@ -12,6 +12,8 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../src/agents/auth-profiles/sqlite.js";
+import { isCurrentProcessLaunchdServiceLabel } from "../src/daemon/launchd-current-service.js";
+import { detectGatewayRespawnSupervisor } from "../src/infra/supervisor-markers.js";
 import { closeOpenClawAgentDatabaseByPath } from "../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
@@ -523,6 +525,57 @@ describe("installTestEnv", () => {
     testEnv.cleanup();
     expect(process.env[key]).toBe("test-channel-value");
   });
+
+  it.each(["live-aware", "hermetic"] as const)(
+    "isolates and restores inherited supervisor identity in %s mode",
+    (mode) => {
+      const supervisorEnv = {
+        LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
+        LAUNCH_JOB_NAME: "ai.openclaw.gateway",
+        XPC_SERVICE_NAME: "ai.openclaw.gateway",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+        INVOCATION_ID: "test-invocation",
+        SYSTEMD_EXEC_PID: "1234",
+        JOURNAL_STREAM: "8:1234",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway",
+        OPENCLAW_SUPERVISOR_MODE: "external",
+        OPENCLAW_WRAPPER: "/fixture/operator-wrapper",
+        OPENCLAW_GATEWAY_SERVICE_PID: "4321",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "FIXTURE_AUTH_REF",
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+      };
+      for (const [key, value] of Object.entries(supervisorEnv)) {
+        setTestEnvValue(key, value);
+      }
+      setTestEnvValue("TEST_UNRELATED_SERVICE_HINT", "preserved");
+
+      const testEnv = installTestEnv({ mode });
+      cleanupFns.push(testEnv.cleanup);
+
+      expect(isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway")).toBe(false);
+      for (const platform of ["darwin", "linux", "win32"] as const) {
+        expect(detectGatewayRespawnSupervisor(process.env, platform)).toBeNull();
+      }
+      expect(Object.keys(supervisorEnv).filter((key) => process.env[key] !== undefined)).toEqual(
+        [],
+      );
+      expect(process.env.TEST_UNRELATED_SERVICE_HINT).toBe("preserved");
+      withEnv({ XPC_SERVICE_NAME: "ai.openclaw.gateway" }, () => {
+        expect(isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway")).toBe(true);
+      });
+      withEnv({ XPC_SERVICE_NAME: "0" }, () => {
+        expect(isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway")).toBe(false);
+      });
+
+      testEnv.cleanup();
+      for (const [key, value] of Object.entries(supervisorEnv)) {
+        expect(process.env[key]).toBe(value);
+      }
+    },
+  );
 
   it("does not load ~/.profile for normal isolated test runs", () => {
     const realHome = createTempHome();

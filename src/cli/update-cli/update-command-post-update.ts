@@ -41,6 +41,7 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-post-core.js";
 import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-post-plugin-validation.js";
+import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
   GatewayServiceUpdateOwnershipError,
@@ -365,11 +366,14 @@ export async function finishUpdate(params: {
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
   let serviceUpdateVerdict = params.preManagedServiceStop?.serviceUpdateVerdict;
   let skipLegacyServiceRestart = serviceUpdateVerdict?.kind === "absent";
-  const serviceStateReadEnv = resolvePostUpdateServiceStateReadEnv({
-    updateMode: resultWithPostUpdate.mode,
-    processEnv: process.env,
-    preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
-  });
+  const serviceStateReadEnv = resolveServiceRefreshEnv(
+    resolvePostUpdateServiceStateReadEnv({
+      updateMode: resultWithPostUpdate.mode,
+      processEnv: process.env,
+      preManagedServiceEnv: params.preManagedServiceStop?.serviceEnv,
+    }),
+    params.invocationCwd,
+  );
   let serviceMutationAllowed =
     params.preManagedServiceStop?.serviceMutationAllowed !== false &&
     isGatewayServiceManagementAllowedForUpdate(process.env) &&

@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import { resolveEffectiveHomeDir } from "../src/infra/home-dir.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../src/infra/supervisor-markers.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
@@ -29,6 +30,13 @@ const ISOLATED_TEST_CREDENTIAL_ENV_KEYS = [
   "COPILOT_GITHUB_TOKEN",
   "GH_TOKEN",
   "GITHUB_TOKEN",
+] as const;
+const ISOLATED_TEST_SERVICE_ENV_KEYS = [
+  ...SUPERVISOR_HINT_ENV_VARS,
+  "OPENCLAW_WRAPPER",
+  "OPENCLAW_GATEWAY_SERVICE_PID",
+  "OPENCLAW_SERVICE_MANAGED_ENV_KEYS",
+  "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",
 ] as const;
 const HERMETIC_TEST_ENV_KEYS = [
   ...LIVE_TEST_TRIGGER_ENV_KEYS,
@@ -221,6 +229,7 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
     { key: "PI_CODING_AGENT_DIR", value: process.env.PI_CODING_AGENT_DIR },
     ...ISOLATED_TEST_CREDENTIAL_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
+    ...ISOLATED_TEST_SERVICE_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
     { key: "NODE_OPTIONS", value: process.env.NODE_OPTIONS },
   ];
 }
@@ -251,6 +260,11 @@ function initializeIsolatedTestEnv(tempHome: string): void {
   deleteTestEnvValue("OPENCLAW_CANVAS_HOST_PORT");
   // Ambient channel credentials can activate real plugins even with an isolated HOME.
   for (const key of ISOLATED_TEST_CREDENTIAL_ENV_KEYS) {
+    deleteTestEnvValue(key);
+  }
+  // A test worker is not the parent Gateway's service. Retaining its identity
+  // selects in-band lifecycle guards and detached restart handoffs in fixtures.
+  for (const key of ISOLATED_TEST_SERVICE_ENV_KEYS) {
     deleteTestEnvValue(key);
   }
   // Avoid leaking local dev tooling flags into tests (e.g. --inspect).

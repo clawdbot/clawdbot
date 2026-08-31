@@ -14,6 +14,7 @@ import type {
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
@@ -180,8 +181,8 @@ type GatewayKernelContext = {
   execApprovalManager?: ExecApprovalManager;
   questionManager?: QuestionManager;
   scopeUpgradeCoordinator?: ScopeUpgradeCoordinator;
-  /** Cancels durable approvals owned by one actively aborted run. */
-  cancelRunBoundApprovals?: (runId: string) => number;
+  /** Exact authority cancels bound approvals; legacy run ids cancel only unbound exec requests. */
+  cancelRunBoundApprovals?: (target: string | AgentRunDelegatedAuthority) => number;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;

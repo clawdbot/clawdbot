@@ -71,6 +71,7 @@ export type AgentHarnessHostCapabilities = Readonly<{
     },
   ) => ReturnType<(typeof import("../agent-tools.before-tool-call.js"))["runBeforeToolCallHook"]>;
   requestApproval: (request: {
+    signal?: AbortSignal;
     title: string;
     description: string;
     severity: "info" | "warning";
