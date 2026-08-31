@@ -1864,7 +1864,7 @@ src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
-src/agents/failover-error.ts	15
+src/agents/failover-error.ts	12
 src/agents/failover/retry-evidence.ts	1
 src/agents/failover/signal-details.ts	1
 src/agents/fallback-skip-cache.ts	1
@@ -2557,7 +2557,7 @@ src/commands/doctor/shared/stale-oauth-profile-shadows.ts	1
 src/commands/doctor/shared/stale-plugin-repair-preservation.ts	1
 src/commands/doctor/shared/stale-subagent-allowlist.ts	2
 src/commands/export-trajectory.ts	1
-src/commands/gateway-health-auth-diagnostic.ts	2
+src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
 src/commands/message-format.ts	20
@@ -3561,8 +3561,8 @@ src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/index.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-channel.ts	1
-src/plugins/runtime/runtime-llm-isolated.ts	4
-src/plugins/runtime/runtime-llm.runtime.ts	5
+src/plugins/runtime/runtime-llm-isolated.ts	3
+src/plugins/runtime/runtime-llm.runtime.ts	4
 src/plugins/runtime/runtime-plugin-boundary.ts	2
 src/plugins/runtime/runtime-taskflow.ts	1
 src/plugins/runtime/runtime-web-channel-plugin.ts	3

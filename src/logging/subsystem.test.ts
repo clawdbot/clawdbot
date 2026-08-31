@@ -35,7 +35,9 @@ beforeAll(async () => {
   await logPathTracker.setup();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Settle owned file writes before resetting logging state or removing the suite directory.
+  await testApi.flushFileLogQueueForTests();
   setConsoleSubsystemFilter(null);
   setLoggerOverride(null);
   loggingState.rawConsole = null;

@@ -13,6 +13,10 @@ import { toErrorObject } from "./lib/error-format.mts";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import {
+  LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+} from "./lib/package-lifecycle-marker.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
@@ -882,6 +886,11 @@ async function restorePackageSourceArtifacts(
   await restoreManifest(sourceDir);
   // Release the lifecycle receipt only after every other source mutation settles.
   await restoreDocsMap(sourceDir);
+  await Promise.all(
+    [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH].map(
+      (relativePath) => fs.rm(path.join(sourceDir, relativePath), { force: true }),
+    ),
+  );
 }
 
 async function loadSourcePackageLifecycle(

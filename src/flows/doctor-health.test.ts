@@ -1,9 +1,15 @@
 import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assertNoUnmigratedWorkspaceState } from "../agents/workspace-legacy-state.js";
+import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
+import {
+  detectLegacyWorkspaceState,
+  migrateLegacyWorkspaceState,
+} from "../infra/state-migrations.workspace-setup.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
@@ -278,6 +284,91 @@ describe("runDoctorHealthFlow", () => {
       expect(fs.readFileSync(archive, "utf8")).toBe("invalid JSON\n");
     });
   });
+
+  it.each(["configured", "sandbox"] as const)(
+    "refuses incomplete %s workspace cleanup with current SQLite schemas, then completes on retry",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const workspaceDir = state.statePath("secondary-workspace");
+        const cfg: OpenClawConfig = {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              primary: { workspace: state.workspaceDir },
+              secondary:
+                kind === "configured"
+                  ? { workspace: workspaceDir }
+                  : {
+                      workspace: state.path("secondary-host-workspace"),
+                      sandbox: {
+                        mode: "all",
+                        scope: "shared",
+                        workspaceRoot: workspaceDir,
+                        workspaceAccess: "none",
+                      },
+                    },
+            },
+          },
+        };
+        mocks.config.mockReturnValue(cfg);
+        const sourcePath = await state.writeJson(
+          "secondary-workspace/openclaw-workspace-state.json",
+          {
+            version: 1,
+            setupCompletedAt: "2026-07-15T00:00:00.000Z",
+          },
+        );
+        openOpenClawStateDatabase({ env: state.env });
+        let failCleanup = true;
+        mocks.runContributions.mockImplementation(async (ctx) => {
+          const result = await migrateLegacyWorkspaceState({
+            stateDir: state.stateDir,
+            env: state.env,
+            detected: detectLegacyWorkspaceState({
+              cfg: ctx.cfg,
+              stateDir: state.stateDir,
+              env: state.env,
+              homedir: () => state.home,
+              doctorOnlyStateMigrations: true,
+            }),
+            ...(failCleanup
+              ? {
+                  removeSource: () => {
+                    throw new Error("simulated unlink failure");
+                  },
+                }
+              : {}),
+          });
+          ctx.runtime.log(result.warnings.join("\n"));
+        });
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await runCommandWithRuntime(runtime, () =>
+          runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+        );
+        expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("legacy cleanup failed"));
+        expect(readWorkspaceStateSnapshot(workspaceDir).setup.setupCompletedAt).toBe(
+          "2026-07-15T00:00:00.000Z",
+        );
+        expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);
+        expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir })).toThrow(
+          /requires migration/,
+        );
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringMatching(/workspace.*requires migration/),
+        );
+        expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+
+        failCleanup = false;
+        runtime.exit.mockClear();
+        await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+        expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+        expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir })).not.toThrow();
+      });
+    },
+  );
 
   it.each(["missing-state", "missing-agent", "current"])(
     "accepts %s databases without creating or repairing them",

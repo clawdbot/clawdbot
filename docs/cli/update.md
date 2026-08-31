@@ -342,12 +342,19 @@ returns the latest sentinel.
 
 ### Plugin sync details
 
-On the beta channel, tracked npm and ClawHub plugin installs that follow the
-default/latest line try a plugin `@beta` release first. If the plugin has no
-beta release, OpenClaw falls back to the recorded default/latest spec and
-reports a warning. For npm plugins, OpenClaw also falls back when the beta
-package exists but fails install validation. These fallback warnings do not
-fail the core update. Exact versions and explicit tags are never rewritten.
+After a beta core update, eligible official npm plugins with a default/latest
+catalog target try the exact installed core version. This also applies to a
+one-off `--tag <beta-version>` while the configured channel is stable, including
+when plugin synchronization resumes in a fresh process. Other default-line npm
+and ClawHub plugins on the beta channel try their plugin `@beta` tag.
+
+If the selected beta plugin release is unavailable, OpenClaw falls back to the
+default/latest spec and reports a warning naming the requested and used targets.
+For npm plugins, this also applies when the selected beta package fails install
+validation. These fallback warnings do not fail the core update. Ordinary exact
+pins and explicit tags retain their selector; trusted official records can
+refresh from the catalog during bulk synchronization, as with
+[`plugins update --all`](/cli/plugins#update).
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying you trust the new artifact.

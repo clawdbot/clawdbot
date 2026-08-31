@@ -98,6 +98,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         path.join(tempDir, "session.jsonl"),
         path.join(tempDir, "workspace"),
       );
+      params.runtimePlan = createCodexRuntimePlanFixture();
       params.timeoutMs = waitMs + 120_000;
       setCodexTestModelSupportsTools(params, true);
       const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);

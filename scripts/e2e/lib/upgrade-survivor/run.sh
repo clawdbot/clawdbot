@@ -872,15 +872,8 @@ source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG="$SYSTEMCTL_SHIM_LOG"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$SYSTEMCTL_SHIM_PID_FILE"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$SYSTEMCTL_SHIM_DAEMON_LOG"
-
-install_update_restart_service_unit() {
-  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json >"$BASELINE_SERVICE_INSTALL_JSON" 2>"$BASELINE_SERVICE_INSTALL_ERR"; then
-    echo "baseline gateway service install failed" >&2
-    openclaw_e2e_print_log "$BASELINE_SERVICE_INSTALL_ERR" >&2
-    openclaw_e2e_print_log "$BASELINE_SERVICE_INSTALL_JSON" >&2
-    return 1
-  fi
-}
+export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON="$BASELINE_SERVICE_INSTALL_JSON"
+export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$BASELINE_SERVICE_INSTALL_ERR"
 
 seed_update_restart_probe_device_auth() {
   node --input-type=module <<'NODE'
@@ -993,9 +986,14 @@ prepare_update_restart_probe() {
   echo "Preparing configured-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
   seed_update_restart_probe_device_auth
-  park_prepublish_authored_config
   local probe_status=0
-  start_gateway legacy-ready-log-ok || probe_status=$?
+  park_prepublish_authored_config || probe_status=$?
+  if [ "$probe_status" -eq 0 ]; then
+    write_update_restart_service_env || probe_status=$?
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    install_update_restart_probe_gateway 18789 "$COMMAND_TIMEOUT" legacy-ready-log-ok || probe_status=$?
+  fi
   if [ "$probe_status" -eq 0 ]; then
     assert_prepublish_fixture_idle || probe_status=$?
   fi
@@ -1008,8 +1006,6 @@ prepare_update_restart_probe() {
     return "$restore_status"
   fi
   assert_baseline_state
-  write_update_restart_service_env
-  install_update_restart_service_unit
 }
 
 assert_baseline_state() {
@@ -1283,10 +1279,7 @@ start_gateway() {
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-    printf '%s\n' "$gateway_pid" >"$SYSTEMCTL_SHIM_PID_FILE"
-  fi
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "${1:-strict}"
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" || return "$?"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then

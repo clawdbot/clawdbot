@@ -34,20 +34,31 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
     name: "openclaw",
     version,
     type: "module",
-    files: ["dist/", "!dist/extensions/remote-runtime/**", "scripts/preinstall.mjs"],
+    files: [
+      "dist/",
+      "!dist/extensions/remote-runtime/**",
+      "scripts/preinstall.mjs",
+      "scripts/postinstall.mjs",
+    ],
     dependencies: { "@fixture/ai": mode === "source" ? "workspace:*" : version },
     ...(mode !== "source" ? { bundleDependencies: ["@fixture/ai"] } : {}),
     devDependencies: { "typescript-only": "workspace:*" },
-    scripts: { prepare: "exit 91", prepack: "exit 92", preinstall: "node scripts/preinstall.mjs" },
+    scripts: {
+      prepare: "exit 91",
+      prepack: "exit 92",
+      preinstall: "node scripts/preinstall.mjs",
+      postinstall: "node scripts/postinstall.mjs",
+    },
   };
   await write(packageRoot, "package.json", sourcePackage);
   await write(packageRoot, "openclaw.mjs", 'import "./dist/entry.js";');
   await fs.chmod(path.join(packageRoot, "openclaw.mjs"), 0o755);
   await write(packageRoot, "node-version.mjs", "export const supported = true;");
+  await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
   await write(
     packageRoot,
-    "scripts/preinstall.mjs",
-    'import { rmSync } from "node:fs"; rmSync(new URL("../dist/openclaw-install-guard", import.meta.url));',
+    "scripts/postinstall.mjs",
+    'import { rmSync } from "node:fs"; rmSync(new URL("../.openclaw-lifecycle-pending", import.meta.url));',
   );
   await write(
     packageRoot,
@@ -175,9 +186,17 @@ describe("node bootstrap distribution", () => {
       const manifest = JSON.parse(await fs.readFile(path.join(target, "package.json"), "utf8"));
       expect(manifest.dependencies).toEqual({ "@fixture/ai": version, "native-runtime": "1.2.3" });
       expect(manifest.bundleDependencies).toEqual(["@fixture/ai"]);
-      expect(manifest.scripts).toEqual({ preinstall: "node scripts/preinstall.mjs" });
+      expect(manifest.scripts).toEqual({
+        preinstall: "node scripts/preinstall.mjs",
+        postinstall: "node scripts/postinstall.mjs",
+      });
       expect(manifest.devDependencies).toBeUndefined();
+      const lifecycleMarker = path.join(target, ".openclaw-lifecycle-pending");
+      await expect(fs.readFile(lifecycleMarker, "utf8")).resolves.toBe("pending\n");
       await promisify(execFile)(process.execPath, [path.join(target, "scripts/preinstall.mjs")]);
+      await expect(fs.readFile(lifecycleMarker, "utf8")).resolves.toBe("pending\n");
+      await promisify(execFile)(process.execPath, [path.join(target, "scripts/postinstall.mjs")]);
+      await expect(fs.access(lifecycleMarker)).rejects.toHaveProperty("code", "ENOENT");
       const { stdout } = await promisify(execFile)(process.execPath, [
         path.join(target, "openclaw.mjs"),
       ]);

@@ -18,12 +18,16 @@ const eventsFile = path.join(root, "events.jsonl");
 const commandsFile = path.join(root, "commands.jsonl");
 const optionsFile = path.join(root, "fixture-options.json");
 const options = fs.existsSync(optionsFile) ? JSON.parse(fs.readFileSync(optionsFile, "utf8")) : {};
-// Resolve identity support before cancellation can enter its cleanup handshake.
-// Ordinary fixture actors do not need the TypeScript module.
-const getFileLockProcessStartTime =
-  options.cancelDuringCleanup && ["supervise", "git"].includes(mode)
-    ? (await import("../../../src/shared/pid-alive.ts")).getFileLockProcessStartTime
-    : undefined;
+// Preload identity support before the cleanup handshake; its TypeScript graph
+// uses .js specifiers that native Node type stripping cannot resolve.
+let getFileLockProcessStartTime;
+if (options.cancelDuringCleanup && ["supervise", "git"].includes(mode)) {
+  const { tsImport } = await import("tsx/esm/api");
+  ({ getFileLockProcessStartTime } = await tsImport(
+    "../../../src/shared/pid-alive.ts",
+    import.meta.url,
+  ));
+}
 const refsFile = path.join(root, "refs.json");
 
 function resolveRef(cwd, ref) {

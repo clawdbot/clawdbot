@@ -6,10 +6,6 @@ import { cancel, isCancel } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  ConnectErrorDetailCodes,
-  readConnectErrorDetailCode,
-} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
@@ -360,21 +356,6 @@ export type GatewayConfiguredModelProbeResult =
   | { kind: "reachable-unverified"; detail?: string }
   | { kind: "unreachable"; detail?: string };
 
-const RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES: ReadonlySet<string> = new Set(
-  Object.values(ConnectErrorDetailCodes),
-);
-
-function didProbeReachGateway(probe: GatewayProbeResult): boolean {
-  const connectErrorCode = readConnectErrorDetailCode(probe.connectErrorDetails);
-  const recognizedConnectError =
-    connectErrorCode !== null && RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES.has(connectErrorCode);
-  const serverVersion = probe.server?.version?.trim();
-  const serverConnectionId = probe.server?.connId?.trim();
-  // Opening a WebSocket proves only that something is listening. A Gateway is
-  // established by a hello-ok server identity or its typed connect rejection.
-  return recognizedConnectError || Boolean(serverVersion && serverConnectionId);
-}
-
 /** Reads only Gateway config and classifies whether its default agent has inference. */
 export async function probeGatewayConfiguredModel(
   params: OnboardingGatewayProbeParams,
@@ -386,7 +367,7 @@ export async function probeGatewayConfiguredModel(
     return { kind: "unreachable", detail: summarizeError(err) };
   }
   const detail = probe.error ?? undefined;
-  if (!didProbeReachGateway(probe)) {
+  if (!probe.gatewayReached) {
     return { kind: "unreachable", ...(detail ? { detail } : {}) };
   }
   if (!probe.ok) {

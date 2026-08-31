@@ -16,7 +16,7 @@ import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
   formatSessionToolOutput,
@@ -120,6 +120,7 @@ export function createGrepToolDefinition(
   options?: GrepToolOptions,
 ): ToolDefinition<typeof grepSchema, GrepToolDetails | undefined> {
   const customOps = options?.operations;
+  const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "grep",
     label: "grep",
@@ -208,7 +209,7 @@ export function createGrepToolDefinition(
               return;
             }
 
-            const searchPath = resolveToCwd(searchDir || ".", cwd);
+            const searchPath = resolvePath(searchDir || ".", cwd);
             let isDirectory: boolean;
             try {
               isDirectory = await (customOps?.isDirectory(searchPath) ??
