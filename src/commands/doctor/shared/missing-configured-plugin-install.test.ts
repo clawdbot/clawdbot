@@ -4053,8 +4053,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       plugins: [
         {
           id: "codex",
+          packageName: "@openclaw/codex",
           packageVersion: codexBetaVersion,
           providers: ["codex"],
+          rootDir: installDir,
         },
       ],
       diagnostics: [],
@@ -4063,8 +4065,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           "codex",
           {
             id: "codex",
+            packageName: "@openclaw/codex",
             packageVersion: codexBetaVersion,
             providers: ["codex"],
+            rootDir: installDir,
           },
         ],
       ]),
