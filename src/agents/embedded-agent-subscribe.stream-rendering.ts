@@ -639,6 +639,8 @@ export function createStreamRendering({
     state.partialBlockState.pendingTagFragment = undefined;
     state.lastStreamedAssistant = undefined;
     state.lastStreamedAssistantCleaned = undefined;
+    state.lastStreamedCommentary = undefined;
+    state.commentaryStreamedWithDelta = false;
     state.currentSourceMessagingToolHeldPartial = undefined;
     state.emittedAssistantUpdate = false;
     state.lastBlockReplyText = undefined;

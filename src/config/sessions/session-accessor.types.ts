@@ -473,6 +473,10 @@ export type SessionTranscriptManualTrimPreflightResult =
     };
 
 export type SessionEntryUpdateOptions = {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
+  /** Synchronous owner bookkeeping after COMMIT, before observers can cancel the caller. */
+  onCommitted?: (entry: SessionEntry) => void;
   /** Skip prune/cap/rotation maintenance for specialized internal updates. */
   skipMaintenance?: boolean;
   /** Let the writer cache retain the updated object without cloning. */

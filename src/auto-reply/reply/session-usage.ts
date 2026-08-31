@@ -19,7 +19,7 @@ import {
   type SessionSystemPromptReport,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -163,7 +163,7 @@ export async function persistSessionUsageUpdate(params: {
     Boolean(params.modelUsed || params.contextTokensUsed);
   if (hasBilling || hasContextUpdate) {
     try {
-      await patchSessionEntryCore(
+      await updateSessionEntry(
         { agentId, storePath, sessionKey },
         (entry) => {
           // Retained compaction facts carry an exact writer, including known absence;

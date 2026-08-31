@@ -111,7 +111,14 @@ export function handleMessageUpdate(
     (evtType === "text_start" || evtType === "text_delta" || evtType === "text_end");
   const suppressVisibleAssistantOutput = resolveAssistantMessagePhase(msg) === "commentary";
   if (suppressVisibleAssistantOutput && !isResponsesTextEvent && !isAnthropicTextEvent) {
-    const rawCommentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
+    const commentaryMessage = scopeAssistantMessageToStreamBlock(
+      eventAssistantMessage,
+      ctx.state.lastAssistantStreamContentIndex,
+      ctx.state.lastAssistantStreamItemId,
+    );
+    const rawCommentaryText = coerceChatContentText(
+      extractAssistantCommentaryText(commentaryMessage),
+    );
     appendRawStream(() => ({
       ts: Date.now(),
       event: "assistant_text_stream",
@@ -121,7 +128,10 @@ export function handleMessageUpdate(
       delta: "",
       content: rawCommentaryText,
     }));
-    emitResolvedCommentaryDisplay(ctx, rawCommentaryText, { preferReplace: true });
+    emitResolvedCommentaryDisplay(ctx, rawCommentaryText, {
+      itemId: ctx.state.lastAssistantStreamItemId,
+      preferReplace: true,
+    });
     return;
   }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);

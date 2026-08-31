@@ -132,7 +132,6 @@ export function handleMessageEnd(
   }
   ctx.noteLastAssistant(assistantMessage);
   ctx.noteCompletedAssistant(assistantMessage);
-  ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
     const isResponsesCommentary = isResponsesApiAssistantMessage(assistantMessage);

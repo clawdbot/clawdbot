@@ -360,7 +360,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             activateRegistrationLifecycle();
             throw new SubagentRegistrationError(
               [error, rollbackError],
-              `Subagent task registration and rollback persistence both failed: ${runId}`,
+              rollbackError instanceof Error
+                ? `Subagent task registration and rollback persistence both failed: ${runId}: ${rollbackError.message}`
+                : `Subagent task registration and rollback persistence both failed: ${runId}`,
               { status: "new-row-survived", attempted },
             );
           }

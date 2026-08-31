@@ -609,7 +609,6 @@ export async function spawnSubagentDirect(
       assertPostPublicationAdmission: () =>
         ctx.continuationDelegateAdmission?.assertCurrent("final-acceptance"),
       publishRegistration: () => {
-        ctx.continuationDelegateAdmission?.assertCurrent("lifecycle-publication");
         if (childEntry) {
           recordSessionCreated({
             sessionKey: childSessionKey,
@@ -623,6 +622,30 @@ export async function spawnSubagentDirect(
           requesterSessionKey: requesterInternalKey,
           agentId: targetAgentId,
         });
+      },
+      afterRegistration: async (state, runId) => {
+        ctx.continuationDelegateAdmission?.assertCurrent("lifecycle-publication");
+        if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
+          activateCollectorSubagentRun({
+            swarmSchedulerGroupKey,
+            childRunId: runId,
+            promptedAt,
+            requesterAgentId,
+            targetAgentId,
+            childSessionKey,
+            requesterInternalKey,
+            cfg,
+            provisionalSessionIdentity,
+            launchChildRun,
+            emitSpawnLifecycleHooks,
+            rollbackPreparedContext: () =>
+              rollbackPreparedContextEngine(state.contextEnginePreparation),
+            cleanupFailedSpawn,
+            gatewayContextResolver,
+          });
+        } else {
+          await emitSpawnLifecycleHooks(runId);
+        }
         emitSessionLifecycleEvent({
           sessionKey: childSessionKey,
           reason: "create",
@@ -630,9 +653,6 @@ export async function spawnSubagentDirect(
           label: label || undefined,
         });
       },
-      afterRegistration: params.collect
-        ? undefined
-        : (_state, runId) => emitSpawnLifecycleHooks(runId),
       rollbackRegistration: rollbackSubagentRunRegistration,
       recordAcceptedRollback: (registration, error) =>
         recordAcceptedSubagentSpawnRollback({
@@ -664,27 +684,9 @@ export async function spawnSubagentDirect(
       };
     }
     childRunId = pipelineResult.runId;
-    let collectorSessionKey: string | undefined;
-    if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
-      activateCollectorSubagentRun({
-        swarmSchedulerGroupKey,
-        childRunId,
-        promptedAt,
-        requesterAgentId,
-        targetAgentId,
-        childSessionKey,
-        requesterInternalKey,
-        cfg,
-        provisionalSessionIdentity,
-        launchChildRun,
-        emitSpawnLifecycleHooks,
-        rollbackPreparedContext: () =>
-          rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),
-        cleanupFailedSpawn,
-        gatewayContextResolver,
-      });
+    const collectorAccepted = params.collect && swarmGroupId && swarmSchedulerGroupKey;
+    if (collectorAccepted) {
       swarmReservationPending = false;
-      collectorSessionKey = childSessionKey;
     }
 
     const acceptedNote = resolveSubagentSpawnAcceptedNote({
@@ -694,7 +696,7 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
-      ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
+      ...(collectorAccepted ? { sessionKey: childSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
       context: preparedSpawnContext.mode,

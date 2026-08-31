@@ -317,7 +317,7 @@ describe("handleMessageEnd", () => {
     } as never);
 
     expect(ctx.noteLastAssistant).toHaveBeenCalled();
-    expect(ctx.recordAssistantUsage).toHaveBeenCalled();
+    expect(ctx.recordAssistantUsage).not.toHaveBeenCalled();
     expect(ctx.commitAssistantUsage).toHaveBeenCalled();
     expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
     expect(emitBlockReply).not.toHaveBeenCalled();
