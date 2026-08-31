@@ -120,6 +120,7 @@ function applyManualRunOutcome(params: {
       scheduleOwnership,
       scheduleOwnershipAtMs: params.prepared.scheduleOwnershipAtMs,
       deferredNotifications: params.deferredNotifications,
+      ...(params.prepared.onExitWatcherCompletion ? { onExitWatcherCompletion: true } : {}),
     },
   );
   applyTriggerRunResult(

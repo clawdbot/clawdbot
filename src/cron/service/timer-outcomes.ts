@@ -92,6 +92,10 @@ export function applyJobResult(
     // Startup recovery restores historical notification facts separately.
     replay?: boolean;
     replaySchedule?: { nextRunAtMs?: number };
+    // Watcher-completion provenance carried from the gateway exit watcher's
+    // terminal fire; never inferred from job state (a manually paused on-exit
+    // job force-run by an operator must not take the terminal disposition).
+    onExitWatcherCompletion?: boolean;
     deferredNotifications?: DeferredCronNotifications;
   },
 ): boolean {
@@ -373,17 +377,17 @@ export function applyJobResult(
       }
     } else if (
       job.schedule.kind === "on-exit" &&
-      opts?.scheduleMode === "preserve" &&
-      !previousScheduleState.enabled &&
+      opts?.onExitWatcherCompletion === true &&
       result.status === "error"
     ) {
-      // Watcher-fired terminal run: the exit watcher persisted this one-shot
-      // disabled BEFORE force-running the payload, so a first error here is
-      // already the job's last and must not park below failureAlert.after.
+      // Watcher-fired terminal run (explicit provenance from the exit
+      // watcher's fire path): the watcher persisted this one-shot disabled
+      // BEFORE force-running the payload, so a first error here is already
+      // the job's last and must not park below failureAlert.after.
       // Transient errors are terminal too — a retry would need re-enabling,
       // and reconcile would re-arm (re-run) the completed watched command.
-      // A manual force-run of a still-armed (enabled) watcher keeps the plain
-      // preserve path below; disabling it would tear down the live watch.
+      // Operator force-runs (armed or manually paused watchers) never carry
+      // the flag and keep the plain preserve path below.
       applyTerminalOneShotErrorDisposition(
         resolveTransientCronRetryDecision({
           cronConfig: state.deps.cronConfig,
