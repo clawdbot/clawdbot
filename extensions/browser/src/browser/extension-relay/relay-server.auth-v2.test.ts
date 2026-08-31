@@ -655,7 +655,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
     }
   });
 
-  it("keeps independent relay authentication available under one saturated source", async () => {
+  it("collapses loopback aliases into one relay authentication source", async () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: true });
     const active = await openExtensionSocket(handle, [
       "openclaw-extension-relay",
@@ -683,7 +683,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
     const overflow = new WebSocket(
       `ws://127.0.0.1:${handle.port}/extension`,
       BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
-      { localAddress: "127.0.0.2", origin: "chrome-extension://relay-auth-v2-test" },
+      { localAddress: "127.0.0.3", origin: "chrome-extension://relay-auth-v2-test" },
     );
     overflow.on("error", () => {});
     const overflowClosed = once(overflow, "close");
@@ -693,13 +693,10 @@ describe.sequential("extension relay HTTP auth v2", () => {
     expect(active.readyState).toBe(WebSocket.OPEN);
     expect(handle.bridge.extensionConnected).toBe(true);
 
-    const independent = await authenticateV2Extension(handle, "127.0.0.3");
-    independent.terminate();
-
     const released = once(attacker[0]!, "close");
     attacker[0]!.close();
     await released;
-    const promoted = await authenticateV2Extension(handle, "127.0.0.2");
+    const promoted = await authenticateV2Extension(handle, "127.0.0.3");
     promoted.send(
       JSON.stringify({
         type: "hello",

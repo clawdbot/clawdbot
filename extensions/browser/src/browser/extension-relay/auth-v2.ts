@@ -24,6 +24,21 @@ const MAX_PENDING_AUTH_CONNECTIONS_PER_SOURCE = 32;
 const MAX_AUTHENTICATED_CONNECTIONS = 128;
 const MAX_REPLAY_ENTRIES = 1_024;
 const MAX_REPLAY_ENTRIES_PER_SOURCE = MAX_PENDING_AUTH_CONNECTIONS_PER_SOURCE * 8;
+const LOOPBACK_AUTH_SOURCE = "loopback";
+
+function normalizeAuthSource(source: string): string {
+  const normalized = source.trim().toLowerCase();
+  // A local process can choose any 127/8 alias. Treat mapped and native
+  // loopback addresses as one principal or the per-source bound is bypassable.
+  if (
+    normalized === "::1" ||
+    /^127(?:\.\d{1,3}){3}$/.test(normalized) ||
+    /^::ffff:127(?:\.\d{1,3}){3}$/.test(normalized)
+  ) {
+    return LOOPBACK_AUTH_SOURCE;
+  }
+  return normalized || "unknown";
+}
 
 type BrowserRelayAuthHello = {
   type: "auth.hello";
@@ -308,9 +323,10 @@ export class BrowserRelayAuthV2Authority {
   }
 
   registerPendingConnection(binding: object, onInvalidate: () => void, source: string): boolean {
+    const normalizedSource = normalizeAuthSource(source);
     let pendingForSource = 0;
     for (const pending of this.pendingConnections.values()) {
-      pendingForSource += pending.source === source ? 1 : 0;
+      pendingForSource += pending.source === normalizedSource ? 1 : 0;
     }
     if (
       this.disposed ||
@@ -321,7 +337,7 @@ export class BrowserRelayAuthV2Authority {
     ) {
       return false;
     }
-    this.pendingConnections.set(binding, { onInvalidate, source });
+    this.pendingConnections.set(binding, { onInvalidate, source: normalizedSource });
     return true;
   }
 

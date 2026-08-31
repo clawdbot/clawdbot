@@ -225,6 +225,42 @@ describe("BrowserRelayAuthV2Authority", () => {
     expect(authority.registerPendingConnection({}, vi.fn(), "198.51.100.10")).toBe(true);
   });
 
+  it("counts loopback aliases as one pending source", () => {
+    const authority = new BrowserRelayAuthV2Authority(KEY);
+    for (let index = 0; index < 32; index += 1) {
+      expect(authority.registerPendingConnection({}, vi.fn(), "127.0.0.2")).toBe(true);
+    }
+    expect(authority.registerPendingConnection({}, vi.fn(), "127.0.0.3")).toBe(false);
+    expect(authority.registerPendingConnection({}, vi.fn(), "::ffff:127.0.0.4")).toBe(false);
+    expect(authority.registerPendingConnection({}, vi.fn(), "::1")).toBe(false);
+  });
+
+  it("counts loopback aliases as one replay source", () => {
+    const authority = new BrowserRelayAuthV2Authority(KEY);
+    for (let index = 0; index < 256; index += 1) {
+      const connection = {};
+      expect(
+        authority.registerPendingConnection(connection, vi.fn(), `127.0.0.${2 + (index % 2)}`),
+      ).toBe(true);
+      const nonce = Buffer.alloc(32);
+      nonce.writeUInt32BE(index, 28);
+      expect(
+        authority.issueChallenge(connection, hello(nonce.toString("base64url")), BINDING, 1_000),
+      ).not.toBeNull();
+      authority.releaseConnection(connection);
+    }
+    const overflow = {};
+    expect(authority.registerPendingConnection(overflow, vi.fn(), "::1")).toBe(true);
+    expect(
+      authority.issueChallenge(
+        overflow,
+        hello(Buffer.alloc(32, 0xff).toString("base64url")),
+        BINDING,
+        1_000,
+      ),
+    ).toBeNull();
+  });
+
   it("rejects promotion at active capacity without disturbing active connections", () => {
     const authority = new BrowserRelayAuthV2Authority(KEY);
     const pending = {};

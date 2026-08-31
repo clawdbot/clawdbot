@@ -8,7 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import { parsePairingString } from "../../../chrome-extension/modules/relay-core.js";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
@@ -35,6 +35,11 @@ import {
 } from "./auth-v2.js";
 import { handleGatewayExtensionUpgrade } from "./gateway-relay-route.js";
 import { RawHttpConnection } from "./relay-http.test-support.js";
+
+const getPluginRuntimeGatewayRequestScopeMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => getPluginRuntimeGatewayRequestScopeMock(),
+}));
 
 const RELAY_KEY = relayTestKey(8);
 const EXTENSION_HELLO = {
@@ -122,6 +127,7 @@ async function closeServer(server: Server): Promise<void> {
 afterEach(async () => {
   await stopBrowserControlService();
   clearRuntimeConfigSnapshot();
+  getPluginRuntimeGatewayRequestScopeMock.mockReset();
 });
 
 describe.sequential("local Gateway extension relay wakeup", () => {
@@ -241,6 +247,12 @@ describe.sequential("local Gateway extension relay wakeup", () => {
               // TCP writes cannot guarantee Node's upgrade-head size; supply that exact boundary.
               const initialHead = coalesced ?? head;
               upgradeHeadBytes = initialHead.byteLength;
+              const preparedClientIp = req.headers["x-test-client-ip"];
+              getPluginRuntimeGatewayRequestScopeMock.mockReturnValue(
+                typeof preparedClientIp === "string"
+                  ? { client: { clientIp: preparedClientIp } }
+                  : undefined,
+              );
               void handleGatewayExtensionUpgrade(req, socket, initialHead);
             });
             let extension: WebSocket | undefined;
@@ -281,7 +293,7 @@ describe.sequential("local Gateway extension relay wakeup", () => {
                 saturationSockets = await Promise.all(
                   Array.from({ length: 32 }, async () => {
                     const ws = new WebSocket(parsed.relayUrl, protocols, {
-                      localAddress: "127.0.0.2",
+                      headers: { "x-test-client-ip": "198.51.100.10" },
                     });
                     ws.on("error", () => {});
                     await once(ws, "open");
@@ -289,7 +301,7 @@ describe.sequential("local Gateway extension relay wakeup", () => {
                   }),
                 );
                 const overflow = new WebSocket(parsed.relayUrl, protocols, {
-                  localAddress: "127.0.0.2",
+                  headers: { "x-test-client-ip": "198.51.100.10" },
                 });
                 overflow.on("error", () => {});
                 const overflowClosed = once(overflow, "close");
@@ -298,7 +310,7 @@ describe.sequential("local Gateway extension relay wakeup", () => {
                 expect(overflowCode).toBe(4013);
               }
               extension = new WebSocket(parsed.relayUrl, protocols, {
-                ...(saturatedSource ? { localAddress: "127.0.0.3" } : {}),
+                ...(saturatedSource ? { headers: { "x-test-client-ip": "203.0.113.20" } } : {}),
                 origin: "chrome-extension://gateway-wakeup-integration",
               });
               await once(extension, "open");
