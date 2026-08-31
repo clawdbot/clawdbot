@@ -12,6 +12,7 @@ scenario:
     - No activity in that reply carries an Adaptive Card attachment, because every structured block degraded to text.
     - The authored status body survives instead of being replaced by a generated card.
     - A reply whose presentation Teams can carry reaches the connector as an Adaptive Card attachment instead of prose.
+    - Every control that reply offered is present in the delivered card.
   regressionRefs:
     - https://github.com/openclaw/openclaw/issues/133295
   docsRefs:
@@ -32,6 +33,9 @@ scenario:
       cardConversationId: msteams-reply-presentation-card
       command: /status
       cardPromptNeedle: Where should this deploy?
+      cardControlLabels:
+        - Staging (Recommended)
+        - Production 🚀
       cardPrompt: >-
         Structured question QA check. Call ask_user exactly once and then reply with the
         exact marker `MSTEAMS-CARD-OK`.
@@ -130,11 +134,11 @@ flow:
             expr: "resolution.status === 'answered'"
             message:
               expr: "`question did not resolve: ${JSON.stringify(resolution)}`"
-        # Deliberately not asserted: the card's `actions`. This step drives ask_user, whose
-        # buttons carry `question` actions, and the Teams card builder maps only
-        # url/web-app/command/callback - so the card arrives with its content and no
-        # actions. Mapping that action type needs a card-submit round trip and is a
-        # separate change; the mapped action types are covered in presentation.reply.test.ts.
+        # This step drives ask_user, whose buttons carry `question` actions. Teams has no
+        # card action for those, so they arrive as the card's control labels rather than as
+        # `actions`; mapping that type needs a card-submit round trip and is a separate
+        # change. The four action types Teams does render are covered in
+        # presentation.reply.test.ts.
         - assert:
             expr: "deliveredCard?.type === 'AdaptiveCard'"
             message:
@@ -143,4 +147,13 @@ flow:
             expr: "JSON.stringify(deliveredCard.body ?? []).includes(config.cardPromptNeedle)"
             message:
               expr: "`the delivered card lost the reply's content: ${JSON.stringify(deliveredCard)}`"
+        # The reply's own option list also names these labels, so this looks for the block
+        # the control degradation writes - without it the controls reach Teams as nothing.
+        - set: deliveredControls
+          value:
+            expr: "(deliveredCard.body ?? []).map((block) => String(block.text ?? '')).find((text) => text.startsWith('Actions:'))"
+        - assert:
+            expr: "Boolean(deliveredControls) && config.cardControlLabels.every((label) => deliveredControls.includes(label))"
+            message:
+              expr: "`the delivered card lost the controls the reply offered: ${JSON.stringify(deliveredCard)}`"
       detailsExpr: "`card blocks=${(deliveredCard.body ?? []).length} actions=${(deliveredCard.actions ?? []).length}`"
