@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { t } from "../i18n/lib/translate.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -216,7 +217,9 @@ suite.define(() => {
       });
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("read-only");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await trigger.textContent()).toContain("Read only");
+      expect(await trigger.textContent()).toContain(
+        t("chat.permissionControls.modes.read-only.label"),
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

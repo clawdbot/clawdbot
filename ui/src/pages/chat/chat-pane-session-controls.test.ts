@@ -4,6 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { icons } from "../../components/icons.ts";
+import { t } from "../../i18n/index.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -301,12 +302,14 @@ describe("chat pane composer controls", () => {
     renderPicker();
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
     expect(trigger.textContent).toContain("Applying permissions");
-    expect(trigger.getAttribute("aria-label")).not.toContain("Full access");
+    expect(trigger.getAttribute("aria-label")).not.toContain(
+      t("chat.permissionControls.modes.full.label"),
+    );
     expect(trigger.disabled).toBe(true);
 
     selectedSession.permissionModePending = false;
     renderPicker();
-    expect(trigger.textContent).toContain("Full access");
+    expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
     expect(trigger.disabled).toBe(false);
   });
 
@@ -371,7 +374,7 @@ describe("chat pane composer controls", () => {
       container,
     );
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
-    expect(trigger.textContent).toContain("Full access");
+    expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
     expect(trigger.disabled).toBe(false);
     expect(getPendingChatPickerPatch(state, state.sessionKey)).toBeUndefined();
   });

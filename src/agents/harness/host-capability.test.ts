@@ -62,6 +62,33 @@ const mockRunBefore = vi.mocked(runBeforeToolCallHook);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
 
+type HostRevocationContext = {
+  host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+  attempt: HostAttempt;
+  admission: PreparedAgentRunAdmission;
+};
+
+const policyRevocations = [
+  {
+    name: "lexical host closure",
+    revoke: async ({ host }: HostRevocationContext) => {
+      host.close();
+    },
+  },
+  {
+    name: "exact authority release",
+    revoke: async ({ attempt }: HostRevocationContext) => {
+      expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+    },
+  },
+  {
+    name: "replacement owner",
+    revoke: async ({ attempt }: HostRevocationContext) => {
+      await admittedAttempt(attempt.runId);
+    },
+  },
+];
+
 const admissions: PreparedAgentRunAdmission[] = [];
 
 async function admittedAttempt(
@@ -628,45 +655,11 @@ describe("agent harness host capability", () => {
   });
 
   it.each(
-    [
-      {
-        name: "lexical host closure",
-        revoke: async ({
-          host,
-        }: {
-          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
-          attempt: HostAttempt;
-        }) => {
-          host.close();
-        },
-      },
-      {
-        name: "exact authority release",
-        revoke: async ({
-          attempt,
-        }: {
-          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
-          attempt: HostAttempt;
-        }) => {
-          expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
-        },
-      },
-      {
-        name: "replacement owner",
-        revoke: async ({
-          attempt,
-        }: {
-          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
-          attempt: HostAttempt;
-        }) => {
-          await admittedAttempt(attempt.runId);
-        },
-      },
-    ].flatMap((entry) =>
+    policyRevocations.flatMap((entry) =>
       (["resolve", "reject"] as const).map((settlement) => Object.assign({ settlement }, entry)),
     ),
   )("rejects a deferred policy $settlement after $name", async ({ revoke, settlement }) => {
-    const { attempt } = await admittedAttempt("run-policy-race");
+    const { attempt, admission } = await admittedAttempt("run-policy-race");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
     const hookStarted = createDeferred<(() => boolean | void) | undefined>();
     const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
@@ -681,7 +674,7 @@ describe("agent harness host capability", () => {
     });
     const receiptAuthority = await hookStarted.promise;
     expect(receiptAuthority).toEqual(expect.any(Function));
-    await revoke({ attempt, host });
+    await revoke({ attempt, admission, host });
     expect(receiptAuthority?.()).toBe(false);
     if (settlement === "resolve") {
       hookResult.resolve({ blocked: false, params: { command: "true" } });
@@ -743,28 +736,11 @@ describe("agent harness host capability", () => {
   });
 
   it.each([
-    {
-      name: "lexical host closure",
-      revoke: async ({ host }: { host: ReturnType<typeof createAgentHarnessHostCapabilities> }) => {
-        host.close();
-      },
-    },
-    {
-      name: "exact authority release",
-      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
-        expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
-      },
-    },
+    ...policyRevocations,
     {
       name: "outer admission abort",
-      revoke: async ({ admission }: { admission: PreparedAgentRunAdmission }) => {
+      revoke: async ({ admission }: HostRevocationContext) => {
         admission.close();
-      },
-    },
-    {
-      name: "replacement owner",
-      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
-        await admittedAttempt(attempt.runId);
       },
     },
   ])("rejects late approval results after $name", async ({ name, revoke }) => {
