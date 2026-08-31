@@ -48,6 +48,23 @@ export function assertAgentDatabaseMaintenanceAuthority(): void {
   authority.assertOwned();
 }
 
+/** Revalidate a maintenance owner when present, without requiring ordinary opens to hold one. */
+export function assertAgentDatabaseMaintenanceAuthorityIfPresent(): void {
+  maintenanceAuthority.getStore()?.assertOwned();
+}
+
+/** Renew a maintenance owner before a synchronous schema phase can block its heartbeat. */
+export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
+  const authority = maintenanceAuthority.getStore();
+  if (!authority) {
+    return;
+  }
+  if (!authority.renew) {
+    throw new Error("Agent database maintenance authority cannot renew its lease.");
+  }
+  authority.renew();
+}
+
 export function claimOpenClawAgentDatabaseLease(params: {
   agentId: string;
   path: string;

@@ -519,6 +519,98 @@ describe("historical transcript directive migration", () => {
     }
   });
 
+  it("renews maintenance during a versioned schema upgrade beyond the original lease lifetime", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const startedAt = Date.now();
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-old-schema-renewal-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    opened.db.exec(`
+      DROP TABLE session_participants;
+      ${withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql())}
+      PRAGMA user_version = 17;
+      UPDATE schema_meta SET schema_version = 17 WHERE meta_key = 'primary';
+    `);
+    closeOpenClawAgentDatabasesForTest();
+
+    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    const originalRenew = agentDatabaseLease.renewAgentDatabaseMaintenanceAuthorityIfPresent;
+    const renew = vi
+      .spyOn(agentDatabaseLease, "renewAgentDatabaseMaintenanceAuthorityIfPresent")
+      .mockImplementation(() => {
+        vi.setSystemTime(Date.now() + 30_000);
+        originalRenew();
+      });
+
+    const result = await migrateHistoricalTranscriptDirectives({ env });
+
+    expect(result.warnings).toEqual([]);
+    expect(Date.now() - startedAt).toBeGreaterThan(60_000);
+    expect(renew).toHaveBeenCalledTimes(3);
+    const migrated = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    try {
+      expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+    } finally {
+      migrated.close();
+    }
+  });
+
+  it("rolls back same-version convergence when maintenance expires before commit", async () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-same-version-expiry-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    opened.db.exec(`
+      DROP TRIGGER session_nodes_entry_valid_after_insert;
+      DROP TRIGGER session_nodes_entry_valid_after_entry_update;
+      DROP TRIGGER session_nodes_entry_valid_after_identity_update;
+      DROP INDEX idx_agent_session_nodes_entry_valid_pending;
+      ALTER TABLE session_nodes DROP COLUMN entry_valid;
+    `);
+    closeOpenClawAgentDatabasesForTest();
+
+    let competingLeaseId: string | undefined;
+    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    const originalAssert = agentDatabaseLease.assertAgentDatabaseMaintenanceAuthorityIfPresent;
+    const authority = vi
+      .spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthorityIfPresent")
+      .mockImplementation(() => {
+        openOpenClawStateDatabase({ env })
+          .db.prepare("UPDATE state_leases SET expires_at = ? WHERE scope = ? AND lease_key = ?")
+          .run(
+            Date.now() - 1,
+            AGENT_DATABASE_MAINTENANCE_LEASE.scope,
+            AGENT_DATABASE_MAINTENANCE_LEASE.key,
+          );
+        competingLeaseId = claimOpenClawAgentDatabaseLease({
+          agentId: "competitor",
+          path: path.join(stateDir, "competitor.sqlite"),
+          env,
+        });
+        originalAssert();
+      });
+
+    const result = await migrateHistoricalTranscriptDirectives({ env }).finally(() => {
+      authority.mockRestore();
+    });
+
+    expect(result.warnings.some((warning) => warning.includes("maintenance lease"))).toBe(true);
+    expect(competingLeaseId).toBeDefined();
+    const rolledBack = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    try {
+      expect(
+        rolledBack
+          .prepare("SELECT 1 FROM pragma_table_info('session_nodes') WHERE name = 'entry_valid'")
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      rolledBack.close();
+    }
+    releaseOpenClawAgentDatabaseLease(competingLeaseId as string, { env });
+  });
+
   it("leaves a current empty database and its active writer untouched", async () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-current-empty-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
