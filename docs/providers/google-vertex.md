@@ -159,8 +159,11 @@ you do not need to declare `models.providers`, and you do not set an API key for
 the ADC path.
 
 <Note>
-  The managed gateway reads `~/.openclaw/.env`, not shell exports. Restart the
-  gateway after changing environment variables.
+  Variables exported only in an interactive shell are not visible to a
+  launchd/systemd Gateway daemon unless that environment is explicitly
+  imported. Set them in `~/.openclaw/.env`, the service environment, or via
+  `env.shellEnv`, then restart the gateway. See
+  [Environment variables](/help/environment) for the full precedence order.
 </Note>
 
 ## Environment variables
