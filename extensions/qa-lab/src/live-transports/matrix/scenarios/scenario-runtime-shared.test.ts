@@ -36,7 +36,7 @@ describe("matrix scenario runtime shared", () => {
       vi.useFakeTimers();
       let polls = 0;
       const fetchImpl: typeof fetch = async (input, init) => {
-        const url = new URL(String(input));
+        const url = new URL(input instanceof Request ? input.url : input);
         if (init?.method === "PUT") {
           return Response.json({ event_id: "$trigger" });
         }
