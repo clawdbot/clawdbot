@@ -1,7 +1,7 @@
-import {
-  type ChannelProgressDraftCompositorLine,
-  type ChannelProgressDraftCompositorSnapshot,
-  type ChannelProgressDraftLine,
+import type {
+  ChannelProgressDraftCompositorLine,
+  ChannelProgressDraftCompositorSnapshot,
+  ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { buildSlackProgressStreamChunks } from "../../progress-blocks.js";
 

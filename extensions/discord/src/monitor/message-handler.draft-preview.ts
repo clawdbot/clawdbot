@@ -264,7 +264,8 @@ export function createDiscordDraftPreviewController(params: {
     disableBlockStreamingForDraft: draftStream ? true : undefined,
     pushToolEvent: progressDraft.pushToolEvent,
     pushItemEvent: progressDraft.pushItemEvent,
-    pushApprovalEvent: progressDraft.pushApprovalEvent,
+    pushApprovalEvent: (payload: Parameters<typeof progressDraft.pushApprovalEvent>[0]) =>
+      progressDraft.pushApprovalEvent(payload),
     pushCommandOutputEvent: progressDraft.pushCommandOutputEvent,
     pushPatchEvent: progressDraft.pushPatchEvent,
     async pushToolProgress(

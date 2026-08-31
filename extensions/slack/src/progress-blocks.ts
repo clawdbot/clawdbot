@@ -1,10 +1,7 @@
 // Slack plugin module implements progress blocks behavior.
 import type { AnyChunk, TaskUpdateChunk } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
-import {
-  type AgentPlanStep,
-  type ChannelProgressDraftLine,
-} from "openclaw/plugin-sdk/channel-outbound";
+import type { AgentPlanStep, ChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { normalizeSlackOutboundText } from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
@@ -148,18 +145,21 @@ export function buildSlackProgressStreamChunks(params: {
     tasks.push(attention);
   }
   const finalTaskIndex = tasks.length - 1;
-  const taskChunks: TaskUpdateChunk[] = tasks.map((task, index) => ({
-    type: "task_update",
-    id: task.id,
-    title: task.title,
-    status:
-      task.status === "in_progress"
-        ? (params.finalInProgressStatus ?? (params.completeInProgress ? "complete" : task.status))
-        : task.status,
-    ...(index === finalTaskIndex && params.sessionUrl
-      ? { sources: buildSessionSources(params.sessionUrl) }
-      : {}),
-  }));
+  const taskChunks: TaskUpdateChunk[] = tasks.map((task, index) => {
+    const chunk: TaskUpdateChunk = {
+      type: "task_update",
+      id: task.id,
+      title: task.title,
+      status:
+        task.status === "in_progress"
+          ? (params.finalInProgressStatus ?? (params.completeInProgress ? "complete" : task.status))
+          : task.status,
+    };
+    if (index === finalTaskIndex && params.sessionUrl) {
+      chunk.sources = buildSessionSources(params.sessionUrl);
+    }
+    return chunk;
+  });
   return [{ type: "plan_update", title }, ...taskChunks];
 }
 
