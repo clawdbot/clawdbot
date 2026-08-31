@@ -1813,6 +1813,12 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
     const key = input.key.trim().toLowerCase();
     const isCodexAcp = isCodexAcpCommand(command);
+    if (key === "model" && this.pluginToolsMcpBridgeEnabled) {
+      throw new AcpRuntimeError(
+        "ACP_BACKEND_UNSUPPORTED_CONTROL",
+        "Changing the model would leave the managed plugin-tool policy stale. Start a fresh ACP session with the desired model instead.",
+      );
+    }
     if (WIRE_TIMEOUT_CONFIG_KEYS.has(key) && (isCodexAcp || isClaudeAcpCommand(command))) {
       return;
     }

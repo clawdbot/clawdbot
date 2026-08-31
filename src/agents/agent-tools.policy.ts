@@ -457,6 +457,9 @@ export function resolveEffectiveToolPolicy(params: {
     globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
     agentPolicy,
     agentProviderPolicy: pickSandboxToolPolicy(agentProviderPolicy),
+    providerPolicyConfigured:
+      Object.keys(globalTools?.byProvider ?? {}).length > 0 ||
+      Object.keys(agentTools?.byProvider ?? {}).length > 0,
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
     // alsoAllow is applied at the profile stage to avoid early filtering.

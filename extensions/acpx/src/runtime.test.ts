@@ -1670,6 +1670,49 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
+  it("requires a fresh session to change model with the managed plugin-tools bridge", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime } = makeRuntime(baseStore, {
+      pluginToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-plugin-tools",
+          command: "node",
+          args: ["dist/mcp/plugin-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const managedDelegate = (
+      runtime as unknown as {
+        resolveManagedToolsDelegateForSession(
+          sessionKey: string,
+          model?: string,
+        ): {
+          setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
+        };
+      }
+    ).resolveManagedToolsDelegateForSession("agent:codex:acp:test", "openai/gpt-5.5");
+    const setConfigOption = vi.spyOn(managedDelegate, "setConfigOption");
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+
+    await expect(
+      runtime.setConfigOption({ handle, key: "model", value: "openai/gpt-5.6" }),
+    ).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
+    expect(setConfigOption).not.toHaveBeenCalled();
+  });
+
   it.each([
     "google/gemini-3.1-flash-lite",
     "gpt-5.4/ultra",

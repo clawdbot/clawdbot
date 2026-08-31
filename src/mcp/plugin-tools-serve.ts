@@ -94,6 +94,13 @@ function resolvePluginToolPolicy(params: {
   const globalProviderPolicy = effective.globalProviderPolicy;
   const agentPolicy = effective.agentPolicy;
   const agentProviderPolicy = effective.agentProviderPolicy;
+  const unknownProviderPolicy =
+    !params.modelProvider && effective.providerPolicyConfigured ? { deny: ["*"] } : undefined;
+  if (unknownProviderPolicy) {
+    logWarn(
+      "plugin tools disabled: provider-specific tool policy requires a qualified ACP model; start the session with provider/model identity",
+    );
+  }
   const { subagentPolicy, inheritedToolPolicy } = resolveRequesterToolPolicies({
     config: params.config,
     agentId: effective.agentId,
@@ -108,6 +115,7 @@ function resolvePluginToolPolicy(params: {
     globalProviderPolicy,
     agentPolicy,
     agentProviderPolicy,
+    unknownProviderPolicy,
     subagentPolicy,
     inheritedToolPolicy,
   ];
@@ -128,6 +136,7 @@ function resolvePluginToolPolicy(params: {
         agentProviderPolicy,
         agentId: effective.agentId,
       }),
+      { policy: unknownProviderPolicy, label: "unknown ACP provider" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
       { policy: inheritedToolPolicy, label: "inherited tools" },
     ].map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true })),
