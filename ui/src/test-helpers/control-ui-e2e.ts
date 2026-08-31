@@ -568,6 +568,7 @@ export type MockGatewayControls = {
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
   ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
+  suspendLatest: () => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
   setGatewayBootId: (bootId: string) => Promise<void>;
   setServerBuildId: (buildId: string) => Promise<void>;
@@ -1094,6 +1095,7 @@ function installControlUiMockGateway(
     ) => void;
     requests: BrowserRequest[];
     resolveDeferred: (method: string, payload?: unknown) => void;
+    suspendLatest: () => void;
     setOnline: (online: boolean) => void;
     setGatewayBootId: (bootId: string) => void;
     setServerBuildId: (buildId: string) => void;
@@ -2280,6 +2282,13 @@ function installControlUiMockGateway(
       }, 0);
     }
 
+    suspend(): void {
+      if (this.tickTimer !== null) {
+        window.clearInterval(this.tickTimer);
+        this.tickTimer = null;
+      }
+    }
+
     deliver(frame: unknown): void {
       if (this.readyState !== MockWebSocket.OPEN) {
         return;
@@ -2343,6 +2352,9 @@ function installControlUiMockGateway(
           type: "res",
         });
       }
+    },
+    suspendLatest() {
+      MockWebSocket.latest?.suspend();
     },
     setOnline(nextOnline) {
       online = nextOnline;
@@ -2654,6 +2666,19 @@ function createMockGatewayControls(
         },
         { targetMethod: method, responsePayload: payload },
       );
+    },
+    async suspendLatest() {
+      await page.evaluate(() => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: { suspendLatest: () => void };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.suspendLatest();
+      });
     },
     async setOnline(online) {
       await page.evaluate((nextOnline) => {

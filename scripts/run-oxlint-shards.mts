@@ -32,7 +32,7 @@ const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
 // local-Mac threshold above misreads as too small and forces serial shards.
 const CI_PARALLEL_MIN_CPUS = 8;
 const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * 1024 ** 3;
-const EXTENSION_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
+const EXTENSION_TS_CONFIG = "extensions/tsconfig.json";
 const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
 const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM"] satisfies NodeJS.Signals[];

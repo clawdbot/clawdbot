@@ -377,7 +377,7 @@ describe("scripts/changed-lanes", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("[check:changed:dry-run] lanes=extensions, extensionTests");
     expect(result.stderr).toContain(
-      "[check:changed:dry-run] would run: node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/lmstudio/src/model-reasoning.ts",
+      "[check:changed:dry-run] would run: node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions/lmstudio/src/model-reasoning.ts",
     );
   });
 
@@ -795,7 +795,7 @@ describe("scripts/changed-lanes", () => {
           args: [
             "scripts/run-oxlint.mjs",
             "--tsconfig",
-            "config/tsconfig/oxlint.extensions.json",
+            "extensions/tsconfig.json",
             "extensions/lmstudio/src/models.fetch.ts",
           ],
         }),
@@ -1066,7 +1066,7 @@ describe("scripts/changed-lanes", () => {
       targets: ["extensions/lmstudio/src/model-reasoning.ts", "docs/help/testing.md"],
       expected: {
         name: "lint extension changed file",
-        tsconfig: "config/tsconfig/oxlint.extensions.json",
+        tsconfig: "extensions/tsconfig.json",
         path: "extensions/lmstudio/src/model-reasoning.ts",
       },
     },

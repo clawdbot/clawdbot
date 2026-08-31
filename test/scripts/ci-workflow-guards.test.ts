@@ -6519,17 +6519,17 @@ server.listen(0, "127.0.0.1", () => {
       [
         ".github/workflows/ci-check-testbox.yml",
         "1",
-        "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}",
+        "${{ steps.testbox-base.outputs.sha || 'HEAD' }}",
       ],
       [
         ".github/workflows/ci-check-arm-testbox.yml",
         "0",
-        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        "${{ steps.testbox-base.outputs.sha || 'refs/remotes/origin/main' }}",
       ],
       [
         ".github/workflows/ci-build-artifacts-testbox.yml",
         "0",
-        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        "${{ steps.testbox-base.outputs.sha || 'refs/remotes/origin/main' }}",
       ],
     ] as const;
 
@@ -6562,7 +6562,7 @@ server.listen(0, "127.0.0.1", () => {
       expect(ensureBaseStep?.if, workflowPath).toBe("github.event_name == 'pull_request'");
       expect(ensureBaseStep?.uses, workflowPath).toBe("./.github/actions/ensure-base-commit");
       expect(ensureBaseStep?.with, workflowPath).toEqual({
-        "base-sha": "${{ github.event.pull_request.base.sha }}",
+        "base-sha": "${{ steps.testbox-base.outputs.sha }}",
         "fetch-ref": "${{ github.event.pull_request.base.ref }}",
       });
       expect(JSON.stringify(job.steps), workflowPath).not.toContain(

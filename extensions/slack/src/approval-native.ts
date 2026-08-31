@@ -13,7 +13,10 @@ import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-cont
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listSlackAccountIds } from "./accounts.js";
-import { getSlackApprovalApprovers, isSlackApprovalAuthorizedSender } from "./approval-auth.js";
+import {
+  getSlackApprovalApproversForTeam,
+  isSlackApprovalAuthorizedSender,
+} from "./approval-auth.js";
 import {
   hasSlackPluginApprovers,
   isSlackAnyNativeApprovalClientEnabled,
@@ -35,7 +38,7 @@ import {
   isSlackExecApprovalClientEnabled,
   resolveSlackExecApprovalTarget,
 } from "./exec-approvals.js";
-import { formatSlackTarget } from "./target-parsing.js";
+import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
 
 type ApprovalRequest = SlackNativeApprovalRequest;
 type SlackSuppressionAccountInput = {
@@ -104,14 +107,25 @@ function resolveSlackApproverDmTargets(params: {
   ) {
     return [];
   }
+  const teamId = resolveEnterpriseApprovalTeamId(params.request);
   const approvers =
     params.approvalKind === "plugin"
-      ? getSlackApprovalApprovers(params)
+      ? getSlackApprovalApproversForTeam({ ...params, teamId })
       : getSlackExecApprovalApprovers(params);
-  const teamId = resolveEnterpriseApprovalTeamId(params.request);
-  return approvers.map((approver) => ({
-    to: formatSlackTarget({ kind: "user", id: approver, teamId, explicitKind: true }),
-  }));
+  return approvers.map((approver) => {
+    const target = parseSlackTarget(approver, { defaultKind: "user" });
+    if (!target || target.kind !== "user") {
+      throw new Error("Slack approval approver target must be a user");
+    }
+    return {
+      to: formatSlackTarget({
+        kind: "user",
+        id: target.id,
+        teamId: target.teamId ?? teamId,
+        explicitKind: true,
+      }),
+    };
+  });
 }
 
 const shouldSuppressSlackForwardingFallback =
@@ -223,6 +237,7 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
                   supportsApproverDmSurface: hasSlackPluginApprovers({
                     cfg: params.cfg,
                     accountId: params.accountId,
+                    teamId: resolveEnterpriseApprovalTeamId(request),
                   }),
                 }
               : {}),

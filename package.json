@@ -1689,7 +1689,7 @@
     "lint:templates:fix": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-templates.jsonc --fix",
     "lint:extensions:no-deprecated-channel-access": "node --import ./scripts/tsx.mjs scripts/check-no-deprecated-channel-access.ts",
     "lint:extensions:telegram-grammy-types": "node --import ./scripts/tsx.mjs scripts/check-telegram-grammy-types-imports.mts",
-    "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions",
+    "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig extensions/tsconfig.json extensions",
     "lint:extensions:no-guarded-wildcard-reexports": "node --import ./scripts/tsx.mjs scripts/check-extension-wildcard-reexports.mts",
     "lint:extensions:no-normalization-core-bypass": "node --import ./scripts/tsx.mjs scripts/check-extension-plugin-sdk-boundary.mts --mode=normalization-core-bypass",
     "lint:extensions:no-plugin-sdk-wildcard-reexports": "node --import ./scripts/tsx.mjs scripts/check-plugin-sdk-wildcard-reexports.mts",
