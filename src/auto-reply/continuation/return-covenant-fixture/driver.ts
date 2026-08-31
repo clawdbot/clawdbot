@@ -1,5 +1,4 @@
-import { constants as fsConstants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
@@ -8,6 +7,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { readReturnCovenantJsonFile, writeReturnCovenantJsonFile } from "./control-file.js";
 import { ProductReturnCovenantGatewayControl } from "./gateway.js";
 import {
   authorizeReturnCovenantPhaseRequest,
@@ -27,7 +27,6 @@ import {
 import { ReturnCovenantFixtureRun } from "./run.js";
 import { projectReturnCovenantRuntimeConfig } from "./runtime-config.js";
 
-const MAX_CONTROL_BYTES = 1024 * 1024;
 const FORBIDDEN_AMBIENT_ENV = [
   "NODE_PATH",
   "NPM_CONFIG_USERCONFIG",
@@ -42,23 +41,6 @@ type IsolatedRuntime = {
   homePath: string;
   statePath: string;
 };
-
-async function readBoundedJsonNoFollow(file: string): Promise<unknown> {
-  const handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.size < 2 || info.size > MAX_CONTROL_BYTES) {
-      throw new Error(`return-covenant control file is not a bounded regular file: ${file}`);
-    }
-    const bytes = await handle.readFile();
-    if (bytes.length > MAX_CONTROL_BYTES) {
-      throw new Error(`return-covenant control file exceeds ${MAX_CONTROL_BYTES} bytes`);
-    }
-    return JSON.parse(bytes.toString("utf8"));
-  } finally {
-    await handle.close();
-  }
-}
 
 function fixtureRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
   return {
@@ -105,7 +87,7 @@ async function validateIsolatedRuntime(params: {
   ) {
     throw new Error("return-covenant fixture paths do not match the isolated run layout");
   }
-  const rawConfig = await readBoundedJsonNoFollow(configFile);
+  const rawConfig = await readReturnCovenantJsonFile(configFile);
   if (sha256ReturnCovenant(stableStringify(rawConfig)) !== params.plan.target.runtimeConfigSha256) {
     throw new Error("return-covenant runtime config differs from the frozen plan");
   }
@@ -132,23 +114,13 @@ async function validateIsolatedRuntime(params: {
   };
 }
 
-async function writeExclusiveJson(file: string, value: unknown): Promise<void> {
-  const handle = await open(file, "wx", 0o600);
-  try {
-    await handle.writeFile(`${JSON.stringify(value)}\n`, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
 function readRequestBody(request: http.IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let raw = "";
     request.setEncoding("utf8");
     request.on("data", (chunk: string) => {
       raw += chunk;
-      if (Buffer.byteLength(raw, "utf8") > MAX_CONTROL_BYTES) {
+      if (Buffer.byteLength(raw, "utf8") > 1024 * 1024) {
         reject(
           new ReturnCovenantProtocolError(
             "request-too-large",
@@ -239,7 +211,7 @@ function readyReceipt(params: {
 
 export async function runReturnCovenantFixtureDriver(argv: readonly string[]): Promise<void> {
   const args = parseReturnCovenantDriverArgs(argv);
-  const plan = parseReturnCovenantPlan(await readBoundedJsonNoFollow(args.planPath));
+  const plan = parseReturnCovenantPlan(await readReturnCovenantJsonFile(args.planPath));
   const runtime = await validateIsolatedRuntime({ plan });
   const launchNonce = process.env.OPENCLAW_RETURN_COVENANT_LAUNCH_NONCE;
   const phaseSigningKey = process.env.OPENCLAW_RETURN_COVENANT_PHASE_KEY;
@@ -277,7 +249,7 @@ export async function runReturnCovenantFixtureDriver(argv: readonly string[]): P
 
   const readAttestation = async () => {
     attestation ??= parseReturnCovenantDriverAttestation(
-      await readBoundedJsonNoFollow(attestationPath),
+      await readReturnCovenantJsonFile(attestationPath),
     );
     return attestation;
   };
@@ -311,7 +283,7 @@ export async function runReturnCovenantFixtureDriver(argv: readonly string[]): P
     resetConfigRuntimeState();
     if (claims) {
       try {
-        await writeExclusiveJson(args.cleanupDraftPath, claims);
+        await writeReturnCovenantJsonFile(args.cleanupDraftPath, claims);
       } catch (error) {
         failures.push(error);
       }
@@ -406,7 +378,7 @@ export async function runReturnCovenantFixtureDriver(argv: readonly string[]): P
       throw new Error("return-covenant driver did not acquire a loopback listener");
     }
     const endpoint = `http://127.0.0.1:${address.port}`;
-    await writeExclusiveJson(
+    await writeReturnCovenantJsonFile(
       args.readyPath,
       readyReceipt({
         driverEndpoint: endpoint,
