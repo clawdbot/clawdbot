@@ -4109,6 +4109,9 @@ describe("runGatewayUpdate", () => {
         if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
           return toCommandResult({ stdout: "main\n" });
         }
+        if (key === statusCommand && rollbackBuildStatus && buildCount >= 2) {
+          return toCommandResult({ stdout: rollbackBuildStatus });
+        }
         if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
           return toCommandResult();
         }
@@ -4170,9 +4173,6 @@ describe("runGatewayUpdate", () => {
           buildEnvs.push(options?.env ?? {});
           await writeRuntime(currentHead);
           return toCommandResult();
-        }
-        if (key === statusCommand && rollbackBuildStatus && buildCount >= 2) {
-          return toCommandResult({ stdout: rollbackBuildStatus });
         }
         if (key === doctorCommand) {
           return toCommandResult({ code: 1, stderr: "doctor failed after build" });
