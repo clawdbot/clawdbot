@@ -88,6 +88,7 @@ export function sanitizeForPlainText(text: string, options: { style?: "markdown"
   // HTML attributes can consume markers. Restore by identity in one pass so
   // surviving code keeps its position and literal marker-shaped text stays inert.
   return convertHtmlOutsideCode(masked, options).replace(
+    // oxlint-disable-next-line eslint/no-control-regex -- Intentional NUL delimiters distinguish internal markers from escaped user text.
     /\u0000(?:e|p\d+;)/g,
     (marker) => preservedText.get(marker) ?? marker,
   );
