@@ -2866,13 +2866,77 @@ NODE
     expect(action).toContain("BASE_SHA: ${{ inputs.base-sha }}");
     expect(action).toContain('BASE="$BASE_SHA"');
     expect(action).toContain(
-      'CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")',
+      'CHANGED=$(git diff --no-renames --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")',
     );
     expect(action).toContain('if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then');
     expect(action).toContain("docs_only=false");
     expect(action).toContain("docs_changed=false");
     expect(action).toContain("test/fixtures/*)");
     expect(action).toContain("docs/* | *.md | *.mdx | config/markdownlint*.jsonc)");
+
+    const run = parse(action).runs.steps[0].run as string;
+    for (const [source, destination, docsChanged, docsOnly] of [
+      ["src/old.ts", "docs/new.md", "true", "false"],
+      ["docs/old.md", "src/new.ts", "true", "false"],
+      ["docs/old.md", "docs/new.md", "true", "true"],
+      ["src/old.ts", "src/new.ts", "false", "false"],
+      ["test/fixtures/old.md", "docs/new.md", "true", "false"],
+      ["docs/removed.md", null, "true", "true"],
+    ] as const) {
+      const root = tempDirs.make("openclaw-docs-diff-");
+      const origin = path.join(root, "origin");
+      const checkout = path.join(root, "checkout");
+      mkdirSync(path.dirname(path.join(origin, source)), { recursive: true });
+      const content = Array.from({ length: 100 }, (_, index) => `line ${index}\n`).join("");
+      writeFileSync(path.join(origin, source), content);
+      runGit(origin, ["init", "-q", "-b", "main"]);
+      for (const [name, value] of [
+        ["user.name", "CI Fixture"],
+        ["user.email", "ci-fixture@example.invalid"],
+        ["commit.gpgsign", "false"],
+        ["uploadpack.allowFilter", "true"],
+      ] as const) {
+        runGit(origin, ["config", name, value]);
+      }
+      runGit(origin, ["add", "."]);
+      runGit(origin, ["commit", "-qm", "base"]);
+      const base = runGit(origin, ["rev-parse", "HEAD"]);
+      const sourceBlob = runGit(origin, ["rev-parse", `HEAD:${source}`]);
+      rmSync(path.join(origin, source));
+      if (destination) {
+        mkdirSync(path.dirname(path.join(origin, destination)), { recursive: true });
+        writeFileSync(path.join(origin, destination), `${content}edited after rename\n`);
+      }
+      runGit(origin, ["add", "-A"]);
+      runGit(origin, ["commit", "-qm", "change"]);
+      runGit(root, [
+        "clone",
+        "-q",
+        "--no-local",
+        "--filter=blob:none",
+        "--depth=2",
+        origin,
+        checkout,
+      ]);
+      runGit(checkout, ["config", "diff.renames", "true"]);
+      const localObjects = () =>
+        runGit(checkout, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"]);
+      expect(localObjects()).toContain(base);
+      expect(localObjects()).not.toContain(sourceBlob);
+      const output = path.join(root, "output");
+      const trace = path.join(root, "trace");
+      const result = runWorkflowShellScript(run, {
+        cwd: checkout,
+        env: { ...process.env, BASE_SHA: base, GITHUB_OUTPUT: output, GIT_TRACE2_EVENT: trace },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readWorkflowOutputs(output), `${source} -> ${destination}`).toEqual({
+        docs_changed: docsChanged,
+        docs_only: docsOnly,
+      });
+      expect(readFileSync(trace, "utf8")).not.toContain('"fetch"');
+      expect(localObjects()).not.toContain(sourceBlob);
+    }
   });
 
   it("bounds matrix fan-out for runner-registration pressure", () => {
