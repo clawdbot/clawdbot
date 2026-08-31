@@ -1034,9 +1034,7 @@ extension ApplicationRelocator {
                   executableURL: installedApp.executableURL,
                   matching: runningIdentity.requirementData)
         else {
-            return self.relaunchFailure(
-                "OpenClaw is installed in Applications, but its signature could not be verified. " +
-                    "Open that copy manually.")
+            return self.relaunchFailure()
         }
 
         do {
@@ -1044,9 +1042,7 @@ extension ApplicationRelocator {
         } catch {
             self.logger.error(
                 "Could not release installed app from quarantine: \(error.localizedDescription, privacy: .public)")
-            return self.relaunchFailure(
-                "OpenClaw is installed in Applications, but macOS could not prepare it to reopen. " +
-                    "Move a fresh copy there with Finder, then open it.")
+            return self.relaunchFailure()
         }
 
         // Quarantine metadata is outside the sealed code signature. Revalidate
@@ -1066,9 +1062,7 @@ extension ApplicationRelocator {
                 bootoutTarget: nil,
                 forwardedArguments: Array(processInfo.arguments.dropFirst()))
         else {
-            return self.relaunchFailure(
-                "OpenClaw is installed in Applications, but couldn’t reopen automatically. " +
-                    "Open that copy manually.")
+            return self.relaunchFailure()
         }
 
         let timeoutMilliseconds = self.replacementHandoffPolicy.timeoutMilliseconds(
@@ -1079,9 +1073,7 @@ extension ApplicationRelocator {
             timeoutMilliseconds: timeoutMilliseconds)
         guard handoffReady else {
             self.logger.error("Installed app handoff failed after \(timeoutMilliseconds) ms")
-            return self.relaunchFailure(
-                "OpenClaw is installed in Applications, but couldn’t reopen automatically. " +
-                    "Open that copy manually.")
+            return self.relaunchFailure()
         }
 
         TerminationSignalWatcher.scheduleExitFailsafe()
@@ -1135,8 +1127,9 @@ extension ApplicationRelocator {
         }
     }
 
-    private static func relaunchFailure(_ message: String) -> LaunchDisposition {
-        self.showFailure(message, title: "OpenClaw couldn’t relaunch")
+    private static func relaunchFailure() -> LaunchDisposition {
+        self.showFailure(
+            "OpenClaw is installed in Applications, but couldn’t reopen automatically. Open it there manually.")
         return .continueLaunch(startUpdater: false)
     }
 
@@ -1469,12 +1462,9 @@ extension ApplicationRelocator {
         while waitpid(processIdentifier, &processStatus, 0) == -1, errno == EINTR {}
     }
 
-    private static func showFailure(
-        _ message: String,
-        title: String = "Move OpenClaw to Applications")
-    {
+    private static func showFailure(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = title
+        alert.messageText = "Move OpenClaw to Applications"
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
