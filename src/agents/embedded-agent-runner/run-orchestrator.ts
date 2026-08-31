@@ -211,11 +211,13 @@ async function runEmbeddedAgentInternal(
     // Same-session reads below must see any prior deferred transcript rewrite.
     // Checkpoint before the global lane so unrelated sessions can still start
     // while this session waits on its own maintenance lane.
-    params.replyOperation?.markWaitingForDeferredMaintenance();
-    try {
-      await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
-    } finally {
-      params.replyOperation?.markDeferredMaintenanceWaitEnded();
+    if (!params.sessionManager || params.sessionManager.getSessionTarget()) {
+      params.replyOperation?.markWaitingForDeferredMaintenance();
+      try {
+        await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
+      } finally {
+        params.replyOperation?.markDeferredMaintenanceWaitEnded();
+      }
     }
     throwIfAborted();
     return enqueueGlobal(async () => {

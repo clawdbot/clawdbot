@@ -119,16 +119,17 @@ async function runEmbeddedAgentViaCliBackend(
     openClaw: dispatch.toolsAllow,
   };
   const onAgentToolResult = params.onAgentToolResult;
+  const { storePath, expectedLifecycleRevision, expectedWriterRunId } = params.sessionTarget;
   // Durable turns mirror CLI output for transcript readers and timeout salvage.
   // Detached runs may borrow the identity without owning its transcript.
   const transcript =
-    params.sessionPersistence === "detached"
+    params.sessionManager || params.sessionPersistence === "detached"
       ? undefined
       : createCliDispatchTranscriptRecorder({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           agentId: params.agentId,
-          storePath: params.sessionTarget.storePath,
+          storePath,
           sessionFile: dispatch.sessionFile,
           runId: params.runId,
           prompt: params.prompt,
@@ -136,12 +137,8 @@ async function runEmbeddedAgentViaCliBackend(
           model: params.model,
           cwd: params.cwd ?? params.workspaceDir,
           config: params.config,
-          ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
-            ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
-            : {}),
-          ...(params.sessionTarget?.expectedWriterRunId !== undefined
-            ? { expectedWriterRunId: params.sessionTarget.expectedWriterRunId }
-            : {}),
+          expectedLifecycleRevision,
+          expectedWriterRunId,
           ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
         });
   // CLI tool results arrive as agent events with transport-prefixed MCP
@@ -217,15 +214,11 @@ async function runEmbeddedAgentViaCliBackend(
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
-      ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
-        : {}),
-      ...(params.sessionTarget?.expectedWriterRunId !== undefined
-        ? { expectedWriterRunId: params.sessionTarget.expectedWriterRunId }
-        : {}),
+      expectedLifecycleRevision,
+      expectedWriterRunId,
       chatType: params.chatType,
       agentId: params.agentId,
-      storePath: params.sessionTarget.storePath,
+      storePath,
       trigger: params.trigger,
       sessionFile: dispatch.sessionFile,
       workspaceDir: params.workspaceDir,
