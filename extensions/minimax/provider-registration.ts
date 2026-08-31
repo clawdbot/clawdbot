@@ -222,7 +222,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
                 baseUrl,
                 api: "anthropic-messages",
                 authHeader: true,
-                models: [],
+                models: buildMinimaxPortalProvider().models,
               },
             },
           },

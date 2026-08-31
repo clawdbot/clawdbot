@@ -15,6 +15,57 @@ function runMigration(config: OpenClawConfig) {
 }
 
 describe("bundled setup config migrations", () => {
+  test("repairs legacy empty MiniMax OAuth model catalogs", () => {
+    const result = runMigration({
+      agents: {
+        defaults: {
+          models: {
+            "minimax-portal/MiniMax-M3": { alias: "minimax-m3" },
+            "minimax-portal/MiniMax-M2.7": { alias: "minimax-m2.7" },
+            "minimax-portal/MiniMax-M2.7-highspeed": { alias: "minimax-m2.7-highspeed" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "minimax-portal": {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            authHeader: true,
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(result.changes).toEqual([
+      "restored the MiniMax OAuth model catalog for a legacy empty provider entry",
+    ]);
+    expect(result.config.models?.providers?.["minimax-portal"]?.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "MiniMax-M3", contextWindow: 1_000_000 }),
+      ]),
+    );
+  });
+
+  test("preserves intentionally empty MiniMax OAuth model catalogs without legacy aliases", () => {
+    const result = runMigration({
+      models: {
+        providers: {
+          "minimax-portal": {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            authHeader: true,
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.models?.providers?.["minimax-portal"]?.models).toEqual([]);
+  });
+
   test("repairs Tencent TokenHub model defaults", () => {
     const result = runMigration({
       agents: {

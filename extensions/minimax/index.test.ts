@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildMinimaxModelDiscovery } from "./provider-catalog.js";
+import { buildMinimaxModelDiscovery, buildMinimaxPortalProvider } from "./provider-catalog.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 
@@ -597,7 +597,7 @@ describe("minimax provider hooks", () => {
       baseUrl: "https://api.minimax.io/anthropic",
       api: "anthropic-messages",
       authHeader: true,
-      models: [],
+      models: buildMinimaxPortalProvider().models,
     });
   });
 });

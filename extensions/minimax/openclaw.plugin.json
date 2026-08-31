@@ -103,6 +103,9 @@
     "webSearchProviders": ["minimax"],
     "usageProviders": ["minimax"]
   },
+  "configContracts": {
+    "compatibilityMigrationPaths": ["models.providers.minimax-portal.models"]
+  },
   "mediaUnderstandingProviderMetadata": {
     "minimax": {
       "capabilities": ["image"],
