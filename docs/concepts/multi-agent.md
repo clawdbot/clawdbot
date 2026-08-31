@@ -62,7 +62,7 @@ when personas must not share compiled wiki knowledge.
 If you configure nothing, OpenClaw runs one agent:
 
 - `agentId` defaults to `main`.
-- Sessions key as `agent:main:<mainKey>` (default `mainKey` is `main`).
+- The main session key is `agent:main:main`.
 - Workspace defaults to `<stateDir>/workspace` (`~/.openclaw/workspace` for the default install and `~/.openclaw-<profile>/workspace` for a named profile).
 - State defaults to `~/.openclaw/agents/main/agent`.
 
@@ -247,7 +247,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
 - `agentId`: one "brain" (workspace, per-agent auth, per-agent session store).
 - `accountId`: one channel account instance (e.g. WhatsApp account `personal` vs `biz`).
 - `binding`: routes inbound messages to an `agentId` by `(channel, accountId, peer)`, and optionally guild/team ids.
-- Direct chats collapse to `agent:<agentId>:<mainKey>` (per-agent "main"; see `session.mainKey`).
+- Direct chats collapse to `agent:<agentId>:main` by default (the per-agent [main session](/concepts/main-session)).
 
 ## Platform examples
 

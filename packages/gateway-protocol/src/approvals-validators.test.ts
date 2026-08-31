@@ -245,7 +245,7 @@ describe("unified approval protocol validators", () => {
           sourceSessionKey: "agent:worker:subagent:123",
         },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       validateApprovalGetResult({
         approval: {

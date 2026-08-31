@@ -59,15 +59,15 @@ the builder inserts `~key` before it, for example
 and appears only when the unescaped form would be ambiguous.
 
 The reserved single-segment literal rest names are `main`, `global`, `boot`,
-and `sessions`. The configured `session.mainKey` joins that set at runtime.
-Exactly one segment after the agent id is literal when it is reserved or does
-not contain a valid short id; otherwise it is a short reference. Two or more
-segments after the agent id are always literal.
+and `sessions`. Exactly one segment after the agent id is literal when it is
+reserved or does not contain a valid short id; otherwise it is a short reference.
+Two or more segments after the agent id are always literal.
 
-Only the configured `session.mainKey` collapses to the agent-only main-session
-path. With `session.mainKey: "workspace"`, `agent:research:workspace` becomes
-`/chat/research`, while the distinct key `agent:research:main` remains the
-literal path `/chat/research/main`.
+The canonical main session `agent:research:main` uses the agent-only path
+`/chat/research`. Custom `session.mainKey` values are ignored by config loading;
+setting it to `"workspace"` does not make `/chat/research/workspace` a main-session
+route. It follows ordinary session lookup; if no existing session matches, it shows
+**Session not found**.
 
 ### Stability contract
 
@@ -118,6 +118,21 @@ query-form identity, and new links must not emit it. The Sessions list keeps its
 own `?session=` parameter because that parameter expands a row; it is not a
 session deep link. The one-shot composer value `?draft=` remains supported on
 chat and dashboard session paths.
+
+### Native catalog links
+
+Native catalog threads use the agent path with a source query:
+
+```text
+/chat/<agentId>?catalog=<catalogId>&host=<hostId>&thread=<threadId>
+```
+
+URL-encode each query value. The agent in the path owns the OpenClaw pane,
+including catalog reads and continuation; `catalog`, `host`, and `thread`
+identify the native source. Opening the same source under different agents
+keeps their panes and drafts separate, including in split view. Continuing a
+thread navigates to the adopted OpenClaw session link. The same catalog query
+also works under `/dashboard/<agentId>`.
 
 ## Focus presentation routes
 
@@ -184,56 +199,90 @@ paths, and the removed desktop and dashboard query forms are not accepted.
 `/focus` and unsupported `/focus/*` targets show an error without the ordinary
 application shell. They do not open a normal application route.
 
+## Beam share URLs
+
+Beam uploads return a dedicated share path such as:
+
+```text
+/beam/fix-the-upload-flow-0123456789ab
+```
+
+This route is an adapter into the existing read-only Beam session catalog, not
+a separate transcript or storage path. It stays in the browser address bar
+while the catalog transcript renders. Normal Gateway authentication still
+applies; the URL identifies a Beam row but does not authorize access.
+
+Share links open in chat under the default agent. Sidebar and dashboard navigation
+keep the explicit catalog-query URL so the selected agent and view are preserved.
+
+New URLs use the same display-name slug as regular session links, followed by
+the first 12 lowercase hexadecimal characters of the 32-character Beam id.
+The slug is decorative: bare-id links and stale names still resolve by id, and
+the browser replaces the slug with the current title without adding history.
+If the title produces no slug, the URL contains only the id prefix.
+Twelve characters provide 48 bits; against Beam's 500-row retention
+bound, the probability that any pair shares that prefix is about 1 in 2.26
+billion. Resolution still never assumes uniqueness: exactly one retained row
+must match. A missing prefix shows session recovery links, while an
+ambiguous prefix shows the matching rows and asks for a longer id. Any longer
+lowercase hexadecimal prefix through the full 32-character id is accepted.
+Uppercase, non-hexadecimal, shorter, and longer id suffixes, or extra path segments,
+are invalid.
+
+With `gateway.controlUi.basePath: "/openclaw"`, use
+`/openclaw/beam/fix-the-upload-flow-0123456789ab`.
+
 ## Route table
 
 This table lists every Control UI application route. A dash means the route has
 no route-specific URL parameters.
 
-| Page                | Canonical path              | Aliases                   | Parameters or dynamic forms                                    |
-| ------------------- | --------------------------- | ------------------------- | -------------------------------------------------------------- |
-| Chat                | `/chat`                     | -                         | Key-backed session forms above; `?draft=<text>`                |
-| Dashboard           | `/dashboard`                | -                         | Key-backed session forms above; `?draft=<text>`                |
-| Dashboards          | `/dashboards`               | -                         | -                                                              |
-| Ask OpenClaw        | `/custodian`                | -                         | `?intent=new-agent`, `?onboarding=1`                           |
-| New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                     |
-| Activity            | `/activity`                 | -                         | `?view=run&run=<run-id>`, `?view=run&execution=<execution-id>` |
-| Apps                | `/apps`                     | -                         | -                                                              |
-| Portals             | `/portals`                  | -                         | -                                                              |
-| Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`                         |
-| Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                               |
-| Connection          | `/settings/connection`      | -                         | Shared settings parameters below                               |
-| Legacy General      | `/settings/general`         | `/config`                 | Redirects to Appearance → Language                             |
-| Profile             | `/settings/profile`         | `/profile`                | Shared settings parameters below                               |
-| Communications      | `/settings/communications`  | `/communications`         | Shared settings parameters below                               |
-| Appearance          | `/settings/appearance`      | `/appearance`             | Shared settings parameters below                               |
-| Notifications       | `/settings/notifications`   | -                         | Shared settings parameters below                               |
-| Security            | `/settings/security`        | -                         | Shared settings parameters below                               |
-| Secrets             | `/settings/secrets`         | -                         | Shared settings parameters below                               |
-| Advanced            | `/settings/advanced`        | -                         | Shared settings parameters below                               |
-| Approvals           | `/settings/approvals`       | -                         | Shared settings parameters below                               |
-| Automation settings | `/settings/automation`      | `/automation`             | Shared settings parameters below                               |
-| MCP                 | `/settings/mcp`             | `/mcp`                    | Shared settings parameters below                               |
-| Memory              | `/settings/memory`          | -                         | `/settings/memory/memories\|dreams\|settings`                  |
-| Infrastructure      | `/settings/infrastructure`  | `/infrastructure`         | Shared settings parameters below                               |
-| Labs                | `/settings/labs`            | -                         | Shared settings parameters below                               |
-| About               | `/settings/about`           | -                         | Shared settings parameters below                               |
-| AI and agents       | `/settings/ai-agents`       | `/ai-agents`              | Shared settings parameters below                               |
-| Model setup         | `/settings/model-setup`     | `/model-setup`            | `?firstRun=1`                                                  |
-| Model providers     | `/settings/model-providers` | `/model-providers`        | Shared settings parameters below                               |
-| Import memory       | `/memory-import`            | `/settings/memory-import` | -                                                              |
-| Workboard           | `/workboard`                | -                         | `/workboard/<boardId>`                                         |
-| Worktrees           | `/worktrees`                | `/settings/worktrees`     | -                                                              |
-| Sessions            | `/sessions`                 | `/settings/sessions`      | `?session=<sessionKey>`, `?status=archived\|all`               |
-| Usage               | `/usage`                    | -                         | -                                                              |
-| Debug               | `/debug`                    | -                         | -                                                              |
-| Logs                | `/logs`                     | -                         | -                                                              |
-| Skill Workshop      | `/skills/workshop`          | -                         | -                                                              |
-| Skills              | `/skills`                   | -                         | -                                                              |
-| Plugins             | `/settings/plugins`         | -                         | `/settings/plugins/discover`                                   |
-| Automations         | `/cron`                     | -                         | -                                                              |
-| Tasks               | `/tasks`                    | -                         | -                                                              |
-| Devices             | `/settings/devices`         | `/nodes`                  | Shared settings parameters below                               |
-| Plugin tab host     | `/plugin`                   | -                         | `?plugin=<pluginId>&id=<tabId>`                                |
+| Page                | Canonical path              | Aliases                   | Parameters or dynamic forms                                       |
+| ------------------- | --------------------------- | ------------------------- | ----------------------------------------------------------------- |
+| Chat                | `/chat`                     | -                         | Key-backed session forms above; `?draft=<text>`                   |
+| Dashboard           | `/dashboard`                | -                         | Key-backed session forms above; `?draft=<text>`                   |
+| Beam transcript     | `/beam/<title>-<beam-id>`   | `/beam/<beam-id>`         | Optional title slug and 12-32 lowercase hexadecimal id characters |
+| Dashboards          | `/dashboards`               | -                         | -                                                                 |
+| Ask OpenClaw        | `/custodian`                | -                         | `?intent=new-agent`, `?onboarding=1`                              |
+| New session         | `/new`                      | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                        |
+| Activity            | `/activity`                 | -                         | `?view=run&run=<run-id>`, `?view=run&execution=<execution-id>`    |
+| Apps                | `/apps`                     | -                         | -                                                                 |
+| Portals             | `/portals`                  | -                         | -                                                                 |
+| Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`                            |
+| Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                                  |
+| Connection          | `/settings/connection`      | -                         | Shared settings parameters below                                  |
+| Legacy General      | `/settings/general`         | `/config`                 | Redirects to Appearance → Language                                |
+| Profile             | `/settings/profile`         | `/profile`                | Shared settings parameters below                                  |
+| Communications      | `/settings/communications`  | `/communications`         | Shared settings parameters below                                  |
+| Appearance          | `/settings/appearance`      | `/appearance`             | Shared settings parameters below                                  |
+| Notifications       | `/settings/notifications`   | -                         | Shared settings parameters below                                  |
+| Security            | `/settings/security`        | -                         | Shared settings parameters below                                  |
+| Secrets             | `/settings/secrets`         | -                         | Shared settings parameters below                                  |
+| Advanced            | `/settings/advanced`        | -                         | Shared settings parameters below                                  |
+| Approvals           | `/settings/approvals`       | -                         | Shared settings parameters below                                  |
+| Automation settings | `/settings/automation`      | `/automation`             | Shared settings parameters below                                  |
+| MCP                 | `/settings/mcp`             | `/mcp`                    | Shared settings parameters below                                  |
+| Memory              | `/settings/memory`          | -                         | `/settings/memory/memories\|dreams\|settings`                     |
+| Infrastructure      | `/settings/infrastructure`  | `/infrastructure`         | Shared settings parameters below                                  |
+| Labs                | `/settings/labs`            | -                         | Shared settings parameters below                                  |
+| About               | `/settings/about`           | -                         | Shared settings parameters below                                  |
+| AI and agents       | `/settings/ai-agents`       | `/ai-agents`              | Shared settings parameters below                                  |
+| Model setup         | `/settings/model-setup`     | `/model-setup`            | `?firstRun=1`                                                     |
+| Model providers     | `/settings/model-providers` | `/model-providers`        | Shared settings parameters below                                  |
+| Import memory       | `/memory-import`            | `/settings/memory-import` | -                                                                 |
+| Workboard           | `/workboard`                | -                         | `/workboard/<boardId>`                                            |
+| Worktrees           | `/worktrees`                | `/settings/worktrees`     | -                                                                 |
+| Sessions            | `/sessions`                 | `/settings/sessions`      | `?session=<sessionKey>`, `?status=archived\|all`                  |
+| Usage               | `/usage`                    | -                         | -                                                                 |
+| Debug               | `/debug`                    | -                         | -                                                                 |
+| Logs                | `/logs`                     | -                         | -                                                                 |
+| Skill Workshop      | `/skills/workshop`          | -                         | -                                                                 |
+| Skills              | `/skills`                   | -                         | -                                                                 |
+| Plugins             | `/settings/plugins`         | -                         | `/settings/plugins/discover`                                      |
+| Automations         | `/cron`                     | -                         | -                                                                 |
+| Tasks               | `/tasks`                    | -                         | -                                                                 |
+| Devices             | `/settings/devices`         | `/nodes`                  | Shared settings parameters below                                  |
+| Plugin tab host     | `/plugin`                   | -                         | `?plugin=<pluginId>&id=<tabId>`                                   |
 
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;
@@ -263,7 +312,11 @@ These Gateway-served documents sit outside the application route table:
 - `/?onboarding=1` opens the first-run onboarding presentation.
 - `/approve/<approvalId>` opens a standalone approval document. With a base
   path, use `<basePath>/approve/<approvalId>`. The id identifies an approval but
-  never authorizes it; normal Gateway authentication still applies.
+  never authorizes it; normal Gateway authentication still applies. An approval
+  notification uses a scope-relative approval path and may add
+  `#gatewayUrl=<encoded-ws-url>` when the owning Gateway has
+  `gateway.publicOrigin`. The Control UI strips that fragment before
+  authentication and applies the normal remote-Gateway handoff below.
 
 Registered exact and prefix plugin HTTP routes can own `/focus` and
 `/focus/*`. After plugin authentication and dispatch decline a request, the
@@ -298,5 +351,6 @@ or password explicitly, and use `wss://` behind TLS.
 ## Related
 
 - [Control UI](/web/control-ui)
+- [Beam plugin](/plugins/beam)
 - [Dashboard](/web/dashboard)
 - [Session dashboards](/web/dashboards)

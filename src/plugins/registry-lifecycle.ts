@@ -1,5 +1,12 @@
 /** Tracks active and retired plugin registries so stale runtime calls can be rejected. */
+import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+
+const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
+
+export const pluginLoaderCacheState = new PluginLoaderCacheState<PluginRegistry>(
+  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
+);
 
 const retiredRegistries = new WeakSet<PluginRegistry>();
 const activatedRegistries = new WeakSet<PluginRegistry>();
@@ -15,6 +22,9 @@ export function markPluginRegistryRetired(registry: PluginRegistry | null | unde
   if (registry) {
     retiredRegistries.add(registry);
     registryEpochs.delete(registry);
+    // Retired registrations cannot be reused and retain their Gateway/cache generation.
+    // Release every cache key now, including keys that will never be looked up again.
+    pluginLoaderCacheState.deleteValue(registry);
   }
 }
 

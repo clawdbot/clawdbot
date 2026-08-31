@@ -13,6 +13,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendConsolidationSkippedSummary,
   appendConsolidationSummary,
+  readMemoryPreimages,
   storeMemoryPreimage,
 } from "./dreaming-consolidation-artifacts.js";
 import {
@@ -21,10 +22,11 @@ import {
 } from "./dreaming-consolidation-candidates.js";
 import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
-import { reconcileMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { pruneMemoryEntryOrigins, reserveMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   buildPromotionMarker,
+  extractPromotionKeys,
   hashMemoryContent,
   isAtomicReplacePermissionError,
   MemoryWriteConflictError,
@@ -141,21 +143,6 @@ function withTrailingNewline(content: string): string {
   return content.endsWith("\n") ? content : `${content}\n`;
 }
 
-function extractPromotionMarkers(memoryText: string): Set<string> {
-  const markers = new Set<string>();
-  // Marker keys include source paths, so spaces are valid. Capture until the
-  // comment close; otherwise a path like "memory/project alpha/..." is missed
-  // and the same candidate can be appended again.
-  const matches = memoryText.matchAll(/<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->/gi);
-  for (const match of matches) {
-    const key = match[1]?.trim();
-    if (key) {
-      markers.add(key);
-    }
-  }
-  return markers;
-}
-
 function consolidationCandidateFingerprint(candidate: PromotionCandidate): string {
   return JSON.stringify({
     key: candidate.key,
@@ -256,6 +243,9 @@ export async function applyShortTermPromotions(
   );
   const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
+  const originAgentIds = options.agentId
+    ? [...new Set([options.agentId, ...(options.workspaceAgentIds ?? [])])]
+    : [];
 
   const dailyProvenanceEntries = await listMemoryArtifactProvenance({ workspaceDir });
   const dailyProvenanceByPath = new Map(
@@ -381,7 +371,7 @@ export async function applyShortTermPromotions(
     }
     throw err;
   });
-  let existingMarkers = extractPromotionMarkers(existingMemory);
+  let existingMarkers = new Set(extractPromotionKeys(existingMemory));
   let alreadyWritten = rehydratedSelected.filter((candidate) => existingMarkers.has(candidate.key));
   let toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
   const consolidationBaseMemoryHash = hashMemoryContent(existingMemory);
@@ -423,6 +413,7 @@ export async function applyShortTermPromotions(
   await withFileLock(promotionLockTarget, MEMORY_WRITE_LOCK_OPTIONS, async () => {
     await withMemoryWorkspaceLock(workspaceDir, async () => {
       const latestStore = await readStore(workspaceDir, nowIso);
+      let retainedPreimageKeys: Set<string> | undefined;
       const authoritativeSelected: PromotionCandidate[] = [];
       for (const candidate of rehydratedSelected) {
         const entry = latestStore.entries[candidate.key];
@@ -469,7 +460,7 @@ export async function applyShortTermPromotions(
         }
         throw err;
       });
-      existingMarkers = extractPromotionMarkers(existingMemory);
+      existingMarkers = new Set(extractPromotionKeys(existingMemory));
       alreadyWritten = authoritativeSelected.filter((candidate) =>
         existingMarkers.has(candidate.key),
       );
@@ -508,7 +499,16 @@ export async function applyShortTermPromotions(
       }
       if (consolidationResult) {
         try {
-          await storeMemoryPreimage({ workspaceDir, content: existingMemory, nowMs });
+          retainedPreimageKeys = await storeMemoryPreimage({
+            workspaceDir,
+            content: existingMemory,
+            nowMs,
+            agentIds: originAgentIds,
+            retainedEntryKeys: new Set([
+              ...extractPromotionKeys(existingMemory),
+              ...Object.keys(latestStore.entries),
+            ]),
+          });
         } catch (error) {
           options.consolidation?.logger.warn(
             `memory-core: consolidation preimage failed (${String(error)}); using append-only fallback.`,
@@ -516,7 +516,14 @@ export async function applyShortTermPromotions(
           consolidationResult = null;
         }
       }
-      if (consolidationResult) {
+      if (consolidationResult && consolidationPlan) {
+        // Reserve the union before publishing its replacement. A failed origin
+        // write must leave MEMORY unchanged; uncommitted rewrites release only new rows.
+        const rollbackOrigins = reserveMemoryEntryOrigins({
+          agentIds: originAgentIds,
+          previousMemory: existingMemory,
+          operations: consolidationPlan.operations,
+        });
         try {
           await writeMemoryContent({
             memoryPath,
@@ -530,6 +537,7 @@ export async function applyShortTermPromotions(
           }
           appendedCandidates = toAppend.length;
         } catch (error) {
+          rollbackOrigins();
           if (
             !(error instanceof MemoryWriteConflictError) &&
             !isAtomicReplacePermissionError(error)
@@ -542,7 +550,7 @@ export async function applyShortTermPromotions(
               : "the MEMORY.md directory blocked atomic replacement";
           consolidationResult = null;
           existingMemory = await readMemoryContent(memoryWritePath);
-          existingMarkers = extractPromotionMarkers(existingMemory);
+          existingMarkers = new Set(extractPromotionKeys(existingMemory));
           alreadyWritten = authoritativeSelected.filter((candidate) =>
             existingMarkers.has(candidate.key),
           );
@@ -618,18 +626,20 @@ export async function applyShortTermPromotions(
       );
       await writeStore(workspaceDir, latestStore);
       if (options.agentId && committedMemoryContent) {
-        reconcileMemoryEntryOrigins({
-          agentIds: [options.agentId, ...(options.workspaceAgentIds ?? [])],
-          previousMemory: existingMemory,
-          currentMemory: committedMemoryContent,
-          operations:
-            consolidationResult && consolidationPlan
-              ? consolidationPlan.operations
-              : toAppend.map((candidate) => ({
-                  candidateKey: candidate.key,
-                  action: "added" as const,
-                  priorEntries: [],
-                })),
+        retainedPreimageKeys ??= new Set(
+          (await readMemoryPreimages(workspaceDir)).flatMap(({ value }) =>
+            extractPromotionKeys(value.content),
+          ),
+        );
+        await pruneMemoryEntryOrigins({
+          workspaceDir,
+          agentIds: originAgentIds,
+          entryKeys: extractPromotionKeys(existingMemory),
+          retainedEntryKeys: new Set([
+            ...extractPromotionKeys(committedMemoryContent),
+            ...Object.keys(latestStore.entries),
+            ...retainedPreimageKeys,
+          ]),
         });
       }
       committedCandidates = [...successfulCandidates.values()];

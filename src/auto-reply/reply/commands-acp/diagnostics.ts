@@ -193,7 +193,8 @@ export async function handleAcpSessionsAction(
     : readAcpSessionEntry({
         cfg: params.cfg,
         sessionKey: currentSessionKey,
-        agentId: params.agentId,
+        // A bound target can belong to a different agent than the command source.
+        agentId: currentSessionKey === params.sessionKey ? params.agentId : undefined,
       });
   const visibleEntries = params.command.senderIsOwner
     ? await listAcpSessionEntries({ cfg: params.cfg })

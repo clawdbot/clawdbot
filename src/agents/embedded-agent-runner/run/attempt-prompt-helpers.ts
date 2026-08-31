@@ -112,6 +112,7 @@ export async function resolvePromptBuildHookResult(params: {
     : await drainPluginNextTurnInjectionContext({
         cfg: params.config,
         sessionKey: params.hookCtx.sessionKey,
+        agentId: params.hookCtx.agentId,
       });
   if (runId && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
@@ -473,6 +474,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "contextEngineAgentId"
   | "sessionKey"
   | "sandboxSessionKey"
+  | "sandboxAgentId"
   | "messageChannel"
   | "messageProvider"
   | "agentAccountId"
@@ -545,6 +547,8 @@ export function buildAfterTurnRuntimeContext(params: {
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
+      sandboxSessionKey: params.attempt.sandboxSessionKey,
+      sandboxAgentId: params.attempt.sandboxAgentId,
       messageChannel: params.attempt.messageChannel,
       messageProvider: params.attempt.messageProvider,
       agentAccountId: params.attempt.agentAccountId,

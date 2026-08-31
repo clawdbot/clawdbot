@@ -1,0 +1,5 @@
+| packages/net-policy/src/client-js.js:2:1:2:31 | net.con ... e.com") | Classify raw net/tls/http2 client egress as managed/proxied, local-only, diagnostic guarded, or documented unsupported before adding this callsite. |
+| packages/net-policy/src/client-mjs.mjs:2:1:2:31 | net.con ... e.com") | Classify raw net/tls/http2 client egress as managed/proxied, local-only, diagnostic guarded, or documented unsupported before adding this callsite. |
+| packages/net-policy/src/client-mts.mts:2:1:2:31 | net.con ... e.com") | Classify raw net/tls/http2 client egress as managed/proxied, local-only, diagnostic guarded, or documented unsupported before adding this callsite. |
+| packages/net-policy/src/client-ts.ts:2:1:2:31 | net.con ... e.com") | Classify raw net/tls/http2 client egress as managed/proxied, local-only, diagnostic guarded, or documented unsupported before adding this callsite. |
+| src/infra/ssh-tunnel.ts:6:10:6:40 | net.con ... e.com") | Classify raw net/tls/http2 client egress as managed/proxied, local-only, diagnostic guarded, or documented unsupported before adding this callsite. |

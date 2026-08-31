@@ -14,6 +14,7 @@ import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-securit
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { describeBinding } from "../commands/agents.binding-format.js";
+import { mergeAccountConfig } from "../config/channel-account-config.js";
 import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -471,7 +472,10 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
         continue;
       }
       inspectSection(
-        accountValue as Record<string, unknown>,
+        mergeAccountConfig({
+          channelConfig: section,
+          accountConfig: accountValue as Record<string, unknown>,
+        }),
         `channels.${channelId}.accounts.${accountId}`,
       );
     }

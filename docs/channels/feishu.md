@@ -319,6 +319,11 @@ The official `lark-cli` VC agent skill currently marks meeting-bot actions as a 
 - `streaming.chunkMode` - `"length"` (default) splits at the limit; `"newline"` prefers newline boundaries
 - `mediaMaxMb` - media upload/download limit (default: `30` MB)
 
+Ordinary Markdown cards and rich-text posts are also split to fit Feishu's 30 KB
+serialized message limit. Headers, notes, mentions, JSON escaping, and UTF-8 text
+count toward that limit, so chunks may be shorter than `textChunkLimit`. Long
+media captions are sent as text/card chunks before the attachment.
+
 ### Streaming
 
 Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming API). When enabled, the bot updates the card in real time as it generates text.
@@ -336,7 +341,7 @@ Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming
 }
 ```
 
-Set `streaming.mode: "off"` to send the complete reply in one message; `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
+Set `streaming.mode: "off"` to send the completed reply without streaming updates; long replies still split at the message limits above. `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
 
 ### Quota optimization
 

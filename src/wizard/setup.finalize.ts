@@ -20,6 +20,7 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
 } from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommandNonExiting } from "../commands/health.js";
 import {
@@ -458,11 +459,13 @@ export async function ensureGatewayServiceForOnboarding(params: {
             t("wizard.finalize.gatewayInstallFixAuth"),
           ].join(" ");
         } else {
+          const existingCommand = await service.readCommand(process.env).catch(() => null);
           const { programArguments, workingDirectory, environment, environmentValueSources } =
             await buildGatewayInstallPlan({
               env: process.env,
               port: settings.port,
               runtime: daemonRuntime,
+              existingCommand,
               warn: (message, title) => {
                 installWarnings.push({ message, title });
               },
@@ -573,7 +576,12 @@ export async function finalizeSetupWizard(
       gatewayProbe =
         gateway.status === "failed"
           ? await probeGatewayReachable(probeOptions)
-          : await waitForGatewayReachable({ ...probeOptions, deadlineMs: 15_000 });
+          : await waitForGatewayReachable({
+              ...probeOptions,
+              ...(gateway.status === "ready" && gateway.action !== "reused"
+                ? resolveGatewayStartupTiming()
+                : { deadlineMs: 15_000 }),
+            });
       if (gatewayProbe.ok) {
         try {
           const healthConfig: OpenClawConfig =

@@ -35,6 +35,7 @@ export function deriveEnvironmentIntent(idempotencyKey: string): {
 export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
+  profileId: string;
   leaseId: string | null;
   nodeDeviceId?: string | null;
   sharedHost: boolean | null;
@@ -66,6 +67,7 @@ export type WorkerDesktopLaunchResult = {
 export type WorkerEnvironmentServiceContract = {
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
+  inventoryVersion(): number;
   supportsExecutionMode?(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
   create(

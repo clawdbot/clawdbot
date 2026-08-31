@@ -1,6 +1,5 @@
 import type { FormatCapabilityProfile, FormatConstruct } from "./format-capabilities.js";
 import {
-  copyMarkdownLinkSpan,
   createStyleSpan,
   mergeAnnotationSpans,
   mergeStyleSpans,
@@ -102,33 +101,26 @@ function collectListFallbacks(ir: MarkdownIR, profile: FormatCapabilityProfile):
   return edits;
 }
 
+// sliceMarkdownIR owns the spans passed here; transfer them without another copy.
+function appendSpans<T extends { start: number; end: number }>(
+  into: T[],
+  spans: T[],
+  offset: number,
+): void {
+  for (const span of spans) {
+    span.start = offset + span.start;
+    span.end = offset + span.end;
+    into.push(span);
+  }
+}
+
 function appendSlice(target: MarkdownIR, source: MarkdownIR): void {
   const offset = target.text.length;
   target.text += source.text;
-  target.styles.push(
-    ...source.styles.map((span) =>
-      createStyleSpan({
-        ...span,
-        start: offset + span.start,
-        end: offset + span.end,
-      }),
-    ),
-  );
-  target.links.push(
-    ...source.links.map((link) =>
-      copyMarkdownLinkSpan(link, {
-        start: offset + link.start,
-        end: offset + link.end,
-      }),
-    ),
-  );
-  const annotations = source.annotations?.map((annotation) => ({
-    ...annotation,
-    start: offset + annotation.start,
-    end: offset + annotation.end,
-  }));
-  if (annotations?.length) {
-    (target.annotations ??= []).push(...annotations);
+  appendSpans(target.styles, source.styles, offset);
+  appendSpans(target.links, source.links, offset);
+  if (source.annotations?.length) {
+    appendSpans((target.annotations ??= []), source.annotations, offset);
   }
 }
 
@@ -142,14 +134,21 @@ function applyTextEdits(ir: MarkdownIR, edits: TextEdit[]): MarkdownIR {
       const previous = all[index - 1];
       return !previous || edit.start !== previous.start || edit.end !== previous.end;
     });
+  // Edited output drops list metadata, so do not rebuild it for every slice.
+  const content: MarkdownIR = {
+    text: ir.text,
+    styles: ir.styles,
+    links: ir.links,
+    annotations: ir.annotations,
+  };
   const result: MarkdownIR = { text: "", styles: [], links: [] };
   let cursor = 0;
   for (const edit of ordered) {
-    appendSlice(result, sliceMarkdownIR(ir, cursor, edit.start));
+    appendSlice(result, sliceMarkdownIR(content, cursor, edit.start));
     result.text += edit.text;
     cursor = edit.end;
   }
-  appendSlice(result, sliceMarkdownIR(ir, cursor, ir.text.length));
+  appendSlice(result, sliceMarkdownIR(content, cursor, ir.text.length));
   result.styles = mergeStyleSpans(result.styles);
   if (result.annotations) {
     result.annotations = mergeAnnotationSpans(result.annotations);

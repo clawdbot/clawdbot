@@ -1,9 +1,9 @@
 // Mattermost tests cover slash http.send config plugin behavior.
 import { ServerResponse, type IncomingMessage } from "node:http";
-import { PassThrough } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
 const mockState = vi.hoisted(() => ({
@@ -18,7 +18,7 @@ const mockState = vi.hoisted(() => ({
     team_id: "team-1",
   })),
   resolveCommandText: vi.fn((_trigger: string, text: string) => text),
-  buildModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
+  buildPreparedModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
   resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
   authorizeMattermostCommandInvocation: vi.fn(() => ({
     ok: true,
@@ -54,7 +54,7 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("./runtime-api.js", () => {
   return {
-    buildModelsProviderData: mockState.buildModelsProviderData,
+    buildPreparedModelsProviderData: mockState.buildPreparedModelsProviderData,
     createChannelMessageReplyPipeline: vi.fn(() => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
@@ -144,20 +144,17 @@ vi.mock("./slash-commands.js", () => ({
 }));
 
 let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
+let clearMattermostSlashCommandValidationCacheForAccount: typeof import("./slash-http.js").clearMattermostSlashCommandValidationCacheForAccount;
 const callbackUrlFixture = "https://gateway.example.com/slash";
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
-  const req = new PassThrough();
-  const incoming = req as PassThrough & IncomingMessage;
-  incoming.method = "POST";
-  incoming.url = "/slash";
-  incoming.headers = {
+  const req = createMockIncomingRequest([body]);
+  req.method = "POST";
+  req.url = "/slash";
+  req.headers = {
     "content-type": "application/x-www-form-urlencoded",
   };
-  process.nextTick(() => {
-    req.end(body);
-  });
-  return incoming;
+  return req;
 }
 
 function createResponse(): {
@@ -215,22 +212,21 @@ const accountFixture: ResolvedMattermostAccount = {
 };
 
 describe("slash-http cfg threading", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
-    mockState.readRequestBodyWithLimit.mockClear();
-    mockState.parseSlashCommandPayload.mockClear();
-    mockState.resolveCommandText.mockClear();
-    mockState.buildModelsProviderData.mockClear();
-    mockState.resolveMattermostModelPickerEntry.mockClear();
-    mockState.authorizeMattermostCommandInvocation.mockClear();
-    mockState.createMattermostClient.mockClear();
-    mockState.fetchMattermostChannel.mockClear();
-    mockState.sendMessageMattermost.mockClear();
-    mockState.normalizeMattermostAllowList.mockClear();
-    mockState.getMattermostCommand.mockClear();
-    mockState.listMattermostCommands.mockClear();
-    mockState.dispatchInbound.mockClear();
-    ({ createSlashCommandHttpHandler } = await import("./slash-http.js"));
+    ({ createSlashCommandHttpHandler, clearMattermostSlashCommandValidationCacheForAccount } =
+      await import("./slash-http.js"));
+  });
+
+  afterEach(() => {
+    clearMattermostSlashCommandValidationCacheForAccount(accountFixture.accountId);
+  });
+
+  beforeEach(() => {
+    // Rejected-before-lookup cases can leave one-shot responses unconsumed.
+    for (const mock of Object.values(mockState)) {
+      mock.mockReset();
+    }
   });
 
   it("passes cfg through the no-models slash reply send path", async () => {

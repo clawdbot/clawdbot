@@ -2,6 +2,7 @@
 summary: "Current integration path for external apps, scripts, dashboards, CI jobs, and IDE extensions"
 title: "Gateway integrations for external apps"
 sidebarTitle: "External apps"
+doc-schema-version: 1
 read_when:
   - You are building an external app, script, dashboard, CI job, or IDE extension that talks to OpenClaw
   - You are choosing between Gateway RPC and the Plugin SDK
@@ -17,11 +18,11 @@ for results, cancel work, or inspect Gateway resources.
 <Note>
   For npm packages, device pairing, reconnect recovery, history, subscriptions,
   and approvals, start with
-  [Building a Gateway client](https://docs.openclaw.ai/gateway/clients). If your
+  [Building a Gateway client](/gateway/clients#install-the-packages). The install
+  guide pins the verified stable `2026.8.1` packages and explains how package and
+  wire versions affect compatibility. If your
   app supervises the Gateway as a child process, also read
-  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding). During the
-  initial package rollout, npm may return `E404` until the first package-bearing
-  OpenClaw release is published.
+  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
 </Note>
 
 <Note>
@@ -31,14 +32,14 @@ for results, cancel work, or inspect Gateway resources.
 
 ## What is available today
 
-| Surface                                                          | Status        | Use it for                                                                                    |
-| ---------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------- |
-| [Gateway client guide](https://docs.openclaw.ai/gateway/clients) | Release train | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
-| [Embedding guide](https://docs.openclaw.ai/gateway/embedding)    | Release train | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
-| [Gateway protocol](/gateway/protocol)                            | Ready         | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc)                          | Ready         | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
-| [`openclaw agent`](/cli/agent)                                   | Ready         | One-shot script integration when shelling out to the CLI is enough.                           |
-| [`openclaw message`](/cli/message)                               | Ready         | Sending messages or channel actions from scripts.                                             |
+| Surface                                                       | Status          | Use it for                                                                                    |
+| ------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
+| [Gateway client guide](/gateway/clients#install-the-packages) | Stable packages | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
+| [Embedding guide](https://docs.openclaw.ai/gateway/embedding) | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Gateway protocol](/gateway/protocol)                         | Ready           | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
+| [Gateway RPC reference](/reference/rpc)                       | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [`openclaw agent`](/cli/agent)                                | Ready           | One-shot script integration when shelling out to the CLI is enough.                           |
+| [`openclaw message`](/cli/message)                            | Ready           | Sending messages or channel actions from scripts.                                             |
 
 ## Recommended path
 
@@ -62,7 +63,7 @@ host-neutral suspension handshake:
 2. Call `gateway.suspend.prepare` with a stable, unique `requestId`.
 3. If the response is `busy`, keep the process running and retry later. To hold
    admission closed while already-admitted work finishes, request the optional
-   preserve-only drain mode and poll `gateway.suspend.status` instead.
+   drain mode and poll `gateway.suspend.status` instead.
 4. If the response is `ready`, save the returned `suspensionId`, then freeze or
    snapshot the process before `expiresAtMs`.
 5. After thaw, or if suspension is abandoned, call `gateway.suspend.resume`
@@ -94,14 +95,17 @@ The RPC contract is:
 
 `terminalPolicy` and `drain` are optional. `terminalPolicy` accepts only
 `"preserve"` or `"terminate"` and defaults to `"preserve"`; `drain` defaults
-to `false`. With `drain: false` or no `drain` field, request handling and
-response shapes are unchanged: open terminal sessions block normal host
-suspension. A caller preparing an update that will terminate the Gateway may
-explicitly use `"terminate"`; this ignores open process-local terminal sessions
-only. Terminal persistence activity and all other tracked work still block
-preparation. Drain mode always preserves terminals: combining `drain: true`
-with `terminalPolicy: "terminate"` returns `INVALID_REQUEST` without acquiring
-a lease.
+to `false`. The terminal policy applies to both immediate preparation and drain
+mode:
+
+- `"preserve"`: open terminal sessions block suspension. Use this for host
+  freeze/snapshot operations that must preserve the running process.
+- `"terminate"`: open process-local terminal sessions do not block suspension.
+  Use this for release updates that will restart the Gateway. Preparation does
+  not close terminals; the actual Gateway restart ends their PTYs and commands.
+
+Pending final chat-state writes (`terminal-persistence`) and all other tracked
+work still block preparation under either policy.
 
 IDs are trimmed, must contain a non-whitespace character, and are limited to
 128 characters. A busy prepare result has `status: "busy"`, `reason`,
@@ -136,11 +140,12 @@ and returns:
 ```
 
 Already-admitted work and its owned completions continue naturally; unrelated
-new runs, sessions, scheduled jobs, and independent work stay rejected. Open
-terminal sessions and terminal-persistence work remain blockers until they
-settle naturally. Drain mode never terminates or detaches a terminal. A terminal
-that remains open indefinitely can therefore keep the lease draining until the
-controller resumes it or the lease expires.
+new runs, sessions, scheduled jobs, and independent work stay rejected. With
+`terminalPolicy: "preserve"`, an open terminal can keep the lease draining until
+it closes, the controller resumes the Gateway, or the lease expires. With
+`terminalPolicy: "terminate"`, that same terminal remains open but does not
+block readiness. Neither policy terminates or detaches terminals during
+preparation, polling, renewal, resume, or lease expiry.
 
 Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
 `retryAfterMs`. While blockers remain, status returns `status: "draining"`
@@ -165,6 +170,19 @@ openclaw gateway call gateway.suspend.status \
   --json
 openclaw gateway resume '<suspension-id>'
 ```
+
+For a release update, use the same handshake with `terminalPolicy: "terminate"`
+so an open terminal cannot hold the drain indefinitely:
+
+```bash
+openclaw gateway call gateway.suspend.prepare \
+  --params '{"requestId":"release-update-1","terminalPolicy":"terminate","drain":true}' \
+  --json
+```
+
+Wait for the lease to become `ready` before performing the checked restart.
+Terminal commands and scrollback are not recovered after restart; see
+[Restart recovery](/gateway/restart-recovery#what-is-not-resumed).
 
 A competing request ID or transient scheduler-resume failure returns retryable
 `UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,

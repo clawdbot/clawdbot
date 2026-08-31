@@ -258,7 +258,7 @@ describe("Windows command execution", () => {
         });
         const call = requireExecaCall(0);
         expect(call[0]).toBe(expectedTrustedCmdExe());
-        expect(call[1][3]).toContain(`${shimPath} --version`);
+        expect(call[1][3]).toContain(`"${shimPath}" "--version"`);
       });
     });
   });
@@ -289,11 +289,11 @@ describe("Windows command execution", () => {
     });
   });
 
-  it("escapes command arguments inside the trusted cmd.exe wrapper", async () => {
+  it("quotes carets inside the trusted cmd.exe wrapper", async () => {
     await withMockedWindowsPlatform(async () => {
       await runCommandWithTimeout(["pnpm", "run", "value^with^carets"], { timeoutMs: 1_000 });
       const commandLine = String(requireExecaCall(0)[1][3]);
-      expect(commandLine).toContain("value^^with^^carets");
+      expect(commandLine).toContain('"value^with^carets"');
     });
   });
 

@@ -137,14 +137,7 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
   const killGraceMs = params.killGraceMs ?? KNIP_KILL_GRACE_MS;
   const scanName = params.scanName ?? "scan";
   const writeStatus = params.writeStatus ?? ((message) => process.stderr.write(`${message}\n`));
-  const args = [
-    "--config.minimum-release-age=0",
-    "dlx",
-    "--package",
-    `knip@${KNIP_VERSION}`,
-    "knip",
-    ...knipArgs,
-  ];
+  const args = ["dlx", "--package", `knip@${KNIP_VERSION}`, "knip", ...knipArgs];
 
   return await new Promise<KnipRunResult>((resolve) => {
     const startedAt = Date.now();

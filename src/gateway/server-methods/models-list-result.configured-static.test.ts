@@ -32,6 +32,7 @@ describe("models.list configured static entries", () => {
     const result = listModels({
       catalog,
       catalogLoadDelayMs: 800,
+      preparedCatalog: catalog.slice(0, 1),
       publishedCatalog: catalog.slice(0, 1),
       cfg: config,
       refresh: true,

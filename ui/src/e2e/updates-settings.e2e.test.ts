@@ -13,12 +13,11 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "updates-settings");
 
 suite.define(() => {
   it("renders live campaign status without requesting config.schema", async () => {
     if (captureProof) {
-      await mkdir(proofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "updates-settings"), { recursive: true });
     }
     await suite.withPage(
       {
@@ -27,7 +26,12 @@ suite.define(() => {
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
         ...(captureProof
-          ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } }
+          ? {
+              recordVideo: {
+                dir: path.join(suite.artifactDir, "updates-settings"),
+                size: { height: 900, width: 1280 },
+              },
+            }
           : {}),
       },
       async ({ page }) => {
@@ -91,7 +95,10 @@ suite.define(() => {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDir, "01-updates-countdown.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "updates-settings"),
+              "01-updates-countdown.png",
+            ),
           });
         }
 
@@ -151,7 +158,10 @@ suite.define(() => {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDir, "02-updates-read-only.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "updates-settings"),
+              "02-updates-read-only.png",
+            ),
           });
         }
       },

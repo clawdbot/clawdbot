@@ -1,10 +1,8 @@
 // Control UI chat module owns Chat thread item derivation and thread-local caches.
 import {
-  streamSegmentHasItemId,
-  streamSegmentUsesAccumulatedText,
+  accumulatedStreamText,
   trimAccumulatedStreamPrefix,
   type ChatItem,
-  type ChatStreamSegment,
   type MessageGroup,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
@@ -54,9 +52,11 @@ const expandedAssistantMessagesBySession = new Map<
 >();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
+// This memo only skips repeated work. Keeping its transcript strongly would
+// retain message payloads after the owning pane and message cache release them.
 const lastToolCardItemsBySession = new Map<
   string,
-  { items: readonly (ChatItem | MessageGroup)[]; isFilteredProjection: boolean }
+  { items: WeakRef<readonly RenderChatItem[]>; isFilteredProjection: boolean }
 >();
 
 export function resetChatThreadState(paneId?: string): void {
@@ -80,8 +80,10 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
   return (
     previous.role === next.role &&
     previous.senderLabel === next.senderLabel &&
-    senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
-    senderIdentityKey(previous.replyToSender) === senderIdentityKey(next.replyToSender) &&
+    previous.senderSession?.sessionKey === next.senderSession?.sessionKey &&
+    previous.senderSession?.agentId === next.senderSession?.agentId &&
+    JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
+    JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
     previous.runId === next.runId &&
     previous.messages.length === next.messages.length &&
@@ -197,6 +199,8 @@ function stabilizeChatItems(
         prior.role !== item.role ||
         prior.runId !== item.runId ||
         prior.senderLabel !== item.senderLabel ||
+        prior.senderSession?.sessionKey !== item.senderSession?.sessionKey ||
+        prior.senderSession?.agentId !== item.senderSession?.agentId ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
         continue;
@@ -253,6 +257,7 @@ function sameChatItemsStructuralInput(
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
+    previous.pendingInputs === next.pendingInputs &&
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
@@ -275,20 +280,6 @@ function sameChatItemsInputExceptStream(
   return (
     previous.stream !== null && next.stream !== null && sameChatItemsStructuralInput(previous, next)
   );
-}
-
-function accumulatedIndexedStreamText(segments: readonly ChatStreamSegment[]): string | null {
-  let accumulated: string | null = null;
-  for (const segment of segments) {
-    if (streamSegmentHasItemId(segment) || !streamSegmentUsesAccumulatedText(segment)) {
-      continue;
-    }
-    const text = sanitizeStreamText(segment.text);
-    if (text.length > 0) {
-      accumulated = text;
-    }
-  }
-  return accumulated;
 }
 
 function liveStreamIdentity(input: BuildChatItemsProps): string {
@@ -363,7 +354,7 @@ export function buildCachedChatItems(
   cached.items = items;
   cached.liveStreamIndex = findLiveStreamIndex(items);
   cached.liveStreamIdentity = cached.liveStreamIndex === -1 ? null : liveStreamIdentity(input);
-  cached.liveStreamPrefix = accumulatedIndexedStreamText(input.streamSegments);
+  cached.liveStreamPrefix = accumulatedStreamText(input.streamSegments, sanitizeStreamText);
   return items;
 }
 
@@ -400,6 +391,19 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
     }
   }
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
+}
+
+export function collectToolTitleCandidates(items: readonly (ChatItem | MessageGroup)[]) {
+  return items.flatMap((item) =>
+    item.kind === "group"
+      ? item.messages.flatMap((entry) =>
+          extractToolCardsCached(entry.message, entry.key).map(({ args, name }) => ({
+            args,
+            name,
+          })),
+        )
+      : [],
+  );
 }
 
 export type AssistantMessageExpansionState =
@@ -450,7 +454,7 @@ export function syncToolCardExpansionState(
   const previousProjection = getSessionCacheValue(lastToolCardItemsBySession, sessionKey);
   const previousAutoExpand = getSessionCacheValue(lastAutoExpandPrefBySession, sessionKey) ?? false;
   if (
-    previousProjection?.items === items &&
+    previousProjection?.items.deref() === items &&
     previousProjection.isFilteredProjection === isFilteredProjection &&
     previousAutoExpand === autoExpandToolCalls
   ) {
@@ -499,6 +503,9 @@ export function syncToolCardExpansionState(
       }
     }
   }
-  setSessionCacheValue(lastToolCardItemsBySession, sessionKey, { items, isFilteredProjection });
+  setSessionCacheValue(lastToolCardItemsBySession, sessionKey, {
+    items: new WeakRef(items),
+    isFilteredProjection,
+  });
   setSessionCacheValue(lastAutoExpandPrefBySession, sessionKey, autoExpandToolCalls);
 }

@@ -1814,6 +1814,367 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   );
 
+  it("does not auto-restore an archived restart-recovery tombstone", async () => {
+    setNoAbort();
+    const sessionId = "restart-tombstone-session";
+    const sessionKey = "agent:main:matrix:channel:room-a";
+    const archivedAt = Date.now() - 1_000;
+    sessionStoreMocks.currentEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      archivedAt,
+      status: "failed",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "matrix",
+      Surface: "matrix",
+      OriginatingChannel: "matrix",
+      OriginatingTo: "!room-a:example.test",
+      ChatType: "channel",
+      From: "@owner:example.test",
+      To: "!room-a:example.test",
+      AccountId: "default",
+      SessionKey: sessionKey,
+      Body: "continue",
+      CommandBody: "continue",
+      RawBody: "continue",
+      CommandSource: undefined,
+      InboundAccessAuthorized: true,
+      InboundEventKind: "user_request",
+      InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
+    });
+
+    await expect(
+      dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
+    ).rejects.toThrow();
+
+    expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+    expect(sessionStoreMocks.currentEntry).toMatchObject({
+      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+    });
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not add a lifecycle parent lookup for an ordinary healthy threaded turn", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "healthy-thread-session",
+      updatedAt: Date.now(),
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "thread handled" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: "agent:main:slack:channel:c1:thread:healthy",
+        ParentSessionKey: "agent:main:slack:channel:c1",
+        Body: "thread reply",
+        CommandBody: "thread reply",
+        RawBody: "thread reply",
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    const parentLookups = sessionStoreMocks.loadSessionStoreEntry.mock.calls.filter(
+      ([params]) =>
+        (params as { sessionKey?: string }).sessionKey === "agent:main:slack:channel:c1",
+    );
+    expect(parentLookups).toHaveLength(1);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits a human parent-fork replacement without reopening its restart tombstone", async () => {
+    setNoAbort();
+    const archivedAt = Date.now() - 1_000;
+    sessionStoreMocks.currentEntry = {
+      sessionId: "preseed-thread-session",
+      updatedAt: Date.now(),
+      archivedAt,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => {
+      expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+      return { text: "fork handled" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: "agent:main:slack:channel:c1:thread:123",
+        ParentSessionKey: "agent:main:slack:channel:c1",
+        Body: "thread reply",
+        CommandBody: "thread reply",
+        RawBody: "thread reply",
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "fork handled" });
+  });
+
+  it.each([
+    {
+      label: "room event",
+      context: { InboundEventKind: "room_event" as const },
+    },
+    {
+      label: "system event",
+      context: {
+        InputProvenance: { kind: "internal_system" as const, sourceTool: "heartbeat" },
+      },
+    },
+  ])("keeps a restart tombstone terminal for a $label parent-fork turn", async ({ context }) => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "preseed-thread-session",
+      updatedAt: Date.now(),
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          SessionKey: "agent:main:slack:channel:c1:thread:123",
+          ParentSessionKey: "agent:main:slack:channel:c1",
+          Body: "thread event",
+          CommandBody: "thread event",
+          RawBody: "thread event",
+          InboundAccessAuthorized: true,
+          InboundEventKind: "user_request",
+          InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+          ...context,
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+      }),
+    ).rejects.toThrow(/ended during restart recovery/i);
+
+    expect(sessionStoreMocks.currentEntry).toMatchObject({
+      sessionId: "preseed-thread-session",
+      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+    });
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it.each<{
+    name: string;
+    commands?: OpenClawConfig["commands"];
+    admitted: boolean;
+  }>([
+    { name: "ordinary channel-authorized reset", admitted: true },
+    {
+      name: "channel-admitted non-owner reset",
+      commands: { ownerAllowFrom: ["owner"] },
+      admitted: true,
+    },
+    {
+      name: "explicit command denial remains authoritative",
+      commands: { ownerAllowFrom: ["owner"], allowFrom: { matrix: [] } },
+      admitted: false,
+    },
+  ])(
+    "gates hard reset admission without pre-unarchiving the tombstone: $name",
+    async ({ commands, admitted }) => {
+      setNoAbort();
+      const sessionId = "restart-tombstone-session";
+      const sessionKey = "agent:main:matrix:channel:room-a";
+      const archivedAt = Date.now() - 1_000;
+      sessionStoreMocks.currentEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        archivedAt,
+        status: "failed",
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: {
+            reason: "automatic recovery exhausted",
+            recoveredSessionId: "dashboard-successor",
+            recoveredSessionKey: "agent:main:dashboard:successor",
+          },
+        },
+      };
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => {
+        expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+        expect(sessionStoreMocks.currentEntry).toMatchObject({
+          mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+        });
+        return { text: "reset handled" } satisfies ReplyPayload;
+      });
+      const ctx = buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        OriginatingChannel: "matrix",
+        OriginatingTo: "!room-a:example.test",
+        ChatType: "channel",
+        SenderId: "guest",
+        From: "@guest:example.test",
+        To: "!room-a:example.test",
+        AccountId: "default",
+        SessionKey: sessionKey,
+        Body: "/new",
+        CommandBody: "/new",
+        RawBody: "/new",
+        CommandSource: "text",
+        CommandAuthorized: true,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
+      });
+
+      const tombstoneBefore = structuredClone(sessionStoreMocks.currentEntry);
+      const dispatch = dispatchReplyFromConfig({
+        ctx,
+        cfg: { ...emptyConfig, commands },
+        dispatcher,
+        replyResolver,
+      });
+      if (!admitted) {
+        await expect(dispatch).rejects.toMatchObject({
+          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+        });
+        expect(sessionStoreMocks.currentEntry).toEqual(tombstoneBefore);
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        return;
+      }
+      const result = await dispatch;
+
+      expect(result.queuedFinal).toBe(true);
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "reset handled" });
+    },
+  );
+
+  it("admits an authorized native reset only when it owns the tombstoned source", async () => {
+    setNoAbort();
+    const sessionId = "restart-tombstone-session";
+    const sessionKey = "agent:main:matrix:channel:room-a";
+    const archivedAt = Date.now() - 1_000;
+    sessionStoreMocks.currentEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      archivedAt,
+      status: "failed",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => {
+      expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+      return { text: "native reset handled" } satisfies ReplyPayload;
+    });
+    const ctx = buildTestCtx({
+      Provider: "matrix",
+      Surface: "matrix",
+      OriginatingChannel: "matrix",
+      OriginatingTo: "!room-a:example.test",
+      ChatType: "channel",
+      From: "@owner:example.test",
+      To: "!room-a:example.test",
+      AccountId: "default",
+      SessionKey: sessionKey,
+      Body: "/new",
+      CommandBody: "/new",
+      RawBody: "/new",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTargetSessionKey: sessionKey,
+      CommandTurn: {
+        kind: "native",
+        source: "native",
+        authorized: true,
+        commandName: "new",
+        body: "/new",
+      },
+      InboundAccessAuthorized: true,
+      InboundEventKind: "user_request",
+      InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "native reset handled" });
+
+    sessionStoreMocks.currentEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      archivedAt,
+      status: "failed",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    };
+    const differentSourceResolver = vi.fn(async () => ({ text: "must not run" }));
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: { ...ctx, SessionKey: "agent:main:matrix:channel:room-b" },
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver: differentSourceResolver,
+      }),
+    ).rejects.toThrow(/ended during restart recovery/i);
+    expect(differentSourceResolver).not.toHaveBeenCalled();
+  });
+
   it("skips plugin-bound claim hook under deny and falls through to suppressed agent dispatch", async () => {
     // Plugin-bound inbound handlers can emit outbound replies we cannot
     // rewind. Under deny, skip the plugin claim entirely and let the agent
@@ -1866,7 +2227,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     // Binding is still tracked (touch runs before the gate)...
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-deny");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-deny",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     // ...but the plugin claim hook MUST NOT be invoked under deny — the
     // plugin can't be trusted to honor suppressDelivery on its outbound path.
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
@@ -2017,7 +2382,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         sourceReplyDeliveryMode: "message_tool_only",
         ...(params.expectPluginReplyDelivered ? { observedReplyDelivery: true } : {}),
       });
-      expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
+      expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+        params.bindingId,
+        undefined,
+        expect.objectContaining(params.conversation),
+      );
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
         "openclaw-codex-app-server",
         expect.objectContaining({
