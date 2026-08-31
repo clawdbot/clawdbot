@@ -5,6 +5,7 @@ import {
   appendTranscriptMessage,
   bindSessionPendingInputSources,
   stageSessionPendingInput,
+  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -123,6 +124,95 @@ describe("chat history consumption receipts", () => {
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
   });
+});
+
+describe("chat history exact-entry snapshots", () => {
+  it.each(["chat.history", "chat.startup"] as const)(
+    "%s projects fresh owned session state without another preparation copy",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const now = Date.now();
+        const scope = {
+          agentId: "main",
+          sessionKey: "agent:main:history-owned",
+          sessionId: "history-owned",
+        };
+        const childScope = { agentId: "main", sessionKey: "agent:main:subagent:history-child" };
+        const toolOverrides = { mcpToolsDeny: { synthetic: ["blocked"] } };
+        await upsertSessionEntryCore(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: now,
+          thinkingLevel: "high",
+          toolOverrides,
+        });
+        await upsertSessionEntryCore(childScope, {
+          sessionId: "history-child",
+          updatedAt: now,
+          parentSessionKey: scope.sessionKey,
+          spawnedBy: scope.sessionKey,
+          status: "running",
+        });
+        const context = createDirectChatContext();
+        const handler = expectDefined(chatHistoryHandlers[method], "history handler");
+        const call = async () => {
+          const respond = vi.fn();
+          const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+          try {
+            const pending = handler({
+              params: { sessionKey: scope.sessionKey },
+              context,
+              req: { type: "req", id: "owned-history", method },
+              client: null,
+              isWebchatConnect: () => false,
+              respond,
+            });
+            // Count synchronous history preparation before optional startup icon work resumes.
+            const preparationCopies = cloneSpy.mock.calls.filter(
+              ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
+            ).length;
+            await pending;
+            const [ok, payload, error] = expectDefined(respond.mock.calls[0], "history response");
+            expect(error).toBeUndefined();
+            expect(ok).toBe(true);
+            expect(preparationCopies).toBe(0);
+            return expectDefined(asOptionalRecord(payload), "history payload");
+          } finally {
+            cloneSpy.mockRestore();
+          }
+        };
+
+        const first = await call();
+        expect(first).toMatchObject({ thinkingLevel: "high", toolOverrides });
+        expect(first.sessionInfo).toMatchObject({ childSessions: [childScope.sessionKey] });
+        const responseTools = expectDefined(
+          asOptionalRecord(first.toolOverrides),
+          "tool overrides",
+        );
+        const deniedByServer = expectDefined(
+          asOptionalRecord(responseTools.mcpToolsDeny),
+          "denied tools by server",
+        );
+        const deniedTools = deniedByServer.synthetic;
+        if (!Array.isArray(deniedTools)) {
+          throw new Error("expected nested denied tool array");
+        }
+        deniedTools.push("response-only");
+        expect(toolOverrides.mcpToolsDeny.synthetic).toEqual(["blocked"]);
+        expect((await call()).toolOverrides).toEqual(toolOverrides);
+
+        await updateSessionEntry(scope, () => ({ thinkingLevel: "low", updatedAt: now + 1 }));
+        await updateSessionEntry(childScope, () => ({
+          parentSessionKey: "agent:main:other-parent",
+          spawnedBy: "agent:main:other-parent",
+          updatedAt: now + 1,
+        }));
+        const fresh = await call();
+        expect(fresh).toMatchObject({ thinkingLevel: "low", toolOverrides });
+        expect(asOptionalRecord(fresh.sessionInfo)?.childSessions).toBeUndefined();
+        expect(first.thinkingLevel).toBe("high");
+      });
+    },
+  );
 });
 
 describe("chat metadata ownership", () => {
