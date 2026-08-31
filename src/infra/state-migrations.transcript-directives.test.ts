@@ -532,6 +532,61 @@ describe("historical transcript directive migration", () => {
     expect(opened.db.isOpen).toBe(true);
   });
 
+  it("continues preflight after an unreadable target", async () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-preflight-targets-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "second", env });
+    const databasePath = opened.path;
+    const unreadablePath = path.join(stateDir, "unreadable.sqlite");
+    fs.writeFileSync(unreadablePath, "");
+    fs.chmodSync(unreadablePath, 0o000);
+    opened.db.exec(`
+      DROP TABLE session_participants;
+      ${withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql())}
+      PRAGMA user_version = 17;
+      UPDATE schema_meta SET schema_version = 17 WHERE meta_key = 'primary';
+    `);
+    closeOpenClawAgentDatabasesForTest();
+
+    const result = await migrateHistoricalTranscriptDirectives({
+      env,
+      configuredAgentDatabaseTargets: [
+        { agentId: "first", path: unreadablePath },
+        { agentId: "second", path: databasePath },
+      ],
+    }).finally(() => fs.chmodSync(unreadablePath, 0o600));
+
+    expect(result.warnings.some((warning) => warning.includes("preflight"))).toBe(true);
+    const migrated = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    try {
+      expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+    } finally {
+      migrated.close();
+    }
+  });
+
+  it("prunes a stale writer lease before completing an empty database", async () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-stale-writer-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+    const leaseId = claimOpenClawAgentDatabaseLease({
+      agentId: "main",
+      path: databasePath,
+      env,
+    });
+    openOpenClawStateDatabase({ env })
+      .db.prepare("UPDATE agent_database_leases SET owner_pid = ? WHERE lease_id = ?")
+      .run(2_147_483_647, leaseId);
+
+    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete" });
+  });
+
   it("rolls back a transcript transaction when maintenance expires before commit", async () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-expired-commit-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
