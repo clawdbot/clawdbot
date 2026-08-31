@@ -107,6 +107,7 @@ const mocks = vi.hoisted(() => ({
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
+  repairObsoleteGeneratedExecApprovals: vi.fn(() => 0),
   collectLegacyPluginManifestContractMigrations: vi.fn(() => [] as unknown[]),
   legacyPluginManifestContractMigrationToHealthFinding: vi.fn(
     (migration: { pluginId: string }) => ({
@@ -337,6 +338,10 @@ vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
 vi.mock("../infra/state-migrations.doctor.js", () => ({
   detectLegacyStateMigrations: mocks.detectLegacyStateMigrations,
   runLegacyStateMigrations: mocks.runLegacyStateMigrations,
+}));
+
+vi.mock("../infra/exec-approvals-generated-migration.js", () => ({
+  repairObsoleteGeneratedExecApprovals: mocks.repairObsoleteGeneratedExecApprovals,
 }));
 
 vi.mock("../commands/doctor-plugin-manifests.js", () => ({
@@ -757,6 +762,7 @@ describe("doctor health contributions", () => {
       .mockReset()
       .mockResolvedValue({ preview: [], warnings: [], notices: [] });
     mocks.runLegacyStateMigrations.mockReset().mockResolvedValue({ changes: [], warnings: [] });
+    mocks.repairObsoleteGeneratedExecApprovals.mockReset().mockReturnValue(0);
     mocks.detectLegacyClawdBrowserProfileResidue.mockReset().mockReturnValue(null);
     mocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockReset().mockResolvedValue({
       changes: [],
