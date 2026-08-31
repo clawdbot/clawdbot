@@ -199,12 +199,24 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
-  it("does not garble text when a stripped tag contains a code-span placeholder", () => {
-    // The code span sits inside the tag's attribute region; stripping the tag
-    // consumes the restore placeholder. The restore loop must skip it instead
-    // of slicing with -1 (which duplicated and reordered the remaining text).
-    expect(sanitizeForPlainText('Link: <a href="`https://example.com`">click</a> end')).toBe(
-      "Link: click end",
+  it.each([
+    ['Link: <a href="`hidden`">click</a> end', "Link: click end"],
+    ['Link: <a href="`hidden`">click</a> then `visible` end', "Link: click then `visible` end"],
+    ['`first` <a href="`hidden`">click</a> then `last`', "`first` click then `last`"],
+    ['<a href="`one`">a</a><span title="`two`">b</span> `visible`', "ab `visible`"],
+    ['<b title="`hidden`">`visible`</b>', "*`visible`*"],
+  ])("restores only surviving code regions in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+    expect(sanitizeForPlainText(input, { style: "markdown" })).toBe(
+      input.startsWith("<b") ? "**`visible`**" : expected,
+    );
+  });
+
+  it("preserves marker-shaped input around and inside surviving code", () => {
+    const sentinels = "\u0000e\u0000p0;\u0000p1;\u0000p12;";
+    const visible = `\`${sentinels}<Button>\``;
+    expect(sanitizeForPlainText(`${sentinels}<a href="\`hidden\`">click</a> ${visible}`)).toBe(
+      `${sentinels}click ${visible}`,
     );
   });
 

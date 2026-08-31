@@ -73,31 +73,22 @@ export function sanitizeForPlainText(text: string, options: { style?: "markdown"
   if (codeRegions.length === 0) {
     return convertHtmlOutsideCode(prepared, options);
   }
-  const preservedCode: string[] = [];
+  const preservedText = new Map([[CODE_ESCAPE, "\u0000"]]);
   let masked = "";
   let cursor = 0;
   for (const region of codeRegions) {
     masked += prepared.slice(cursor, region.start).replaceAll("\u0000", CODE_ESCAPE);
-    masked += CODE_PLACEHOLDER;
-    preservedCode.push(prepared.slice(region.start, region.end));
+    const placeholder = `${CODE_PLACEHOLDER}${preservedText.size};`;
+    masked += placeholder;
+    preservedText.set(placeholder, prepared.slice(region.start, region.end));
     cursor = region.end;
   }
   masked += prepared.slice(cursor).replaceAll("\u0000", CODE_ESCAPE);
 
-  const converted = convertHtmlOutsideCode(masked, options);
-  let restored = "";
-  cursor = 0;
-  for (const code of preservedCode) {
-    const placeholder = converted.indexOf(CODE_PLACEHOLDER, cursor);
-    if (placeholder === -1) {
-      // The conversion stripped an HTML tag whose attribute region contained
-      // this placeholder, so the in-place marker is gone. Skipping avoids
-      // slicing with -1, which garbled and duplicated the remaining text.
-      continue;
-    }
-    restored += converted.slice(cursor, placeholder).replaceAll(CODE_ESCAPE, "\u0000");
-    restored += code;
-    cursor = placeholder + CODE_PLACEHOLDER.length;
-  }
-  return restored + converted.slice(cursor).replaceAll(CODE_ESCAPE, "\u0000");
+  // HTML attributes can consume markers. Restore by identity in one pass so
+  // surviving code keeps its position and literal marker-shaped text stays inert.
+  return convertHtmlOutsideCode(masked, options).replace(
+    /\u0000(?:e|p\d+;)/g,
+    (marker) => preservedText.get(marker) ?? marker,
+  );
 }
