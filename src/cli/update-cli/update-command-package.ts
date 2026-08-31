@@ -197,6 +197,7 @@ export async function runPackageInstallUpdate(params: {
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion ?? beforeVersion },
     steps: packageUpdate.steps,
+    recovery: packageUpdate.recovery,
     durationMs: Date.now() - params.startedAt,
   };
 }

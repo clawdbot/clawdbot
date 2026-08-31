@@ -1,4 +1,3 @@
-import type { ManifestModelIdNormalizationRecord } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { BundledStaticCatalogState } from "../agents/embedded-agent-runner/model.static-catalog.types.js";
 import type { BundledChannelCatalogEntry } from "../channels/bundled-channel-catalog.types.js";
 import type { ManifestChannelPlugin } from "../channels/plugins/manifest-channel-plugin.types.js";
@@ -15,7 +14,9 @@ type CurrentPluginMetadataCacheState = {
   configFingerprint: string | undefined;
   compatiblePolicyHashes: readonly string[] | undefined;
   compatibleConfigFingerprints: readonly string[] | undefined;
-  manifestModelIdNormalizationRecords: readonly ManifestModelIdNormalizationRecord[] | undefined;
+  modelIdNormalizationPolicies:
+    | PluginMetadataSnapshot["owners"]["modelIdNormalizationPolicies"]
+    | undefined;
   revision: symbol;
   configIdentities: WeakSet<OpenClawConfig>;
 };
@@ -54,7 +55,7 @@ export function createPluginCacheMetadata(): PluginCacheMetadata {
         configFingerprint: undefined,
         compatiblePolicyHashes: undefined,
         compatibleConfigFingerprints: undefined,
-        manifestModelIdNormalizationRecords: undefined,
+        modelIdNormalizationPolicies: undefined,
         revision: Symbol("plugin-metadata-snapshot"),
         configIdentities: new WeakSet(),
       },

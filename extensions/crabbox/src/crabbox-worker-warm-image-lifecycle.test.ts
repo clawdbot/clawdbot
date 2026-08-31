@@ -24,7 +24,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
     const initial = createWarmProvider();
     const lease = await provisionWarmProfile(initial.provider, PROFILE, "response-lost");
     await captureWarmImage(initial.provider, PROFILE, "first-template");
-    initial.provider.dispose();
+    await initial.provider.dispose();
     resetPluginStateStoreForTests();
 
     const restarted = createWarmProvider(undefined, initial.stateDir);
@@ -62,7 +62,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
       retirement: { checkpointId: "chk_generation_1" },
     });
     expect(initial.calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
-    initial.provider.dispose();
+    await initial.provider.dispose();
     resetPluginStateStoreForTests();
 
     const restarted = createWarmProvider(command, initial.stateDir);
@@ -167,7 +167,7 @@ describe("Crabbox warm-image lifecycle ownership", () => {
       }
 
       failOldDeletion = false;
-      provider.dispose();
+      await provider.dispose();
       resetPluginStateStoreForTests();
       const restarted = createWarmProvider(command, stateDir);
       const restartedLease = await provisionWarmProfile(
@@ -316,23 +316,35 @@ describe("Crabbox warm-image lifecycle ownership", () => {
     },
   );
 
-  it("deletes the provider snapshot before forgetting an image unused for fourteen days", async () => {
-    const { provider, calls } = createWarmProvider();
-    await captureWarmImage(provider);
-    const expiredAt = Date.now() + 14 * 24 * 60 * 60 * 1_000;
-    vi.spyOn(Date, "now").mockReturnValue(expiredAt);
-    calls.length = 0;
+  it.each(["allocation", "maintenance"])(
+    "deletes the provider snapshot before forgetting an image unused for fourteen days during %s",
+    async (trigger) => {
+      const { provider, calls } = createWarmProvider();
+      await captureWarmImage(provider);
+      const expiredAt = Date.now() + 14 * 24 * 60 * 60 * 1_000;
+      vi.spyOn(Date, "now").mockReturnValue(expiredAt);
+      calls.length = 0;
 
-    await provisionWarmProfile(provider);
+      if (trigger === "allocation") {
+        await provisionWarmProfile(provider);
+      } else {
+        expect(listCrabboxWarmImages()[0]?.allocations).toEqual({});
+        await provider.maintain?.({
+          profiles: [PROFILE],
+          signal: new AbortController().signal,
+          assertCurrent() {},
+        });
+      }
 
-    expect(calls.find(({ argv }) => argv[2] === "delete")?.argv.slice(1)).toEqual([
-      "checkpoint",
-      "delete",
-      CHECKPOINT_ID,
-    ]);
-    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-    expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
-  });
+      expect(calls.find(({ argv }) => argv[2] === "delete")?.argv.slice(1)).toEqual([
+        "checkpoint",
+        "delete",
+        CHECKPOINT_ID,
+      ]);
+      expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(trigger === "allocation");
+      expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(false);
+    },
+  );
 
   it("deletes the least-recently-used provider snapshot before admitting a 129th image", async () => {
     const { provider, calls } = createWarmProvider();

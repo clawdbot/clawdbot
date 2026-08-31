@@ -793,6 +793,95 @@ NODE
     );
   });
 
+  it("preserves RPM-owned Node packages when their linked SQLite is unsafe", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      require_sudo() { :; }
+      install_build_tools_linux() { return 0; }
+      dnf() { printf 'unexpected-dnf:%s\n' "$*"; return 99; }
+      node() {
+        if [[ "\${1:-}" == "-v" ]]; then printf 'v24.18.0\n'; return 0; fi
+        if [[ "\${1:-}" == "-e" ]]; then return 1; fi
+        return 1
+      }
+      ui_info() { printf 'info:%s\n' "$*"; }
+      ui_success() { printf 'success:%s\n' "$*"; }
+      install_node_with_user_prefix() { printf 'prefix-runtime\n'; }
+      install_node
+    `);
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain("prefix-runtime");
+    expect(result.stdout).not.toContain("unexpected-dnf:");
+    expect(result.stdout).not.toContain("Installing Node.js via NodeSource");
+  });
+
+  it("activates and persists the managed Node runtime installed by install-cli.sh", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-rpm-node-prefix-"));
+    const home = join(tmp, "home");
+    const cliInstaller = join(tmp, "install-cli.sh");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      cliInstaller,
+      [
+        "#!/usr/bin/env bash",
+        'PREFIX="${OPENCLAW_PREFIX:?}"',
+        "node_dir() { printf '%s/tools/node-v24.19.0\\n' \"$PREFIX\"; }",
+        "os_detect() { printf 'linux\\n'; }",
+        "arch_detect() { printf 'x64\\n'; }",
+        "install_node() {",
+        '  local dir="$PREFIX/tools/node-v24.19.0"',
+        '  local bin="$dir/bin"',
+        '  mkdir -p "$bin"',
+        "  cat > \"$bin/node\" <<'EOF'",
+        "#!/usr/bin/env bash",
+        "if [[ \"${1:-}\" == '-v' ]]; then printf 'v24.19.0\\n'; exit 0; fi",
+        "if [[ \"${1:-}\" == '-e' ]]; then exit 0; fi",
+        "exit 1",
+        "EOF",
+        '  chmod +x "$bin/node"',
+        '  ln -sfn "$dir" "$PREFIX/tools/node"',
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      const result = runInstallShell(
+        `
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          HOME=${JSON.stringify(home)}
+          SHELL=/bin/bash
+          OS=linux
+          PATH=/usr/bin:/bin
+          export HOME SHELL OS PATH
+          download_validated_script() { cp ${JSON.stringify(cliInstaller)} "$2"; }
+          run_required_step() { shift; "$@"; }
+          ui_info() { printf 'info:%s\n' "$*"; }
+          ui_success() { printf 'success:%s\n' "$*"; }
+          print_active_node_paths() { :; }
+          install_node_with_user_prefix
+          printf 'node=%s\n' "$(command -v node)"
+          printf 'profile=%s\n' "$(sed -n '1p' "$HOME/.bashrc")"
+          resolved_bin="$(cd "$HOME/.openclaw/tools/node/bin" && pwd -P)"
+          warn_shell_path_missing_dir "$resolved_bin" "npm global bin dir"
+        `,
+        { TERM: "dumb" },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(result.stdout).toContain(`node=${home}/.openclaw/tools/node/bin/node`);
+      expect(result.stdout).toContain('profile=export PATH="$HOME/.openclaw/tools/node/bin:$PATH"');
+      expect(result.stdout).toContain("PATH updated in");
+      expect(result.stdout).not.toContain("PATH missing npm global bin dir");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("stops when NodeSource repository setup fails", () => {
     const result = runInstallShell(`
       set -euo pipefail

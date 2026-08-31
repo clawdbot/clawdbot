@@ -15,6 +15,59 @@ import { chatHistoryHandlers } from "./chat-history-handler.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 describe("chat history consumption receipts", () => {
+  it("projects pending input at its acceptance time", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:pending-display-time",
+        sessionId: "pending-display-time",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const receipt = expectDefined(
+        await stageSessionPendingInput(scope, {
+          runId: "pending-display-run",
+          assertCurrent: () => {},
+          message: {
+            role: "user",
+            content: "Display me where I was accepted",
+            timestamp: 1_000,
+            idempotencyKey: "pending-display-run:user",
+          },
+        }),
+        "pending input receipt",
+      );
+      try {
+        let result: unknown;
+        await expectDefined(
+          chatHistoryHandlers["chat.history"],
+          "history handler",
+        )({
+          params: { sessionKey: scope.sessionKey },
+          context: createDirectChatContext(),
+          req: { type: "req", id: "history", method: "chat.history" },
+          client: null,
+          isWebchatConnect: () => false,
+          respond: (ok, payload, error) => {
+            expect(error).toBeUndefined();
+            expect(ok).toBe(true);
+            result = payload;
+          },
+        });
+        const page = expectDefined(asOptionalRecord(result), "history response");
+        const pendingInputs = expectDefined(asOptionalRecord(page.pendingInputs), "pending inputs");
+        const [pending] = pendingInputs.items as Array<Record<string, unknown>>;
+        expect(pending).toMatchObject({
+          acceptedAt: 2_000,
+          message: { content: "Display me where I was accepted", timestamp: 2_000 },
+        });
+      } finally {
+        receipt.finish("interrupted");
+        now.mockRestore();
+      }
+    });
+  });
+
   it.each(["chat.history", "chat.startup"] as const)(
     "%s returns only requested current-session receipts in pages and empty deltas",
     async (method) => {
@@ -70,6 +123,7 @@ describe("chat history consumption receipts", () => {
           }),
           "aggregate receipt",
         );
+        const retained = [];
         try {
           await aggregate.run(() => appendTranscriptMessage(scope, { message: aggregate.message }));
           await appendTranscriptMessage(scope, {
@@ -77,24 +131,56 @@ describe("chat history consumption receipts", () => {
           });
           const inputRunIds = ["source-a", "missing"];
           const page = await call({ inputRunIds, limit: 1 });
-          const expected = [{ runId: "source-a", consumedByEventId: aggregate.inputId }];
-          expect(page.inputConsumptions).toEqual(expected);
+          const expected = [
+            { runId: "source-a", state: "consumed", consumedByEventId: aggregate.inputId },
+          ];
+          expect(page.inputReceipts).toEqual(expected);
+          expect(page.inputConsumptions).toEqual([
+            { runId: "source-a", consumedByEventId: aggregate.inputId },
+          ]);
           expect(page.pendingInputs).toEqual({ items: [], total: 0 });
           expect(JSON.stringify(page.messages)).not.toContain("Collected inputs");
           const delta = await call({ inputRunIds, cursor: page.deltaCursor });
-          expect(delta).toMatchObject({ kind: "delta", messages: [], inputConsumptions: expected });
+          expect(delta).toMatchObject({ kind: "delta", messages: [], inputReceipts: expected });
+          for (let index = 0; index < 21; index += 1) {
+            retained.push(
+              expectDefined(
+                await stageSessionPendingInput(scope, {
+                  runId: `retained-${index}`,
+                  assertCurrent: () => {},
+                  message: {
+                    role: "user",
+                    content: `retained-${index}`,
+                    timestamp: index + 3,
+                    idempotencyKey: `retained-${index}:user`,
+                  },
+                }),
+                "retained receipt",
+              ),
+            );
+          }
+          const retainedPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
+          expect(retainedPage.inputReceipts).toEqual([{ runId: "retained-0", state: "pending" }]);
+          expect(retainedPage.inputConsumptions).toEqual([]);
+          expect(retainedPage.pendingInputs).toMatchObject({
+            total: 21,
+            items: [{ runId: "retained-20" }],
+          });
           const anchor = await call({
             inputRunIds,
             messageId: aggregate.inputId,
             sessionId: scope.sessionId,
           });
-          expect(anchor.inputConsumptions).toEqual([]);
+          expect(anchor.inputReceipts).toEqual([]);
           await upsertSessionEntryCore(scope, { sessionId: "replacement", updatedAt: 2 });
-          expect((await call({ inputRunIds })).inputConsumptions).toEqual([]);
+          expect((await call({ inputRunIds })).inputReceipts).toEqual([]);
         } finally {
           aggregate.finish("interrupted");
           for (const source of sources) {
             source.finish("interrupted");
+          }
+          for (const receipt of retained) {
+            receipt.finish("interrupted");
           }
         }
       });

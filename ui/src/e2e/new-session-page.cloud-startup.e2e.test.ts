@@ -280,7 +280,11 @@ suite.define(() => {
       // Background history loads may arrive before this action's request.
       await expect
         .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
-        .toContainEqual(expect.objectContaining({ params: { sessionKey, limit: 1000 } }));
+        .toContainEqual(
+          expect.objectContaining({
+            params: { sessionKey, limit: 1000, inputRunIds: [messageId] },
+          }),
+        );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
       await retainedTurn
         .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)

@@ -38,6 +38,7 @@ import {
   toolPolicyRestrictsTools,
 } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
+import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { resolveAgentHarnessAvailabilityDecision } from "./availability.js";
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
@@ -509,7 +510,7 @@ async function runSelectedAgentHarnessAttempt(
     });
   }
   const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;
-  return publicResult;
+  return copyCoreTtsAttemptResultProvenance(result, publicResult);
 }
 
 function selectPreparedAgentHarness(

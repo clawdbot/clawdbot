@@ -87,6 +87,17 @@ type StartChatDispatchParams = {
   userTurn: ReturnType<typeof createGatewayChatUserTurnController>;
 };
 
+function formatReturnedAgentErrors(messages: string[]): string | undefined {
+  const [primary, ...additional] = [...new Set(messages)];
+  if (!primary || additional.length === 0) {
+    return primary;
+  }
+  if (additional.length === 1) {
+    return `${primary}\n\nAdditional error: ${additional[0]}`;
+  }
+  return `${primary}\n\nAdditional errors:\n${additional.map((message) => `- ${message}`).join("\n")}`;
+}
+
 export function startChatDispatch(params: StartChatDispatchParams): void {
   const {
     admissionStartedAt,
@@ -457,10 +468,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               (agentRunStarted || !isInternalTextSlashCommandTurn);
           const returnedAgentErrorMessage =
             runtimeOutcome?.error ??
-            (returnedAgentErrorPayloads
-              .map((payload) => payload.text?.trim())
-              .filter((text): text is string => Boolean(text))
-              .join(" | ") ||
+            (formatReturnedAgentErrors(
+              returnedAgentErrorPayloads
+                .map((payload) => payload.text?.trim())
+                .filter((text): text is string => Boolean(text)),
+            ) ||
               (runtimeFailed ? "agent run failed" : undefined));
           if (
             !userTurnRecorder.hasPersisted() &&

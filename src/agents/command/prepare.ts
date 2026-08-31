@@ -278,7 +278,7 @@ export async function prepareAgentCommandExecution(
       resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir }))
     : undefined;
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
+    manifestPlugins: manifestMetadataSnapshot ?? [],
   } satisfies ModelManifestNormalizationContext;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
@@ -363,7 +363,9 @@ export async function prepareAgentCommandExecution(
     const runId = opts.runId?.trim() || sessionId;
     const { getAcpSessionManager } = await loadAcpManagerRuntime();
     const acpManager = getAcpSessionManager();
-    const acpResolution = sessionKey ? acpManager.resolveSession({ cfg, sessionKey }) : null;
+    const acpResolution = sessionKey
+      ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
+      : null;
     let promptMessage = message;
     if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
       const {

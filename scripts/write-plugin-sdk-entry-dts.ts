@@ -2,10 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import configs from "../tsdown.config.ts";
+import { resolveBuildStepCacheState, type BuildCacheStep } from "./lib/build-artifact-cache.mts";
 import { publishStagedDeclarations } from "./lib/declaration-stage.mts";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS } from "./lib/tsdown-config-groups.mts";
-import { prepareTsdownBuildExecution } from "./tsdown-build.mts";
+import {
+  prepareTsdownBuildExecution,
+  TSDOWN_DECLARATION_EXTENSIONS,
+  TSDOWN_UNIFIED_CACHE_INPUTS,
+} from "./tsdown-build.mts";
 
 const root = process.cwd();
 let staging: string | undefined;
@@ -13,6 +18,7 @@ const failures: unknown[] = [];
 try {
   await withDistArtifactOwnership(root, async () => {
     staging = fs.mkdtempSync(path.join(root, ".artifacts/plugin-sdk-staging-"));
+    const output = path.join(staging, "dist");
     const required: string[] = [];
     for (const name of TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS) {
       const config = configs.find((candidate: { name?: string }) => candidate.name === name);
@@ -42,7 +48,7 @@ try {
       "tsdown.config.ts",
       ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.flatMap((group) => ["--filter", group]),
       "--out-dir",
-      staging,
+      output,
     ];
     const plan = prepareTsdownBuildExecution(
       { args },
@@ -58,7 +64,37 @@ try {
     if (!plan) {
       throw new Error("Insufficient memory for SDK declaration build");
     }
-    await publishStagedDeclarations(plan, staging, path.join(root, "dist"), required);
+    const step: BuildCacheStep = {
+      label: "tsdown-plugin-sdk",
+      cache: {
+        env: ["OPENCLAW_BUILD_PRIVATE_QA"],
+        inputs: [
+          ...TSDOWN_UNIFIED_CACHE_INPUTS,
+          "scripts/write-plugin-sdk-entry-dts.ts",
+          "scripts/lib/declaration-stage.mts",
+        ],
+        outputs: [{ path: "dist", extensions: TSDOWN_DECLARATION_EXTENSIONS }],
+        requiredOutputs: required.map((entry) => `dist/${entry}`),
+        restore: "always",
+      },
+    };
+    const params = {
+      rootDir: root,
+      artifactRoot: staging,
+      env: {
+        ...process.env,
+        OPENCLAW_BUILD_PRIVATE_QA: process.env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? "1" : "0",
+      },
+    };
+    await publishStagedDeclarations(
+      plan,
+      output,
+      path.join(root, "dist"),
+      required,
+      process.env.OPENCLAW_BUILD_CACHE === "0"
+        ? undefined
+        : { step, state: resolveBuildStepCacheState(step, params), params },
+    );
   });
 } catch (error) {
   failures.push(error);

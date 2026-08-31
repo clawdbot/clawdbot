@@ -2,7 +2,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { UserMessage } from "openclaw/plugin-sdk/llm";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
 import { summarizeWithFallback } from "./compaction.test-support.js";
 
@@ -36,12 +36,25 @@ const testModel = {
   maxTokens: 8192,
 } as unknown as NonNullable<ExtensionContext["model"]>;
 
+async function finishAssertionWithTimers(assertion: Promise<unknown>): Promise<void> {
+  // The async clock drain yields native turns. Observe failures immediately,
+  // then rethrow only after the drain finishes.
+  void assertion.catch(() => undefined);
+  await vi.runAllTimersAsync();
+  await assertion;
+}
+
 describe("summarizeWithFallback", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     agentSessionMocks.generateSummary.mockReset();
     agentSessionMocks.generateSummary.mockRejectedValue(
       new Error("Summarization failed: fetch failed"),
     );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("throws CompactionError when all summarization attempts fail", async () => {
@@ -53,7 +66,7 @@ describe("summarizeWithFallback", () => {
       } satisfies UserMessage,
     ];
 
-    await expect(
+    const result = expect(
       summarizeWithFallback({
         messages,
         model: testModel,
@@ -64,6 +77,7 @@ describe("summarizeWithFallback", () => {
         contextWindow: 200_000,
       }),
     ).rejects.toThrow("All summarization attempts failed for 1 messages");
+    await finishAssertionWithTimers(result);
     // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
@@ -81,7 +95,7 @@ describe("summarizeWithFallback", () => {
       .mockRejectedValueOnce(providerAbortErr)
       .mockResolvedValueOnce("recovered summary after provider disconnect");
 
-    const result = await summarizeWithFallback({
+    const summary = summarizeWithFallback({
       messages: [
         {
           role: "user",
@@ -97,7 +111,8 @@ describe("summarizeWithFallback", () => {
       contextWindow: 200_000,
     });
 
-    expect(result).toBe("recovered summary after provider disconnect");
+    const result = expect(summary).resolves.toBe("recovered summary after provider disconnect");
+    await finishAssertionWithTimers(result);
     // Two calls: first fails with provider-side AbortError, second succeeds.
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(2);
   });
@@ -112,7 +127,7 @@ describe("summarizeWithFallback", () => {
       )
       .mockResolvedValueOnce("recovered non-empty summary");
 
-    await expect(
+    const result = expect(
       summarizeWithFallback({
         messages: [
           {
@@ -129,6 +144,7 @@ describe("summarizeWithFallback", () => {
         contextWindow: 200_000,
       }),
     ).resolves.toBe("recovered non-empty summary");
+    await finishAssertionWithTimers(result);
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(2);
   });
 
@@ -136,7 +152,7 @@ describe("summarizeWithFallback", () => {
     const controller = new AbortController();
     controller.abort();
 
-    await expect(
+    const result = expect(
       summarizeWithFallback({
         messages: [
           {
@@ -153,6 +169,7 @@ describe("summarizeWithFallback", () => {
         contextWindow: 200_000,
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
+    await finishAssertionWithTimers(result);
 
     expect(agentSessionMocks.generateSummary).not.toHaveBeenCalled();
   });
@@ -182,7 +199,7 @@ describe("summarizeWithFallback", () => {
     });
     const rejection = expect(promise).rejects.toThrow("aborted");
     setTimeout(() => controller.abort(), 50);
-    await rejection;
+    await finishAssertionWithTimers(rejection);
     const elapsedMs = Date.now() - startedAt;
 
     // Well under the 500ms minimum backoff — the abort interrupted the sleep.
@@ -215,7 +232,7 @@ describe("summarizeWithFallback", () => {
       return Promise.reject(new Error("partial retry error"));
     });
 
-    await expect(
+    const result = expect(
       summarizeWithFallback({
         messages,
         model: testModel,
@@ -228,5 +245,7 @@ describe("summarizeWithFallback", () => {
     ).rejects.toThrow(
       "All summarization attempts failed for 2 messages. Last error: partial retry error",
     );
+    await finishAssertionWithTimers(result);
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(6);
   });
 });

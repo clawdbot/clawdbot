@@ -58,6 +58,9 @@ describe("prepared reply fallback ownership", () => {
     vi.spyOn(agentScope, "resolveEffectiveModelFallbacks").mockImplementation(
       actual.resolveEffectiveModelFallbacks,
     );
+    vi.spyOn(agentScope, "resolveModelFallbackAvailability").mockImplementation(
+      actual.resolveModelFallbackAvailability,
+    );
     vi.spyOn(agentScope, "resolveSubagentSpawnModelFallbacksOverride").mockImplementation(
       actual.resolveSubagentSpawnModelFallbacksOverride,
     );

@@ -335,7 +335,7 @@ function emitCompactionSessionLifecycleHooks(params: {
     });
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await hookRunner.runSessionEnd(payload.event, payload.context);
-    }).catch((error: unknown) => {
+    }, "hooks:session-end").catch((error: unknown) => {
       logVerbose(`session_end hook failed: ${String(error)}`);
     });
   }
@@ -348,7 +348,7 @@ function emitCompactionSessionLifecycleHooks(params: {
     });
     void runWithGatewayIndependentRootWorkContinuation(async () => {
       await hookRunner.runSessionStart(payload.event, payload.context);
-    }).catch((error: unknown) => {
+    }, "hooks:session-start").catch((error: unknown) => {
       logVerbose(`session_start hook failed: ${String(error)}`);
     });
   }

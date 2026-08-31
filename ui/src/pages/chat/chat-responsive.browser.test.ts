@@ -122,6 +122,8 @@ async function createSharedAppPage(): Promise<Page> {
       assistantName: "Claw",
       historyMessages: [
         {
+          // Keep context geometry independent of the lazily loaded media fixtures.
+          __openclaw: { runId: "context-fixture-run" },
           content: [{ text: SHARED_APP_CONTEXT_TEXT, type: "text" }],
           model: "openai/gpt-5.5",
           role: "assistant",
@@ -2703,12 +2705,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await messageText.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
         expect(await context.isVisible()).toBe(false);
 
-        // Finish the shared image layout before measuring whether opening the
-        // tooltip moves the row.
         await messageText.hover();
-        await page.waitForFunction(
-          () => document.querySelector<HTMLImageElement>(".chat-message-image")?.complete,
-        );
         await waitForLayoutSettled(page, ".chat-group");
         const initialLayout = await group.evaluate((node) => {
           const footer = node.querySelector<HTMLElement>(".chat-group-footer")!;

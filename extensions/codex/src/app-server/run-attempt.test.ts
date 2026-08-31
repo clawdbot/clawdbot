@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -3353,40 +3354,91 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
   });
-  it("projects canonical SQLite continuity when starting without a native thread binding", async () => {
-    const sessionId = "session-sqlite-fresh-continuity";
-    const sessionFile = `agent:main:${sessionId}`;
-    const storePath = path.join(tempDir, "sqlite-fresh-continuity.sqlite");
-    const workspaceDir = path.join(tempDir, "workspace-sqlite-fresh-continuity");
-    const params = createParams(sessionFile, workspaceDir);
-    await attachSqliteSessionTarget(params, storePath, sessionId);
-    await appendSqliteHistoryMessage(
-      params,
-      userMessage("canonical SQLite startup question", Date.now()),
-    );
-    await appendSqliteHistoryMessage(
-      params,
-      assistantMessage("canonical SQLite startup answer", Date.now() + 1),
-    );
-    params.prompt = "continue the canonical SQLite startup";
-    const harness = createStartedThreadHarness();
+  it.each([
+    { boundary: "none", tail: "user-assistant" },
+    { boundary: "compaction", tail: "user-assistant" },
+    { boundary: "compaction", tail: "assistant" },
+    { boundary: "compaction", tail: "none" },
+    { boundary: "branch", tail: "user-assistant" },
+    { boundary: "branch", tail: "assistant" },
+    { boundary: "branch", tail: "none" },
+  ] as const)(
+    "projects canonical SQLite continuity when starting without a native thread binding ($boundary / $tail)",
+    async ({ boundary, tail }) => {
+      const sessionId = "session-sqlite-fresh-continuity";
+      const sessionFile = `agent:main:${sessionId}`;
+      const storePath = path.join(tempDir, "sqlite-fresh-continuity.sqlite");
+      const workspaceDir = path.join(tempDir, "workspace-sqlite-fresh-continuity");
+      const params = createParams(sessionFile, workspaceDir);
+      await attachSqliteSessionTarget(params, storePath, sessionId);
+      const target = {
+        agentId: "main",
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        storePath,
+      };
+      const sessionManager = SessionManager.open(target, workspaceDir);
+      const summary = "The durable code is summary-only-code-7429.";
+      if (boundary !== "none") {
+        sessionManager.appendMessage(userMessage("discarded seed question", Date.now()));
+        sessionManager.appendMessage(assistantMessage("discarded seed ACK", Date.now() + 1));
+      }
+      if (boundary === "branch") {
+        sessionManager.resetLeaf();
+        sessionManager.branchWithSummary(null, summary);
+      }
+      // A metadata entry gives compaction a real retained boundary even for a summary-only cut.
+      const firstKeptEntryId = sessionManager.appendThinkingLevelChange("off");
+      if (tail === "user-assistant") {
+        sessionManager.appendMessage(userMessage("canonical SQLite startup question", Date.now()));
+      }
+      if (tail !== "none") {
+        sessionManager.appendMessage(
+          assistantMessage("ACK: startup context recorded", Date.now() + 1),
+        );
+      }
+      if (boundary === "compaction") {
+        sessionManager.appendCompaction(summary, firstKeptEntryId, 1_000);
+      }
+      const summaryRole = boundary === "compaction" ? "compactionSummary" : "branchSummary";
+      expect(
+        SessionManager.openModelContext(target)
+          .buildSessionContext()
+          .messages.map((message) => message.role),
+      ).toEqual([
+        ...(boundary === "none" ? [] : [summaryRole]),
+        ...(tail === "user-assistant" ? ["user"] : []),
+        ...(tail === "none" ? [] : ["assistant"]),
+      ]);
+      params.prompt = "Recall the durable code from our prior work.";
+      const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
 
-    const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const inputText =
-      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
-      "";
-    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
-    expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).toContain("canonical SQLite startup question");
-    expect(inputText).toContain("canonical SQLite startup answer");
-    expect(inputText).toContain("Current user request:");
-    expect(inputText).toContain("continue the canonical SQLite startup");
-  });
+      const turnStart = harness.requests.find((request) => request.method === "turn/start");
+      const inputText =
+        (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+        "";
+      expect(harness.requests.map((request) => request.method)).toContain("thread/start");
+      expect(inputText).toContain("OpenClaw assembled context for this turn:");
+      if (boundary !== "none") {
+        expect(inputText).toContain(`[${summaryRole}]\n${summary}`);
+        expect(inputText).not.toContain("discarded seed");
+      }
+      if (tail === "user-assistant") {
+        expect(inputText).toContain("canonical SQLite startup question");
+      }
+      if (tail !== "none") {
+        expect(inputText).toContain("ACK: startup context recorded");
+      }
+      expect(inputText).toContain(
+        `</conversation_context>\n\nCurrent user request:\n${params.prompt}`,
+      );
+    },
+  );
   it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const sessionManager = openRunSession(sessionFile);
@@ -4775,35 +4827,39 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it.each([
-    { label: "completed turn", failure: undefined, expectedContext: true },
-    {
-      label: "provider overload after the tool result",
-      failure: {
-        message: "Selected model is at capacity. Please try a different model.",
-        codexErrorInfo: "serverOverloaded",
+  it.each(
+    [
+      { label: "completed turn", failure: undefined, expectedContext: true },
+      {
+        label: "provider overload after the tool result",
+        failure: {
+          message: "Selected model is at capacity. Please try a different model.",
+          codexErrorInfo: "serverOverloaded",
+        },
+        expectedContext: true,
       },
-      expectedContext: true,
-    },
-    {
-      label: "usage limit after the tool result",
-      failure: {
-        message: "Usage limit exceeded.",
-        codexErrorInfo: "usageLimitExceeded",
+      {
+        label: "usage limit after the tool result",
+        failure: {
+          message: "Usage limit exceeded.",
+          codexErrorInfo: "usageLimitExceeded",
+        },
+        expectedContext: false,
       },
-      expectedContext: false,
-    },
-    {
-      label: "unauthorized response after the tool result",
-      failure: {
-        message: "Unauthorized.",
-        codexErrorInfo: "unauthorized",
+      {
+        label: "unauthorized response after the tool result",
+        failure: {
+          message: "Unauthorized.",
+          codexErrorInfo: "unauthorized",
+        },
+        expectedContext: false,
       },
-      expectedContext: false,
-    },
-  ])(
-    "captures the complete mirrored branch through a settled tool-result boundary for a $label",
-    async ({ failure, expectedContext }) => {
+    ].flatMap((scenario) =>
+      [false, true].map((oversizedHistory) => ({ scenario, oversizedHistory })),
+    ),
+  )(
+    "preserves settled finalization eligibility for a $scenario.label (oversized history: $oversizedHistory)",
+    async ({ scenario: { failure, expectedContext }, oversizedHistory }) => {
       const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
       const sessionId = "session-settled-finalization-context";
       const sessionFile = `agent:main:${sessionId}`;
@@ -4811,9 +4867,20 @@ describe("runCodexAppServerAttempt", () => {
       const harness = createStartedThreadHarness();
       const params = createParams(sessionFile, workspaceDir);
       await attachSqliteSessionTarget(params, storePath, sessionId);
+      if (oversizedHistory) {
+        for (let index = 0; index < 201; index += 1) {
+          await appendSqliteHistoryMessage(
+            params,
+            userMessage(`Prior message ${index}`, index + 1),
+          );
+        }
+      }
       params.prompt = "Send the update to Alice.";
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
+      const emptyAssistant = { type: "agentMessage", id: "empty-assistant", text: "" };
+      await harness.notify(itemNotification("item/started", emptyAssistant));
+      await harness.notify(itemNotification("item/completed", emptyAssistant));
       await harness.notify(
         itemNotification("item/started", {
           type: "commandExecution",
@@ -4852,16 +4919,29 @@ describe("runCodexAppServerAttempt", () => {
       const result = await run;
       expect(Boolean(readAttemptTerminal(result).promptError)).toBe(Boolean(failure));
       expect(Boolean(result.settledTurnFinalizationContext)).toBe(expectedContext);
-      if (result.settledTurnFinalizationContext) {
+      expect(result.currentAttemptAssistant).toBeDefined();
+      expect(result.replayMetadata).toMatchObject({
+        hadPotentialSideEffects: true,
+        replaySafe: false,
+      });
+      expect(result.itemLifecycle).toMatchObject({
+        startedCount: 2,
+        completedCount: 2,
+        activeCount: 0,
+      });
+      if (expectedContext && oversizedHistory) {
+        expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
+        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
+      } else if (result.settledTurnFinalizationContext) {
         expect(result.settledTurnFinalizationContext).toMatchObject({
-          source: "openclaw-transcript",
-          messages: [
+          source: "harness",
+          data: [
             expect.objectContaining({ role: "user" }),
-            expect.objectContaining({ role: "assistant" }),
-            expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
+            expect.objectContaining({ type: "function_call" }),
+            expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
           ],
         });
-        expect(Object.isFrozen(result.settledTurnFinalizationContext.messages)).toBe(true);
+        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
       }
     },
   );
@@ -4933,14 +5013,14 @@ describe("runCodexAppServerAttempt", () => {
     });
     expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
     expect(result.settledTurnFinalizationContext).toMatchObject({
-      source: "openclaw-transcript",
-      messages: [
+      source: "harness",
+      data: [
         expect.objectContaining({ role: "user" }),
-        expect.objectContaining({ role: "assistant" }),
-        expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
+        expect.objectContaining({ type: "function_call" }),
+        expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
       ],
     });
-    expect(Object.isFrozen(result.settledTurnFinalizationContext?.messages)).toBe(true);
+    expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
   });
   it("preserves every command failure from official app-server events", async () => {
     const sessionFile = path.join(tempDir, "session-multi-command-failure.jsonl");

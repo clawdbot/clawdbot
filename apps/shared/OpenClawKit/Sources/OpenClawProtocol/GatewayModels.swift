@@ -12518,6 +12518,90 @@ public struct SystemAgentSetupActivateResult: Codable, Sendable {
     }
 }
 
+public struct SystemAgentSetupActivateStartParams: Codable, Sendable {
+    public let agentid: String?
+    public let kind: AnyCodable
+    public let modelref: String?
+    public let authchoice: String?
+    public let apikey: String?
+    public let workspace: String?
+    public let sessionid: String
+
+    public init(
+        agentid: String? = nil,
+        kind: AnyCodable,
+        modelref: String? = nil,
+        authchoice: String? = nil,
+        apikey: String? = nil,
+        workspace: String? = nil,
+        sessionid: String)
+    {
+        self.agentid = agentid
+        self.kind = kind
+        self.modelref = modelref
+        self.authchoice = authchoice
+        self.apikey = apikey
+        self.workspace = workspace
+        self.sessionid = sessionid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case kind
+        case modelref = "modelRef"
+        case authchoice = "authChoice"
+        case apikey = "apiKey"
+        case workspace
+        case sessionid = "sessionId"
+    }
+}
+
+public struct SystemAgentSetupActivateStartResult: Codable, Sendable {
+    public let sessionid: String
+    public let done: Bool
+    public let step: WizardStep?
+    public let status: AnyCodable?
+    public let error: String?
+    public let channels: [String]?
+    public let accounts: [[String: AnyCodable]]?
+    public let preparedmodelref: String?
+    public let modelactivation: [String: AnyCodable]?
+
+    public init(
+        sessionid: String,
+        done: Bool,
+        step: WizardStep? = nil,
+        status: AnyCodable? = nil,
+        error: String? = nil,
+        channels: [String]? = nil,
+        accounts: [[String: AnyCodable]]? = nil,
+        preparedmodelref: String? = nil,
+        modelactivation: [String: AnyCodable]? = nil)
+    {
+        self.sessionid = sessionid
+        self.done = done
+        self.step = step
+        self.status = status
+        self.error = error
+        self.channels = channels
+        self.accounts = accounts
+        self.preparedmodelref = preparedmodelref
+        self.modelactivation = modelactivation
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case done
+        case step
+        case status
+        case error
+        case channels
+        case accounts
+        case preparedmodelref = "preparedModelRef"
+        case modelactivation = "modelActivation"
+    }
+}
+
 public struct SystemAgentSetupAuthStartParams: Codable, Sendable {
     public let sessionid: String
     public let agentid: String?
@@ -20862,6 +20946,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
     public let inflightrun: AnyCodable?
     public let metadata: AnyCodable?
     public let pendinginputs: [String: AnyCodable]?
+    public let inputreceipts: [AnyCodable]?
     public let inputconsumptions: [[String: AnyCodable]]?
 
     public init(
@@ -20873,6 +20958,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         inflightrun: AnyCodable? = nil,
         metadata: AnyCodable? = nil,
         pendinginputs: [String: AnyCodable]? = nil,
+        inputreceipts: [AnyCodable]? = nil,
         inputconsumptions: [[String: AnyCodable]]? = nil)
     {
         self.kind = kind
@@ -20883,6 +20969,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         self.inflightrun = inflightrun
         self.metadata = metadata
         self.pendinginputs = pendinginputs
+        self.inputreceipts = inputreceipts
         self.inputconsumptions = inputconsumptions
     }
 
@@ -20895,6 +20982,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         case inflightrun = "inFlightRun"
         case metadata
         case pendinginputs = "pendingInputs"
+        case inputreceipts = "inputReceipts"
         case inputconsumptions = "inputConsumptions"
     }
 }

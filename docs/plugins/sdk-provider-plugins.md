@@ -409,7 +409,17 @@ catalog, API-key auth, and dynamic model resolution.
     Public metadata never establishes account entitlement or expands the
     credential scope of discovery.
 
-    The same subpath exposes `normalizeOpenRouterModelPricing(pricing)` for
+    Official plugins use the private, pure
+    `openclaw/plugin-sdk/model-catalog-pricing` runtime subpath. It exposes
+    `normalizeModelPricingCatalog(rows, normalizePricing, readPricing?)` for
+    provider-owned pricing feeds. It returns a map of complete costs: absent
+    prices are omitted, while malformed declared prices, invalid or duplicate
+    model IDs, and a feed with no usable prices return `undefined`. Supply the
+    provider's unit conversion and optional price-field selector; the default
+    selector reads `model.pricing`. No auth, discovery, or runtime loader is
+    imported.
+
+    This subpath also exposes `normalizeOpenRouterModelPricing(pricing)` for
     native OpenRouter pricing objects. It converts per-token rates and static
     prompt-length overrides into a complete per-million cost schedule, without
     network access or prices from another source. Overrides apply strictly above

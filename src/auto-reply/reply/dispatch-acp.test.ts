@@ -8,6 +8,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
+import type { AcpSessionResolution } from "../../acp/control-plane/manager.types.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
@@ -49,7 +50,7 @@ import {
 } from "./test-fixtures/acp-runtime.js";
 
 const managerMocks = vi.hoisted(() => ({
-  resolveSession: vi.fn(),
+  resolveSession: vi.fn<() => AcpSessionResolution>(),
   runTurn: vi.fn(),
   getObservabilitySnapshot: vi.fn(() => ({
     turns: { queueDepth: 0 },
@@ -326,6 +327,7 @@ function setReadyAcpResolution() {
   managerMocks.resolveSession.mockReturnValue({
     kind: "ready",
     sessionKey,
+    agentId: "codex-acp",
     meta: createAcpSessionMeta(),
   });
 }
@@ -679,6 +681,7 @@ describe("tryDispatchAcpReplyCore", () => {
       managerMocks.resolveSession.mockReturnValue({
         kind: "ready",
         sessionKey: resolvedSessionKey,
+        agentId: "codex-acp",
         meta: createAcpSessionMeta({ agent: "private-agent-must-not-leak" }),
       });
       managerMocks.runTurn.mockImplementationOnce(
@@ -2971,6 +2974,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "stale",
       sessionKey,
+      agentId: "codex-acp",
       error: new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP metadata is missing."),
     });
     policyMocks.resolveAcpDispatchPolicyError.mockReturnValue(
@@ -2997,6 +3001,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "stale",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       error: new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP metadata is missing."),
     });
     bindingServiceMocks.unbind.mockResolvedValueOnce([
@@ -3057,6 +3062,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta(),
     });
     managerMocks.runTurn.mockRejectedValueOnce(
@@ -3102,6 +3108,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({
         identity: {
           state: "pending",
@@ -3169,6 +3176,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({
         identity: {
           state: "pending",

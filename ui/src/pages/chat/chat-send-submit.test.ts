@@ -23,6 +23,7 @@ import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
 import { retryQueuedChatMessage, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { formatChatWorkContext } from "./chat-work-context.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
@@ -137,6 +138,7 @@ describe("structured Goal admission", () => {
     async (objective) => {
       const host = makeChatHost({
         chatMessage: objective,
+        getWorkContext: () => "Ambient context must not become a Goal objective",
         currentSessionId: "incarnation-a",
         chatDisplayedLeafEntryId: "leaf-a",
         requestHandlers: { "chat.send": { status: "started" } },
@@ -548,37 +550,97 @@ describe("handleSendChat browser annotation context", () => {
     expect(findChatSendPayload(host).message).toBe("Review the annotated page\n\n/review-this");
   });
 
-  it("keeps one materialized snapshot through delayed failed delivery", async () => {
-    const settingsPatch = createDeferred<boolean>();
-    const attachment = createBrowserAnnotationAttachment("delayed", "Stable browser context");
-    const replacement = createBrowserAnnotationAttachment("replacement", "New browser context");
-    const host = makeChatHost({
-      requestHandlers: { "chat.send": { status: "timeout" } },
-      chatAttachments: [attachment],
-      chatMessage: "Use the marked area",
-      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
-    });
+  it.each(["annotation", "home"])(
+    "keeps one %s context snapshot through delayed delivery and retry",
+    async (source) => {
+      const settingsPatch = createDeferred<boolean>();
+      const sendRequest = vi
+        .fn()
+        .mockResolvedValueOnce({ status: "timeout" })
+        .mockResolvedValue({ status: "started" });
+      let workContext = "Stable browser context";
+      const attachment = createBrowserAnnotationAttachment("delayed", "Stable browser context");
+      const replacement = createBrowserAnnotationAttachment("replacement", "New browser context");
+      const host = makeChatHost({
+        requestHandlers: { "chat.send": sendRequest },
+        chatAttachments: source === "annotation" ? [attachment] : [],
+        getWorkContext: source === "home" ? () => workContext : undefined,
+        chatMessage: "Use the marked area",
+        pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+      });
 
-    const send = handleSendChat(host);
-    await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
-    expect(host.chatQueue[0]?.text).toBe("Stable browser context\n\nUse the marked area");
+      const send = handleSendChat(host);
+      await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
+      expect(host.chatQueue[0]?.text).toBe("Stable browser context\n\nUse the marked area");
 
-    host.chatMessage = "New draft";
-    host.chatAttachments = [replacement];
-    settingsPatch.resolve(true);
-    await send;
+      host.chatMessage = "New draft";
+      host.chatAttachments = [replacement];
+      workContext = "A different task is now visible";
+      settingsPatch.resolve(true);
+      await send;
 
-    expect(findChatSendPayload(host).message).toBe("Stable browser context\n\nUse the marked area");
-    expect(host.chatQueue[0]).toMatchObject({
-      sendState: "failed",
-      text: "Stable browser context\n\nUse the marked area",
-    });
-    expect(host.chatMessage).toBe("New draft");
-    expect(host.chatAttachments).toEqual([replacement]);
-    expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
-      "Use the marked area",
-    );
-  });
+      expect(findChatSendPayload(host).message).toBe(
+        "Stable browser context\n\nUse the marked area",
+      );
+      expect(host.chatQueue[0]).toMatchObject({
+        sendState: "failed",
+        text: "Stable browser context\n\nUse the marked area",
+      });
+      expect(host.chatMessage).toBe("New draft");
+      expect(host.chatAttachments).toEqual([replacement]);
+      expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
+        "Use the marked area",
+      );
+      await retryQueuedChatMessage(host, host.chatQueue[0]!.id);
+      expect(sendRequest.mock.calls.map(([params]) => params.message)).toEqual([
+        "Stable browser context\n\nUse the marked area",
+        "Stable browser context\n\nUse the marked area",
+      ]);
+    },
+  );
+});
+
+describe("Home work context admission", () => {
+  it.each([true, false])(
+    "sends an inspectable context only when included (%s)",
+    async (included) => {
+      const text = formatChatWorkContext({
+        page: "chat",
+        title: "Review parser",
+        sessionKey: "agent:main:parser",
+      });
+      const host = makeChatHost({
+        chatMessage: "Explain this task",
+        getWorkContext: () => (included ? text : undefined),
+        requestHandlers: { "chat.send": { status: "started" } },
+      });
+      await handleSendChat(host);
+      expect(findChatSendPayload(host).message).toBe(
+        included ? `${text}\n\nExplain this task` : "Explain this task",
+      );
+      expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
+        "Explain this task",
+      );
+    },
+  );
+
+  it.each(["/new", "/stop", "/review-this", ""])(
+    "does not attach ambient context to %j",
+    async (message) => {
+      const getWorkContext = vi.fn(() => "Unrelated work context");
+      const host = makeChatHost({
+        chatMessage: message,
+        getWorkContext,
+        createChatSession: vi.fn(async () => true),
+        requestHandlers: { "chat.send": { status: "started" } },
+      });
+      await handleSendChat(host);
+      expect(getWorkContext).not.toHaveBeenCalled();
+      if (message === "/review-this") {
+        expect(findChatSendPayload(host).message).toBe(message);
+      }
+    },
+  );
 });
 
 describe("handleSendChat immediate local commands", () => {
@@ -682,7 +744,7 @@ describe("handleSendChat session ownership", () => {
       });
       await loadChatHistory(host);
       expect(host.chatRunError?.summary).toContain(failed.sessionInfo!.lastRunError);
-      const diagnostic = getChatSessionProjection(host, host.chatMessages).runs["run-first"];
+      const diagnostic = getChatSessionProjection(host).runs["run-first"];
       const loading = pendingHistory ? loadChatHistory(host) : undefined;
       try {
         const sending = handleSendChat(
@@ -714,9 +776,7 @@ describe("handleSendChat session ownership", () => {
         expect(host.chatRunStatus).toMatchObject({ phase: "done", runId });
         expect(host.chatRunId).toBeNull();
         expect(host.lastError).toBeNull();
-        expect(getChatSessionProjection(host, host.chatMessages).runs["run-first"]).toEqual(
-          diagnostic,
-        );
+        expect(getChatSessionProjection(host).runs["run-first"]).toEqual(diagnostic);
         expect(host.chatRunError).toBeNull();
       } finally {
         reconcileChatRunLifecycle(host, { clearRunStatus: true });
@@ -803,7 +863,7 @@ describe("handleSendChat session ownership", () => {
         await loadChatHistory(host);
         expect(host.chatRunId).toBeNull();
         expect(host.chatRunError).toBeNull();
-        expect(getChatSessionProjection(host, host.chatMessages).runs["old-run"]).toBeUndefined();
+        expect(getChatSessionProjection(host).runs["old-run"]).toBeUndefined();
       } finally {
         ack.resolve({ status: "started" });
         await sending;

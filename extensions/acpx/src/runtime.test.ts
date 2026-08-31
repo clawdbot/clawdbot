@@ -251,9 +251,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const managedDelegate = (
       managedRuntime.runtime as unknown as {
-        resolveManagedToolsDelegateForSession(sessionKey: string): typeof managedRuntime.delegate;
+        resolveManagedToolsDelegateForSession(target: {
+          sessionKey: string;
+        }): typeof managedRuntime.delegate;
       }
-    ).resolveManagedToolsDelegateForSession("agent:codex:acp:managed");
+    ).resolveManagedToolsDelegateForSession({ sessionKey: "agent:codex:acp:managed" });
     const managedTurn = vi.spyOn(managedDelegate, "runTurn").mockImplementation(async function* () {
       yield { type: "done" };
     });
@@ -297,9 +299,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const readScopedMcpEnv = (sessionKey: string, serverName: string, model?: string) => {
       const delegate = (
         runtime as unknown as {
-          resolveManagedToolsDelegateForSession(sessionKey: string, model?: string): unknown;
+          resolveManagedToolsDelegateForSession(target: {
+            sessionKey: string;
+            model?: string;
+          }): unknown;
         }
-      ).resolveManagedToolsDelegateForSession(sessionKey, model) as {
+      ).resolveManagedToolsDelegateForSession({ sessionKey, model }) as {
         options: {
           mcpServers?: Array<{
             env?: Array<{ name: string; value: string }>;
@@ -354,10 +359,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const exposedRuntime = runtime as unknown as {
       managedToolsSessionDelegates: Map<string, unknown>;
-      resolveManagedToolsDelegateForSession(
-        sessionKey: string,
-        model?: string,
-      ): {
+      resolveManagedToolsDelegateForSession(target: { sessionKey: string; model?: string }): {
         close: AcpRuntime["close"];
         ensureSession: AcpRuntime["ensureSession"];
         options?: {
@@ -366,10 +368,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       };
     };
 
-    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(
-      "agent:codex:main",
-      "openai/gpt-5.5",
-    );
+    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession({
+      sessionKey: "agent:codex:main",
+      model: "openai/gpt-5.5",
+    });
     const firstEnsure = vi.spyOn(firstDelegate, "ensureSession").mockResolvedValue({
       sessionKey: "agent:codex:main",
       backend: "acpx",
@@ -398,10 +400,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
     expect(firstClose).toHaveBeenCalledOnce();
     expect(exposedRuntime.managedToolsSessionDelegates.has("agent:codex:main")).toBe(false);
-    const secondDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(
-      "agent:codex:main",
-      "openai/gpt-5.6",
-    );
+    const secondDelegate = exposedRuntime.resolveManagedToolsDelegateForSession({
+      sessionKey: "agent:codex:main",
+      model: "openai/gpt-5.6",
+    });
     expect(secondDelegate).not.toBe(firstDelegate);
     expect(secondDelegate.options?.mcpServers?.[0]?.env).toContainEqual({
       name: "OPENCLAW_TOOLS_MCP_MODEL_REF",
@@ -1814,14 +1816,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const managedDelegate = (
       runtime as unknown as {
-        resolveManagedToolsDelegateForSession(
-          sessionKey: string,
-          model?: string,
-        ): {
+        resolveManagedToolsDelegateForSession(target: { sessionKey: string; model?: string }): {
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
         };
       }
-    ).resolveManagedToolsDelegateForSession("agent:codex:acp:test", "openai/gpt-5.5");
+    ).resolveManagedToolsDelegateForSession({
+      sessionKey: "agent:codex:acp:test",
+      model: "openai/gpt-5.5",
+    });
     const setConfigOption = vi.spyOn(managedDelegate, "setConfigOption");
     const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
       sessionKey: "agent:codex:acp:test",
@@ -2292,11 +2294,13 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const exposedRuntime = runtime as unknown as {
       managedToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
-      resolveManagedToolsDelegateForSession(sessionKey: string): {
+      resolveManagedToolsDelegateForSession(target: { sessionKey: string }): {
         close: AcpRuntime["close"];
       };
     };
-    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:codex:main");
+    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession({
+      sessionKey: "agent:codex:main",
+    });
     const close = vi.spyOn(scopedDelegate, "close").mockResolvedValue(undefined);
 
     await runtime.close({

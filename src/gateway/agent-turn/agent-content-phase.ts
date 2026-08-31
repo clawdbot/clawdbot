@@ -125,16 +125,24 @@ export async function prepareAgentContentPhase(params: {
     let catalogAgentId = agentId;
     let requestedAcpMeta: ReturnType<typeof readAcpSessionMeta>;
     if (params.requestedSessionKeyRaw) {
-      const { cfg, entry, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw, {
+      const {
+        cfg,
+        entry,
+        canonicalKey,
+        agentId: sessionAgentId,
+      } = loadSessionEntry(params.requestedSessionKeyRaw, {
         ...(agentId ? { agentId } : {}),
         clone: false,
       });
-      const sessionAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
       catalogAgentId = sessionAgentId;
       const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
       baseProvider = modelRef.provider;
       baseModel = modelRef.model;
-      requestedAcpMeta = readAcpSessionMeta({ sessionKey: canonicalKey });
+      requestedAcpMeta = readAcpSessionMeta({
+        cfg,
+        agentId: sessionAgentId,
+        sessionKey: canonicalKey,
+      });
     }
     const isConfirmedAcpSession =
       params.request.acpTurnSource === "manual_spawn" &&

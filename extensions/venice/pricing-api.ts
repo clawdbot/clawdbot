@@ -1,9 +1,6 @@
+import { normalizeModelPricingCatalog } from "openclaw/plugin-sdk/model-catalog-pricing";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  asFiniteNumberInRange,
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function readVeniceRates(value: unknown): ModelDefinitionConfig["cost"] | undefined {
   const row = asOptionalRecord(value);
@@ -71,21 +68,9 @@ export function parseVeniceModelPricing(value: unknown): ModelDefinitionConfig["
 export function parseVenicePricingCatalog(
   payload: unknown,
 ): Map<string, ModelDefinitionConfig["cost"]> | undefined {
-  const data = asOptionalRecord(payload)?.data;
-  if (!Array.isArray(data)) {
-    return undefined;
-  }
-  const prices = new Map<string, ModelDefinitionConfig["cost"]>();
-  for (const value of data) {
-    const row = asOptionalRecord(value);
-    const id = normalizeOptionalString(row?.id);
-    if (!id || row?.type !== "text") {
-      continue;
-    }
-    const price = parseVeniceModelPricing(asOptionalRecord(row.model_spec)?.pricing);
-    if (price) {
-      prices.set(id, price);
-    }
-  }
-  return prices;
+  return normalizeModelPricingCatalog(
+    asOptionalRecord(payload)?.data,
+    parseVeniceModelPricing,
+    (model) => (model.type === "text" ? asOptionalRecord(model.model_spec)?.pricing : undefined),
+  );
 }

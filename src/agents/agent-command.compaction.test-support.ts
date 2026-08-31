@@ -73,11 +73,14 @@ vi.mock("./agent-runtime-config.js", () => ({
   resolveAgentRuntimeConfig: async () => compactionTestState.cfg,
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", async () => {
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { rebasePluginMetadataSnapshotManifestRegistry } =
+    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
   const { createPluginMetadataSnapshot } =
     await import("../config/plugin-auto-enable.test-helpers.js");
   return {
     isPluginMetadataSnapshotCompatible: () => false,
+    rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: () =>
       createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
   };

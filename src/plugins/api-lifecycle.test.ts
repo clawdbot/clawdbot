@@ -115,25 +115,37 @@ describe("plugin api lifecycle", () => {
     const api = captureRegisteredPluginApi({ enqueueNextTurnInjection });
 
     const groupedResult = await api.session.workflow.enqueueNextTurnInjection({
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
       text: "grouped",
+      agentId: "work",
     });
     const flatResult = await api.enqueueNextTurnInjection({
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
       text: "flat",
+      agentId: "main",
     });
 
     expect(groupedResult).toEqual({
       enqueued: true,
       id: "injection-grouped",
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
     });
     expect(flatResult).toEqual({
       enqueued: true,
       id: "injection-flat",
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
     });
     expect(enqueueNextTurnInjection).toHaveBeenCalledTimes(2);
+    expect(enqueueNextTurnInjection).toHaveBeenNthCalledWith(1, {
+      sessionKey: "global",
+      agentId: "work",
+      text: "grouped",
+    });
+    expect(enqueueNextTurnInjection).toHaveBeenNthCalledWith(2, {
+      sessionKey: "global",
+      agentId: "main",
+      text: "flat",
+    });
   });
 
   it("blocks registration-phase methods after registration", () => {

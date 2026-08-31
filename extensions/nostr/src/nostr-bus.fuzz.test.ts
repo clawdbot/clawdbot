@@ -1,20 +1,7 @@
 // Nostr tests cover nostr bus.fuzz plugin behavior.
 import { describe, expect, it } from "vitest";
-import { createMetrics } from "./metrics.js";
 import { validatePrivateKey, normalizePubkey } from "./nostr-key-utils.js";
 import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
-
-function createPlainMetrics() {
-  return createMetrics();
-}
-
-function createCollectingMetrics() {
-  const events: unknown[] = [];
-  return {
-    events,
-    metrics: createMetrics((event) => events.push(event)),
-  };
-}
 
 function expectThrowsError(run: () => unknown): void {
   let error: unknown;
@@ -113,125 +100,6 @@ describe("normalizePubkey fuzz", () => {
     it("normalizes mixed case to lowercase", () => {
       const mixed = "0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf";
       expect(normalizePubkey(mixed)).toBe(TEST_HEX_PRIVATE_KEY);
-    });
-  });
-});
-
-// ============================================================================
-// Fuzz Tests for Metrics
-// ============================================================================
-
-describe("Metrics fuzz", () => {
-  describe("invalid metric names", () => {
-    it("handles unknown metric names gracefully", () => {
-      const metrics = createPlainMetrics();
-
-      // Cast to bypass type checking - testing runtime behavior
-      type EmitMetricName = Parameters<typeof metrics.emit>[0];
-      expect(metrics.emit("invalid.metric.name" as EmitMetricName)).toBeUndefined();
-    });
-  });
-
-  describe("invalid label values", () => {
-    it("handles null relay label", () => {
-      const metrics = createPlainMetrics();
-      expect(
-        metrics.emit("relay.connect", 1, { relay: null as unknown as string }),
-      ).toBeUndefined();
-    });
-
-    it("handles undefined relay label", () => {
-      const metrics = createPlainMetrics();
-      expect(
-        metrics.emit("relay.connect", 1, { relay: undefined as unknown as string }),
-      ).toBeUndefined();
-    });
-
-    it("handles very long relay URL", () => {
-      const metrics = createPlainMetrics();
-      const longUrl = "wss://" + "a".repeat(10000) + ".com";
-      expect(metrics.emit("relay.connect", 1, { relay: longUrl })).toBeUndefined();
-
-      const snapshot = metrics.getSnapshot();
-      expect(snapshot.relays[longUrl]).toEqual({
-        connects: 1,
-        disconnects: 0,
-        reconnects: 0,
-        errors: 0,
-        messagesReceived: {
-          event: 0,
-          eose: 0,
-          closed: 0,
-          notice: 0,
-          ok: 0,
-          auth: 0,
-        },
-        circuitBreakerState: "closed",
-        circuitBreakerOpens: 0,
-        circuitBreakerCloses: 0,
-      });
-    });
-  });
-
-  describe("extreme values", () => {
-    it("handles NaN value", () => {
-      const metrics = createPlainMetrics();
-      expect(metrics.emit("event.received", Number.NaN)).toBeUndefined();
-
-      const snapshot = metrics.getSnapshot();
-      expect(Number.isNaN(snapshot.eventsReceived)).toBe(true);
-    });
-
-    it("handles Infinity value", () => {
-      const metrics = createPlainMetrics();
-      expect(metrics.emit("event.received", Infinity)).toBeUndefined();
-
-      const snapshot = metrics.getSnapshot();
-      expect(snapshot.eventsReceived).toBe(Infinity);
-    });
-
-    it("handles negative value", () => {
-      const metrics = createPlainMetrics();
-      metrics.emit("event.received", -1);
-
-      const snapshot = metrics.getSnapshot();
-      expect(snapshot.eventsReceived).toBe(-1);
-    });
-
-    it("handles very large value", () => {
-      const metrics = createPlainMetrics();
-      metrics.emit("event.received", Number.MAX_SAFE_INTEGER);
-
-      const snapshot = metrics.getSnapshot();
-      expect(snapshot.eventsReceived).toBe(Number.MAX_SAFE_INTEGER);
-    });
-  });
-
-  describe("rapid emissions", () => {
-    it("handles many rapid emissions", () => {
-      const { events, metrics } = createCollectingMetrics();
-
-      for (let i = 0; i < 10000; i++) {
-        metrics.emit("event.received");
-      }
-
-      expect(events).toHaveLength(10000);
-      const snapshot = metrics.getSnapshot();
-      expect(snapshot.eventsReceived).toBe(10000);
-    });
-  });
-
-  describe("reset during operation", () => {
-    it("handles reset mid-operation safely", () => {
-      const metrics = createPlainMetrics();
-
-      metrics.emit("event.received");
-      metrics.emit("event.received");
-      metrics.reset();
-      metrics.emit("event.received");
-
-      const snapshot = metrics.getSnapshot();
-      expect(snapshot.eventsReceived).toBe(1);
     });
   });
 });

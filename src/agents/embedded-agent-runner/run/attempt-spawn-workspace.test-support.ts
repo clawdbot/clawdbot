@@ -69,6 +69,7 @@ function normalizeMockProviderId(providerId?: string): string {
 
 type SessionManagerMocks = {
   getSessionTarget: Mock<() => undefined>;
+  getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
   getBoundaryCount: UnknownMock;
@@ -275,6 +276,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const trajectoryEvents: CapturedTrajectoryEvent[] = [];
   const sessionManager = {
     getSessionTarget: vi.fn(() => undefined),
+    getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
     getBoundaryCount: vi.fn(() => 0),
@@ -366,6 +368,7 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
     registrySnapshotMs: 0,
@@ -1142,6 +1145,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);

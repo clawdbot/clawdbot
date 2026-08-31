@@ -10,7 +10,7 @@ import {
 import { hashWorkerCredential } from "./credential.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
@@ -201,7 +201,7 @@ describe("worker environment service", () => {
     });
     const operationalRun = createOperationalRunInstanceRef(claim.runId);
     const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRun);
-    bindWorkerTurnExecutionIdentity(
+    bindWorkerTurnOwner(
       store,
       claim,
       createExecutionIdentityAdmissionToken(claim.runId, {
@@ -211,6 +211,7 @@ describe("worker environment service", () => {
       }),
       operationalRun,
       { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      () => {},
     );
     const gate = createWorkerSessionPlacementGate(store);
     const workerService = support.createService(support.createProvider(), { placementStore: gate });
@@ -276,7 +277,7 @@ describe("worker environment service", () => {
     });
     const firstOperationalRun = createOperationalRunInstanceRef(first.runId);
     const firstAuthority = claimAgentRunDelegatedAuthority(firstOperationalRun);
-    bindWorkerTurnExecutionIdentity(
+    bindWorkerTurnOwner(
       store,
       first,
       createExecutionIdentityAdmissionToken(first.runId, {
@@ -286,6 +287,7 @@ describe("worker environment service", () => {
       }),
       firstOperationalRun,
       { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      () => {},
     );
     let resumeInstallation: (() => void) | undefined;
     support.testState.prepareInstallation = vi.fn(
@@ -329,7 +331,7 @@ describe("worker environment service", () => {
       });
       const secondOperationalRun = createOperationalRunInstanceRef(second.runId);
       secondAuthority = claimAgentRunDelegatedAuthority(secondOperationalRun);
-      bindWorkerTurnExecutionIdentity(
+      bindWorkerTurnOwner(
         store,
         second,
         createExecutionIdentityAdmissionToken(second.runId, {
@@ -339,6 +341,7 @@ describe("worker environment service", () => {
         }),
         secondOperationalRun,
         { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+        () => {},
       );
       resumeInstallation?.();
 

@@ -68,6 +68,7 @@ export function renderTriagePrompt(params: {
     `- OpenClaw: ${VERSION}`,
     `- Platform: ${process.platform}`,
     `- Node.js: ${process.versions.node} (the runtime executing OpenClaw, which may differ from the shell default)`,
+    "- Local shell commands inherit `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_WORKSPACE_DIR` for the diagnosed installation and its default workspace; expand archive references in that shell. In embedded triage, in-process config and session tools use temporary agent run state. The execution cwd is separate from the installation's default workspace. Do not substitute a remote or sandbox installation for this local target.",
     "",
     "## Doctor findings",
     "",

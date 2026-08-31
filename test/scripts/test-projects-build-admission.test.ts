@@ -170,6 +170,17 @@ syncBuiltinESMExports();\n`,
       "runtime",
     ],
     [
+      "Windows cron process identity",
+      "scripts/run-vitest.mts",
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.gateway-core.config.ts",
+        "gateway-cron-process-identity.windows.test.ts",
+      ],
+      "runtime",
+    ],
+    [
       "aggregate config",
       "scripts/run-vitest.mts",
       ["run", "--config", "test/vitest/vitest.full-extensions.config.ts"],

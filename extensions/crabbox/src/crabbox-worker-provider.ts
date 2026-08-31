@@ -45,6 +45,7 @@ import {
   isNonRunnableState,
   leaseRunArgs,
   remainingProvisionTimeout,
+  runProvisionSetup,
   runProvisionSetupAndWaitReady,
   waitForProvisionReady,
   type InspectCommandResult,
@@ -193,7 +194,7 @@ async function rejectAwsProfileAfterLeaseReconciliation(
 
 export function createCrabboxWorkerProvider(
   dependencies: CrabboxWorkerProviderDependencies,
-): WorkerProvider & { dispose: () => void } {
+): WorkerProvider & { dispose: () => Promise<void> } {
   const wallpaperBase64 = loadCrabboxWorkerWallpaperBase64(dependencies.wallpaperPath);
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const warn = dependencies.warn ?? (() => {});
@@ -245,6 +246,8 @@ export function createCrabboxWorkerProvider(
     warn,
   });
   const warmImages = createCrabboxWarmImageManager({ runCommand, runArgs: leaseRunArgs, warn });
+  const maintenanceAbort = new AbortController();
+  let maintenanceInFlight: Promise<void> | undefined;
   const stopLease = async (context: LeaseCommandContext): Promise<void> => {
     heartbeats.stop(context.id);
     // Cleanup has its own deadline. Only confirmed stop releases allocation/image ownership.
@@ -282,7 +285,39 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
-    dispose: () => heartbeats.dispose(),
+    async dispose() {
+      heartbeats.dispose();
+      maintenanceAbort.abort();
+      await maintenanceInFlight?.catch(() => {});
+    },
+    maintain(context) {
+      context.assertCurrent();
+      maintenanceAbort.signal.throwIfAborted();
+      return (maintenanceInFlight ??= Promise.resolve()
+        .then(async () => {
+          const signal = AbortSignal.any([context.signal, maintenanceAbort.signal]);
+          const assertCurrent = () => {
+            signal.throwIfAborted();
+            context.assertCurrent();
+          };
+          assertCurrent();
+          const binaries = new Set(
+            context.profiles.map((profile) => resolveBinary(parseCrabboxProfile(profile).binary)),
+          );
+          if (binaries.size !== 1) {
+            warn(
+              "Crabbox warm-image maintenance requires one configured CLI executable; retained images were not changed. Check cloud worker profile binary settings.",
+            );
+            return;
+          }
+          // The standard CLI shares its process-configured catalog across backend profiles.
+          // Checkpoint records, rather than the current profile, own native deletion routing.
+          await warmImages.maintain({ binary: [...binaries][0]!, signal, assertCurrent });
+        })
+        .finally(() => {
+          maintenanceInFlight = undefined;
+        }));
+    },
     listMachineOptions,
     supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
@@ -365,7 +400,7 @@ export function createCrabboxWorkerProvider(
         }
       }
 
-      await warmImages.allocate({
+      const allocationChoice = await warmImages.allocate({
         ...context,
         id: leaseId,
         profile: parsed,
@@ -453,6 +488,9 @@ export function createCrabboxWorkerProvider(
               profile: parsed,
               signal: project.signal,
               assertCurrent: project.assertCurrent,
+              ...(allocationChoice.kind === "checkpoint"
+                ? { forkedCheckpointId: allocationChoice.checkpointId }
+                : {}),
             },
             async () => {
               if (!options?.prepareNodeRuntime) {
@@ -462,22 +500,20 @@ export function createCrabboxWorkerProvider(
               project.assertCurrent();
               const setup = createCrabboxNodeRuntimeSetup({
                 nodeBootstrap: runtime.nodeBootstrap,
+                workerBundle: runtime.workerBundle,
                 leaseId,
               });
               try {
-                inspectedParams.inspect = await runProvisionSetupAndWaitReady({
+                await runProvisionSetup({
                   ...inspectedParams,
                   phase: "node runtime preparation",
                   setup: setup.command,
                   forwardedEnv: setup.forwardedEnv,
                   timeoutMs: CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
                   signal: runtime.signal,
-                  sleep,
                 });
-                runtime.signal?.throwIfAborted();
               } catch (error) {
-                // Setup already owns cleanup; an indeterminate readiness error deliberately
-                // keeps the lease for replay. Neither outcome permits a second stop here.
+                // The command owner settles setup failure and cleanup; do not stop it twice.
                 preparationFailed = true;
                 throw error;
               }
@@ -521,7 +557,8 @@ export function createCrabboxWorkerProvider(
         desktop: parsed.desktop,
         leaseId,
       });
-      inspectedParams.inspect = await runProvisionSetupAndWaitReady({
+      // These owned scripts do not restart SSH; authenticated enrollment proves node readiness.
+      await runProvisionSetup({
         ...inspectedParams,
         phase: "node enrollment setup",
         signal: enrollment.signal,
@@ -530,7 +567,6 @@ export function createCrabboxWorkerProvider(
         ...(nodeEnrollmentSetup.forwardedEnv
           ? { forwardedEnv: nodeEnrollmentSetup.forwardedEnv }
           : {}),
-        sleep,
       });
       let deviceId: string;
       try {

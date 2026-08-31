@@ -847,7 +847,6 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     // here so the transport fixture exercises core retry policy without plugin discovery.
     withPluginRuntimeGenerationScope(
       {
-        config: {},
         metadataSnapshot: createPluginMetadataSnapshot({
           manifestRegistry: makeRegistry([{ id: "openai", channels: [], providers: ["openai"] }]),
         }),

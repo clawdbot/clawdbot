@@ -1056,6 +1056,10 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   const settleMs = params.settleMs ?? 15_000;
   const settleDeadline = Date.now() + settleMs;
   const embeddedRunHandle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
+  // Capture the exact handle's session owner before cancellation can replace the run.
+  const agentId = embeddedRunHandle
+    ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(embeddedRunHandle)?.agentId
+    : undefined;
   const replyOperation = resolveActiveReplyOperationForSessionId(params.sessionId);
   let releaseStaleExpiryBarrier: (() => void) | undefined;
   const staleExpiryBarrier =
@@ -1112,7 +1116,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     }
     const persistenceSnapshot =
       params.forceClear === true && params.sessionKey
-        ? tryLoadForceClearSessionSnapshot(params.sessionKey)
+        ? tryLoadForceClearSessionSnapshot(params.sessionKey, agentId)
         : undefined;
     const forceCleared =
       params.forceClear === true &&
@@ -1149,10 +1153,11 @@ type ForceClearSessionSnapshot = {
 
 function tryLoadForceClearSessionSnapshot(
   sessionKey: string,
+  preparedAgentId?: string,
 ): ForceClearSessionSnapshot | undefined {
   try {
     const cfg = getRuntimeConfig();
-    const agentId = resolveSessionAgentId({ config: cfg, sessionKey });
+    const agentId = resolveSessionAgentId({ config: cfg, sessionKey, agentId: preparedAgentId });
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const entry = loadSessionEntry({ agentId, sessionKey, storePath });
     if (!entry || entry.status !== "running") {
@@ -1253,6 +1258,7 @@ export function setActiveEmbeddedRun(
   handle: EmbeddedAgentQueueHandle,
   sessionKey?: string,
   sessionFile?: string,
+  agentId?: string,
 ) {
   const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
   const incomingLifecycleGeneration = setActiveEmbeddedRunLifecycleGeneration(
@@ -1288,6 +1294,7 @@ export function setActiveEmbeddedRun(
   const operationalRunInstance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS.set(handle, {
     sessionId,
+    agentId,
     ...(sessionKey ? { sessionKey } : {}),
     delegatedAuthority:
       operationalRunInstance?.runId === handle.runId && operationalRunInstance

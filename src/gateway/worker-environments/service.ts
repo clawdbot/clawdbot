@@ -80,6 +80,7 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   stopNodeEnrollmentWaits?: () => void;
   closeNodeBootstrapArtifacts?: () => Promise<void>;
   stopNodeWorkerBundleTransfers?: () => void;
+  maintainProviders?: (signal: AbortSignal) => Promise<void>;
   reconcileIntervalMs?: number;
   bootstrapCallTimeoutMs?: number;
   workerCredentialTtlMs?: number;
@@ -183,6 +184,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   // losing recovery pass attach or sync after the winner advances the placement.
   const guardedReconcileInFlight = new Map<string, Promise<void>>();
   let stopping = false;
+  const maintenanceAbort = new AbortController();
+  let maintenanceInFlight: Promise<void> | undefined;
 
   const inState = (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
     states.includes(record.state);
@@ -309,6 +312,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareNodeEnrollment: options.prepareNodeEnrollment,
     closeNodeEnrollment: options.closeNodeEnrollment,
     retireNodeEnrollment: options.retireNodeEnrollment,
+    placementStore: options.placementStore,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
     credentialBroker,
@@ -421,18 +425,23 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return async () => await closeReconcileEnvironmentGuard(guard);
   };
 
-  const reconcilePass = async () => {
-    const tasks = store
-      .listForReconcile()
-      .map(
-        (candidate) => () =>
-          reconcileEnvironment(candidate.environmentId).catch(() =>
-            warn(
-              `Worker environment reconcile failed (${candidate.environmentId}, ${candidate.providerId})`,
-            ),
+  const reconcilePass = async (environmentId?: string) => {
+    const candidates =
+      environmentId === undefined
+        ? store.listForReconcile()
+        : [store.get(environmentId)].filter((candidate) => candidate !== undefined);
+    const tasks = candidates.map(
+      (candidate) => () =>
+        reconcileEnvironment(candidate.environmentId).catch(() =>
+          warn(
+            `Worker environment reconcile failed (${candidate.environmentId}, ${candidate.providerId})`,
           ),
-      );
+        ),
+    );
     await runTasksWithConcurrency({ tasks, limit: 8 });
+    if (environmentId !== undefined) {
+      return;
+    }
     try {
       store.pruneTerminalEnvironments();
     } catch (error) {
@@ -444,9 +453,33 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
   };
 
-  const reconcileOnce = () => {
+  const reconcileOnce = (environmentId?: string) => {
     if (stopping) {
       return Promise.resolve();
+    }
+    if (environmentId !== undefined) {
+      // Preserve per-environment failure reporting without joining unrelated sweep work.
+      // Shutdown still owns this pass; the installed guard coalesces its exact environment.
+      return trackOperation(reconcilePass(environmentId));
+    }
+    if (options.maintainProviders && !maintenanceInFlight) {
+      // Keep cleanup off the placement/reconcile wait path, but retain the actual promise
+      // until shutdown has aborted and drained every provider-owned command.
+      maintenanceInFlight = trackOperation(
+        Promise.resolve()
+          .then(() => {
+            maintenanceAbort.signal.throwIfAborted();
+            return options.maintainProviders!(maintenanceAbort.signal);
+          })
+          .catch(() => {
+            if (!stopping) {
+              warn("Worker provider maintenance sweep failed; cleanup will retry");
+            }
+          })
+          .finally(() => {
+            maintenanceInFlight = undefined;
+          }),
+      );
     }
     return (reconcileInFlight ??= reconcilePass().finally(() => {
       reconcileInFlight = undefined;
@@ -474,6 +507,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const stop = async () => {
     stopping = true;
+    maintenanceAbort.abort();
     options.stopNodeEnrollmentWaits?.();
     clearInterval(interval);
     interval = undefined;

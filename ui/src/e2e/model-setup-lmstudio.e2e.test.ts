@@ -53,7 +53,7 @@ suite.define(() => {
             "chat.metadata",
             "chat.startup",
             "openclaw.setup.detect",
-            "openclaw.setup.activate",
+            "openclaw.setup.activate.start",
             "openclaw.setup.prepare.start",
             "wizard.next",
           ],
@@ -64,11 +64,10 @@ suite.define(() => {
               done: false,
               status: "running",
             },
-            "openclaw.setup.activate": {
-              ok: true,
-              modelRef,
-              latencyMs: 416,
-              lines: ["Model ready"],
+            "openclaw.setup.activate.start": {
+              sessionId: "activation-session",
+              done: false,
+              status: "running",
             },
             "wizard.next": {
               sequence: [
@@ -117,6 +116,7 @@ suite.define(() => {
                   },
                 },
                 { done: true, status: "done" },
+                { done: true, status: "done", modelActivation: { modelRef } },
               ],
             },
           },
@@ -182,13 +182,14 @@ suite.define(() => {
           .toContain(modelRef);
         await expect
           .poll(() => page.locator(".model-setup-success").textContent())
-          .toContain("Verified in 416 ms");
+          .not.toContain("Verified in");
         await expect
           .poll(() => page.locator('.model-setup-success [data-provider-icon="lmstudio"]').count())
           .toBe(1);
 
-        const activate = await gateway.waitForRequest("openclaw.setup.activate");
+        const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activate.params).toEqual({
+          sessionId: expect.any(String),
           kind: "provider-auto:lmstudio",
           agentId: "main",
           modelRef,

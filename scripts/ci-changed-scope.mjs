@@ -70,7 +70,7 @@ const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
 // to any of them that skipped the lane would merge a Windows regression unseen.
 // Not gated on isTestOnly: the proof itself is a test file and must route here.
 const WINDOWS_PROCESS_IDENTITY_SCOPE_RE =
-  /^(?:src\/(?:shared\/pid-alive(?:\.[a-z-]+)?(?:\.test)?\.ts|infra\/(?:windows-process-start|gateway-lock)(?:\.test)?\.ts|node-host\/node-worker-process-identity(?:\.test)?\.ts|cron\/store\/run-receipt-store(?:\.test)?\.ts)|test\/e2e\/windows-cron-process-identity\.e2e\.test\.ts)$/;
+  /^src\/(?:shared\/pid-alive(?:\.[a-z-]+)?(?:\.test)?\.ts|infra\/(?:windows-process-start|gateway-lock)(?:\.test)?\.ts|node-host\/node-worker-process-identity(?:\.test)?\.ts|cron\/store\/run-receipt-store(?:\.test)?\.ts)$/;
 const WINDOWS_FILE_URL_SCOPE_RE =
   /^(?:src\/agents\/tools\/(?:media-tool-file-url\.windows\.test|media-tool-shared(?:\.test)?|pdf-tool(?:\.test)?)|src\/auto-reply\/(?:reply\/stage-sandbox-media|reply\.triggers\.trigger-handling\.stages-inbound-media-into-sandbox-workspace\.test)|src\/media\/(?:local-media-path(?:\.windows\.test)?|local-roots(?:\.test)?|web-media(?:\.file-url\.windows\.test)?)|src\/channels\/inbound-event\/media(?:\.test)?|src\/gateway\/managed-image-attachments(?:\.test)?|extensions\/msteams\/src\/(?:media-helpers|messenger)(?:\.test)?)\.ts$/;
 const WINDOWS_SCOPE_RE =

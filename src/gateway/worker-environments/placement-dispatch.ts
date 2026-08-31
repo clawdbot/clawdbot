@@ -138,7 +138,6 @@ function isExactAttachedEnvironment(
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
   const { environments, placements } = options;
   const failure = createPlacementFailureActions({ environments, placements });
-  let recoverPlacementMoves = async (): Promise<Set<string>> => new Set();
 
   const reportTransition = (
     observer: ((placement: WorkerDispatchPlacement) => void) | undefined,
@@ -174,7 +173,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       ? { reportWorkspaceResultRecoveryFailure: options.reportWorkspaceResultRecoveryFailure }
       : {}),
     resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
-    recoverPlacementMoves: () => recoverPlacementMoves(),
+    recoverPlacementMoves: (environmentId) => moveService.recoverAll(environmentId),
     workspaceOperations: options.workspaceOperations,
     ...(options.prepareAcceptedWorkspacePublication
       ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
@@ -244,6 +243,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       const localPath = await options.resolveWorkspacePath(request);
       // Workspace preparation yields; fence the current paired node again before durable provision.
       await validateDevicePlacement();
+      authorize?.();
       const idempotencyKey =
         request.idempotencyKey ?? `session-dispatch:${request.sessionId}:${placement.generation}`;
       const expectedEnvironmentId = deriveEnvironmentIntent(idempotencyKey).environmentId;
@@ -708,7 +708,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     abandonSource: abandonment.abandonSource,
     resolveDestination: options.resolveMoveDestination,
   });
-  recoverPlacementMoves = moveService.recoverAll;
 
   return {
     dispatch,

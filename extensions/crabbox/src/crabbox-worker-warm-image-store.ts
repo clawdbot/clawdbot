@@ -106,7 +106,7 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
       key: string,
       update: (current: WarmProfileRecord | undefined) => WarmProfileRecord | undefined,
     ) {
-      return store.update!(key, (current) => update(requireCanonicalProfile(current)));
+      return store.update(key, (current) => update(requireCanonicalProfile(current)));
     },
   };
 }
@@ -168,7 +168,7 @@ export function clearCrabboxWarmImageCapture(key: string, selector: string): boo
   const matches = (current: WarmProfileRecord) =>
     current.operation?.type === "capture" && current.operation.id === selector;
   if (
-    store.deleteIf?.(
+    store.deleteIf(
       key,
       (current) =>
         !current.image && Object.keys(current.allocations).length === 0 && matches(current),
@@ -197,7 +197,7 @@ export function recoverCrabboxWarmImageCapture(
       .find(({ key, value }) => legacyLeaseSelector(key, value) === selector);
     if (
       !entry ||
-      !store.deleteIf?.(entry.key, (value) => legacyLeaseSelector(entry.key, value) === selector)
+      !store.deleteIf(entry.key, (value) => legacyLeaseSelector(entry.key, value) === selector)
     ) {
       throw new Error(
         "Legacy allocation selector is absent or changed; rerun openclaw crabbox warm-images --json. No state was changed.",

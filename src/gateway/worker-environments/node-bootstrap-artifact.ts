@@ -213,12 +213,19 @@ async function prepareNodeBootstrapArtifact(
     // detects staging changes without reopening and hashing the entire directory.
     const entry = {
       path: `package/${relative}`,
-      mode: process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : mode & ~process.umask(),
       size: Buffer.byteLength(contents),
       sha256: createHash("sha256").update(contents).digest("hex"),
     };
     await fs.writeFile(target, contents, { mode });
-    staged.set(relative, entry);
+    // Reading process.umask() temporarily clears the process-wide mask and races
+    // parallel file creation. Record the mode the filesystem actually applied.
+    staged.set(relative, {
+      ...entry,
+      mode:
+        process.platform === "win32"
+          ? WORKER_BUNDLE_ARTIFACT_MODE
+          : (await fs.stat(target)).mode & 0o777,
+    });
   };
   const writeFile = async (relative: string, contents: string) => {
     reserveFile(relative, Buffer.byteLength(contents));

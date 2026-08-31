@@ -173,7 +173,13 @@ describe("node worker provider provisioning", () => {
       const finishProvider = createDeferredCore();
       const finishEnrollment = createDeferredCore<WorkerNodeEnrollment>();
       const finishRuntime = createDeferredCore<WorkerNodeRuntimePreparation>();
-      const runtime: WorkerNodeRuntimePreparation = { nodeBootstrap: support.NODE_BOOTSTRAP };
+      const runtime: WorkerNodeRuntimePreparation = {
+        nodeBootstrap: support.NODE_BOOTSTRAP,
+        workerBundle: {
+          ...support.NODE_BOOTSTRAP,
+          packageRelativePath: `worker-artifacts/${support.NODE_BOOTSTRAP.sha256}.tgz`,
+        },
+      };
       let runtimeSignal: AbortSignal | undefined;
       const prepareNodeRuntime = vi.fn(async (_record, signal?: AbortSignal) => {
         runtimeSignal = signal;

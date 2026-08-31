@@ -61,6 +61,7 @@ export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): Plugin
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -378,6 +379,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     resolveProviderAuthProfileId: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDeprecatedAuthProfileIds: vi.fn(() => []),
+    resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),

@@ -24,6 +24,7 @@ import {
   resolveRuntimeModelAttempt,
   runEmbeddedSettledTurnFinalizationWithBackend,
 } from "./backend.js";
+import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
 import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
 import {
   resolveEmbeddedRunAttemptTerminalOutcome,
@@ -404,11 +405,14 @@ function buildSettledToolFallbackAttemptResult(input: {
   runtimePlan?: EmbeddedRunAttemptParams["runtimePlan"];
   transcriptIdempotencyKey?: string;
 }): EmbeddedRunAttemptWithReceiptEvidence {
+  // Command-only harnesses retain assistant identity in the settled tool batch,
+  // even when neither visible-assistant field exists.
   const sourceAssistant =
     input.sourceAttempt.currentAttemptAssistant ??
     input.sourceAttempt.lastAssistant ??
     input.settledAttempt.currentAttemptAssistant ??
-    input.settledAttempt.lastAssistant;
+    input.settledAttempt.lastAssistant ??
+    resolveSettledToolBatchEvidence(input.settledAttempt).assistant;
   if (!sourceAssistant) {
     throw new Error("Settled-turn fallback has no assistant identity");
   }

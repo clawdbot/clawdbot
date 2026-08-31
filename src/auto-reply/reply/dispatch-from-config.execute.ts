@@ -81,26 +81,32 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   let pendingContinuation = false;
   let didDeliverVisiblePartialReply = false;
   const flushDeferredFinalText = async () => {
-    if (!deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
-      return false;
+    try {
+      if (!deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
+        return;
+      }
+      const deferredVisibleText = cleanBlockTtsDirectiveText
+        ? cleanDeferredFinalText(state.progressState.accumulatedBlockTtsText)
+        : state.progressState.accumulatedBlockText;
+      if (!deferredVisibleText.trim()) {
+        return;
+      }
+      const fallback = await sendFinalPayload(
+        { text: deferredVisibleText },
+        { abortSignal: isDispatchOperationAborted() ? false : undefined, skipTts: true },
+      );
+      if (!fallback.queuedFinal && fallback.routedFinalCount === 0) {
+        return;
+      }
+      didDeliverVisiblePartialReply = true;
+      state.progressState.accumulatedBlockText = "";
+      state.progressState.accumulatedBlockTtsText = "";
+    } catch (fallbackError) {
+      // Recovery must not replace the original resolver or cancellation outcome.
+      logVerbose(
+        `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
+      );
     }
-    const deferredVisibleText = cleanBlockTtsDirectiveText
-      ? cleanDeferredFinalText(state.progressState.accumulatedBlockTtsText)
-      : state.progressState.accumulatedBlockText;
-    if (!deferredVisibleText.trim()) {
-      return false;
-    }
-    const fallback = await sendFinalPayload(
-      { text: deferredVisibleText },
-      { abortSignal: isDispatchOperationAborted() ? false : undefined, skipTts: true },
-    );
-    if (!fallback.queuedFinal && fallback.routedFinalCount === 0) {
-      return false;
-    }
-    didDeliverVisiblePartialReply = true;
-    state.progressState.accumulatedBlockText = "";
-    state.progressState.accumulatedBlockTtsText = "";
-    return true;
   };
   const replyResult = await runWithDispatchLifecycleAdmission(
     async () =>
@@ -592,13 +598,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         trackDispatchLifecycleWork,
       ),
   ).catch(async (error: unknown) => {
-    try {
-      await flushDeferredFinalText();
-    } catch (fallbackError) {
-      logVerbose(
-        `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
-      );
-    }
+    await flushDeferredFinalText();
     const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
     const adopted = state.turnAdoptionState?.adopted === true;
     if (
@@ -626,13 +626,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     });
   });
   if (isDispatchOperationAborted()) {
-    try {
-      await flushDeferredFinalText();
-    } catch (fallbackError) {
-      logVerbose(
-        `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
-      );
-    }
+    await flushDeferredFinalText();
   }
   const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
   notifySessionMetadataChanges(sessionMetadataChanges);

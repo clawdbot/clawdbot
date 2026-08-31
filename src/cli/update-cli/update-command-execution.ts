@@ -11,7 +11,11 @@ import {
   formatSchemaRefusalLines,
   hasSchemaRefusal,
 } from "./schema-preflight.js";
-import { resolveGitInstallDir, type UpdateCommandOptions } from "./shared.js";
+import {
+  resolveGitInstallDir,
+  UpdatePreMutationError,
+  type UpdateCommandOptions,
+} from "./shared.js";
 import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
 import {
   captureOwnedManagedUpdateContext,
@@ -51,7 +55,6 @@ export async function executeMutableUpdate(params: {
   stop: () => void;
   channel: "stable" | "extended-stable" | "beta" | "dev";
   tag: string;
-  showProgress: boolean;
   opts: UpdateCommandOptions;
   shouldRestart: boolean;
   devTarget?: DevUpdateTarget;
@@ -67,7 +70,14 @@ export async function executeMutableUpdate(params: {
 }): Promise<MutableUpdateExecutionResult | null> {
   let preManagedServiceStop: PreManagedServiceStop | undefined;
   let ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
-  let schemaRefusalAfterStop = false;
+  const recoverStoppedService = () =>
+    maybeRestartServiceAfterFailedMutableUpdate({
+      preManagedServiceStop,
+      jsonMode: Boolean(params.opts.json),
+      nodeRunner: params.packageUpdateNodeRunner,
+      timeoutMs: params.updateStepTimeoutMs,
+      invocationCwd: params.invocationCwd,
+    });
   const gitMutationRoots =
     params.updateInstallKind === "git"
       ? params.switchToGit
@@ -130,10 +140,7 @@ export async function executeMutableUpdate(params: {
     } catch (err) {
       params.stop();
       defaultRuntime.error(`Failed to capture managed gateway update state: ${String(err)}`);
-      await maybeRestartServiceAfterFailedMutableUpdate({
-        preManagedServiceStop,
-        jsonMode: Boolean(params.opts.json),
-      });
+      await recoverStoppedService();
       defaultRuntime.exit(1);
       throw new UpdateCommandAbort();
     }
@@ -181,86 +188,80 @@ export async function executeMutableUpdate(params: {
           preManagedServiceStop?.serviceEnv ?? process.env,
         )
       : { incompatible: [], indeterminate: [] };
-  if (hasSchemaRefusal(postStopPackageSchemaPreflight)) {
-    schemaRefusalAfterStop = true;
-    defaultRuntime.error(formatSchemaRefusalLines(postStopPackageSchemaPreflight).join("\n"));
-  }
-
   let result: UpdateRunResult;
   try {
+    if (hasSchemaRefusal(postStopPackageSchemaPreflight)) {
+      throw new UpdatePreMutationError(
+        "database-schema-preflight",
+        formatSchemaRefusalLines(postStopPackageSchemaPreflight).join("\n"),
+      );
+    }
     result =
-      params.updateInstallKind === "package" && hasSchemaRefusal(postStopPackageSchemaPreflight)
-        ? {
-            status: "error",
-            mode: params.packageInstallTarget?.manager ?? "unknown",
+      params.updateInstallKind === "package"
+        ? await runPackageInstallUpdate({
             root: params.root,
-            reason: "database-schema-preflight",
-            steps: [],
-            durationMs: Date.now() - params.startedAt,
-          }
-        : params.updateInstallKind === "package"
-          ? await runPackageInstallUpdate({
-              root: params.root,
-              installKind: params.installKind,
-              tag: params.tag,
-              installSpec: params.packageInstallSpec ?? undefined,
-              timeoutMs: params.updateStepTimeoutMs,
-              startedAt: params.startedAt,
-              progress: params.progress,
-              jsonMode: Boolean(params.opts.json),
-              ...resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart),
-              managedServiceEnv: preManagedServiceStop?.serviceEnv,
-              invocationCwd: params.invocationCwd,
-              honorPackageRoot:
-                params.managedServiceRootRedirect !== null ||
-                params.managedServiceNodeRunner !== undefined,
-              nodeRunner: params.packageUpdateNodeRunner,
-              installEnv: params.packageInstallEnv,
-              installTarget: params.packageInstallTarget,
-            })
-          : await updateGitInstall({
-              root: params.root,
-              switchToGit: params.switchToGit,
-              installKind: params.installKind,
-              timeoutMs: params.timeoutMs,
-              startedAt: params.startedAt,
-              progress: params.progress,
-              channel: params.channel,
-              tag: params.tag,
-              showProgress: params.showProgress,
-              opts: params.opts,
-              stop: params.stop,
-              devTarget: params.devTarget,
-              beforeGitMutation:
-                params.updateInstallKind === "git"
-                  ? createBeforeGitMutation({
-                      roots: gitMutationRoots ?? [params.root],
-                      shouldRestart: params.shouldRestart,
-                      stopManagedService: stopManagedServiceBeforeMutableUpdate,
-                      getPreManagedServiceStop: () => preManagedServiceStop,
-                      markSchemaRefusalAfterStop: () => {
-                        schemaRefusalAfterStop = true;
-                      },
-                    })
-                  : undefined,
-              allowGatewayServiceRepair: false,
-              allowGatewayActivation: false,
-            });
+            installKind: params.installKind,
+            tag: params.tag,
+            installSpec: params.packageInstallSpec ?? undefined,
+            timeoutMs: params.updateStepTimeoutMs,
+            startedAt: params.startedAt,
+            progress: params.progress,
+            jsonMode: Boolean(params.opts.json),
+            ...resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart),
+            managedServiceEnv: preManagedServiceStop?.serviceEnv,
+            invocationCwd: params.invocationCwd,
+            honorPackageRoot:
+              params.managedServiceRootRedirect !== null ||
+              params.managedServiceNodeRunner !== undefined,
+            nodeRunner: params.packageUpdateNodeRunner,
+            installEnv: params.packageInstallEnv,
+            installTarget: params.packageInstallTarget,
+          })
+        : await updateGitInstall({
+            root: params.root,
+            switchToGit: params.switchToGit,
+            installKind: params.installKind,
+            timeoutMs: params.timeoutMs,
+            startedAt: params.startedAt,
+            progress: params.progress,
+            channel: params.channel,
+            tag: params.tag,
+            devTarget: params.devTarget,
+            beforeGitMutation:
+              params.updateInstallKind === "git"
+                ? createBeforeGitMutation({
+                    roots: gitMutationRoots ?? [params.root],
+                    shouldRestart: params.shouldRestart,
+                    stopManagedService: stopManagedServiceBeforeMutableUpdate,
+                    getPreManagedServiceStop: () => preManagedServiceStop,
+                    switchToGit: params.switchToGit,
+                  })
+                : undefined,
+            allowGatewayServiceRepair: false,
+            allowGatewayActivation: false,
+          });
   } catch (err) {
     params.stop();
+    if (err instanceof UpdatePreMutationError) {
+      defaultRuntime.error(err.message);
+      return {
+        result: {
+          status: "error",
+          mode:
+            params.updateInstallKind === "git"
+              ? "git"
+              : (params.packageInstallTarget?.manager ?? "unknown"),
+          root: params.root,
+          reason: err.reason,
+          recovery: { serviceRestartSafe: true },
+          steps: [],
+          durationMs: Date.now() - params.startedAt,
+        },
+        preManagedServiceStop,
+        ownedManagedUpdateContext,
+      };
+    }
     if (err instanceof UpdateCommandAbort) {
-      if (schemaRefusalAfterStop) {
-        if (preManagedServiceStop?.stopped === true) {
-          await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(preManagedServiceStop).catch(
-            () => undefined,
-          );
-          await maybeRestartServiceAfterFailedMutableUpdate({
-            preManagedServiceStop,
-            jsonMode: Boolean(params.opts.json),
-          });
-        }
-        defaultRuntime.exit(1);
-      }
       return null;
     }
     try {
@@ -274,10 +275,11 @@ export async function executeMutableUpdate(params: {
         err,
       );
     }
-    await maybeRestartServiceAfterFailedMutableUpdate({
-      preManagedServiceStop,
-      jsonMode: Boolean(params.opts.json),
-    });
+    // Only the mutation owner can prove rollback. Unexpected exceptions cannot
+    // authorize restarting a partially replaced installation.
+    defaultRuntime.error(
+      "Update recovery is unverified. Inspect `openclaw gateway status --deep` and repair the installation before restarting.",
+    );
     throw err;
   }
 

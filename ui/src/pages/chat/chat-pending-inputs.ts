@@ -1,10 +1,9 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import {
-  CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS,
+  CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
 } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import type {
-  ChatInputConsumptions,
+  ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { t } from "../../i18n/index.ts";
@@ -15,10 +14,9 @@ import { removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
-  adoptInitialUserMessage,
   getChatSessionProjection,
   readChatSessionProjectionScope,
-  setChatSessionProjection,
+  reconcileChatInputCustody,
 } from "./history-merge.ts";
 
 type PendingInputView = {
@@ -34,7 +32,6 @@ const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 
 export function buildPendingInputItems(
   inputs: ChatPendingInputsPage["items"],
-  history: unknown[],
   searchQuery?: string,
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
@@ -42,20 +39,7 @@ export function buildPendingInputItems(
   if (!inputs.length) {
     return items;
   }
-  const pendingIds = new Set(inputs.map((input) => input.id));
-  for (const message of history) {
-    const identity = readSessionMessageIdentity(message);
-    if (identity?.role === "user" && identity.id) {
-      pendingIds.delete(identity.id);
-      if (!pendingIds.size) {
-        break;
-      }
-    }
-  }
   for (const input of inputs) {
-    if (!pendingIds.has(input.id)) {
-      continue;
-    }
     if (searchQuery?.trim() && !messageMatchesSearchQuery(input.message, searchQuery)) {
       continue;
     }
@@ -92,7 +76,6 @@ export function clearChatPendingInputs(state: ChatState): void {
 export function readChatInputRunIds(state: ChatState): string[] {
   const projection = getChatSessionProjection(
     state,
-    state.chatMessages,
     readChatSessionProjectionScope(state, { agentId: resolveUiSelectedSessionAgentId(state) }),
   );
   const runIds = [
@@ -109,43 +92,28 @@ export function readChatInputRunIds(state: ChatState): string[] {
     ),
   ]
     .toSorted()
-    .slice(0, CHAT_INPUT_CONSUMPTION_MAX_RUN_IDS);
+    .slice(0, CHAT_INPUT_RECEIPT_MAX_RUN_IDS);
 }
 
 export function applyChatPendingInputs(
   state: ChatState,
   page: ChatPendingInputsPage | undefined,
-  options: { before?: number; consumptions?: ChatInputConsumptions } = {},
+  options: { before?: number; receipts?: ChatInputReceipts } = {},
 ): void {
-  const handoff = state.initialUserMessage?.read(state.sessionKey, state.client ?? null);
+  const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(
+    state,
+    page,
+    options.receipts,
+  );
   pendingInputViews.set(state, {
     sessionKey: state.sessionKey,
     sessionId: state.currentSessionId ?? null,
     agentId: resolveUiSelectedSessionAgentId(state),
-    page:
-      page && handoff
-        ? {
-            ...page,
-            items: page.items.map((input) => ({
-              ...input,
-              message: adoptInitialUserMessage(input.message, handoff, input.runId),
-            })),
-          }
-        : (page ?? { items: [], total: 0 }),
+    page: displayPage,
     before: options.before,
     loading: false,
   });
-  const acceptedRunIds = new Set(
-    [...(page?.items ?? []), ...(options.consumptions ?? [])].map((item) => item.runId),
-  );
   if (acceptedRunIds.size) {
-    if (handoff && acceptedRunIds.has(handoff.pendingRunId)) {
-      state.initialUserMessage?.retire(
-        state.sessionKey,
-        state.client ?? null,
-        handoff.pendingRunId,
-      );
-    }
     // The server owns accepted input even after an interruption. Retiring the
     // outbox copy prevents reconnect from silently submitting it a second time.
     for (const item of state.chatQueue) {
@@ -156,27 +124,6 @@ export function applyChatPendingInputs(
       ) {
         removeQueuedMessage(state, item.id);
       }
-    }
-    const scope = readChatSessionProjectionScope(state, {
-      agentId: resolveUiSelectedSessionAgentId(state),
-    });
-    const projection = getChatSessionProjection(state, state.chatMessages, scope);
-    // Custody replaces only this pane's provisional user copy, never a canonical
-    // message or active assistant state that happens to share the run correlation.
-    const entries = projection.entries.filter(
-      (entry) =>
-        !(
-          entry.pending &&
-          entry.identity?.role === "user" &&
-          entry.identity.id === null &&
-          entry.identity.sequence === null &&
-          acceptedRunIds.has(entry.pendingRunId ?? "")
-        ),
-    );
-    if (entries.length !== projection.entries.length) {
-      const messages = entries.map((entry) => entry.message);
-      setChatSessionProjection(state, { ...projection, entries, messages });
-      state.chatMessages = [...messages];
     }
   }
   state.requestUpdate?.();

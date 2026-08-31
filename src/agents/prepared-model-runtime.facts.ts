@@ -208,7 +208,7 @@ export async function prepareWorkspaceBuildGroup(
   );
   const prepare = async () => {
     const matchesStaticModelId = createStaticModelIdMatcher({
-      manifestPlugins: pluginMetadataSnapshot.plugins,
+      manifestPlugins: pluginMetadataSnapshot,
     });
     const mediaCapabilityProviders = reuseRuntimeFacts
       ? reusablePluginGeneration.mediaCapabilityProviders
@@ -370,7 +370,7 @@ export async function prepareWorkspaceBuildGroup(
       reusablePluginGeneration?.configuredCatalogEntries ??
       buildConfiguredModelCatalog({
         cfg: input.config,
-        manifestPlugins: pluginMetadataSnapshot.plugins,
+        manifestPlugins: pluginMetadataSnapshot,
         ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
       });
     const agentFacts: PreparedModelRuntimeAgentFacts[] = [];
@@ -453,7 +453,6 @@ export async function prepareWorkspaceBuildGroup(
   };
   return await withPluginRuntimeGenerationScope(
     {
-      config: input.config,
       metadataSnapshot: pluginMetadataSnapshot,
       pluginRegistry: runtimePluginRegistry,
     },

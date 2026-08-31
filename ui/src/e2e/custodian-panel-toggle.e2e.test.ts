@@ -111,7 +111,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
 
       // Opening the panel renders the durable machine-wide history from the Gateway.
       await footerToggle.click();
-      const panel = page.locator("openclaw-custodian-panel");
+      const panel = page.locator("openclaw-assistant-panel");
       await panel.getByText("Channel repaired.").waitFor();
       const chatRequest = await gateway.waitForRequest("openclaw.chat");
       const firstSessionId = (chatRequest.params as { sessionId?: string }).sessionId;
@@ -155,7 +155,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       // The reload replaces the page context and restarts the request ring, so
       // the plain wait matches only post-reload openclaw.chat traffic.
       await page.reload();
-      await page.locator("openclaw-custodian-panel").getByText("Channel repaired.").waitFor();
+      await page.locator("openclaw-assistant-panel").getByText("Channel repaired.").waitFor();
       const reloadedRequest = await gateway.waitForRequest("openclaw.chat");
       expect((reloadedRequest.params as { sessionId?: string }).sessionId).toBe(MOCK_SESSION_ID);
       await page.screenshot({
