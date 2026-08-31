@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const OWNER = "openclaw";
@@ -68,7 +68,7 @@ async function collectOpenClawTreeEntries(directory, root = directory) {
   for (const entry of entries) {
     if (directory === root && OPENCLAW_METADATA_DIRECTORIES.has(entry.name)) continue;
     const path = join(directory, entry.name);
-    const portablePath = relative(root, path).split("\\").join("/");
+    const portablePath = relative(root, path).split(sep).join("/");
     const stat = await lstat(path);
     if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) {
       throw new Error(`Skill tree contains unsupported entry ${JSON.stringify(portablePath)}.`);
@@ -92,7 +92,7 @@ async function collectOpenClawTreeEntries(directory, root = directory) {
 
 // Keep this byte-compatible with OpenClaw's ClawHub update guard so the prompt
 // never offers an unforced update that OpenClaw will refuse as locally modified.
-export async function digestOpenClawSkillTree(directory) {
+async function digestOpenClawSkillTree(directory) {
   const entries = await collectOpenClawTreeEntries(directory);
   return `sha256:${createHash("sha256").update(JSON.stringify(entries)).digest("hex")}`;
 }
@@ -137,7 +137,7 @@ function compareSemver(leftValue, rightValue) {
   return 0;
 }
 
-export async function hasLocalModifications(lockEntry, origin, directory = skillDirectory) {
+async function hasLocalModifications(lockEntry, origin, directory = skillDirectory) {
   const originTree = origin?.fileTreeSha256;
   const lockedTree = lockEntry?.fileTreeSha256;
   if (typeof originTree === "string" || typeof lockedTree === "string") {
@@ -170,7 +170,7 @@ export async function hasLocalModifications(lockEntry, origin, directory = skill
   return (await sha256(join(directory, "SKILL.md"))) !== expectedSkillHash;
 }
 
-export function updateCommand({ force = false } = {}) {
+function updateCommand({ force = false } = {}) {
   const configuredStateRoot = resolve(
     process.env.OPENCLAW_STATE_DIR || join(homedir(), ".openclaw"),
   );
@@ -185,7 +185,7 @@ export function updateCommand({ force = false } = {}) {
   ];
 }
 
-export function determineStatus({ comparison, modified }) {
+function determineStatus({ comparison, modified }) {
   if (modified === undefined) return "untracked";
   if (comparison === undefined) return "check-failed";
   if (comparison < 0) return "update-available";
