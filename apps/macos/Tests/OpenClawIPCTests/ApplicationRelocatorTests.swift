@@ -577,7 +577,7 @@ struct ApplicationRelocatorTests {
 
     private func setQuarantineAttribute(at url: URL) throws {
         let value = Array("0083;00000000;OpenClawTests;".utf8)
-        let result = value.withUnsafeBytes { bytes in
+        let result: Int32 = value.withUnsafeBytes { bytes in
             url.withUnsafeFileSystemRepresentation { path in
                 guard let path else { return -1 }
                 return setxattr(
