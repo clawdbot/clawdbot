@@ -2,6 +2,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { runBundledPluginPostinstall } from "../../scripts/postinstall-bundled-plugins.mjs";
 import { collectGitRuntimeErrors } from "../../src/infra/update-git-runtime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -17,6 +18,10 @@ it("builds the package-derived Git fixture with its own checkout identity", asyn
     JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
   );
   writeFileSync(join(root, "dist/entry.js"), runtimeEntry);
+  writeFileSync(
+    join(root, "dist/postinstall-inventory.json"),
+    JSON.stringify(["dist/entry.js", "dist/build-info.json", "dist/control-ui/index.html"]),
+  );
   writeFileSync(
     join(root, "dist/build-info.json"),
     JSON.stringify({ commit: packageCommit, version: "2026.8.1" }),
@@ -50,6 +55,10 @@ it("builds the package-derived Git fixture with its own checkout identity", asyn
   for (const checkout of [preflight, root]) {
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).not.toEqual([]);
     execSync(manifest.scripts.build, { cwd: checkout });
+    runBundledPluginPostinstall({
+      packageRoot: checkout,
+      env: { HOME: join(root, "home"), OPENCLAW_STATE_DIR: join(root, "state") },
+    });
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).toEqual([]);
     expect(JSON.parse(readFileSync(join(checkout, "dist/build-info.json"), "utf8"))).toEqual({
       commit: sha,
