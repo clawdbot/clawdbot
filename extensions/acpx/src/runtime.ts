@@ -77,7 +77,7 @@ type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
 const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
-const OPENCLAW_TOOLS_MCP_MODEL_REF_ENV = "OPENCLAW_TOOLS_MCP_MODEL_REF";
+const TOOLS_MCP_MODEL_REF_ENV = "OPENCLAW_TOOLS_MCP_MODEL_REF";
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
 };
@@ -793,7 +793,7 @@ function withManagedToolsMcpSessionEnv(params: {
     changed = true;
     const managedEnvNames = new Set([
       OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
-      ...(isManagedPluginTools ? [OPENCLAW_TOOLS_MCP_MODEL_REF_ENV] : []),
+      ...(isManagedPluginTools ? [TOOLS_MCP_MODEL_REF_ENV] : []),
     ]);
     const env = [
       ...server.env.filter((entry) => !managedEnvNames.has(entry.name)),
@@ -802,7 +802,7 @@ function withManagedToolsMcpSessionEnv(params: {
         value: sessionKey,
       },
       ...(isManagedPluginTools && params.model?.trim()
-        ? [{ name: OPENCLAW_TOOLS_MCP_MODEL_REF_ENV, value: params.model.trim() }]
+        ? [{ name: TOOLS_MCP_MODEL_REF_ENV, value: params.model.trim() }]
         : []),
     ];
     return {

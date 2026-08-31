@@ -22,15 +22,22 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
+
+type ManifestContractSnapshotMock = {
+  plugins: Array<Partial<Pick<PluginManifestRecord, "contracts" | "providers" | "toolMetadata">>>;
+};
 
 const callGatewayTool = vi.hoisted(() => vi.fn());
 const connectToolsMcpServerToStdioMock = vi.hoisted(() => vi.fn());
 const createToolsMcpServerMock = vi.hoisted(() => vi.fn(() => ({ close: vi.fn() })));
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled: true } })));
 const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() => vi.fn());
-const loadManifestContractSnapshotMock = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
+const loadManifestContractSnapshotMock = vi.hoisted(() =>
+  vi.fn<() => ManifestContractSnapshotMock>(() => ({ plugins: [] })),
+);
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
 const tempDirs = createTempDirTracker();

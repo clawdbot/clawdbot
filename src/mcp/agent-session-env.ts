@@ -3,7 +3,7 @@ import { isValidExactModelPolicyRef } from "../config/model-policy-ref.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 
 export const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
-export const OPENCLAW_TOOLS_MCP_MODEL_REF_ENV = "OPENCLAW_TOOLS_MCP_MODEL_REF";
+const TOOLS_MCP_MODEL_REF_ENV = "OPENCLAW_TOOLS_MCP_MODEL_REF";
 
 /** Private generated-helper argv selects context, never approval or execution authority. */
 export function resolveToolsMcpAgentId(
@@ -46,7 +46,7 @@ export function resolveToolsMcpAgentSessionKey(
 }
 
 export function resolveToolsMcpModelRef(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env[OPENCLAW_TOOLS_MCP_MODEL_REF_ENV]?.trim() || undefined;
+  return env[TOOLS_MCP_MODEL_REF_ENV]?.trim() || undefined;
 }
 
 export function parseToolsMcpModelRef(
