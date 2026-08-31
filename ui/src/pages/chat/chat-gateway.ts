@@ -44,6 +44,11 @@ import {
   authoritativeHistoryAppliedForRun,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import {
+  ERROR_ICON_PREFIX_RE,
+  ERROR_TEXT_PREFIX_RE,
+  normalizeErrorComparisonText as normalizeCentralErrorComparisonText,
+} from "../../components/error-presentation.ts";
 
 export type { ChatEventPayload } from "./chat-history.ts";
 
@@ -141,14 +146,11 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
 }
 
 function stripChatErrorMarker(text: string): string {
-  return text.replace(/^⚠️\s*/u, "");
+  return text.replace(ERROR_ICON_PREFIX_RE, "");
 }
 
-function normalizeChatErrorComparisonText(text: string): string {
-  return stripChatErrorMarker(text)
-    .replace(/^Error:\s*/iu, "")
-    .replace(/\s+/gu, " ")
-    .trim();
+export function normalizeChatErrorComparisonText(text: string): string {
+  return normalizeCentralErrorComparisonText(text);
 }
 
 function resolveGatewayErrorText(
@@ -157,12 +159,12 @@ function resolveGatewayErrorText(
 ): string {
   const errorText = payload.errorMessage?.trim();
   if (errorText) {
-    return errorText.startsWith("⚠️") || errorText.startsWith("Error:")
-      ? stripChatErrorMarker(errorText)
+    return ERROR_ICON_PREFIX_RE.test(errorText) || ERROR_TEXT_PREFIX_RE.test(errorText)
+      ? errorText
       : `Error: ${errorText}`;
   }
   const messageText = message ? extractText(message)?.trim() : null;
-  return messageText ? stripChatErrorMarker(messageText) : "chat error";
+  return messageText ? messageText : "chat error";
 }
 
 function payloadMessageIsErrorProjection(

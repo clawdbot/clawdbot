@@ -6,7 +6,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
+import {
+  handleChatGatewayEvent,
+  normalizeChatErrorComparisonText,
+  type ChatEventPayload,
+} from "./chat-gateway.ts";
 import { getChatHistoryLoadState, loadChatHistory, type ChatState } from "./chat-history.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
@@ -4064,6 +4068,129 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "visible old" }] },
     ]);
     expect(state.chatThinkingLevel).toBeNull();
+  });
+});
+
+describe("normalizeChatErrorComparisonText", () => {
+  // Mirrors ui/src/components/error-presentation.test.ts: multi-glyph and
+  // repeated prefix handling must stay in sync via centralized logic.
+  it.each([
+    ["⚠️ hello", "hello"],
+    ["⚠️⚠️ hello", "hello"],
+    ["⚠️ ⚠️ hello", "hello"],
+    ["⚠️  ⚠️  hello", "hello"],
+    ["⚠️⚠️⚠️ hello", "hello"],
+    ["⚠️\uFE0F hello", "hello"],
+    ["⚠️\uFE0F ⚠️ hello", "hello"],
+    ["\u26A0 hello", "hello"],
+    ["Error: foo", "foo"],
+    ["Error: Error: foo", "foo"],
+    ["error: ERROR: foo", "foo"],
+    ["⚠️ Error: foo", "foo"],
+    ["Error: ⚠️ foo", "foo"],
+    ["⚠️ Error: ⚠️ Error: foo", "foo"],
+    ["⚠️⚠️ Error: Error: foo", "foo"],
+    ["Error: ⚠️ Error: ⚠️ foo", "foo"],
+    ["⚠️\uFE0F Error: foo", "foo"],
+    ["Error: ⚠️\uFE0F foo", "foo"],
+    ["  ⚠️   Error:  foo   bar ", "foo bar"],
+    ["⚠️   foo\t\nbar", "foo bar"],
+  ])("normalizes %s to %s", (input, expected) => {
+    expect(normalizeChatErrorComparisonText(input)).toBe(expected);
+  });
+
+  it("preserves body emoji", () => {
+    expect(normalizeChatErrorComparisonText("⚠️ hello ⚠️ world")).toBe("hello ⚠️ world");
+    expect(normalizeChatErrorComparisonText("Error: foo ⚠️ bar")).toBe("foo ⚠️ bar");
+    expect(normalizeChatErrorComparisonText("⚠️ Error: foo ⚠️ bar")).toBe("foo ⚠️ bar");
+    expect(normalizeChatErrorComparisonText("hello ⚠️ world")).toBe("hello ⚠️ world");
+  });
+
+  it("treats interleaved repeated prefixes as equal for error projection (gateway deduplication)", () => {
+    const variants = [
+      "⚠️ gateway disconnected",
+      "⚠️⚠️ gateway disconnected",
+      "⚠️\uFE0F gateway disconnected",
+      "Error: gateway disconnected",
+      "Error: Error: gateway disconnected",
+      "⚠️ Error: gateway disconnected",
+      "⚠️ Error: ⚠️ Error: gateway disconnected",
+      "⚠️\uFE0F Error: gateway disconnected",
+      "  ⚠️   Error:  gateway   disconnected  ",
+    ];
+    const normalized = variants.map((v) => normalizeChatErrorComparisonText(v));
+    for (const n of normalized) {
+      expect(n).toBe("gateway disconnected");
+    }
+    // End-to-end: payloadMessageIsErrorProjection via handleChatGatewayEvent
+    // should recognize these as the same error and avoid duplicate bubbles.
+    for (const errorVariant of variants) {
+      for (const messageVariant of variants) {
+        const state = createState({ sessionKey: "main", chatRunId: "run-1" });
+        const payload: ChatEventPayload = {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "error",
+          errorMessage: errorVariant,
+          message: createTextChatMessage("assistant", messageVariant, undefined, 10),
+        };
+        expect(handleChatGatewayEvent(state, payload)).toBe("error");
+        // Normalized message matches error -> projection, no extra bubble
+        expect(state.chatMessages).toHaveLength(0);
+      }
+    }
+  });
+
+  it("preserves body emoji through error projection comparison", () => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-1" });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "gateway disconnected",
+      message: createTextChatMessage("assistant", "Error: gateway disconnected ⚠️ retry", undefined, 10),
+    };
+    // Message has body emoji after error; should NOT be considered a projection
+    expect(handleChatGatewayEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("keeps raw error text in resolveGatewayErrorText (copy/transcript bypass)", () => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-1" });
+    const rawError = "⚠️ raw gateway failure";
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: rawError,
+    };
+    handleChatGatewayEvent(state, payload);
+    expect(state.chatRunError?.summary).toBe(rawError);
+
+    const plainError = "plain failure";
+    const state2 = createState({ sessionKey: "main", chatRunId: "run-1" });
+    handleChatGatewayEvent(state2, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: plainError,
+    });
+    expect(state2.chatRunError?.summary).toBe(`Error: ${plainError}`);
+
+    const errorPrefixed = "Error: already prefixed";
+    const state3 = createState({ sessionKey: "main", chatRunId: "run-1" });
+    handleChatGatewayEvent(state3, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: errorPrefixed,
+    });
+    expect(state3.chatRunError?.summary).toBe(errorPrefixed);
+  });
+
+  it("collapses whitespace after stripping prefixes", () => {
+    expect(normalizeChatErrorComparisonText("Error:   foo   bar  ")).toBe("foo bar");
+    expect(normalizeChatErrorComparisonText("  foo   bar  ")).toBe("foo bar");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
