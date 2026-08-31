@@ -444,6 +444,7 @@ export async function prepareGatewayKernelState(params: {
     ...(opts.tryRecoverChannelAutostartSuppression
       ? { tryRecoverAutostartSuppression: opts.tryRecoverChannelAutostartSuppression }
       : {}),
+    isClosing: () => lifecycle.closePreludeStarted,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";

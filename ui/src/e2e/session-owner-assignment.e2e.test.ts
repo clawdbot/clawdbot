@@ -1,8 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
@@ -17,7 +17,12 @@ const suite = createControlUiE2eSuite({
 });
 const sessionKey = "agent:main:owner-outcome";
 const proofPhase = process.env.OPENCLAW_OWNER_ASSIGNMENT_PROOF_PHASE;
-const proofDir = path.resolve(".artifacts/control-ui-e2e/session-owner-assignment");
+let proofDir: string;
+beforeEach(() => {
+  if (proofPhase) {
+    proofDir = createControlUiE2eArtifactDir("session-owner-assignment");
+  }
+});
 
 function sessionsListResponse() {
   return {
@@ -80,7 +85,6 @@ async function captureProof(page: Page, surface: string): Promise<void> {
   if (!proofPhase) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,

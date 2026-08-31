@@ -152,16 +152,14 @@ function runCompactionRemovedFallbackAttempt(ownedState: OpenClawTestState) {
   });
 }
 
-async function expectDeepseekFallbackError(
-  promise: Promise<unknown>,
-  getLastFormattedAssistant: () => unknown,
-) {
+async function expectDeepseekFallbackError(promise: Promise<unknown>) {
   await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-  await expect(promise).rejects.toThrow(`deepseek/deepseek-chat: ${DEEPSEEK_ERROR_MESSAGE}`);
+  // The user-facing copy is composed by the real (unmocked) renderer; the
+  // current-attempt provider/model appearing in it is the attribution proof.
+  await expect(promise).rejects.toThrow("deepseek (deepseek-chat) returned a billing error");
   expect(mockedIsRateLimitAssistantError).toHaveBeenCalledTimes(1);
   const rateLimitCalls = mockedIsRateLimitAssistantError.mock.calls as unknown[][];
   expectDeepseekAssistant(rateLimitCalls.at(-1)?.[0]);
-  expectDeepseekAssistant(getLastFormattedAssistant());
 }
 
 describe("runEmbeddedAgent cross-provider fallback error handling", () => {
@@ -194,7 +192,6 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
 
   it("uses the current attempt assistant for fallback errors instead of stale session history", async () => {
     setupDeepseekFallbackErrorMatchers();
-    const getLastFormattedAssistant = captureFormattedAssistant();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -227,7 +224,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
-    await expectDeepseekFallbackError(promise, getLastFormattedAssistant);
+    await expectDeepseekFallbackError(promise);
   });
 
   it("falls back to the session assistant when compaction removes the current attempt slice", async () => {
@@ -236,9 +233,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     const promise = runCompactionRemovedFallbackAttempt(state);
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow(
-      `anthropic/test-model: ${COMPACTION_REMOVED_ERROR_MESSAGE}`,
-    );
+    await expect(promise).rejects.toThrow("⚠️ anthropic/test-model request failed.");
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(2);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",

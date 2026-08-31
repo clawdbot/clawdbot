@@ -194,7 +194,7 @@ function assertConsistentOptions(
 function createKeyedStoreForPluginId<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
-): PluginStateKeyedStore<T> {
+): Required<PluginStateKeyedStore<T>> {
   const store = createSyncKeyedStoreForPluginId<T>(pluginId, options);
 
   return {
@@ -369,7 +369,7 @@ export function registerMigratedPluginStateEntry(params: {
 export function createPluginStateKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
-): PluginStateKeyedStore<T> {
+): Required<PluginStateKeyedStore<T>> {
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
@@ -380,7 +380,7 @@ export function createPluginStateKeyedStore<T>(
 export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
-): PluginStateSyncKeyedStore<T> {
+): Required<PluginStateSyncKeyedStore<T>> {
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
@@ -510,7 +510,7 @@ export function importPluginStateEntriesForDoctor(
 /** Opens a sync plugin-state namespace for a trusted core owner id. */
 export function createCorePluginStateSyncKeyedStore<T>(
   options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
-): PluginStateSyncKeyedStore<T> {
+): Required<PluginStateSyncKeyedStore<T>> {
   return createSyncKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 

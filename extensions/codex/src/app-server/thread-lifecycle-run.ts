@@ -47,7 +47,6 @@ import type {
   CodexStartOrResumeThreadParams,
 } from "./thread-lifecycle-types.js";
 import {
-  releaseCodexConsumedLiveThread,
   releaseCodexRetainedLiveThread,
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
@@ -368,7 +367,6 @@ export async function startOrResumeThread(
       binding = undefined;
     }
     const requestContext = resolveRequestContext();
-    const { startModelSelection, startModelProvider } = requestContext;
     // Capability read failures use managed search for this turn but must not
     // create a binding that later looks like a confirmed provider-policy change.
     let preserveExistingBinding =
@@ -378,6 +376,38 @@ export async function startOrResumeThread(
         !binding?.threadId);
     let rotatedContextEngineBinding = false;
     let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
+    // Scoped inventory requires a loaded native thread. The warm/resume owner
+    // calls this only after acquiring that exact subscription, before admission.
+    const buildLoadedPluginThreadConfig = async (
+      current: CodexAppServerThreadBinding,
+    ): Promise<CodexPluginThreadConfig | undefined> => {
+      if (
+        !params.pluginThreadConfig?.requiresCurrentPolicyCheck &&
+        !shouldRecheckRecoverablePluginBinding({
+          binding: current,
+          pluginThreadConfig: params.pluginThreadConfig,
+        })
+      ) {
+        return undefined;
+      }
+      try {
+        prebuiltPluginThreadConfig = await lifecycleTiming.measure("plugin-config-recovery", () =>
+          params.pluginThreadConfig?.build({ threadId: current.threadId }),
+        );
+      } catch (error) {
+        throwIfAborted();
+        if (params.pluginThreadConfig?.requiresCurrentPolicyCheck) {
+          throw error;
+        }
+        embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
+          error,
+          threadId: current.threadId,
+        });
+        return undefined;
+      }
+      throwIfAborted();
+      return prebuiltPluginThreadConfig;
+    };
     const webSearchBindingChanged =
       binding?.threadId &&
       binding.webSearchThreadConfigFingerprint !== webSearchThreadConfigFingerprint;
@@ -544,38 +574,13 @@ export async function startOrResumeThread(
       binding = undefined;
     }
     if (binding?.threadId) {
-      let pluginBindingStale = isCodexPluginThreadBindingStale({
+      const pluginBindingStale = isCodexPluginThreadBindingStale({
         codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
         bindingFingerprint: binding.pluginAppsFingerprint,
         bindingInputFingerprint: binding.pluginAppsInputFingerprint,
         currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
         hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
       });
-      if (
-        !pluginBindingStale &&
-        (params.pluginThreadConfig?.requiresCurrentPolicyCheck ||
-          shouldRecheckRecoverablePluginBinding({
-            binding,
-            pluginThreadConfig: params.pluginThreadConfig,
-          }))
-      ) {
-        try {
-          const bindingThreadId = binding.threadId;
-          prebuiltPluginThreadConfig = await lifecycleTiming.measure("plugin-config-recovery", () =>
-            params.pluginThreadConfig?.build({ threadId: bindingThreadId }),
-          );
-          pluginBindingStale =
-            prebuiltPluginThreadConfig?.fingerprint !== binding.pluginAppsFingerprint;
-        } catch (error) {
-          if (params.pluginThreadConfig?.requiresCurrentPolicyCheck) {
-            throw error;
-          }
-          embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
-            error,
-            threadId: binding.threadId,
-          });
-        }
-      }
       if (pluginBindingStale) {
         embeddedAgentLog.debug(
           "codex app-server plugin app config changed; starting a new thread",
@@ -637,7 +642,12 @@ export async function startOrResumeThread(
           await clearCurrentBinding("rotating a stale thread binding");
         }
       } else if (incognito) {
-        if (binding.clientId && binding.clientId === clientId) {
+        if (
+          binding.clientId &&
+          binding.clientId === clientId &&
+          ((await buildLoadedPluginThreadConfig(binding))?.fingerprint ??
+            binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
+        ) {
           // Ephemeral threads have no cold-resume source; reuse only the live client that started it.
           params.buildFinalConfigPatch?.({ action: "resume", binding });
           throwIfAborted();
@@ -655,50 +665,38 @@ export async function startOrResumeThread(
         binding = undefined;
       } else {
         const warmReuse = await tryReuseCodexLiveThread({
+          ...requestContext,
           params,
           binding,
-          bindingIdentity,
           clientId,
-          dynamicToolsFingerprint,
-          environmentSelectionFingerprint,
-          hostSystemAgentActive,
-          lifecycleTiming,
-          nativeSkillIsolation,
-          releaseConsumedThread: (threadId, cause) =>
-            releaseCodexConsumedLiveThread({
-              client: params.client,
-              abandonClient: params.abandonClient,
-              lifecycleTiming,
-              threadId,
-              cause,
-            }),
-          ringZeroActive,
-          restrictedToolSurfaceInheritedMcpServerNames,
-          startModelProvider,
-          startModelSelection,
-          throwIfAborted,
-          userMcpServersConfigPatch,
+          buildLoadedPluginThreadConfig,
         });
-        if (warmReuse.binding) {
+        if (warmReuse.kind === "ready") {
           return warmReuse.binding;
         }
-        // Native adoption must be checked before releasing any retained owner;
-        // a passive refusal neither acquires nor authorizes dropping a subscription.
-        if (binding.preserveNativeModel === true) {
-          await assertAdoptedCodexThreadResumeAllowed(params, binding.threadId, requestContext);
-        }
-        // Codex cold-resumes a changed idle thread after its last subscriber
-        // leaves; resume_running_thread shuts down the old cached session.
-        await releaseRetainedThread(binding.threadId);
-        const resumed = await resumeExistingCodexThread(params, {
-          ...requestContext,
-          binding,
-          clearCurrentBinding,
-          prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
-          prebuiltPluginThreadConfig,
-        });
-        if (resumed) {
-          return resumed;
+        if (warmReuse.kind === "rotate") {
+          throwIfAborted();
+          await clearCurrentBinding("rotating a stale plugin app binding");
+        } else {
+          // Native adoption must be checked before releasing any retained owner;
+          // a passive refusal neither acquires nor authorizes dropping a subscription.
+          if (binding.preserveNativeModel === true) {
+            await assertAdoptedCodexThreadResumeAllowed(params, binding.threadId, requestContext);
+          }
+          // Codex cold-resumes a changed idle thread after its last subscriber
+          // leaves; resume_running_thread shuts down the old cached session.
+          await releaseRetainedThread(binding.threadId);
+          const resumed = await resumeExistingCodexThread(params, {
+            ...requestContext,
+            binding,
+            clearCurrentBinding,
+            prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
+            prebuiltPluginThreadConfig,
+            buildLoadedPluginThreadConfig,
+          });
+          if (resumed) {
+            return resumed;
+          }
         }
       }
     }

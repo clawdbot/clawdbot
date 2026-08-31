@@ -1,8 +1,8 @@
 // Real routing and browser storage; Gateway/provider sign-in is mocked.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -10,7 +10,13 @@ const suite = createControlUiE2eSuite({
   name: "Control UI first-run wizard cancellation ownership",
   startServerBeforeBrowser: true,
 });
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("model-setup-cancel", artifactRoot)
+    : undefined;
+});
 const receiptKey = "openclaw.modelSetup.pendingActivation.v1";
 const detection = {
   candidates: [],
@@ -153,7 +159,6 @@ suite.define(() => {
           ]);
           expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
           if (artifactDir) {
-            await mkdir(artifactDir, { recursive: true });
             await page.screenshot({
               path: path.join(artifactDir, `activation-consent-${decision}-review.png`),
             });
@@ -234,7 +239,6 @@ suite.define(() => {
             await gateway.resolveDeferred("wizard.cancel");
           }
           if (artifactDir) {
-            await mkdir(artifactDir, { recursive: true });
             await page.screenshot({
               path: path.join(artifactDir, `cancel-${acknowledgement.replaceAll(" ", "-")}.png`),
               animations: "disabled",

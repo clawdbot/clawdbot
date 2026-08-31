@@ -1,10 +1,10 @@
 // Control UI tests cover the initial-connect splash shown instead of the
 // login gate while the Gateway resolves its first connection attempt.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -18,7 +18,13 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("initial-connect-splash", artifactRoot)
+    : undefined;
+});
 const viewport = { height: 900, width: 1280 };
 
 let browser: Browser;
@@ -26,9 +32,6 @@ let server: ControlUiE2eServer;
 const openContexts = new Set<BrowserContext>();
 
 async function createPage(): Promise<Page> {
-  if (artifactDir) {
-    await mkdir(artifactDir, { recursive: true });
-  }
   const context = await browser.newContext({
     viewport,
     ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),

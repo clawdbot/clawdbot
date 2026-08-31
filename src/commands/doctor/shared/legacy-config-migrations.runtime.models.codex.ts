@@ -1,10 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
+import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import { getRecord, type LegacyConfigRule } from "../../../config/legacy.shared.js";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import {
-  isLegacyCodexProviderId,
   legacyCodexProviderIdentityKey,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";

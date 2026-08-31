@@ -18,10 +18,10 @@ on:
     outputs:
       state:
         description: Candidate acquisition state
-        value: ${{ jobs.finalize.outputs.state }}
+        value: ${{ jobs.resolve_candidate.outputs.state }}
       source:
         description: Whether the ready candidate was reused or freshly produced
-        value: ${{ jobs.finalize.outputs.source }}
+        value: ${{ jobs.resolve_candidate.outputs.source }}
       reuse_reason:
         description: Candidate acquisition result
         value: ${{ jobs.discover.outputs.reuse_reason }}
@@ -33,10 +33,10 @@ on:
         value: ${{ jobs.discover.outputs.request_sha256 }}
       binding_json:
         description: Validated immutable candidate binding
-        value: ${{ jobs.finalize.outputs.binding_json }}
+        value: ${{ jobs.resolve_candidate.outputs.binding_json }}
       candidate_artifact_json:
         description: Candidate artifact tuple for child workflows
-        value: ${{ jobs.finalize.outputs.candidate_artifact_json }}
+        value: ${{ jobs.resolve_candidate.outputs.candidate_artifact_json }}
 
 permissions:
   actions: read
@@ -140,16 +140,17 @@ jobs:
   resolve_candidate:
     name: Resolve release candidate
     needs: [discover, prepare]
-    if: ${{ always() && needs.discover.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      state: ${{ steps.resolve.outputs.state }}
-      source: ${{ steps.resolve.outputs.source }}
-      binding_json: ${{ steps.resolve.outputs.binding_json }}
-      candidate_artifact_json: ${{ steps.resolve.outputs.candidate_artifact_json }}
+      state: ${{ steps.result.outputs.state }}
+      source: ${{ steps.result.outputs.source }}
+      binding_json: ${{ steps.result.outputs.binding_json }}
+      candidate_artifact_json: ${{ steps.result.outputs.candidate_artifact_json }}
     steps:
       - name: Checkout candidate binding authority
+        if: ${{ !cancelled() && needs.discover.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -166,6 +167,7 @@ jobs:
           persist-credentials: false
 
       - name: Resolve candidate binding
+        if: ${{ success() && needs.discover.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
         id: resolve
         env:
           CANDIDATE_REQUEST_JSON: ${{ needs.discover.outputs.request_json }}
@@ -193,36 +195,29 @@ jobs:
             printf 'candidate_artifact_json=%s\n' "$(jq -r '.candidateArtifactJson' <<< "$result")"
           } >> "$GITHUB_OUTPUT"
 
-  finalize:
-    name: Finalize release candidate acquisition
-    needs: [discover, prepare, resolve_candidate]
-    if: always()
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      state: ${{ steps.result.outputs.state }}
-      source: ${{ steps.result.outputs.source }}
-      binding_json: ${{ steps.result.outputs.binding_json }}
-      candidate_artifact_json: ${{ steps.result.outputs.candidate_artifact_json }}
-    steps:
+      # A failed or cancelled binding must never publish ready, even if it wrote outputs.
+      # Runner loss may omit this projection; callers also require acquisition success.
       - name: Record candidate acquisition result
+        if: always()
         id: result
         env:
+          JOB_STATUS: ${{ job.status }}
           DISCOVERY_RESULT: ${{ needs.discover.result }}
           DISCOVERY_STATE: ${{ needs.discover.outputs.state }}
           PREPARE_RESULT: ${{ needs.prepare.result }}
-          RESOLVE_RESULT: ${{ needs.resolve_candidate.result }}
-          RESOLVED_STATE: ${{ needs.resolve_candidate.outputs.state }}
-          RESOLVED_SOURCE: ${{ needs.resolve_candidate.outputs.source }}
-          BINDING_JSON: ${{ needs.resolve_candidate.outputs.binding_json }}
-          CANDIDATE_ARTIFACT_JSON: ${{ needs.resolve_candidate.outputs.candidate_artifact_json }}
+          RESOLVE_RESULT: ${{ steps.resolve.outcome }}
+          RESOLVED_STATE: ${{ steps.resolve.outputs.state }}
+          RESOLVED_SOURCE: ${{ steps.resolve.outputs.source }}
+          BINDING_JSON: ${{ steps.resolve.outputs.binding_json }}
+          CANDIDATE_ARTIFACT_JSON: ${{ steps.resolve.outputs.candidate_artifact_json }}
         run: |
           set -euo pipefail
           state=unavailable
           source=""
           binding_json=""
           candidate_artifact_json=""
-          if [[ "$DISCOVERY_RESULT" == "success" &&
+          if [[ "$JOB_STATUS" == "success" &&
+                "$DISCOVERY_RESULT" == "success" &&
                 "$DISCOVERY_STATE" != "unavailable" &&
                 "$PREPARE_RESULT" =~ ^(success|skipped)$ &&
                 "$RESOLVE_RESULT" == "success" &&
@@ -240,6 +235,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Enforce candidate acquisition
+        if: always()
         env:
           STATE: ${{ steps.result.outputs.state }}
         run: |

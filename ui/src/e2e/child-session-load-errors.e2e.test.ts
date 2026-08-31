@@ -84,7 +84,7 @@ suite.define(() => {
             request.params.spawnedBy === parentKey,
         ).length;
       expect(await childRequestCount()).toBe(1);
-      await captureUiProof(page, "child-session-load-error.png");
+      await captureUiProof(suite, page, "child-session-load-error.png");
 
       for (let revision = 1; revision <= 3; revision += 1) {
         const listRequests = (await gateway.getRequests("sessions.list")).length;
@@ -124,7 +124,7 @@ suite.define(() => {
       await page.getByText("Recovered child", { exact: true }).waitFor();
       expect(await childRequestCount()).toBe(2);
       expect(await alert.count()).toBe(0);
-      await captureUiProof(page, "child-session-load-recovered.png");
+      await captureUiProof(suite, page, "child-session-load-recovered.png");
     } finally {
       await context.close();
     }

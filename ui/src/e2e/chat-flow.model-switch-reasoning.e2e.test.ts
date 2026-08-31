@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -119,7 +120,10 @@ suite.define(() => {
       });
       await expect.poll(() => page.getByText(/not supported for/u).count()).toBe(0);
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.model-switch-reasoning", artifactDirParent)
+        : undefined;
       if (artifactDir) {
         await page.screenshot({
           path: `${artifactDir}/model-thinking-sync.png`,

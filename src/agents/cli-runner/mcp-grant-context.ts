@@ -96,6 +96,7 @@ export function buildCliMcpGrantContext(params: {
   config: OpenClawConfig;
   requireExplicitMessageTarget: boolean;
   agentId: string;
+  runtimePolicyAgentId?: string;
   modelProvider: string;
   modelId: string;
   toolsAllow?: string[];
@@ -104,9 +105,6 @@ export function buildCliMcpGrantContext(params: {
   const runtimePolicySessionKey = normalizeOptionalMcpContextValue(
     params.run.runtimePolicySessionKey,
   );
-  const runtimePolicyAgentId = runtimePolicySessionKey
-    ? normalizeOptionalMcpContextValue(params.run.agentId)
-    : undefined;
   const clientCaps = uniqueStrings(
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
   );
@@ -137,7 +135,7 @@ export function buildCliMcpGrantContext(params: {
   return {
     sessionKey,
     runtimePolicySessionKey,
-    ...(runtimePolicyAgentId ? { runtimePolicyAgentId } : {}),
+    ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
     agentId: params.agentId,
     sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
     runId: normalizeOptionalMcpContextValue(params.run.runId),

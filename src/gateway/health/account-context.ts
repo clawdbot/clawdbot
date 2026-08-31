@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { inspectChannelAccount } from "../../channels/account-inspection.js";
+import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
   resolveChannelAccountConfigured,
   resolveChannelAccountEnabled,
@@ -108,20 +109,12 @@ export async function resolveHealthAccountContext(params: {
   accountId: string;
 }): Promise<{
   probeAccount: unknown;
-  snapshotAccount: unknown;
+  inspectedAccount: unknown;
   enabled: boolean;
-  configured: boolean;
+  configured: boolean | undefined;
   diagnostics: string[];
 }> {
   const diagnostics: string[] = [];
-  let account: unknown;
-  try {
-    account = params.plugin.config.resolveAccount(params.cfg, params.accountId);
-  } catch (error) {
-    diagnostics.push(
-      `${params.plugin.id}:${params.accountId}: failed to resolve account (${formatErrorMessage(error)}).`,
-    );
-  }
   let inspectedAccount: unknown;
   try {
     inspectedAccount = await inspectChannelAccount(params);
@@ -131,36 +124,47 @@ export async function resolveHealthAccountContext(params: {
     );
   }
 
-  const probeAccount = hasAccountValue(account) ? account : inspectedAccount;
-  if (!hasAccountValue(probeAccount)) {
+  const inspectedEnabled = readBooleanField(inspectedAccount, "enabled");
+  const inspectedConfigured = readBooleanField(inspectedAccount, "configured");
+  let account: unknown;
+  if (inspectedEnabled !== false && !hasConfiguredUnavailableCredentialStatus(inspectedAccount)) {
+    try {
+      account = params.plugin.config.resolveAccount(params.cfg, params.accountId);
+    } catch (error) {
+      diagnostics.push(
+        `${params.plugin.id}:${params.accountId}: failed to resolve account (${formatErrorMessage(error)}).`,
+      );
+    }
+  }
+
+  if (!hasAccountValue(account)) {
     return {
-      probeAccount: {},
-      snapshotAccount: {},
-      enabled: false,
-      configured: false,
+      probeAccount: undefined,
+      inspectedAccount,
+      enabled: inspectedEnabled ?? false,
+      configured: inspectedConfigured,
       diagnostics,
     };
   }
-  const snapshotAccount = hasAccountValue(inspectedAccount) ? inspectedAccount : probeAccount;
 
   const enabled = resolveProbeAccountEnabled({
     plugin: params.plugin,
     cfg: params.cfg,
     accountId: params.accountId,
-    account: probeAccount,
+    account,
     diagnostics,
   });
   const configured = await resolveProbeAccountConfigured({
     plugin: params.plugin,
     cfg: params.cfg,
     accountId: params.accountId,
-    account: probeAccount,
+    account,
     diagnostics,
   });
 
   return {
-    probeAccount,
-    snapshotAccount,
+    probeAccount: account,
+    inspectedAccount,
     enabled,
     configured,
     diagnostics,
