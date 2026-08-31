@@ -14,6 +14,7 @@ import type {
   UpdateStatusOptions,
   UpdateWizardOptions,
 } from "./update-cli/shared.js";
+import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
   UpdateCommandOptions,
   UpdateFinalizeOptions,
@@ -126,18 +127,11 @@ export function registerUpdateCli(program: Command) {
   program.enablePositionalOptions();
   const update = program
     .command("update")
-    .description("Update OpenClaw and inspect update channel status")
-    .option("--json", "Output result as JSON", false)
-    .option("--no-restart", "Skip restarting the gateway service after a successful update")
-    .option("--dry-run", "Preview update actions without making changes", false)
-    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel (git + npm)")
-    .option(
-      "--tag <dist-tag|version|spec>",
-      "Override the package target for this update (dist-tag, version, or package spec)",
-    )
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
-    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
-    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
+    .description("Update OpenClaw and inspect update channel status");
+  for (const [flags, description, defaultValue] of UPDATE_OPTION_SPECS) {
+    update.option(flags, description, defaultValue);
+  }
+  update
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
