@@ -889,9 +889,9 @@ describe("runAgentHarnessAttempt", () => {
     ]);
   });
 
-  it.each(["heartbeat"] as const)(
-    "records %s classification on the host-owned turn candidate",
-    async (bootstrapContextRunKind) => {
+  it.each(["complete", "missing admission", "missing terminal"] as const)(
+    "records native terminal facts only with complete anchors: %s",
+    async (boundary) => {
       const admission = {
         ...createTranscriptAnchor("user-1", 1, 0),
         logicalTurnId: "heartbeat-turn",
@@ -906,7 +906,7 @@ describe("runAgentHarnessAttempt", () => {
           supports: () => ({ supported: true, priority: 100 }),
           runAttempt: async () => ({
             ...createAttemptResult("session-1"),
-            contextEngineTerminalAnchor: terminal,
+            contextEngineTerminalAnchor: boundary === "missing terminal" ? undefined : terminal,
           }),
         },
         { ownerPluginId: "codex" },
@@ -920,22 +920,26 @@ describe("runAgentHarnessAttempt", () => {
         sessionKey: admission.sessionKey,
         storePath: admission.storePath,
       };
-      params.bootstrapContextRunKind = bootstrapContextRunKind;
-      params.userTurnTranscriptRecorder = createTranscriptRecorder(admission);
+      params.bootstrapContextRunKind = "heartbeat";
+      params.userTurnTranscriptRecorder =
+        boundary === "missing admission" ? undefined : createTranscriptRecorder(admission);
       params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
 
       await runAgentHarnessAttempt(params);
 
-      expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          boundary: { admission, terminal },
-          harnessId: "codex",
-          isHeartbeat: true,
-          promptError: false,
-          aborted: false,
-          yieldAborted: false,
-        }),
-      );
+      if (boundary === "complete") {
+        expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            boundary: { admission, terminal },
+            isHeartbeat: true,
+            promptError: false,
+            aborted: false,
+            yieldAborted: false,
+          }),
+        );
+      } else {
+        expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+      }
     },
   );
 
