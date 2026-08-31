@@ -563,21 +563,22 @@ describe("Anthropic provider", () => {
     expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });
 
-  it.each([
-    [undefined, 0],
-    [2, 2],
-  ])("uses Anthropic SDK maxRetries=%s", async (maxRetries, expected) => {
-    const model = makeAnthropicModel();
-    await streamAnthropic(
-      model,
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      { maxRetries },
-    ).result();
+  it.each([undefined, 2])(
+    "disables Anthropic SDK retries when maxRetries=%s",
+    async (maxRetries) => {
+      const model = makeAnthropicModel();
+      await streamAnthropic(
+        model,
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        { maxRetries },
+      ).result();
 
-    expect(anthropicMockState.requestOptions).toEqual([
-      expect.objectContaining({ maxRetries: expected }),
-    ]);
-  });
+      expect(anthropicMockState.requestOptions).toEqual([
+        expect.objectContaining({ maxRetries: 0 }),
+      ]);
+      expect(anthropicMockState.configs.at(-1)).toMatchObject({ maxRetries: 0 });
+    },
+  );
 
   it.each([
     { allowEmptySignature: undefined, expectedType: "text", expectedSignature: undefined },

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../failover-error.js";
 
 const mocks = vi.hoisted(() => ({
-  sleepWithAbort: vi.fn(async () => {}),
+  sleepWithAbort: vi.fn(async (_ms: number, _abortSignal?: AbortSignal): Promise<void> => {}),
 }));
 
 vi.mock("../../../infra/backoff.js", async () => {
@@ -51,40 +51,90 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     rateLimitContext.logFallbackDecision.mockClear();
   });
 
-  it("preserves the full same-model retry budget when rate-limit rotation does not advance", async () => {
-    const advanceAuthProfile = vi.fn(async () => false);
-    const controller = createController(advanceAuthProfile);
+  it("bounds transient retries across reasons and honors Retry-After", async () => {
+    // The 90s budget is wall-clock from the first consult, so the mocked sleep
+    // must advance the clock for the exhaustion branch to be reachable.
+    let nowMs = 1_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    mocks.sleepWithAbort.mockImplementation(async (delayMs: number) => {
+      nowMs += delayMs;
+    });
+    try {
+      const controller = createController(vi.fn(async () => false));
 
-    await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(false);
-    await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(true);
-    await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(true);
-    await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(true);
-    await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(false);
+      await expect(
+        controller.maybeRetryTransient({ reason: "server_error", retryAfterMs: 60_000 }),
+      ).resolves.toBe(true);
+      await expect(
+        controller.maybeRetryTransient({ reason: "timeout", retryAfterMs: 30_000 }),
+      ).resolves.toBe(true);
+      await expect(controller.maybeRetryTransient({ reason: "overloaded" })).resolves.toBe(false);
 
-    expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
-    expect(mocks.sleepWithAbort).toHaveBeenCalledTimes(3);
+      expect(controller.transientRetryCount).toBe(2);
+      expect(mocks.sleepWithAbort).toHaveBeenCalledTimes(2);
+      expect(mocks.sleepWithAbort.mock.calls[0]?.[0]).toBe(60_000);
+      expect(mocks.sleepWithAbort.mock.calls[1]?.[0]).toBe(30_000);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
-  it("consumes same-model retry eligibility after a successful rate-limit rotation", async () => {
+  it("counts failed-request wall time against the retry budget", async () => {
+    let nowMs = 1_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      const controller = createController(vi.fn(async () => false));
+      await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(true);
+      // A slow provider failure burns the window even though no backoff slept.
+      nowMs += 90_000;
+      await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(false);
+      expect(controller.transientRetryCount).toBe(1);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("keeps profile rotation separate from transient retry accounting", async () => {
     const advanceAuthProfile = vi.fn(async () => true);
     const controller = createController(advanceAuthProfile);
 
     await expect(controller.advanceRateLimitAuthProfile(rateLimitContext)).resolves.toBe(true);
-    await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(false);
+    await expect(controller.maybeRetryTransient({ reason: "rate_limit" })).resolves.toBe(true);
 
     expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
-    expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+    expect(controller.transientRetryCount).toBe(1);
+    expect(mocks.sleepWithAbort).toHaveBeenCalledTimes(1);
   });
 
-  it("does not spend rate-limit rotation eligibility on an ordinary profile advance", async () => {
-    const advanceAuthProfile = vi.fn(async () => true);
-    const controller = createController(advanceAuthProfile);
+  it("allows three transient retries when the ceiling has room", async () => {
+    const controller = createController(vi.fn(async () => false));
 
-    await expect(controller.advanceAuthProfile()).resolves.toBe(true);
-    await expect(controller.maybeRetrySameModelRateLimit()).resolves.toBe(true);
+    await expect(controller.maybeRetryTransient({ reason: "rate_limit" })).resolves.toBe(true);
+    await expect(controller.maybeRetryTransient({ reason: "overloaded" })).resolves.toBe(true);
+    await expect(controller.maybeRetryTransient({ reason: "timeout" })).resolves.toBe(true);
+    await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(false);
+    expect(controller.transientRetryCount).toBe(3);
+  });
 
-    expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
-    expect(mocks.sleepWithAbort).toHaveBeenCalledWith(10_000, undefined);
+  it("uses the bounded backoff timer without emitting a user notice", async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    mocks.sleepWithAbort.mockImplementation(
+      (delayMs) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, delayMs);
+        }),
+    );
+    try {
+      const controller = createController(vi.fn(async () => false));
+      const retry = controller.maybeRetryTransient({ reason: "server_error" });
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(retry).resolves.toBe(true);
+      expect(mocks.sleepWithAbort).toHaveBeenCalledWith(500, undefined);
+    } finally {
+      random.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("escalates after one successful rate-limit rotation without advancing again", async () => {

@@ -476,10 +476,9 @@ export class SettingsManager {
     this.setScopedSetting("global", "httpIdleTimeoutMs", Math.floor(timeoutMs));
   }
 
-  getProviderRetrySettings(): { timeoutMs?: number; maxRetries?: number; maxRetryDelayMs: number } {
+  getProviderRetrySettings(): { timeoutMs?: number; maxRetryDelayMs: number } {
     return {
       timeoutMs: this.settings.retry?.provider?.timeoutMs,
-      maxRetries: this.settings.retry?.provider?.maxRetries,
       maxRetryDelayMs: this.settings.retry?.provider?.maxRetryDelayMs ?? 60000,
     };
   }

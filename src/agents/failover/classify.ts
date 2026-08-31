@@ -52,6 +52,7 @@ import {
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
 export {
+  isBilling429MessageForProvider,
   isGenericUnknownStreamErrorMessage,
   isTransientHttpError,
   isUnclassifiedNoBodyHttpSignal,

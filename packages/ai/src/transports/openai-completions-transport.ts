@@ -268,7 +268,6 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
             params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
             buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
               timeoutMs: options?.timeoutMs,
-              maxRetries: options?.maxRetries,
             }),
           )
           .withResponse();

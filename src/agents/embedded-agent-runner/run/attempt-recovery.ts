@@ -453,8 +453,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       advanceAuthProfile: failoverRetryController.advanceAuthProfile,
       advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
       maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-      maybeBackoffBeforeOverloadFailover:
-        failoverRetryController.maybeBackoffBeforeOverloadFailover,
+      maybeRetryTransient: failoverRetryController.maybeRetryTransient,
+      getTransientRetryCount: () => failoverRetryController.transientRetryCount,
       attemptedThinking: preparedRuntime.attemptedThinking,
       thinkLevel: runtime.thinkLevel,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,

@@ -272,6 +272,19 @@ describe("formatAssistantErrorText", () => {
       ).toBe("server_error");
     });
   });
+  it("renders opaque upstream_error facts as a temporary provider error", () => {
+    const msg = makeAssistantMessageFixture({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      errorMessage: "opaque provider response",
+      errorType: "upstream_error",
+    });
+
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "⚠️ openai/gpt-5.6-luna request failed (provider internal error). " +
+        "This is usually temporary — try again shortly.",
+    );
+  });
   it("uses generic user-facing copy for escaped structured provider messages", () => {
     // The internal formatter keeps detail for logs, while user-facing text must
     // not expose arbitrary provider-controlled structured payload content.

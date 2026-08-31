@@ -17,7 +17,9 @@ export interface BranchSummarySettings {
 
 export interface ProviderRetrySettings {
   timeoutMs?: number; // SDK/provider request timeout in milliseconds
-  maxRetries?: number; // SDK/provider retry attempts
+  // maxRetries retired: the embedded runner's failover retry controller is the
+  // only provider retry owner; transports pin SDK retries to 0. Persisted
+  // values are ignored on load.
   maxRetryDelayMs?: number; // default: 60000 (max server-requested delay before failing)
 }
 

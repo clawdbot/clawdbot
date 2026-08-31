@@ -196,7 +196,6 @@ export async function runPreparedEmbeddedLoop(
   let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
   let overloadProfileRotations = 0;
   const terminalRetryState = createEmbeddedRunTerminalRetryState();
-  let sameModelIdleTimeoutRetries = 0;
   // Cost-runaway breaker for #76293. State lives at the run-loop level
   // on purpose so it survives across attempt boundaries and across
   // profile/auth retries within this embedded run (a wrapper-local
@@ -471,7 +470,6 @@ export async function runPreparedEmbeddedLoop(
         attemptCompactionCount,
         activeErrorContext,
         resolveReplayInvalidForAttempt,
-        canRestartForLiveSwitch,
       } = normalizedAttempt;
       const recovery = await recoverEmbeddedRunAttempt({
         runInput: admittedRunInput,
@@ -521,7 +519,6 @@ export async function runPreparedEmbeddedLoop(
         attemptedThinking,
         fallbackConfigured,
         pluginHarnessOwnsTransport,
-        canRestartForLiveSwitch,
         authProfileId: lastProfileId,
         authProfileStore: attemptAuthProfileStore,
         runtimeAuthRetry,
@@ -530,12 +527,10 @@ export async function runPreparedEmbeddedLoop(
         emptyErrorRetries,
         overloadProfileRotations,
         overloadProfileRotationLimit: failoverRetryController.overloadProfileRotationLimit,
-        sameModelIdleTimeoutRetries,
         previousRetryFailoverReason: lastRetryFailoverReason,
         maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-        maybeRetrySameModelRateLimit: failoverRetryController.maybeRetrySameModelRateLimit,
-        maybeBackoffBeforeOverloadFailover:
-          failoverRetryController.maybeBackoffBeforeOverloadFailover,
+        maybeRetryTransient: failoverRetryController.maybeRetryTransient,
+        getTransientRetryCount: () => failoverRetryController.transientRetryCount,
         advanceAuthProfile: failoverRetryController.advanceAuthProfile,
         advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
         traceAttempts,
@@ -549,11 +544,7 @@ export async function runPreparedEmbeddedLoop(
       authRetryPending = assistantFailureOutcome.authRetryPending;
       emptyErrorRetries = assistantFailureOutcome.emptyErrorRetries;
       overloadProfileRotations = assistantFailureOutcome.overloadProfileRotations;
-      sameModelIdleTimeoutRetries = assistantFailureOutcome.sameModelIdleTimeoutRetries;
       lastRetryFailoverReason = assistantFailureOutcome.lastRetryFailoverReason;
-      if (!assistantFailureOutcome.preserveSameModelRateLimitRetryCount) {
-        failoverRetryController.resetSameModelRateLimitRetries();
-      }
       if (assistantFailureOutcome.action === "retry") {
         continue;
       }
