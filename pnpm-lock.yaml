@@ -14353,7 +14353,7 @@ snapshots:
       is-path-inside: 4.0.0
       micromatch: 4.0.8
       slash: 5.1.0
-      unicorn-magic: 0.3.0
+      unicorn-magic: 0.4.0
 
   globjoin@0.1.4: {}
 
@@ -15765,7 +15765,7 @@ snapshots:
   npm-run-path@6.0.0:
     dependencies:
       path-key: 4.0.0
-      unicorn-magic: 0.4.0
+      unicorn-magic: 0.3.0
 
   nth-check@3.0.1:
     dependencies:
