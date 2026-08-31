@@ -45,6 +45,9 @@ const buildOpenAICompatibleProviderCatalog = createLazyRuntimeMethod(
   (runtime) => runtime.buildOpenAICompatibleProviderCatalog,
 );
 
+// Auth descriptors are safe to construct before the lazy credential runtime is needed.
+export { createProviderApiKeyAuthMethod };
+
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
 
 type SingleProviderPluginManifestAuthChoice = Pick<
