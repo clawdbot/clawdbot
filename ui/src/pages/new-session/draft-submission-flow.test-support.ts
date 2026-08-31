@@ -40,6 +40,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
             ? {
                 server: { bootId: "gateway-boot-a" },
                 auth: {
+                  recoveryScope: client.recoveryScope,
                   role: "operator",
                   scopes: options.scopes ?? ["operator.read", "operator.write"],
                 },
