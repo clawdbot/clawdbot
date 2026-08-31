@@ -141,9 +141,9 @@ plugin finalization steps still exit non-zero.
 
 Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not
-accept capability changes, and JSON mode does not prompt. A denied update can
-preserve the previous usable plugin and finish with a warning; an unresolved
-missing or invalid active payload can still fail finalization.
+accept capability changes, and JSON mode does not prompt. An unresolved review
+preserves the previous plugin, exits non-zero, and blocks any requested Gateway
+restart.
 
 If the core package has already changed, run `openclaw update repair` in an
 interactive terminal to review plugin capabilities. After reviewing the changes,
