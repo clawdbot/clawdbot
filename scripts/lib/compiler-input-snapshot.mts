@@ -112,6 +112,7 @@ export class CompilerInputSnapshot {
           .toSorted((left, right) => (left.name < right.name ? -1 : 1));
         for (const entry of entries) {
           const file = path.join(directory, entry.name);
+          const canonicalFile = path.join(realDirectory, entry.name);
           const id = portableRelativePath(this.rootDir, file);
           if (
             !installed &&
@@ -134,9 +135,11 @@ export class CompilerInputSnapshot {
           }
           let isDirectory = entry.isDirectory();
           if (entry.isSymbolicLink()) {
-            add(`${id}->${fs.readlinkSync(file)}`);
+            // Resolve entries beneath the parent we enumerated. Windows relative
+            // links reached through a junction can otherwise follow a different alias.
+            add(`${id}->${fs.readlinkSync(canonicalFile)}`);
             try {
-              isDirectory = fs.statSync(file).isDirectory();
+              isDirectory = fs.statSync(canonicalFile).isDirectory();
             } catch (error) {
               if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
                 throw error;
@@ -150,11 +153,11 @@ export class CompilerInputSnapshot {
             // Extend the canonical parent path for ordinary children; resolve only links.
             // Rewalking every ancestor multiplies metadata calls across installed trees.
             const canonical = entry.isSymbolicLink()
-              ? fs.realpathSync(file)
-              : path.join(realDirectory, entry.name);
+              ? fs.realpathSync(canonicalFile)
+              : canonicalFile;
             visit(file, canonical, installed || entry.name === "node_modules");
           } else if (/\.(?:[cm]?[jt]sx?|json)$/u.test(entry.name)) {
-            add(id, file);
+            add(id, canonicalFile);
           }
         }
         active.delete(realDirectory);
