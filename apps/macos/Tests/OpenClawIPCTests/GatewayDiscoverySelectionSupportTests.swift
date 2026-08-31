@@ -4,6 +4,24 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawDiscovery
 
+private final class DiscoveryConnectRequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var connectParams: [String: Any]?
+
+    func record(_ message: URLSessionWebSocketTask.Message) {
+        guard let params = GatewayWebSocketTestSupport.connectRequestParams(from: message) else { return }
+        self.lock.lock()
+        self.connectParams = params
+        self.lock.unlock()
+    }
+
+    func auth() -> [String: Any]? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.connectParams?["auth"] as? [String: Any]
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct GatewayDiscoverySelectionSupportTests {
@@ -255,6 +273,9 @@ struct GatewayDiscoverySelectionSupportTests {
                 beforeConfigRead: {})
             #expect(source.token == nil)
             #expect(source.password == nil)
+            let connectAuth = try await self.connectAuth(source: source)
+            #expect(connectAuth?["token"] == nil)
+            #expect(connectAuth?["password"] == nil)
 
             var root = OpenClawConfigFile.loadDict()
             var gateway = root["gateway"] as? [String: Any] ?? [:]
@@ -500,5 +521,33 @@ struct GatewayDiscoverySelectionSupportTests {
             #expect(remote?["token"] == nil)
             #expect(remote?["password"] == nil)
         }
+    }
+
+    private func connectAuth(source: GatewayEndpointStore.SourceSnapshot) async throws -> [String: Any]? {
+        let recorder = DiscoveryConnectRequestRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                recorder.record(message)
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            })
+        })
+        let endpointURL = source.directRemoteURL ?? URL(string: "ws://127.0.0.1:18789")!
+        let connection = GatewayConnection(
+            testEndpointProvider: {
+                GatewayConnection.EndpointSnapshot(
+                    config: (endpointURL, source.token, source.password),
+                    routeAuthority: nil,
+                    deviceAuthGatewayID: source.deviceAuthGatewayID)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+        _ = try await connection.request(
+            method: "health",
+            params: nil,
+            retryTransportFailures: false)
+        await connection.shutdown()
+        return recorder.auth()
     }
 }
