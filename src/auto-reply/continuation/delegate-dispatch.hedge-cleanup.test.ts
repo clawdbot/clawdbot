@@ -379,8 +379,8 @@ describe("hedge timer ref/handle cleanup", () => {
 
     vi.setSystemTime(101);
     now.mockRestore();
+    // Advance only the hedge; draining every process timer also consumes unrelated recurring work.
     await vi.advanceTimersByTimeAsync(0);
-    await vi.runAllTimersAsync();
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
