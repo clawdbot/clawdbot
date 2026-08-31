@@ -114,8 +114,7 @@ describe("chat pane workspace chip icon", () => {
     vi.useFakeTimers();
     const pending = createDeferred<Response>();
     const routeUrl = "/__openclaw__/workspace-icon/agent%3Amain%3Aimmediate-reconnect";
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
+    const fetchSpy = mockWorkspaceIconFetch()
       .mockReturnValueOnce(pending.promise)
       .mockResolvedValue({
         ok: true,
