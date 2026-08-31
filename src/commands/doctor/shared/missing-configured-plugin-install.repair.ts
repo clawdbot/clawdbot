@@ -155,14 +155,29 @@ async function repairMissingPluginInstalls(params: {
   // Baseline, awaited review, package publication, and the index write share one generation.
   return await withPluginLifecycleLease({ env: params.env }, async () => {
     const pendingInstallTransactions: PluginInstallTransaction[] = [];
+    let result: RepairMissingPluginInstallsResult;
     try {
-      const result = await repairMissingPluginInstallsWithLease(params, pendingInstallTransactions);
-      await settlePluginInstallTransactions(pendingInstallTransactions, "commit");
-      return result;
+      result = await repairMissingPluginInstallsWithLease(params, pendingInstallTransactions);
     } catch (error) {
-      await settlePluginInstallTransactions(pendingInstallTransactions, "rollback");
+      try {
+        await settlePluginInstallTransactions(pendingInstallTransactions, "rollback");
+      } catch (rollbackError) {
+        const aggregate = new AggregateError(
+          [error, rollbackError],
+          "Plugin repair failed and payload rollback failed",
+        );
+        aggregate.cause = error;
+        throw aggregate;
+      }
       throw error;
     }
+    await settlePluginInstallTransactions(pendingInstallTransactions, "commit").catch(() => {
+      const warning = "Plugin install committed, but backup cleanup failed. Restart is required.";
+      if (!result.warnings.includes(warning)) {
+        result.warnings.push(warning);
+      }
+    });
+    return result;
   });
 }
 
