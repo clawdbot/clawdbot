@@ -38,11 +38,6 @@ const PARALLEL_MAX_SEARCH_QUERIES = 5;
 const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
 const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
 
-const normalizeParallelSessionId: (
-  value: string | undefined,
-  maxLength: number,
-) => string | undefined = normalizeBoundedOptionalString;
-
 type ParallelSearchResult = {
   title?: unknown;
   url?: unknown;
@@ -84,7 +79,10 @@ function normalizeParallelSearchRequest(
     objective,
     searchQueries,
     count: resolveParallelSearchCount(args, configuredCount),
-    sessionId: normalizeParallelSessionId(readStringParam(args, "session_id"), sessionIdMaxLength),
+    sessionId: normalizeBoundedOptionalString(
+      readStringParam(args, "session_id"),
+      sessionIdMaxLength,
+    ),
     clientModel: normalizeParallelClientModel(readStringParam(args, "client_model")),
   };
 }
