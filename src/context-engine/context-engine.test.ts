@@ -40,6 +40,7 @@ import {
   registerContextEngineInRegistry,
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
+  resolveLogicalTurnContextEngines,
 } from "./registry.js";
 import {
   captureContextEngineRegistryStateForTests,
@@ -140,6 +141,45 @@ let uniqueEngineIdCounter = 0;
 function uniqueEngineId(prefix: string): string {
   uniqueEngineIdCounter += 1;
   return `${prefix}-${uniqueEngineIdCounter}`;
+}
+
+async function withCompactionDelegateFixture(
+  acceptSessionKey: boolean,
+  run: (engine: ContextEngine) => Promise<void>,
+) {
+  registerLegacyContextEngine();
+  const engineId = uniqueEngineId("compaction-projection");
+  const compact = vi.fn<ContextEngine["compact"]>(delegateCompactionToRuntime);
+  registerTestContextEngine(engineId, () => ({
+    info: {
+      id: engineId,
+      name: "Compaction projection",
+      acceptedHostParams: acceptSessionKey
+        ? ["sessionKey", "runtimeContext", "sessionTarget"]
+        : ["runtimeContext", "sessionTarget"],
+    },
+    async ingest() {
+      return { ingested: false };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    compact,
+  }));
+  const resolution = await resolveLogicalTurnContextEngines(configWithSlot(engineId));
+  try {
+    await run(resolution.configured.engine);
+    expect(compact).toHaveBeenCalledOnce();
+    if (!acceptSessionKey) {
+      // The registry, not an invalid typed call, owns host-field omission.
+      expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
+    }
+  } finally {
+    await Promise.allSettled([
+      resolution.configured.engine.dispose?.(),
+      resolution.fallback.engine.dispose?.(),
+    ]);
+  }
 }
 
 function registerPromptTrackingEngine(engineId: string) {
@@ -369,7 +409,7 @@ describe("Engine contract tests", () => {
     },
     {
       name: "runtime fallback key",
-      sessionKey: undefined,
+      projectSessionKey: true,
       runtimeContext: { sessionKey: "agent:main:another-key" },
     },
     {
@@ -380,7 +420,7 @@ describe("Engine contract tests", () => {
     {
       name: "target-only parsed key",
       agentId: undefined,
-      sessionKey: undefined,
+      projectSessionKey: true,
       sessionTarget: { agentId: "worker", sessionKey: "agent:main:session" },
     },
     {
@@ -390,23 +430,24 @@ describe("Engine contract tests", () => {
     },
   ])(
     "rejects $name before a backend with no nested result can run",
-    async ({ name: _name, ...input }) => {
+    async ({ name: _name, projectSessionKey, ...input }) => {
       compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({ ok: true, compacted: true });
-      await expect(
-        delegateCompactionToRuntime({
-          agentId: "main",
-          sessionId: "session",
-          // @ts-expect-error Exercise JavaScript callers that omit the public contract's required key.
-          sessionKey: "agent:main:session",
-          sessionTarget: {
+      await withCompactionDelegateFixture(!projectSessionKey, async (engine) => {
+        await expect(
+          engine.compact({
             agentId: "main",
             sessionId: "session",
             sessionKey: "agent:main:session",
-          },
-          ...input,
-        }),
-      ).rejects.toThrow(/conflicts with/);
-      expect(compactEmbeddedAgentSessionOnDemandMock).not.toHaveBeenCalled();
+            sessionTarget: {
+              agentId: "main",
+              sessionId: "session",
+              sessionKey: "agent:main:session",
+            },
+            ...input,
+          }),
+        ).rejects.toThrow(/conflicts with/);
+        expect(compactEmbeddedAgentSessionOnDemandMock).not.toHaveBeenCalled();
+      });
     },
   );
 
@@ -425,22 +466,22 @@ describe("Engine contract tests", () => {
         sessionTarget: runtimeFallback ? sessionTarget : { agentId: "ignored" },
       };
       compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({ ok: true, compacted: true });
-      // @ts-expect-error Exercise JavaScript callers that supply identity only through runtimeContext.
-      const result = await delegateCompactionToRuntime({
-        sessionId: "session",
-        ...(runtimeFallback
-          ? {}
-          : { agentId: "main", sessionKey: "agent:main:session", sessionTarget }),
-        runtimeContext,
+      await withCompactionDelegateFixture(!runtimeFallback, async (engine) => {
+        const result = await engine.compact({
+          sessionId: "session",
+          sessionKey: "agent:main:session",
+          ...(runtimeFallback ? {} : { agentId: "main", sessionTarget }),
+          runtimeContext,
+        });
+        expect(result).toEqual({ ok: true, compacted: true, reason: undefined, result: undefined });
+        expect(requireCompactRuntimeParams(0)).toMatchObject({
+          agentId: "main",
+          sessionId: "session",
+          sessionKey: "agent:main:session",
+          sessionTarget,
+        });
+        expect(requireCompactRuntimeParams(0).contextEngineRuntimeContext).toBe(runtimeContext);
       });
-      expect(result).toEqual({ ok: true, compacted: true, reason: undefined, result: undefined });
-      expect(requireCompactRuntimeParams(0)).toMatchObject({
-        agentId: "main",
-        sessionId: "session",
-        sessionKey: "agent:main:session",
-        sessionTarget,
-      });
-      expect(requireCompactRuntimeParams(0).contextEngineRuntimeContext).toBe(runtimeContext);
     },
   );
 
