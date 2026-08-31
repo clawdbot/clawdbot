@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -27,6 +27,8 @@ describe("Plugin SDK API diff CLI", () => {
     // Keep revision checkout bounded so startup reaches the child this test cancels.
     const repo = tempDirs.make("plugin-sdk-api-diff-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-api-diff-temp-");
+    const runnerArtifact = join(runnerTemp, "unrelated-runner-artifact");
+    writeFileSync(runnerArtifact, "retained\n");
     const binDir = tempDirs.make("plugin-sdk-api-diff-bin-");
     const pnpmMarker = join(binDir, "pnpm-started");
 
@@ -107,7 +109,13 @@ describe("Plugin SDK API diff CLI", () => {
       expect(exitCode).toBe(143);
       expect(Date.now() - interruptedAt).toBeLessThan(5_000);
       expect(git(repo, ["worktree", "list"])).not.toContain(runnerTemp);
-      expect(readdirSync(runnerTemp)).toEqual([]);
+      // RUNNER_TEMP is shared with runner tools; the CLI owns only its generated roots.
+      expect(
+        readdirSync(runnerTemp).filter((entry) =>
+          entry.startsWith("openclaw-plugin-sdk-api-diff-"),
+        ),
+      ).toEqual([]);
+      expect(readFileSync(runnerArtifact, "utf8")).toBe("retained\n");
     } finally {
       if (!closed) {
         child.kill("SIGKILL");
