@@ -10,6 +10,7 @@ import {
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
@@ -377,6 +378,7 @@ async function requestTwilioApi(params: {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }): Promise<TwilioApiResponse> {
+  assertSmsCredentialOwnerAvailable(params.account.accountId);
   const init = {
     ...params.init,
     headers: {
@@ -569,6 +571,7 @@ export async function sendSmsViaTwilio(params: {
   fetchImpl?: typeof fetch;
   onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<SmsSendResult> {
+  assertSmsCredentialOwnerAvailable(params.account.accountId);
   if (!params.account.fromNumber && !params.account.messagingServiceSid) {
     throw new Error("Twilio SMS send requires fromNumber or messagingServiceSid.");
   }

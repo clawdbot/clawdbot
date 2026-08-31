@@ -6,6 +6,7 @@ import {
   isRequestBodyLimitError,
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import {
   createSmsDeliveryRecorder,
   isTwilioDeliveryStatusForm,
@@ -117,6 +118,7 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       respondTwiml(res, 405, "Method not allowed");
       return true;
     }
+    assertSmsCredentialOwnerAvailable(params.account.accountId);
 
     const clientAddress = resolvedClientAddress({ cfg: params.cfg, req });
     const clientAddressKey = rateLimitKey({ account: params.account, subject: clientAddress });

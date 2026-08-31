@@ -1,7 +1,7 @@
 // Sms tests cover twilio plugin behavior.
 import { createHmac } from "node:crypto";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import {
   buildTwilioInboundMessage,
@@ -15,8 +15,10 @@ import {
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
+const assertSmsCredentialOwnerAvailable = vi.hoisted(() => vi.fn());
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
+vi.mock("./credential-availability.js", () => ({ assertSmsCredentialOwnerAvailable }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   return {
@@ -97,6 +99,10 @@ function cancelTrackedTextResponse(
 }
 
 describe("Twilio SMS helpers", () => {
+  beforeEach(() => {
+    assertSmsCredentialOwnerAvailable.mockReset();
+  });
+
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
   });
@@ -486,6 +492,50 @@ describe("Twilio SMS helpers", () => {
     ).rejects.toThrow("Twilio SMS/MMS send requires text or media.");
 
     expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a cold owner before dispatch or fetch", async () => {
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    const fetchImpl = vi.fn<typeof fetch>();
+    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
+      throw new Error("SMS credential owner unavailable");
+    });
+
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+        onPlatformSendDispatch,
+        fetchImpl,
+      }),
+    ).rejects.toThrow("SMS credential owner unavailable");
+
+    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the owner after the dispatch marker before fetch", async () => {
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    const fetchImpl = vi.fn<typeof fetch>();
+    assertSmsCredentialOwnerAvailable
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("SMS credential owner became unavailable");
+      });
+
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+        onPlatformSendDispatch,
+        fetchImpl,
+      }),
+    ).rejects.toThrow("SMS credential owner became unavailable");
+
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("sends MMS with repeated MediaUrl fields and no required text body", async () => {

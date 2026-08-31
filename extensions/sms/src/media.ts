@@ -20,6 +20,7 @@ import {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isTransientNetworkError } from "openclaw/plugin-sdk/retry-runtime";
 import { safeEqualSecret, SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { getSmsRuntime } from "./runtime.js";
 import { TWILIO_MMS_MAX_BYTES } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
@@ -416,6 +417,7 @@ export async function materializeSmsInboundMedia(params: {
       cleanup,
     };
   }
+  assertSmsCredentialOwnerAvailable(params.account.accountId);
 
   // The operator cap applies per attachment; Twilio's aggregate budget spans the message.
   let remainingBytes = TWILIO_MMS_MAX_BYTES;

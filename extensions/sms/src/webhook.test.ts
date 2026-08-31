@@ -7,9 +7,12 @@ import type { SmsDeliveryRecorder } from "./delivery-observations.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
 
+const assertSmsCredentialOwnerAvailable = vi.hoisted(() => vi.fn());
 const enqueueSmsIngress = vi.hoisted(() =>
   vi.fn(async () => ({ kind: "accepted" as const, duplicate: false })),
 );
+
+vi.mock("./credential-availability.js", () => ({ assertSmsCredentialOwnerAvailable }));
 
 let testAccountSequence = 0;
 let activeAccountId = "test-0";
@@ -208,9 +211,27 @@ function createMessageSid(index: number): string {
 
 describe("createSmsWebhookHandler", () => {
   beforeEach(() => {
+    assertSmsCredentialOwnerAvailable.mockReset();
     enqueueSmsIngress.mockReset();
     enqueueSmsIngress.mockResolvedValue({ kind: "accepted", duplicate: false });
     activeAccountId = `test-${++testAccountSequence}`;
+  });
+
+  it("rejects a cold owner before parsing or durable admission", async () => {
+    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
+      throw new Error("SMS credential owner unavailable");
+    });
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+    const res = createResponse();
+
+    await expect(handler(createRequest("ignored", "ignored"), res)).rejects.toThrow(
+      "SMS credential owner unavailable",
+    );
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
   });
 
   it("validates a fragmentless signature before enqueuing the raw Twilio form", async () => {

@@ -23,6 +23,7 @@ import {
 import { setSmsRuntime } from "./runtime.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
+const assertSmsCredentialOwnerAvailable = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn<typeof loadWebMediaType>());
 const unlinkIfExistsMock = vi.hoisted(() =>
   vi.fn<typeof unlinkIfExistsType>(async () => undefined),
@@ -84,10 +85,15 @@ const TWILIO_MMS_FILENAME_CASES = [
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: loadWebMediaMock,
 }));
+vi.mock("./credential-availability.js", () => ({ assertSmsCredentialOwnerAvailable }));
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   unlinkIfExists: unlinkIfExistsMock,
 }));
+
+beforeEach(() => {
+  assertSmsCredentialOwnerAvailable.mockReset();
+});
 
 const testStateEnv: NodeJS.ProcessEnv = {
   ...process.env,
@@ -755,6 +761,30 @@ describe("SMS inbound MMS materialization", () => {
     expect(result.media).toEqual([]);
     expect(result.body).toContain("many photos");
     expect(result.body).toContain("[2 Twilio MMS attachments unavailable]");
+  });
+
+  it("rejects a cold owner before authenticated MMS download", async () => {
+    const saveRemoteMedia = vi.fn();
+    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
+      throw new Error("SMS credential owner unavailable");
+    });
+
+    await expect(
+      materializeSmsInboundMedia({
+        account: createAccount(),
+        msg: {
+          accountSid: ACCOUNT_SID,
+          from: "+15551234567",
+          to: "+15557654321",
+          body: "",
+          messageSid: MESSAGE_SID,
+          media: [{ url: twilioMediaUrl(), contentType: "image/jpeg" }],
+        },
+        mediaRuntime: { media: { saveRemoteMedia } } as never,
+      }),
+    ).rejects.toThrow("SMS credential owner unavailable");
+
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
   it("rejects non-Twilio media hosts and exposes a visible failure notice", async () => {

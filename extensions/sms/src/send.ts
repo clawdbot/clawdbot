@@ -15,6 +15,7 @@ import {
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { recordInitialSmsDeliveryResult } from "./delivery-observations.js";
 import { getSmsRuntime } from "./runtime.js";
 import { sendSmsViaTwilio, TWILIO_MESSAGE_BODY_MAX_LENGTH } from "./twilio.js";
@@ -228,6 +229,7 @@ export async function prepareSmsMediaAttempt(params: {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }): Promise<PreparedSmsMediaAttempt> {
+  assertSmsCredentialOwnerAvailable(params.account.accountId);
   if (!params.mediaUrl) {
     throw new Error("MMS send requires mediaUrl.");
   }
