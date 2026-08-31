@@ -7,6 +7,7 @@ import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatSessionListResponse,
+  controlUiSessionUrl,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
@@ -246,7 +247,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", {
         key: "main",
         phase: "message",
-        sessionId: "control-ui-e2e-session",
+        sessionId: "session:agent:main:main",
         updatedAt: initialTime.getTime() + 5 * 60_000 + 1,
       });
       await gateway.waitForRequest("chat.history", { after: historyCount });
@@ -315,7 +316,7 @@ suite.define(() => {
         key: "main",
         phase: "reset",
         reason: "reset",
-        sessionId: "control-ui-e2e-session",
+        sessionId: "session:agent:main:main",
         updatedAt: initialTime.getTime() + 5 * 60_000 + 1,
       });
       await gateway.waitForRequest("chat.history", { after: firstHistoryCount });
@@ -335,7 +336,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", {
         key: "main",
         phase: "message",
-        sessionId: "control-ui-e2e-session",
+        sessionId: "session:agent:main:main",
         updatedAt: initialTime.getTime() + 5 * 60_000 + 2,
       });
       await gateway.waitForRequest("chat.history", { after: secondHistoryCount });
@@ -431,7 +432,7 @@ suite.define(() => {
         sessionKey: "agent:main:session-a",
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       const rows = panes.locator(".chat-tool-row");
@@ -505,7 +506,7 @@ suite.define(() => {
         sessionKey,
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       const summaries = panes.locator(".chat-activity-group__summary");
@@ -525,7 +526,7 @@ suite.define(() => {
         key: sessionKey,
         phase: "reset",
         reason: "reset",
-        sessionId: "control-ui-e2e-session",
+        sessionId: `session:${sessionKey}`,
         updatedAt: initialTime.getTime() + 5 * 60_000 + 1,
       });
       await gateway.waitForRequest("chat.history", { after: firstHistoryCount });

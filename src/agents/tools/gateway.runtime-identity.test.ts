@@ -8,6 +8,7 @@ import {
 } from "../../gateway/agent-runtime-identity-token.js";
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import { ExecApprovalManager } from "../../gateway/exec-approval-manager.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -444,6 +445,7 @@ describe("gateway tool runtime identity", () => {
 
   it("invalidates message action identity when its turn capability closes", async () => {
     const operationalRunInstance = createOperationalRunInstanceRef("run-capability-close");
+    const permissionGeneration = new AbortController();
     const sessionKey = "agent:ops:telegram:group:room-close";
     const turnCapability = mintMessageActionTurnCapability({
       agentId: "ops",
@@ -454,7 +456,12 @@ describe("gateway tool runtime identity", () => {
     mintedTurnCapabilities.push(turnCapability);
 
     await withActiveGatewayToolCallerIdentity(
-      { agentId: "ops", sessionKey, operationalRunInstance },
+      {
+        agentId: "ops",
+        sessionKey,
+        operationalRunInstance,
+        approvalSignals: [permissionGeneration.signal],
+      },
       async () => {
         const token = await resolveMessageActionAgentRuntimeIdentityToken({
           opts: {},
@@ -472,6 +479,8 @@ describe("gateway tool runtime identity", () => {
           return;
         }
         const validate = createAgentRuntimeApprovalAuthorityValidator();
+        expect(validate(identity)).toBe(true);
+        permissionGeneration.abort();
         expect(validate(identity)).toBe(true);
 
         expect(revokeMessageActionTurnCapability(turnCapability)).toBe(true);
@@ -586,6 +595,73 @@ describe("gateway tool runtime identity", () => {
       );
       if (!executionIdentityToken) {
         expect(verified).not.toHaveProperty("executionIdentity");
+      }
+    },
+  );
+
+  it.each(
+    ["exec.approval.request", "plugin.approval.request"].flatMap((method) =>
+      [false, true].map((ambient) => ({ method, ambient })),
+    ),
+  )(
+    "rejects late $method registration after permission change (ambient lifetime: $ambient)",
+    async ({ method, ambient }) => {
+      mocks.callGateway.mockResolvedValue({ id: "approval" });
+      const manager = new ExecApprovalManager({
+        validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+      });
+      const operationalRunInstance = createOperationalRunInstanceRef("run-permission-change");
+      const outerLifetime = new AbortController();
+      const oldGeneration = new AbortController();
+      const nextGeneration = new AbortController();
+      try {
+        await withActiveGatewayToolCallerIdentity(
+          {
+            agentId: "ops",
+            sessionKey: "agent:ops:main",
+            operationalRunInstance,
+            ...(ambient ? { approvalSignals: [outerLifetime.signal] } : {}),
+          },
+          async () => {
+            await callGatewayTool(method, {}, {}, { signal: oldGeneration.signal });
+            const oldIdentity = await verifyAgentRuntimeIdentityToken(
+              capturedGatewayCall().agentRuntimeIdentityToken,
+            );
+            if (!oldIdentity) {
+              throw new Error("Expected signed approval identity");
+            }
+            const oldRecord = manager.create({ command: "echo old" }, 2_000, "old-generation");
+            oldRecord.agentRuntimeDelegatedAuthority = oldIdentity.delegatedAuthority;
+            // The request is already dispatched, but has not registered its pending card.
+            oldGeneration.abort(new Error("Permission change"));
+            expect(() => manager.register(oldRecord, 2_000)).toThrow("no longer active");
+            expect(manager.listPendingRecords()).toHaveLength(0);
+
+            await callGatewayTool(method, {}, {}, { signal: nextGeneration.signal });
+            const nextCall = mocks.callGateway.mock.calls.at(-1)?.[0] as CallGatewayOptions;
+            const nextIdentity = await verifyAgentRuntimeIdentityToken(
+              nextCall.agentRuntimeIdentityToken,
+            );
+            if (!nextIdentity) {
+              throw new Error("Expected replacement approval identity");
+            }
+            const nextRecord = manager.create({ command: "echo new" }, 2_000, "next-generation");
+            nextRecord.agentRuntimeDelegatedAuthority = nextIdentity.delegatedAuthority;
+            const decision = manager.register(nextRecord, 2_000);
+            const waiter = manager.awaitDecision(nextRecord.id);
+            expect(manager.listPendingRecords()).toHaveLength(1);
+            manager.resolve(nextRecord.id, "allow-once");
+            await expect(decision).resolves.toBe("allow-once");
+            expect(manager.projectDecisionIfActive(nextRecord.id, await waiter)).toBe("allow-once");
+          },
+        );
+      } finally {
+        outerLifetime.abort();
+        oldGeneration.abort();
+        nextGeneration.abort();
+        for (const record of manager.listPendingRecords()) {
+          manager.resolve(record.id, "deny");
+        }
       }
     },
   );

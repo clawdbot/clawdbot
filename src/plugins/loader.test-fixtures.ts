@@ -80,6 +80,35 @@ export function makePluginLoaderTempDir() {
   return dir;
 }
 
+export function writePluginMetadata(params: {
+  dir: string;
+  id: string;
+  configSchema?: Record<string, unknown>;
+  channels?: string[];
+  packageJson?: Record<string, unknown>;
+}): void {
+  if (params.packageJson) {
+    fs.writeFileSync(
+      path.join(params.dir, "package.json"),
+      JSON.stringify(params.packageJson, null, 2),
+      "utf-8",
+    );
+  }
+  fs.writeFileSync(
+    path.join(params.dir, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: params.id,
+        configSchema: params.configSchema ?? EMPTY_PLUGIN_SCHEMA,
+        ...(params.channels ? { channels: params.channels } : {}),
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+}
+
 export function writePlugin(params: {
   id: string;
   body: string;
@@ -92,18 +121,7 @@ export function writePlugin(params: {
   mkdirSafe(dir);
   const file = path.join(dir, filename);
   fs.writeFileSync(file, params.body, "utf-8");
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        configSchema: params.configSchema ?? EMPTY_PLUGIN_SCHEMA,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  writePluginMetadata({ dir, id: params.id, configSchema: params.configSchema });
   return { dir, file, id: params.id };
 }
 

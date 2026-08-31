@@ -23,6 +23,7 @@ import {
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
+import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
 
 export type OpenClawVitestPool = "forks" | "threads";
 
@@ -160,7 +161,7 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
-  plugins: [createStateSchemaInlinePlugin(repoRoot)],
+  plugins: [createStateSchemaInlinePlugin(repoRoot), compiledSubprocessesPlugin()],
   resolve: {
     alias: [
       {
@@ -453,6 +454,7 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core"),
       sourcePackageAlias("retry"),
       sourcePackageAlias("session-url-contract", "parse"),
+      sourcePackageAlias("session-url-contract", "share-build"),
       sourcePackageAlias("session-url-contract"),
       sourcePackageAlias("workboard-contract"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),

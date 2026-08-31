@@ -50,6 +50,7 @@ function makeContextParams(
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),
+    isConfigReloadSettled: vi.fn(() => true),
     getGatewayMethodRegistry: vi.fn(() => ({}) as never),
     sessionCompanion: {} as never,
     sessionObserver: {} as never,
@@ -206,16 +207,23 @@ describe("createGatewayRequestContext", () => {
     expect(context.cronStorePath).toBe("/tmp/cron-b");
   });
 
-  it("reads config hot-reload status through the live kernel bridge", () => {
+  it("reads config reload status and readiness through the live kernel bridge", () => {
     let status: "active" | "disabled" | undefined;
+    let settled = true;
     const context = createGatewayRequestContext(
-      makeContextParams({ getConfigReloaderHotReloadStatus: () => status }),
+      makeContextParams({
+        getConfigReloaderHotReloadStatus: () => status,
+        isConfigReloadSettled: () => settled,
+      }),
     );
 
     expect(context.getConfigReloaderHotReloadStatus?.()).toBeUndefined();
 
     status = "active";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
+    expect(context.isConfigReloadSettled()).toBe(true);
+    settled = false;
+    expect(context.isConfigReloadSettled()).toBe(false);
 
     status = "disabled";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");

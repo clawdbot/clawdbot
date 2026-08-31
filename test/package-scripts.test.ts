@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { detectChangedScope } from "../scripts/ci-changed-scope.mjs";
 
 type RootPackageJson = {
   scripts: Record<string, string>;
@@ -226,6 +227,13 @@ describe("package scripts", () => {
     expect(scripts["android:test"]).toContain(":wear:testDebugUnitTest");
   });
 
+  it("routes every declared Windows CI test to its native lane", () => {
+    const missedTargets = readWindowsCiPartScripts()
+      .flatMap(readWindowsCiTargets)
+      .filter((target) => !detectChangedScope([target]).runWindows);
+    expect(missedTargets).toEqual([]);
+  });
+
   it("partitions Windows CI coverage into two disjoint explicit test lists", () => {
     const scripts = readPackageJson().scripts;
     const partScripts = readWindowsCiPartScripts();
@@ -256,6 +264,12 @@ describe("package scripts", () => {
 
   it("runs direct-run entrypoint coverage in Windows CI", () => {
     expect(readWindowsCiCoverageScript()).toContain("test/scripts/direct-run-entrypoints.test.ts");
+  });
+
+  it("runs compiled worker path, IPC, and cleanup coverage in Windows CI", () => {
+    expect(readWindowsCiPartScripts().flatMap(readWindowsCiTargets)).toContain(
+      "test/scripts/vitest-worker-artifacts.test.ts",
+    );
   });
 
   it("runs Docker package process-tree coverage in Windows CI", () => {

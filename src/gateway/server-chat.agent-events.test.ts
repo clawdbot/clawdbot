@@ -352,6 +352,23 @@ describe("agent event handler", () => {
     );
   });
 
+  it("replays cumulative usage with the same client identity as live delivery", () => {
+    const { chatRunState, handler, broadcast } = createHarness();
+    registerChatRun(chatRunState, "provider-run", "session-1", "client-run");
+    emitAgentEvents(handler, "provider-run", [
+      ["usage", { outputTokens: 100 }],
+      ["usage", { outputTokens: 170 }],
+    ]);
+    const usage = agentBroadcastCalls(broadcast).at(-1)?.[1];
+    expect(usage).toMatchObject({
+      runId: "client-run",
+      sessionKey: "session-1",
+      stream: "usage",
+      data: { outputTokens: 170 },
+    });
+    expect(chatRunState.runs.get("client-run")?.progressSnapshot?.events).toEqual([usage]);
+  });
+
   it("records, replaces, dismisses, and clears normalized plan snapshots", () => {
     const { chatRunState, handler } = createHarness();
     registerChatRun(chatRunState, "provider-run", "session-1", "client-run");

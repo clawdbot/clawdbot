@@ -323,13 +323,12 @@ export function listCrabboxMachineOptions(
   return options;
 }
 
-export function buildCrabboxWarmupArgs(
+export function buildCrabboxAllocationArgs(
   profile: CrabboxProfile,
   leaseId: string,
   slug: string,
 ): string[] {
   const args = [
-    "warmup",
     "--provider",
     profile.provider,
     "--network",

@@ -111,6 +111,7 @@ export async function resolvePromptBuildHookResult(params: {
     : await drainPluginNextTurnInjectionContext({
         cfg: params.config,
         sessionKey: params.hookCtx.sessionKey,
+        agentId: params.hookCtx.agentId,
       });
   if (runId && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);

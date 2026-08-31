@@ -209,6 +209,10 @@
       "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
       "@openclaw/retry": ["./packages/retry/src/index.ts"],
       "@openclaw/session-url-contract": ["./packages/session-url-contract/src/index.ts"],
+      "@openclaw/session-url-contract/parse": ["./packages/session-url-contract/src/parse.ts"],
+      "@openclaw/session-url-contract/share-build": [
+        "./packages/session-url-contract/src/share-build.ts"
+      ],
       "@openclaw/session-url-contract/*": ["./packages/session-url-contract/src/*"],
       "@openclaw/workboard-contract": ["./packages/workboard-contract/src/index.ts"],
       "@openclaw/acp-core": ["./packages/acp-core/src/index.ts"],

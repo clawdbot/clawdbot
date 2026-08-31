@@ -189,7 +189,10 @@ const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted
   buildLinePostbackContextMock: vi.fn(async () => null as unknown),
 }));
 
-vi.mock("./bot-message-context.js", () => ({
+vi.mock("./bot-message-context.js", async (importOriginal) => ({
+  // Reading a LINE text body is pure and is part of the behavior these tests
+  // exercise, so it comes from the real module rather than a stub.
+  ...(await importOriginal<typeof import("./bot-message-context.js")>()),
   buildLineMessageContext: buildLineMessageContextMock,
   buildLinePostbackContext: buildLinePostbackContextMock,
   getLineSourceInfo: (source: {
@@ -897,7 +900,16 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m-hist-1", type: "text", text: "first", quoteToken: "q-hist-1" },
+          message: {
+            id: "m-hist-1",
+            type: "text",
+            text: "() (hello)",
+            quoteToken: "q-hist-1",
+            emojis: [
+              { index: 0, length: 2, productId: "emoji-set", emojiId: "1" },
+              { index: 3, length: 7, productId: "emoji-set", emojiId: "2" },
+            ],
+          },
           timestamp: 1700000000000,
           source: { type: "group", groupId: "group-hist-1", userId: "user-one" },
           webhookEventId: "evt-hist-1",
@@ -914,7 +926,7 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(groupHistories.get("group-hist-1")).toEqual([
-      expect.objectContaining({ sender: "Sora (user-one)", body: "first" }),
+      expect.objectContaining({ sender: "Sora (user-one)", body: "[emoji] (hello)" }),
       expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
     ]);
 
@@ -939,7 +951,7 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         inboundHistory: [
-          expect.objectContaining({ sender: "Sora (user-one)", body: "first" }),
+          expect.objectContaining({ sender: "Sora (user-one)", body: "[emoji] (hello)" }),
           expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
         ],
       }),

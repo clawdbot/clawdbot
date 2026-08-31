@@ -50,7 +50,7 @@ import {
   restorePointerOpenedChatComposerTrigger,
 } from "./chat-picker-overlay.ts";
 import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
-import { renderChatVoiceError } from "./chat-voice-activity.ts";
+import { renderChatVoiceStatus } from "./chat-voice-activity.ts";
 
 type ChatComposerViewContext = {
   props: ChatComposerProps;
@@ -183,8 +183,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     state.capabilityMenuView = "root";
   }
   const disabledReasonId = paneDomId(props.paneId, "disabled-reason");
-  const voiceError = showComposerInput
-    ? renderChatVoiceError({
+  const composerAlerts = showComposerInput
+    ? renderChatVoiceStatus({
         status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
         detail: props.realtimeTalkDetail,
         onDismissError: props.realtimeTalkCameraError
@@ -192,12 +192,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           : props.onDismissRealtimeTalkError,
       })
     : nothing;
-  const composerAlerts =
-    voiceError !== nothing
-      ? html`<div class="agent-chat__composer-errors agent-chat__composer-errors--standalone">
-          ${voiceError}
-        </div>`
-      : nothing;
   const offlineText = props.offline
     ? props.queuedOutboxCount
       ? t("chat.composer.offlineQueuedHint", { count: String(props.queuedOutboxCount) })
@@ -278,6 +272,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     onQueueEditCancel: props.queuedEdit?.onCancel,
     editingId: props.queuedEdit?.editingId ?? null,
     editingText: props.queuedEdit?.editingText,
+    editingSource: props.queuedEdit?.source,
     onQueueRemove: props.onQueueRemove,
   });
   const goalCard = activeSession?.goal

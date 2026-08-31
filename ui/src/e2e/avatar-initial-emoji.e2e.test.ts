@@ -69,7 +69,7 @@ suite.define(() => {
               agentsList,
               messages: [],
               metadata: { models: [] },
-              sessionId: "control-ui-e2e-session",
+              sessionId: "session:agent:main:main",
               thinkingLevel: null,
             },
             "sessions.list": {

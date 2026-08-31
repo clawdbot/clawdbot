@@ -18,6 +18,7 @@ import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js"
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
 import type { WorkerEnvironmentStore } from "./store.js";
+import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import type { WorkerComputerExecutor } from "./worker-turn-computer-rpc.js";
 
 const COMPUTER_COMMANDS = ["screen.snapshot", "computer.act"] as const;
@@ -68,7 +69,7 @@ export function createWorkerComputerTransportOwner(options: {
     }
     const node = context.nodeRegistry.get(environment.nodeDeviceId);
     if (!node) {
-      throw new Error("Session desktop node is disconnected");
+      throw new WorkerRunnerUnavailableError();
     }
     const environmentIsCurrent = () => {
       const current = options.store.get(environment.environmentId);

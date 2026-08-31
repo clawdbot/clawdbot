@@ -354,9 +354,12 @@ pr_meta_json() {
 
   actual_file_count=$(printf '%s\n' "$files" | jq -r 'length')
   if [ "$actual_file_count" -ne "$expected_file_count" ]; then
+    local repo_nwo
+    repo_nwo=$(gh_plain repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+    # Pin the base repository and revalidate every page before the final head check.
     if ! files=$(
       set -o pipefail
-      gh_plain api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
+      gh_plain api --paginate "repos/$repo_nwo/pulls/$pr/files?per_page=100" -H 'Cache-Control: max-age=0' |
         jq -cs '
           add
           | map({

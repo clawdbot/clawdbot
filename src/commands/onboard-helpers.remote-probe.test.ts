@@ -64,11 +64,15 @@ describe("probeGatewayReachable", () => {
       },
     };
 
-    await expect(probe({ url: "wss://gateway.example", config })).resolves.toEqual({
-      ok: true,
-    });
+    await expect(
+      probe({ url: "wss://gateway.example", config, originScopedDeviceAuth: true }),
+    ).resolves.toEqual({ ok: true });
     expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "wss://gateway.example", config }),
+      expect.objectContaining({
+        url: "wss://gateway.example",
+        config,
+        originScopedDeviceAuth: true,
+      }),
     );
   });
 
@@ -177,13 +181,14 @@ describe("probeGatewayReachable", () => {
     await expect(
       probeGatewayConfiguredModel({
         url: "ws://127.0.0.1:18789",
+        originScopedDeviceAuth: true,
       }),
     ).resolves.toEqual({
       kind: "missing-configured-model",
       detail: "Gateway default agent has no configured model",
     });
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ detailLevel: "config" }),
+    expect(mocks.probeGateway).toHaveBeenLastCalledWith(
+      expect.objectContaining({ detailLevel: "config", originScopedDeviceAuth: true }),
     );
   });
 

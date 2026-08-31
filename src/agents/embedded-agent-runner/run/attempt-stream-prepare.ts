@@ -46,7 +46,11 @@ import { normalizeToolPolicyName } from "../../tool-policy.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { log } from "../logger.js";
-import { ACTIVE_EMBEDDED_RUNS, setActiveEmbeddedRunLifecycleGeneration } from "../run-state.js";
+import {
+  ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
+  setActiveEmbeddedRunLifecycleGeneration,
+} from "../run-state.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
@@ -71,6 +75,7 @@ import {
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "./helpers.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -88,7 +93,11 @@ type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
 };
 
 export function prepareEmbeddedAttemptStream(input: {
-  attempt: EmbeddedRunAttemptParams;
+  attempt: EmbeddedRunAttemptInternalParams;
+  applyPermissionMode?: (
+    mode: NonNullable<EmbeddedRunAttemptParams["permissionMode"]> | null,
+    revokeApprovals: () => void,
+  ) => void;
   activeSession: AgentSession;
   runtimeChannel?: string;
   hookRunner: HookRunner;
@@ -336,6 +345,9 @@ export function prepareEmbeddedAttemptStream(input: {
     silentExpected: attempt.silentExpected,
     suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
     config: attempt.config,
+    compactionCountOwner: attempt.compactionCountOwner,
+    onContextAccountingEvent: attempt.onContextAccountingEvent,
+    sessionPersistence: attempt.sessionPersistence,
     // Live events belong to the transcript session. The sandbox key is only
     // authority context and may intentionally point at a visible parent.
     sessionKey: attempt.sessionKey,
@@ -518,15 +530,39 @@ export function prepareEmbeddedAttemptStream(input: {
   };
   const heartbeatReplyOperation =
     attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
+  const applyPermissionMode = input.applyPermissionMode;
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
+    permissionChangeOwner: attempt.permissionChange?.owner,
     diagnosticOwner: input.diagnosticOwner,
     closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(input.diagnosticOwner),
     startedAtMs: attempt.startedAtMs,
-    ...(attempt.toolAuthorityFingerprint
-      ? { toolAuthorityFingerprint: attempt.toolAuthorityFingerprint }
-      : {}),
+    get toolAuthorityFingerprint() {
+      return attempt.toolAuthorityFingerprint;
+    },
+    applyPermissionMode: applyPermissionMode
+      ? async (mode, revokeApprovals) => {
+          if (
+            !acceptingSteerMessages ||
+            input.runAbortController.signal.aborted ||
+            ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) !== queueHandle
+          ) {
+            return false;
+          }
+          if ((attempt.permissionMode ?? null) === mode) {
+            return true;
+          }
+          try {
+            applyPermissionMode(mode, revokeApprovals);
+            return true;
+          } catch (error) {
+            // A partially rebuilt surface must never resume its revoked tools.
+            input.abortRun(false, error);
+            throw error;
+          }
+        }
+      : undefined,
     claimPendingUserInputAnswer: (text, options) =>
       claimEmbeddedPendingUserInputAnswer(text, options, attempt.sessionKey),
     cancelPendingUserInput: (resolvedBy) =>

@@ -22,7 +22,10 @@ import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approv
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
-import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
+import type {
+  EmbeddedRunAttemptInternalParams,
+  RunEmbeddedAgentInternalParams,
+} from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
@@ -119,6 +122,7 @@ type AttemptControl = {
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
   codeModeRecovery?: Exclude<CodeModeRecoveryState, { kind: "idle" }>;
+  permissionChange?: EmbeddedRunAttemptParams["permissionChange"];
   /** Run-owned start timestamp captured before admission; projected on recovery. */
   runStartedAtMs: number;
   runtime: AttemptRuntime;
@@ -207,6 +211,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ? await (async () => {
         const workspace = await resolveAttemptWorkspaceSandbox({
           ...params,
+          agentId: runtime.agentId,
           cwd: undefined,
           sessionId: runtime.sessionId,
           sessionKey: runtime.sessionKey,
@@ -234,6 +239,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
+  const sessionKey = runtime.sessionKey?.trim() || runtime.sessionId;
+  const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
   const pluginSandbox = control.pluginHarnessOwnsTransport
     ? ((await resolveSessionPlacementSandbox({
         agentId: runtime.agentId,
@@ -244,7 +251,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
       })) ??
       (await resolveSandboxContext({
         config: params.config,
-        sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
+        agentId: sandboxSessionKey === sessionKey ? runtime.agentId : undefined,
+        sessionKey: sandboxSessionKey,
         workspaceDir: runtime.workspaceDir,
       })))
     : undefined;
@@ -272,7 +280,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     sessionKey: params.sessionKey,
     toolsAllow: params.toolsAllow,
   });
-  const attemptParams: EmbeddedRunAttemptParams = {
+  const attemptParams: EmbeddedRunAttemptInternalParams = {
+    permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: input.runStartedAtMs,
     contextEngineAgentId: runtime.contextEngineAgentId,
@@ -497,6 +506,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
     // Authorized prompt enrichment needs the exact prepared turn policy identity.
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     sessionPersistence: params.sessionPersistence,
+    // The host loop settles all completed counts, including default/SDK runs.
+    compactionCountOwner: "caller",
+    onContextAccountingEvent: params.onContextAccountingEvent,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,

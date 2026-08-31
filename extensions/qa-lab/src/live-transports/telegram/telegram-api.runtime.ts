@@ -25,7 +25,6 @@ export function buildTelegramQaConfig(
   params: {
     apiRoot: string;
     groupId: string;
-    requireMention: boolean;
     sutAccountId: string;
     sutToken: string;
     testerUserId: string;
@@ -77,7 +76,9 @@ export function buildTelegramQaConfig(
               [params.groupId]: {
                 groupPolicy: "allowlist",
                 allowFrom: [params.testerUserId],
-                requireMention: params.requireMention,
+                // Concurrent leases share this group and QA sender. Only this
+                // bot's mentions or reply chain may trigger an agent turn.
+                requireMention: true,
               },
             },
           },

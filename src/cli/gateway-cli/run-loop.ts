@@ -12,6 +12,7 @@ import {
   startGatewayRestartTrace,
 } from "../../gateway/restart-trace.js";
 import type { startGatewayServer } from "../../gateway/server.js";
+import { flushDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
@@ -175,6 +176,7 @@ export async function runGatewayLoop(params: {
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;
     // Graceful signal/restart paths call process.exit(), which skips beforeExit.
+    flushDiagnosticsTimeline();
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
     const flushed = await Promise.race([
       flushLogger().then(() => true),
@@ -574,6 +576,7 @@ export async function runGatewayLoop(params: {
         | "restored-in-process"
         | "restart-after-exit"
         | undefined;
+      let shutdownFailed = false;
       const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs(restartIntent) : 0;
       const restartDrainDeadlineAt =
         isRestart && restartDrainTimeoutMs !== undefined
@@ -734,6 +737,7 @@ export async function runGatewayLoop(params: {
           ...(closeDrainTimeoutMs !== null ? { drainTimeoutMs: closeDrainTimeoutMs } : {}),
         });
       } catch (err) {
+        shutdownFailed = true;
         gatewayLog.error(`shutdown step failed (gateway server close): ${formatErrorMessage(err)}`);
       } finally {
         const handoffClosed =
@@ -743,7 +747,9 @@ export async function runGatewayLoop(params: {
         }
         if (isRestart) {
           try {
-            if (handoffClosed) {
+            if (shutdownFailed) {
+              await forceExitAfterStabilityBundle("gateway.restart_close_failed");
+            } else if (handoffClosed) {
               await handleRestartAfterServerClose(
                 managedUpdateOwner,
                 managedUpdateCancellation === "restored-in-process",

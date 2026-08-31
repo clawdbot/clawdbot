@@ -35,6 +35,11 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import type {
+  CliBackendConfig,
+  CliBackendExecute,
+  CliBackendLiveSessionHandle,
+} from "../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -46,6 +51,7 @@ import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transc
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
@@ -233,6 +239,87 @@ function makeClaudePreparedContext(
 ): PreparedCliRunContext {
   return buildPreparedContext({ provider: "claude-cli", model: "opus", ...overrides });
 }
+
+async function usePluginLiveBackend(context: PreparedCliRunContext, execute: CliBackendExecute) {
+  const backend: CliBackendConfig = {
+    command: "/bin/sh",
+    args: [],
+    resumeArgs: ["--resume", "{sessionId}"],
+    output: "jsonl",
+    jsonlDialect: "claude-stream-json",
+    input: "stdin",
+    sessionMode: "existing",
+    liveSession: "claude-stdio",
+    freshSessionRecovery: "invalidated-only",
+  };
+  context.preparedBackend.backend = backend;
+  context.backendResolved.config = backend;
+  context.executionTarget = { kind: "plugin", execute };
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    context.params.runId,
+    "main",
+    "plugin-recovery-test",
+  );
+  context.params.admittedRunContext = await admission.admit("plugin-harness");
+  return { admission, context };
+}
+
+const failClosedPluginResumeCases: Array<{
+  name: string;
+  warm?: boolean;
+  invalidate?: boolean;
+  managed?: boolean;
+  resume?: boolean;
+  event?: Record<string, unknown>;
+}> = [
+  { name: "a valid required generation", warm: true, resume: true },
+  { name: "a fresh managed turn", managed: true },
+  { name: "an unbound managed resume", managed: true, resume: true },
+  { name: "a one-shot turn" },
+  {
+    name: "assistant output",
+    warm: true,
+    invalidate: true,
+    resume: true,
+    event: { type: "assistant", message: { content: [{ type: "text", text: "started" }] } },
+  },
+  {
+    name: "thinking output",
+    warm: true,
+    invalidate: true,
+    resume: true,
+    event: { type: "assistant", message: { content: [{ type: "thinking", thinking: "work" }] } },
+  },
+  {
+    name: "tool output with an active parsed tool",
+    warm: true,
+    invalidate: true,
+    resume: true,
+    event: {
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "tool-1", name: "Read", input: {} }] },
+    },
+  },
+  {
+    name: "background work",
+    warm: true,
+    invalidate: true,
+    resume: true,
+    event: {
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "task-1", task_type: "local_agent" }],
+    },
+  },
+  {
+    name: "an unknown event",
+    warm: true,
+    invalidate: true,
+    resume: true,
+    event: { type: "future_event" },
+  },
+];
 
 function makeRunExit(overrides: Partial<RunExit> = {}): RunExit {
   return {
@@ -4138,6 +4225,210 @@ describe("runCliAgent reliability", () => {
       expect(firstHistoryMessage.content).toBe(`history-5`);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fresh-reseeds one invalidated control-only plugin resume without duplicate hooks", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["llm_input", "llm_output", "agent_end"].includes(hookName),
+      ),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    let attempts = 0;
+    let liveHandle: CliBackendLiveSessionHandle | undefined;
+    const execute: CliBackendExecute = async function* (execution) {
+      attempts += 1;
+      const capability = execution.liveSession;
+      if (!capability) {
+        throw new Error("Expected a managed live-session capability.");
+      }
+      if (attempts === 1) {
+        const handle: CliBackendLiveSessionHandle = {
+          generation: "warm-generation",
+          fingerprint: capability.fingerprint,
+          isIdle: () => true,
+          close: () => capability.remove(handle),
+          waitForExit: async () => {},
+        };
+        liveHandle = handle;
+        capability.register(handle);
+        yield { type: "result", subtype: "success", is_error: false, result: "warm" };
+        return;
+      }
+      if (attempts === 2) {
+        expect(execution.useResume).toBe(true);
+        yield { type: "system", subtype: "init", session_id: "warm-session" };
+        capability.current()?.close("abort");
+        return;
+      }
+      expect(execution.useResume).toBe(false);
+      expect(execution.prompt).toContain("earlier context");
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "recovered output",
+        session_id: "fresh-session",
+      };
+    };
+    const { admission, context } = await usePluginLiveBackend(
+      makeClaudePreparedContext({
+        sessionKey: "agent:main:plugin-resume-recovery",
+        runId: "run-plugin-resume-recovery",
+        cliSessionId: "warm-session",
+        openClawHistoryPrompt: CLI_RESEED_PROMPT,
+      }),
+      execute,
+    );
+    const clearBeforeRetry = vi.fn(async () => true);
+
+    try {
+      await executePreparedCliRun({ ...context, openClawHistoryPrompt: undefined }, undefined);
+      context.requiredClaudeLiveSessionGeneration = liveHandle?.generation;
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "recovered output" }]);
+      expect(attempts).toBe(3);
+      expect(clearBeforeRetry).toHaveBeenCalledOnce();
+      expect(hookRunner.runLlmInput).toHaveBeenCalledOnce();
+      expect(hookRunner.runLlmOutput).toHaveBeenCalledOnce();
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledOnce();
+    } finally {
+      liveHandle?.close("restart");
+      admission.close();
+    }
+  });
+
+  it.each(failClosedPluginResumeCases)(
+    "keeps the original failure after $name",
+    async ({ name, event, invalidate, managed, resume, warm }) => {
+      let attempts = 0;
+      let liveHandle: CliBackendLiveSessionHandle | undefined;
+      const streamError = new Error("plugin stream failed without a retry-safe termination");
+      const execute: CliBackendExecute = async function* (execution) {
+        attempts += 1;
+        const capability = execution.liveSession;
+        if (warm && attempts === 1) {
+          if (!capability) {
+            throw new Error("Expected a managed live-session capability.");
+          }
+          const handle: CliBackendLiveSessionHandle = {
+            generation: "warm-generation",
+            fingerprint: capability.fingerprint,
+            isIdle: () => true,
+            close: () => capability.remove(handle),
+            waitForExit: async () => {},
+          };
+          liveHandle = handle;
+          capability.register(handle);
+          yield { type: "result", subtype: "success", is_error: false, result: "warm" };
+          return;
+        }
+        yield { type: "system", subtype: "init", session_id: "warm-session" };
+        if (event) {
+          yield event;
+        }
+        if (invalidate) {
+          capability?.current()?.close("abort");
+        }
+        throw streamError;
+      };
+      const { admission, context } = await usePluginLiveBackend(
+        makeClaudePreparedContext({
+          runId: `run-plugin-fail-closed-${name.replaceAll(" ", "-")}`,
+          openClawHistoryPrompt: CLI_RESEED_PROMPT,
+        }),
+        execute,
+      );
+      if (!managed && !warm) {
+        delete context.preparedBackend.backend.liveSession;
+      }
+
+      try {
+        if (warm) {
+          await executePreparedCliRun({ ...context, openClawHistoryPrompt: undefined }, undefined);
+          context.requiredClaudeLiveSessionGeneration = liveHandle?.generation;
+        }
+        await expect(
+          executePreparedCliRun(context, resume ? "warm-session" : undefined),
+        ).rejects.toBe(streamError);
+        expect(attempts).toBe(warm ? 2 : 1);
+      } finally {
+        liveHandle?.close("restart");
+        admission.close();
+      }
+    },
+  );
+
+  it("does not retry again when the fresh plugin recovery attempt fails", async () => {
+    let attempts = 0;
+    let liveHandle: CliBackendLiveSessionHandle | undefined;
+    const freshError = new Error("fresh plugin attempt failed");
+    const execute: CliBackendExecute = async function* (execution) {
+      attempts += 1;
+      const capability = execution.liveSession;
+      if (!capability) {
+        throw new Error("Expected a managed live-session capability.");
+      }
+      if (attempts === 1) {
+        const handle: CliBackendLiveSessionHandle = {
+          generation: "warm-generation",
+          fingerprint: capability.fingerprint,
+          isIdle: () => true,
+          close: () => capability.remove(handle),
+          waitForExit: async () => {},
+        };
+        liveHandle = handle;
+        capability.register(handle);
+        yield { type: "result", subtype: "success", is_error: false, result: "warm" };
+        return;
+      }
+      if (attempts === 2) {
+        yield { type: "system", subtype: "init", session_id: "warm-session" };
+        capability.current()?.close("abort");
+        return;
+      }
+      throw freshError;
+    };
+    const { admission, context } = await usePluginLiveBackend(
+      makeClaudePreparedContext({
+        sessionKey: "agent:main:plugin-resume-recovery-failure",
+        runId: "run-plugin-resume-recovery-failure",
+        cliSessionId: "warm-session",
+        openClawHistoryPrompt: CLI_RESEED_PROMPT,
+      }),
+      execute,
+    );
+    const clearBeforeRetry = vi.fn(async () => true);
+
+    try {
+      await executePreparedCliRun({ ...context, openClawHistoryPrompt: undefined }, undefined);
+      context.requiredClaudeLiveSessionGeneration = liveHandle?.generation;
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            onBeforeFreshCliSessionRetry: clearBeforeRetry,
+          },
+        }),
+      ).rejects.toBe(freshError);
+
+      expect(attempts).toBe(3);
+      expect(clearBeforeRetry).toHaveBeenCalledOnce();
+    } finally {
+      liveHandle?.close("restart");
+      admission.close();
     }
   });
 

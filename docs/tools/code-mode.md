@@ -292,6 +292,10 @@ without another model turn. Cancellation, explicitly terminal tool outcomes,
 sandbox restrictions, approval requirements, and tool-policy denials retain
 their existing behavior.
 
+Computer observations, including window and cursor queries, cropped screenshots,
+browser state, and dialog inspection, do not spend that mutation attempt. Browser
+preparation, input, and dialog acceptance or dismissal still count as mutations.
+
 ### Verify the active surface
 
 To confirm the model payload shape while debugging, run the Gateway with

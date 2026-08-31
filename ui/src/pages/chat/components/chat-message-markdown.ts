@@ -80,9 +80,8 @@ export function jsonSummaryLabel(parsed: unknown): string {
 
 export type MessageActionDetails = {
   markdown?: string;
-  messageId?: string;
+  fullMessage?: { messageId: string; state: AssistantMessageExpansionState | undefined };
   replyTarget?: MessageReplyTarget;
-  shouldFetchFullMessage: boolean;
 };
 
 function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
@@ -127,12 +126,7 @@ export function resolveMessageActionDetails(params: {
 }): MessageActionDetails | null {
   const { message, messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
   const record = message as Record<string, unknown>;
-  const transcriptMeta =
-    record["__openclaw"] &&
-    typeof record["__openclaw"] === "object" &&
-    !Array.isArray(record["__openclaw"])
-      ? (record["__openclaw"] as Record<string, unknown>)
-      : null;
+  const transcriptMeta = asNullableRecord(record["__openclaw"]);
   const messageId =
     typeof transcriptMeta?.id === "string"
       ? transcriptMeta.id
@@ -147,29 +141,27 @@ export function resolveMessageActionDetails(params: {
   // that marker is the whole contract: sniffing the in-band sentinel would fetch
   // for any reply that merely contains the text. Pending user inputs share the
   // same read-only expansion, without becoming transcript reply/rewind targets.
-  const shouldFetchFullMessage = Boolean(
+  const fullMessage =
     (role === "assistant" || pendingInput) &&
     canFetchFullMessage &&
     messageId &&
     !record.openclawMessageToolMirror &&
-    transcriptMeta?.truncated === true,
-  );
-  const expansion =
-    shouldFetchFullMessage && messageId
-      ? params.getAssistantMessageExpansion?.(messageId)
+    transcriptMeta?.truncated === true
+      ? { messageId, state: params.getAssistantMessageExpansion?.(messageId) }
       : undefined;
+  const expansion = fullMessage?.state;
   const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   const visibleMarkdown =
     role === "assistant" ? stripThinkingTags(expandedMarkdown).trim() : expandedMarkdown;
   const markdown = role === "assistant" || pendingInput ? visibleMarkdown : undefined;
   const replyText = onReply && !pendingInput ? truncateUtf16Safe(visibleMarkdown, 500) : "";
-  if (!markdown && !replyText && !shouldFetchFullMessage) {
+  if (!markdown && !replyText && !fullMessage) {
     return null;
   }
   const sourceMessageId = persistedMessageEntryId(message);
   return {
     ...(markdown === undefined ? {} : { markdown }),
-    messageId,
+    fullMessage,
     ...(replyText
       ? {
           replyTarget: {
@@ -180,7 +172,6 @@ export function resolveMessageActionDetails(params: {
           },
         }
       : {}),
-    shouldFetchFullMessage,
   };
 }
 
@@ -258,10 +249,11 @@ function userMessageOverflowRef(expanded: boolean) {
   };
 }
 
-export function renderUserMessageMarkdown(
+export function renderMessageMarkdown(
   markdown: string,
   messageKey: string,
   opts: {
+    role: string;
     isStreaming: boolean;
     isUserMessageExpanded?: (messageId: string) => boolean;
     onToggleUserMessageExpanded?: (messageId: string) => void;
@@ -270,17 +262,40 @@ export function renderUserMessageMarkdown(
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
 ) {
-  if (opts.assistantMessageDisclosure?.onRetryFullMessage) {
-    return renderAssistantMessageMarkdown(
-      markdown,
-      opts.isStreaming,
-      opts.assistantMessageDisclosure,
-      markdownRenderOptions,
-      duplicateSuffix,
-    );
+  const disclosure = opts.assistantMessageDisclosure;
+  const isAssistant = opts.role === "assistant";
+  const recoverFullMessage =
+    isAssistant || (opts.role === "user" && disclosure?.onRetryFullMessage);
+  const recovered = recoverFullMessage && disclosure?.expanded;
+  const text = renderMarkdownText(
+    recovered ? (disclosure.markdown ?? markdown) : markdown,
+    opts.isStreaming,
+    recovered ? { ...markdownRenderOptions, mode: "document" } : markdownRenderOptions,
+    duplicateSuffix,
+    isAssistant && opts.isStreaming ? messageKey : undefined,
+  );
+  // Exhausted recovery keeps the preview visible and offers manual re-entry.
+  if (recoverFullMessage && disclosure?.onRetryFullMessage) {
+    return html`
+      ${text}
+      <div class="chat-message-load-error">
+        ${t("chat.messages.fullContentLoadExhausted")}
+        <button
+          type="button"
+          class="chat-message-load-error__retry"
+          @click=${disclosure.onRetryFullMessage}
+        >
+          ${t("common.retry")}
+        </button>
+      </div>
+    `;
   }
-  if (!opts.onToggleUserMessageExpanded || !shouldCollapseUserMessage(markdown)) {
-    return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix);
+  if (
+    opts.role !== "user" ||
+    !opts.onToggleUserMessageExpanded ||
+    !shouldCollapseUserMessage(markdown)
+  ) {
+    return text;
   }
 
   const disclosureId = `user-message:${messageKey}`;
@@ -288,7 +303,7 @@ export function renderUserMessageMarkdown(
   return html`
     <div class="chat-message-disclosure ${expanded ? "is-expanded has-overflow" : ""}">
       <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
-        ${renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix)}
+        ${text}
       </div>
       <button
         class="chat-message-disclosure__toggle"
@@ -311,42 +326,7 @@ export type AssistantMessageDisclosure = {
   onRetryFullMessage?: () => void;
 };
 
-export function renderAssistantMessageMarkdown(
-  previewMarkdown: string,
-  isStreaming: boolean,
-  disclosure: AssistantMessageDisclosure | undefined,
-  markdownRenderOptions: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
-  streamKey?: string,
-) {
-  const markdown = disclosure?.expanded
-    ? (disclosure.markdown ?? previewMarkdown)
-    : previewMarkdown;
-  const renderOptions = disclosure?.expanded
-    ? { ...markdownRenderOptions, mode: "document" as const }
-    : markdownRenderOptions;
-  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix, streamKey);
-  if (!disclosure?.onRetryFullMessage) {
-    return text;
-  }
-  // Exhausted automatic retries must not leave a silent truncated preview:
-  // name the failure and offer a manual re-entry into the loader.
-  return html`
-    ${text}
-    <div class="chat-message-load-error">
-      ${t("chat.messages.fullContentLoadExhausted")}
-      <button
-        type="button"
-        class="chat-message-load-error__retry"
-        @click=${disclosure.onRetryFullMessage}
-      >
-        ${t("common.retry")}
-      </button>
-    </div>
-  `;
-}
-
-export function renderMarkdownText(
+function renderMarkdownText(
   markdown: string,
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,

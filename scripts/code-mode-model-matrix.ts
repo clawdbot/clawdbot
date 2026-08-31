@@ -15,7 +15,7 @@ import {
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
 } from "../extensions/qa-lab/api.js";
-import type { AgentExecEnvelope } from "../src/commands/agent-exec.ts";
+import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.ts";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
 

@@ -88,8 +88,9 @@ const pullPreviewResponse = {
 
 // Shared page setup for the two pointer-lifecycle cases below: both only need
 // a single previewable pull-request link, unlike the full walkthrough above.
-async function openPullPreviewPage(): Promise<{
+async function openPullPreviewPage(deferPreview = false): Promise<{
   card: Locator;
+  gateway: Awaited<ReturnType<typeof installMockGateway>>;
   page: Page;
   pullLink: Locator;
 }> {
@@ -102,7 +103,8 @@ async function openPullPreviewPage(): Promise<{
   );
 
   const page = await context.newPage();
-  await installMockGateway(page, {
+  const gateway = await installMockGateway(page, {
+    deferredMethods: deferPreview ? ["controlUi.githubPreview"] : [],
     methodResponses: {
       "controlUi.githubPreview": {
         cases: [{ match: { kind: "pull", number: 99816 }, response: pullPreviewResponse }],
@@ -123,7 +125,7 @@ async function openPullPreviewPage(): Promise<{
   const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
   const card = page.locator(".github-link-hovercard");
   await pullLink.waitFor({ state: "visible" });
-  return { card, page, pullLink };
+  return { card, gateway, page, pullLink };
 }
 
 describeControlUiE2e("GitHub link hover cards", () => {
@@ -140,6 +142,46 @@ describeControlUiE2e("GitHub link hover cards", () => {
   });
 
   afterEach(closeBrowsers);
+
+  it.each([
+    { theme: "light", reducedMotion: "no-preference", width: 1180, fails: false },
+    { theme: "dark", reducedMotion: "no-preference", width: 1180, fails: false },
+    { theme: "dark", reducedMotion: "reduce", width: 390, fails: true },
+  ] as const)("shimmers while pending ($theme, $reducedMotion, $width)", async (scenario) => {
+    const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
+    await page.emulateMedia({ colorScheme: scenario.theme, reducedMotion: scenario.reducedMotion });
+    await page.setViewportSize({ width: scenario.width, height: 800 });
+    await pullLink.focus();
+    await gateway.waitForRequest("controlUi.githubPreview");
+
+    await expect.poll(() => card.getAttribute("aria-label")).toBe("Loading GitHub details…");
+    const skeleton = card.locator('[aria-hidden="true"]');
+    await skeleton.waitFor({ state: "visible" });
+    expect(await card.locator("a").count()).toBe(0);
+    expect(await card.textContent()).toBe("");
+    const placeholder = skeleton.locator(".skeleton").first();
+    await placeholder.waitFor({ state: "visible" });
+    const animating = () =>
+      placeholder.evaluate((element) =>
+        element
+          .getAnimations({ subtree: true })
+          .some((animation) => animation.playState === "running"),
+      );
+    await expect.poll(animating).toBe(scenario.reducedMotion === "no-preference");
+    const bounds = await card.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(scenario.width);
+
+    if (scenario.fails) {
+      await gateway.rejectDeferred("controlUi.githubPreview", { message: "Unavailable" });
+      await expectText(card, "GitHub preview unavailable");
+    } else {
+      await gateway.resolveDeferred("controlUi.githubPreview");
+      await expectText(card, pullPreviewResponse.title);
+    }
+    expect(await card.locator(".skeleton").count()).toBe(0);
+    expect(await card.getAttribute("aria-label")).not.toBe("Loading GitHub details…");
+  });
 
   it("previews issue and pull request links while preserving navigation", async () => {
     const context = await newBrowserContext();
@@ -269,6 +311,10 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expectText(card, "+101");
     await expectText(card, "−12");
     await expectText(card, "3 files");
+    await page.clock.runFor(300);
+    await captureArtifact(page, "github-hovercard-title-tooltip");
+    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    expect(await pullLink.getAttribute("title")).toBe("");
     await expect.poll(() => card.locator("img").count()).toBe(1);
     expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(1);
     const pullBox = await card.boundingBox();
@@ -283,6 +329,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expectText(card, "Keep hover previews compact");
     await expectText(card, "octocat");
     await expectText(card, "4 comments");
+    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
     await expect.poll(() => card.locator("img").count()).toBe(1);
     expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(2);
 
@@ -296,6 +343,12 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await page.getByRole("link", { exact: true, name: "repository" }).hover();
     await page.clock.runFor(300);
     await expect.poll(() => card.count()).toBe(0);
+
+    const fileLink = page.getByRole("link", { name: "SKILL.md" });
+    await fileLink.hover();
+    await expect
+      .poll(() => page.locator("openclaw-tooltip[open]").textContent())
+      .toContain("https://github.com/blader/humanizer/blob/main/SKILL.md");
 
     const missingLink = page.getByRole("link", { name: "missing item" });
     await missingLink.hover();
@@ -315,6 +368,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
     await pullLink.focus();
     await expectText(card, "Merged");
+    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
     await page.keyboard.press("Escape");
     await expect.poll(() => card.count()).toBe(0);
     await expect

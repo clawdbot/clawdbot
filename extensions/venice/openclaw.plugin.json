@@ -160,7 +160,28 @@
             "input": ["text", "image"],
             "contextWindow": 500000,
             "maxTokens": 32000,
-            "cost": { "input": 2.27, "output": 6.8, "cacheRead": 0.34, "cacheWrite": 0 },
+            "cost": {
+              "input": 2.27,
+              "output": 6.8,
+              "cacheRead": 0.34,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "input": 2.27,
+                  "output": 6.8,
+                  "cacheRead": 0.34,
+                  "cacheWrite": 0,
+                  "range": [0, 200001]
+                },
+                {
+                  "input": 4.53,
+                  "output": 13.6,
+                  "cacheRead": 0.68,
+                  "cacheWrite": 0,
+                  "range": [200001]
+                }
+              ]
+            },
             "compat": {
               "supportsUsageInStreaming": false
             }
@@ -184,7 +205,28 @@
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 65536,
-            "cost": { "input": 0.5, "output": 2, "cacheRead": 0.05, "cacheWrite": 0.625 },
+            "cost": {
+              "input": 0.5,
+              "output": 2,
+              "cacheRead": 0.05,
+              "cacheWrite": 0.625,
+              "tieredPricing": [
+                {
+                  "input": 0.5,
+                  "output": 2,
+                  "cacheRead": 0.05,
+                  "cacheWrite": 0.625,
+                  "range": [0, 256001]
+                },
+                {
+                  "input": 1.5,
+                  "output": 6,
+                  "cacheRead": 0.15,
+                  "cacheWrite": 1.875,
+                  "range": [256001]
+                }
+              ]
+            },
             "compat": {
               "supportsUsageInStreaming": false
             }

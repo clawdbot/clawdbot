@@ -58,6 +58,91 @@ Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
 
+## Crabbox repository setup
+
+The shared [Crabbox skill](https://github.com/openclaw/agent-skills/tree/main/skills/crabbox)
+owns portable lease, trust, sync, and cleanup procedures. This section owns the
+OpenClaw wrapper and workflow inputs. Routine task-needed Crabbox/Testbox use
+and task-owned worktrees do not require another confirmation; preserve unrelated
+work and existing credential, production, budget, and publication boundaries.
+
+Run trusted OpenClaw remote proof through the wrapper from the repository root:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --help
+```
+
+Read `.crabbox.yaml` and the resolved provider before running. The repository
+default is `blacksmith-testbox`, with `.github/workflows/ci-check-testbox.yml`
+owning its prepared environment. Direct providers use
+`.github/workflows/crabbox-hydrate.yml`. Keep the resolved provider unless the
+requested proof requires another environment; capacity or hydration failure
+does not make a different provider equivalent.
+
+The wrapper checks an executable sibling `../crabbox/bin/crabbox`, then `PATH`,
+then the sibling of the Git common checkout. Verify the selected binary and
+its source rather than trusting a directory name. If it needs repair or is
+missing, use a clean task-owned checkout of
+[Crabbox](https://github.com/openclaw/crabbox), build `./cmd/crabbox` into a
+task-owned binary directory, and leave other checkouts and the operator's
+installed binary untouched. The existing
+`OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY=1` setting skips the first sibling
+candidate; a task binary on `PATH` then takes precedence over the common-checkout
+candidate. A dirty or occupied sibling is not a reason to stop and ask.
+
+For a selected trusted Testbox lane:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 \
+  OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 \
+  OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 \
+  pnpm test <path-or-filter>
+```
+
+For several commands, warm once with
+`node scripts/crabbox-wrapper.mjs warmup --keep --timing-json`, save the returned
+lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
+`node scripts/crabbox-wrapper.mjs stop --id <tbx_id>`; stop has no `--timing-json`.
+
+- Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
+  deliberately transfers that ownership and never changes repository identity.
+  Sparse staging uses the wrapper's ownership path. Do not sync or reclaim
+  while another command owns the lease.
+- Wrapper reuse requires the local SSH key created by Crabbox. A missing key
+  requires a fresh warmup. Leases created directly by Blacksmith remain usable
+  through `blacksmith testbox run --id <tbx_id>`, not Crabbox wrapper reuse.
+- Every native Testbox run syncs again, including reused leases. `--no-sync`
+  cannot preserve a remote baseline. Compare revisions in separate remote
+  worktrees within one synced command; never switch refs in the synced root.
+- Compound remote shell commands use `bash -lc`, not `sh -lc`; hydration can
+  depend on Bash declarations. Testbox's workflow owns Chromium, so do not pass
+  Crabbox `--browser` to that provider.
+- Keep the lease fingerprint checks described above. No stale-lease override
+  for release proof. Direct-provider flags such as `--fresh-pr`, `--full-resync`,
+  `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
+  a substitute for the delegated Testbox workflow.
+
+The shared skill's command placeholders map to the focused commands in this
+guide. Its trusted bootstrap is `scripts/crabbox-untrusted-bootstrap.sh`; the
+untrusted path above invokes the installed trusted CLI, never the PR's wrapper.
+For an explicitly selected local-container lane, the existing example image is
+`node:24-bookworm` and the install command is
+`corepack pnpm install --frozen-lockfile --store-dir .pnpm-store`, followed by
+the chosen test. Keep `--no-hydrate` and a repository-local dependency store
+when host caches cannot cross filesystems. The OpenClaw broker login endpoint
+is `https://crabbox.openclaw.ai`; normal brokered validation does not require
+asking for AWS keys.
+
+Live Gateway, channel, and agent-turn proof uses an isolated
+`OPENCLAW_STATE_DIR`, a free port, and the real user path. Test-only plugin
+artifacts may use `OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1`; that does not make
+them official installs. Before sharing WebVNC, inspect a screenshot of the
+working app. Keep proof media out of the product repository and compare source
+hashes before and after generator runs. If a final timing result is written but
+portal synchronization hangs, interrupt only the task wrapper and independently
+verify lease cleanup; never stop the operator's Gateway.
+
 ## Routine local order
 
 1. `pnpm test:changed` for changed-scope Vitest proof.
@@ -86,6 +171,62 @@ existing temporary directories, Node or Vitest caches, or other global caches. S
 `pnpm ui:build` keeps native startup and applies the same preload to its post-build
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+
+### Source tests and subprocess builds
+
+Non-watch runs through `pnpm test` or `scripts/run-vitest.mjs` keep Vitest tests
+and runtime parents on TypeScript. Importing a declared subprocess entrypoint
+compiles the fixed test entry set and its workspace dependencies into one fresh
+invocation directory under `.artifacts/vitest-workers/`.
+
+The seven application subprocess entries run as plain Node JavaScript without a
+TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
+route ownership, the service relay, its POSIX and Windows anchors, and the memory
+plugin's KNN child. The same generation also compiles the fake-backend TUI
+fixture's four runtime roots together: the real TUI, embedded reply producer,
+reply metadata reader, and outbound normalizer. Shared chunks preserve their
+module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
+launches them with `--import tsx` for their own syntax, while Bun handles that
+syntax natively without the Node loader. Only their runtime imports change.
+Application/package build entries and Vitest source parents stay unchanged. This
+does not convert Worker-thread entries or arbitrary source CLI fixtures.
+
+Preparation is lazy across both projects and shards. Config imports, listing
+tests, and tiny tests that do not import these declarations do not load the
+subprocess compiler or compile workers. A shard that needs a declaration requests the
+outer runner's single build through its existing Node IPC channel during module
+collection, before fixture hooks and readiness deadlines. Every finite invocation
+that needs a declaration pays for this fixed entry set; preparation timing is
+reported separately from child execution. The runner starts one short-lived native
+Node or Bun compiler child and joins it before returning the verified manifest to
+borrowers. The compiler module graph lives in that child, not the long-lived runner
+or Vitest worker. No shard can select a different build graph or adopt another invocation's output. The outer
+runner retains the generation until child close and process-group cleanup
+finish, then verifies it before reporting success. Standalone Vitest and watch runs retain
+source execution: its public close hooks run concurrently with pool shutdown,
+so compilation and artifact deletion require the repository runner's ownership.
+A lost owner or failed build fails the run.
+Disposal cancels pending compilation and joins it and every borrower before
+removing the directory. An uncertain compiler or borrower join retains the
+generation and fails the run. Abnormal termination can also leave an unused
+directory; later runs never adopt it.
+
+Every preparation compiles current source; checkout `dist/` is neither an input
+nor a fallback. Build errors, missing artifacts, and changes to recorded build
+inputs fail the run. Compilation includes the native subprocess fixtures before
+they impose resource limits. Third-party dependencies remain external except for
+the always-bundled OpenClaw packages. Each generation carries all seven fs-safe
+native helpers in its own private tree, using the package runtime's loader-relative
+layout. The package itself shares one native tree between runtime entries and its
+sealed worker; it does not copy a second tree beside that worker. The helpers'
+original source hashes are pinned before copying and verified alongside compiler
+output; missing or altered assets fail verification. The default stays off, and
+the existing `off`/`auto`/`require` opt-ins retain their behavior.
+
+Watch mode deliberately keeps the existing live-source path, including tsx for
+Node subprocesses and native TypeScript handling for Bun. It creates no prepared generation, so a new child launch
+reads current source rather than reusing a compiled snapshot. Existing Vitest
+watch dependency tracking still determines when tests rerun.
 
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
 
@@ -242,7 +383,7 @@ Other behavior: the runner preflights Docker by default, cleans stale OpenClaw E
 | `pnpm test:docker:mcp-channels`                                                              | Seeded Gateway container plus a client container spawning `openclaw mcp serve`: routed conversation discovery, transcript reads, attachment metadata, live event queue behavior, outbound send routing, and Claude-style channel + permission notifications over the real stdio bridge (assertion reads raw stdio MCP frames directly).                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `pnpm test:docker:upgrade-survivor`                                                          | Installs the packed tarball over a dirty old-user fixture, runs package update plus non-interactive doctor without live provider/channel keys, starts a loopback Gateway, checks agents/channel config/plugin allowlists/workspace/session state/stale legacy plugin dependency state/startup/RPC status survive.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `pnpm test:docker:published-upgrade-survivor`                                                | Installs `openclaw@latest` by default, seeds realistic existing-user files, configures via a baked `openclaw config set` recipe, updates to the packed tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, checks `/healthz`, `/readyz`, RPC status. Override with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, expand a matrix with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS`, or add scenario fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` (includes `configured-plugin-installs` and `stale-source-plugin-shadow`). Package Acceptance exposes these as `published_upgrade_survivor_baseline(s)` / `_scenarios` and resolves meta tokens like `last-stable-4` or `all-since-2026.4.23`. |
-| `pnpm test:docker:update-migration`                                                          | Published-upgrade survivor harness in the `plugin-deps-cleanup` scenario, starting at `openclaw@2026.4.23` by default. The `Update Migration` workflow expands this with `baselines=all-since-2026.4.23` to prove configured-plugin dependency cleanup outside Full Release CI.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `pnpm test:docker:update-migration`                                                          | Published-upgrade survivor harness in the `plugin-deps-cleanup` scenario, starting at the latest stable release by default. The `Update Migration` workflow pins that baseline before fanout; pass `baselines=all-since-2026.4.23` for an explicit historical cleanup replay.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `pnpm test:docker:plugins`                                                                   | Install/update smoke for local path, `file:`, npm registry packages with hoisted dependencies, git moving refs, ClawHub fixtures, marketplace updates, and Claude-bundle enable/inspect.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ### Sandbox compatibility lanes
@@ -271,6 +412,54 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 
 - `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`
 - `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache pnpm test:changed`
+
+## JSON reports across native processes
+
+For a multi-project or chunked run, explicitly request native JSON with an output
+file, for example:
+
+```bash
+pnpm test test/vitest/vitest.unit-fast-isolated.config.ts test/vitest/vitest.agents-embedded-agent.config.ts --reporter=verbose --reporter=json --outputFile=.artifacts/test-results.json
+```
+
+The project runner and plugin batch runner give each attempt separate native JSON
+and blob files, then publish the requested JSON from Vitest's native report merge.
+They print a companion `<output>.reports-<unique>` directory. Keep that directory:
+it contains original reports, per-attempt coverage files when coverage is enabled,
+and an `index.json` with child exit codes, signals, timeouts and unstarted work.
+Only the accepted retry attempt contributes to the aggregate.
+
+The aggregate preserves the accepted case inventory, but is not a lossless
+replacement for the originals. Native merging does not restore snapshot summaries
+or JSON `coverageMap`, and its `startTime` is the merge time. Passing snapshot tests
+still succeed. Read native originals for those details and the index for process
+outcomes: JSON `success` does not encode every wrapper or unhandled-error failure.
+Separate built-in coverage reports remain per attempt in the companion directory.
+Custom coverage providers/reporters and coverage reporter tuple options require
+separate invocations with unique destinations.
+
+A complete failed-test aggregate is retained with a failing command exit. Missing
+or invalid evidence, cancellation, unstarted required work, or publication failure
+does not publish a complete aggregate; an existing output file is not proof of the
+new run. The diagnostic prints the retained report-set location. Report sets are
+not automatically swept.
+
+Overlapping selections can share native task IDs, so merging them can replace
+independent failure details even when case counts match. Such report sets retain
+their originals and fail publication. Select each configuration once, or run
+overlapping selections separately with distinct output files.
+
+This ownership applies to explicit CLI JSON file requests with named, file-based
+Node projects and native console reporters. Scalar `--outputFile` and
+`--outputFile.json` both work. Config-owned reporter options, other file formats,
+custom reporters and inline/browser project composition require separate native
+invocations with unique output destinations. Do not assume those outputs are
+aggregated. Single-process and console-only runs keep their existing native behavior.
+Native help and other non-test controls stay with the child CLI and do not allocate
+report sets. `run --version` still runs tests, as it does in native Vitest.
+Config-only reporters are not intercepted: multiple children can still overwrite
+the same configured file. Run those configurations separately with distinct paths;
+adding `--reporter=json` alone does not override a reporter tuple's own `outputFile`.
 
 ## Test performance tooling
 

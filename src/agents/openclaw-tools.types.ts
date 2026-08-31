@@ -51,6 +51,8 @@ export type OpenClawToolsOptions = {
   sandboxRoot?: string;
   sandboxContainerWorkdir?: string;
   sandboxFsBridge?: SandboxFsBridge;
+  /** Producer-authored bare upload handles mapped to exact sandbox paths. */
+  stagedMediaPaths?: ReadonlyMap<string, string>;
   /** Prepared effective read authorization for exporting sandbox workspace media. */
   sandboxWorkspaceMediaReadAllowed?: boolean;
   fsPolicy?: ToolFsPolicy;

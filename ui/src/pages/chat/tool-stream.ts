@@ -24,13 +24,17 @@ import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
-import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import {
+  uiSessionEventMatches,
+  type UiSessionDefaultsHost,
+} from "../../lib/sessions/session-key.ts";
+import { reconcileChatRunStartup, type ChatRunStartupState } from "./chat-run-startup.ts";
 import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 const TOOL_STREAM_LIMIT = 50;
+const RUN_USAGE_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
 
@@ -75,14 +79,16 @@ export type ToolStreamEntry = {
   message: Record<string, unknown>;
 };
 
+export type RunOutputUsage = { outputTokens: number; seq: number };
+
 export type ToolStreamHost = {
   sessionKey: string;
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null } | null;
+  agentsList?: UiSessionDefaultsHost["agentsList"];
   hello?: { snapshot?: unknown } | null;
   chatRunId: string | null;
   chatMessages?: unknown[];
-  chatRunUsageById?: Map<string, number>;
+  chatRunUsageById?: Map<string, RunOutputUsage>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunStartup?: ChatRunStartupState | null;
@@ -447,24 +453,6 @@ export type WaitingApprovalStatus = {
   runId: string;
 };
 
-export function resolveActiveRunOutputTokens(params: {
-  localRunId?: string | null;
-  activeRunIds?: readonly string[];
-  usageByRun?: ReadonlyMap<string, number>;
-}): number | null {
-  const localUsage = params.localRunId ? params.usageByRun?.get(params.localRunId) : undefined;
-  if (localUsage !== undefined) {
-    return localUsage;
-  }
-  for (const runId of params.activeRunIds ?? []) {
-    const usage = params.usageByRun?.get(runId);
-    if (usage !== undefined) {
-      return usage;
-    }
-  }
-  return null;
-}
-
 export function resolveChatProjectionRunId(params: {
   localRunId?: string | null;
   activeRunIds?: readonly string[];
@@ -735,10 +723,18 @@ function handleUsageEvent(host: ToolStreamHost, payload: AgentEventPayload): boo
     return true;
   }
   const current = host.chatRunUsageById?.get(payload.runId);
-  if (current !== undefined && outputTokens <= current) {
+  if (current && payload.seq <= current.seq) {
     return true;
   }
-  host.chatRunUsageById = new Map(host.chatRunUsageById).set(payload.runId, outputTokens);
+  // Keep the sequence with its count across stream resets and terminal events:
+  // recovery snapshots must not overwrite newer live usage or erase the recap.
+  const usageByRun = new Map(host.chatRunUsageById);
+  usageByRun.delete(payload.runId);
+  usageByRun.set(payload.runId, { outputTokens, seq: payload.seq });
+  for (const staleRunId of [...usageByRun.keys()].slice(0, -RUN_USAGE_LIMIT)) {
+    usageByRun.delete(staleRunId);
+  }
+  host.chatRunUsageById = usageByRun;
   return true;
 }
 
@@ -867,6 +863,9 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   // clear, or persist its commentary into this transcript.
   if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
     return true;
+  }
+  if (progress.text) {
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId });
   }
   const persisted =
     progress.itemId &&
@@ -1075,15 +1074,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (payload.stream === "lifecycle") {
-    const phase = payload.data?.phase;
-    if (
-      (phase === "start" || phase === "end" || phase === "error") &&
-      host.chatRunUsageById?.has(payload.runId)
-    ) {
-      const usageByRun = new Map(host.chatRunUsageById);
-      usageByRun.delete(payload.runId);
-      host.chatRunUsageById = usageByRun;
-    }
     if (handleLifecycleApprovalEvent(host, payload)) {
       return true;
     }
@@ -1124,7 +1114,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       ? entry.name
       : (toTrimmedString(data.name) ?? entry?.name ?? "tool");
   if (phase === "start" && payload.runId === host.chatRunId) {
-    host.chatRunStartup = { state: "activity", runId: payload.runId };
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId });
   }
   const args = phase === "start" ? data.args : undefined;
   const output =

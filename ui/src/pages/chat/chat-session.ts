@@ -386,6 +386,7 @@ export async function switchChatModel(
     return false;
   }
   const currentOverride = resolveChatModelOverrideValue({
+    activeSession: activeRow,
     chatModelCatalog: host.chatModelCatalog,
     modelOverrides: host.sessions.state.modelOverrides,
     sessionKey: targetSessionKey,

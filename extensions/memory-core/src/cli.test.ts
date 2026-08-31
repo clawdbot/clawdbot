@@ -2076,7 +2076,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("warns before reporting no matches from a dirty index", async () => {
+  it("does not warn before reporting no matches from routine pending work", async () => {
     const close = vi.fn(async () => {});
     mockManager({
       search: vi.fn(async () => []),
@@ -2088,9 +2088,7 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["search", "hidden codeword"]);
 
-    expect(error).toHaveBeenCalledWith(
-      "Memory index is dirty. Search results may be incomplete. Run: openclaw memory status --index --agent main",
-    );
+    expect(error).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("No matches.");
   });
 

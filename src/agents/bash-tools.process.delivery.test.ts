@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { copyInternalToolResultAcknowledgement } from "../../packages/agent-core/src/internal-hooks.js";
+import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import {
   addSession,
@@ -59,7 +59,7 @@ function toolResultMessage(
   toolCallId: string,
   result: AgentToolResult<unknown>,
 ): Extract<AgentMessage, { role: "toolResult" }> {
-  return copyInternalToolResultAcknowledgement(result, {
+  return copyInternalToolResultState(result, {
     role: "toolResult" as const,
     toolCallId,
     toolName: "process",

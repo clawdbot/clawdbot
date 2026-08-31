@@ -6,6 +6,7 @@ import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
+  type PosixProcess,
   readCodexAppServerProcessCommand,
   readCodexAppServerProcessSnapshot,
 } from "./transport-process-snapshot.js";
@@ -14,6 +15,14 @@ const procfs = vi.hoisted(() => ({
   readFile: vi.fn<(file: string) => Promise<string>>(),
   readdir: vi.fn<() => Promise<string[]>>(),
 }));
+
+const observedProcess: PosixProcess = {
+  pid: process.pid,
+  ppid: process.ppid,
+  pgid: process.pid,
+  state: "S",
+  startedAt: "00000000-0000-0000-0000-000000000001:12345",
+};
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
@@ -34,12 +43,75 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 describe("Codex procfs command inspector", () => {
   it.for([
+    "ready",
+    "empty",
+    "gone",
+    "replaced",
+    "zombie",
+    "reparented",
+    "regrouped",
+    "malformed",
+    "permission",
+    "read-error",
+    "replaced after read",
+  ])("binds empty-command startup readiness to the same live process: %s", async (mode, ctx) => {
+    ctx.onTestFinished(() => {
+      procfs.readFile.mockReset();
+      vi.restoreAllMocks();
+    });
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const bootId = "00000000-0000-0000-0000-000000000001";
+    let commandReads = 0;
+    procfs.readFile.mockImplementation(async (file) => {
+      if (file === "/proc/sys/kernel/random/boot_id") {
+        return bootId;
+      }
+      if (file === `/proc/${process.pid}/cmdline`) {
+        commandReads += 1;
+        if (commandReads > 1 && mode === "read-error") {
+          throw Object.assign(new Error("command read failed"), { code: "EIO" });
+        }
+        return commandReads === 1 || mode === "empty" ? "" : "/opt/codex\0app-server\0";
+      }
+      expect(file).toBe(`/proc/${process.pid}/stat`);
+      if (commandReads && (mode === "gone" || mode === "permission")) {
+        throw Object.assign(new Error("identity unavailable"), {
+          code: mode === "gone" ? "ENOENT" : "EACCES",
+        });
+      }
+      if (commandReads && mode === "malformed") {
+        return "";
+      }
+      const changed = commandReads > 0;
+      const state = changed && mode === "zombie" ? "Z" : "R";
+      const ppid = process.ppid + Number(changed && mode === "reparented");
+      const pgid = process.pid + Number(changed && mode === "regrouped");
+      const replaced =
+        (changed && mode === "replaced") || (commandReads > 1 && mode === "replaced after read");
+      return `${process.pid} (codex) ${state} ${ppid} ${pgid}${" 0".repeat(16)} ${replaced ? 54321 : 12345}\n`;
+    });
+    const observed = (await readCodexAppServerProcessSnapshot(undefined, [process.pid]))[0]!;
+    const inspected = readCodexAppServerProcessCommand(observed, Date.now() + 250);
+    if (mode === "ready") {
+      await expect(inspected).resolves.toBe("/opt/codex app-server");
+    } else {
+      await expect(inspected).rejects.toMatchObject({
+        reason:
+          mode === "empty" ? "deadline" : mode === "permission" ? "permission" : "unavailable",
+      });
+    }
+    if (["ready", "read-error", "replaced after read"].includes(mode)) {
+      expect(commandReads).toBe(2);
+    }
+  });
+
+  it.for([
     {
       input: "/opt/codex\0app-server\0--listen\0stdio://\0",
       expected: "/opt/codex app-server --listen stdio://",
     },
-    { input: "", reason: "unavailable" },
     { input: "\0", reason: "unavailable" },
+    { input: " \0 ", reason: "unavailable" },
     { code: "ENOENT", reason: "unavailable" },
     { code: "ESRCH", reason: "unavailable" },
     { code: "EACCES", reason: "permission" },
@@ -60,7 +132,7 @@ describe("Codex procfs command inspector", () => {
         return fixture.input!;
       });
 
-      const inspected = readCodexAppServerProcessCommand(process.pid, Date.now() + 1_000);
+      const inspected = readCodexAppServerProcessCommand(observedProcess, Date.now() + 1_000);
       if (fixture.reason) {
         await expect(inspected).rejects.toMatchObject({ reason: fixture.reason });
         if (fixture.reason !== "permission") {
@@ -74,7 +146,7 @@ describe("Codex procfs command inspector", () => {
       }
       procfs.readFile.mockClear();
       await expect(
-        readCodexAppServerProcessCommand(process.pid, Date.now() - 1),
+        readCodexAppServerProcessCommand(observedProcess, Date.now() - 1),
       ).rejects.toMatchObject({ reason: "deadline" });
       expect(procfs.readFile).not.toHaveBeenCalled();
     },
@@ -202,7 +274,7 @@ ${mode === "unavailable" ? "process.exit(1);" : "setInterval(() => {}, 1000);"}
             const budgetMs = 1_000;
             const result =
               kind === "command"
-                ? readCodexAppServerProcessCommand(process.pid, startedAt + budgetMs)
+                ? readCodexAppServerProcessCommand(observedProcess, startedAt + budgetMs)
                 : readCodexAppServerProcessSnapshot(startedAt + budgetMs);
             await expect(result).rejects.toMatchObject({
               reason: mode === "hung" ? "deadline" : "unavailable",

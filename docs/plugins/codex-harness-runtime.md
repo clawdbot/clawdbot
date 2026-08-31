@@ -92,6 +92,9 @@ or discover descendants that independently reparented before inspection.
 
 Linux reads process identities directly from `/proc`, including the boot ID
 and process start ticks, so Alpine/BusyBox installations do not need `procps`.
+During Linux startup, an empty command line waits within the existing inspection
+deadline while the same live process identity remains valid. Registration still
+requires a usable command fingerprint; unreadable or changed identities fail.
 macOS uses its native `ps` with a fixed locale and timezone. Registration checks
 inspect only the observer and the relevant parent and child processes; an
 unrelated unreadable process does not block those checks. Destructive cleanup

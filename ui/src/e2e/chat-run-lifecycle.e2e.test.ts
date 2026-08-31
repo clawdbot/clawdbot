@@ -30,20 +30,24 @@ suite.define(() => {
     const currentPage = await context.newPage();
     page = currentPage;
     const sessionKey = "agent:main:main";
-    const diagnostic = "Earlier preparation failed before model output";
+    const diagnostic = "⚠️ ✉️ Message failed: delivery unavailable near 🧭";
+    const renderedDiagnostic = "Message failed: delivery unavailable near 🧭";
     const gateway = await installMockGateway(currentPage, {
       sessionKey,
       // Account recovery can replace startup with a scoped history request.
       heldMethods: ["chat.startup", "chat.history", "chat.send"],
-      sessionInfo: {
-        key: sessionKey,
-        status: "failed",
-        hasActiveRun: false,
-        lastRunId: "failed-run",
-        lastRunError: diagnostic,
-      },
+      sessions: [
+        {
+          key: sessionKey,
+          status: "failed",
+          hasActiveRun: false,
+          lastRunId: "failed-run",
+          lastRunError: diagnostic,
+        },
+      ],
     });
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    await gateway.waitForRequest("sessions.list");
     const startup = await gateway.waitForRequest("chat.startup");
     expect(startup.params).toMatchObject({ sessionKey });
     await currentPage.locator(".agent-chat__input textarea").fill("Try again");
@@ -65,8 +69,10 @@ suite.define(() => {
     const send = await gateway.waitForRequest("chat.send");
     const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
     expect(runId).toEqual(expect.any(String));
-    const alert = currentPage.getByRole("alert").filter({ hasText: diagnostic });
+    const alert = currentPage.getByRole("alert").filter({ hasText: renderedDiagnostic });
     await alert.waitFor();
+    await alert.locator(".chat-error__content > strong").getByText(renderedDiagnostic).waitFor();
+    expect(await alert.locator("details").count()).toBe(0);
     await gateway.resolveDeferred("chat.send", { runId, status: "started" });
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
     await gateway.emitChatFinal({ sessionKey, runId, text: "Recovery completed." });
@@ -121,16 +127,21 @@ suite.define(() => {
     };
     await currentPage.getByRole("button", { name: "Send message" }).click();
     const failedRunId = await persistUser("First attempt", firstStartedAt, 0);
+    const diagnostic = "⚠️ 🛠️ Exec failed (exit 1): command failed near 🧭.";
+    const renderedDiagnostic = "Exec failed (exit 1): command failed near 🧭.";
     await gateway.emitGatewayEvent("chat", {
       sessionKey,
       runId: failedRunId,
       state: "error",
-      errorMessage: "Failed before model output",
+      errorMessage: diagnostic,
     });
-    await currentPage
-      .getByRole("alert")
-      .filter({ hasText: "Failed before model output" })
+    const failedAlert = currentPage.getByRole("alert").filter({ hasText: renderedDiagnostic });
+    await failedAlert.waitFor();
+    await failedAlert
+      .locator(".chat-error__content > strong")
+      .getByText(renderedDiagnostic)
       .waitFor();
+    expect(await failedAlert.locator("details").count()).toBe(0);
     expect(await currentPage.locator(".chat-group.assistant").count()).toBe(0);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
@@ -171,7 +182,7 @@ suite.define(() => {
     // the live terminal projection or its retained local timestamps.
     await gateway.setMethodResponse("chat.history", {
       messages,
-      sessionId: "control-ui-e2e-session",
+      sessionId: `session:${sessionKey}`,
       sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [], status: "done" },
     });
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "final", message: reply });
@@ -208,7 +219,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: ["run-continuing"],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -246,7 +257,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: ["newer-run"],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -289,7 +300,7 @@ suite.define(() => {
       sessionInfo: {
         activeRunIds: ["run-reconnected"],
         hasActiveRun: true,
-        key: "main",
+        key: "agent:main:main",
       },
     });
 
@@ -394,7 +405,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: activeStartedAt,
@@ -419,7 +430,7 @@ suite.define(() => {
           activeRunIds: [runId],
           displayName: staleActiveLabel,
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           label: staleActiveLabel,
           model: "gpt-5.5",
@@ -440,7 +451,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: Date.now() - 1_000,
@@ -486,7 +497,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: lateStaleActiveUpdatedAt - 11_000,
@@ -539,7 +550,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
-      key: "main",
+      key: "agent:main:main",
       kind: "direct",
       reason: "lifecycle",
       startedAt: Date.now() - 1_000,
@@ -559,7 +570,7 @@ suite.define(() => {
         timestamp: Date.now(),
       },
       runId,
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "final",
       stopReason: "end_turn",
       yielded: true,
@@ -597,7 +608,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("chat", {
       errorMessage: diagnostic,
       runId,
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "aborted",
     });
 

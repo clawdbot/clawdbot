@@ -709,6 +709,7 @@ const config = {
       "browser-profiles.ts!",
       // Built by tsdown as the native messaging executable; Chrome launches it by path.
       "native-host-entry.ts!",
+      "relay-daemon-entry.ts!",
       // Chrome manifest/package scripts load these without TypeScript imports.
       "chrome-extension/background.js!",
       "chrome-extension/options.js!",

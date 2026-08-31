@@ -518,7 +518,7 @@ test.each([
   { name: "unknown first", keys: [UNKNOWN_SESSION_KEY, "agent:main:preview-valid"] },
   { name: "valid first", keys: ["agent:main:preview-valid", UNKNOWN_SESSION_KEY] },
 ])(
-  "sessions.preview keeps fixed-store cache entries agent-distinct with $name",
+  "sessions.preview keeps fixed-store results agent-distinct with $name lookup order",
   async ({ keys }) => {
     const storePath = await configureFixedSessionStore("preview-order");
     const validSessionKey = "agent:main:preview-valid";

@@ -55,6 +55,7 @@ export function buildGatewaySessionEventFields(params: {
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
     permissionMode: sessionRow.permissionMode ?? null,
+    permissionModePending: sessionRow.permissionModePending ?? false,
     ...(sessionRow.permissionMode !== undefined && sessionRow.sessionRoot !== undefined
       ? { sessionRoot: sessionRow.sessionRoot }
       : {}),
@@ -173,13 +174,19 @@ export function buildGatewaySessionSnapshot(params: {
       delete sessionRow.estimatedCostUsd;
     }
   }
+  // Accepted terminal events outrank retained cleanup liveness; otherwise the
+  // active owner, not a stale persisted row, supplies current run status.
+  const activeStatus = params.activeRunState?.active
+    ? (params.activeRunState.status ?? "running")
+    : undefined;
+  const status = params.status ?? patch.status ?? activeStatus;
   const eventFields = buildGatewaySessionEventFields({
     sessionRow,
     agentId: params.agentId,
     label: params.label,
     displayName: params.displayName,
     parentSessionKey: params.parentSessionKey,
-    status: params.status,
+    status,
     hasActiveRun: params.activeRunState?.active,
     // Presence means an exact set; null clears stale IDs when only liveness is known.
     activeRunIds: params.activeRunState ? (params.activeRunState.runIds ?? null) : undefined,

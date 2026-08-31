@@ -1,7 +1,8 @@
 /**
- * Extension relay lifecycle: one relay server per extension-driver profile,
- * owned by the browser control runtime state.
+ * Extension relay lifecycle: one owned listener or authenticated borrowed lease
+ * per extension-driver profile in the browser control runtime.
  */
+import { extractErrorCode } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProfile, type ResolvedBrowserProfile } from "../config.js";
 import {
@@ -12,7 +13,9 @@ import {
   withProfileOperationLease,
 } from "../server-context.lifecycle.js";
 import type { BrowserServerState, ProfileRuntimeState } from "../server-context.types.js";
-import { type ExtensionRelayHandle, startExtensionRelayServer } from "./relay-server.js";
+import { RelayOwnerClient } from "./owner-client.js";
+import { registerBorrowedRelayCdpAccess, type ExtensionRelayResource } from "./relay-access.js";
+import { startExtensionRelayServer } from "./relay-server.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
 
@@ -20,7 +23,7 @@ type PendingRelayEnsure = {
   port: number;
   token: string;
   allowLegacyAuth: boolean;
-  promise: Promise<ExtensionRelayHandle>;
+  promise: Promise<ExtensionRelayResource>;
 };
 
 const pendingRelayEnsures = new WeakMap<ProfileRuntimeState, PendingRelayEnsure>();
@@ -29,7 +32,7 @@ const pendingRelayEnsures = new WeakMap<ProfileRuntimeState, PendingRelayEnsure>
 export const EXTENSION_PAIRING_HINT =
   "Run `openclaw browser extension install`, load the printed unpacked directory once, and wait for automatic setup.";
 
-function relays(state: BrowserServerState): Map<string, ExtensionRelayHandle> {
+function relays(state: BrowserServerState): Map<string, ExtensionRelayResource> {
   if (!state.extensionRelays) {
     state.extensionRelays = new Map();
   }
@@ -68,7 +71,7 @@ export async function ensureExtensionRelayForProfile(
   state: BrowserServerState,
   profile: ResolvedBrowserProfile,
   signal?: AbortSignal,
-): Promise<ExtensionRelayHandle> {
+): Promise<ExtensionRelayResource> {
   for (;;) {
     signal?.throwIfAborted();
     if (!isBrowserRuntimeRunning(state)) {
@@ -153,7 +156,7 @@ async function ensureDesiredRelay(params: {
   runtime: ProfileRuntimeState;
   profile: ResolvedBrowserProfile;
   token: string;
-}): Promise<ExtensionRelayHandle> {
+}): Promise<ExtensionRelayResource> {
   const { state, runtime, profile, token } = params;
   return await withProfileOperationLease({
     state,
@@ -165,12 +168,27 @@ async function ensureDesiredRelay(params: {
       const actor = getProfileLifecycle(runtime);
       const existing = map.get(profile.name);
       if (existing) {
-        if (
+        const matches =
           existing.port === profile.cdpPort &&
           existing.token === token &&
-          existing.allowLegacyAuth === state.resolved.extensionRelay.allowLegacyAuth
-        ) {
-          const current = applyInternalRelayToken(state, profile.name, existing.internalToken);
+          existing.allowLegacyAuth === state.resolved.extensionRelay.allowLegacyAuth;
+        if (matches && existing.ownership === "borrowed" && existing.client.connected) {
+          try {
+            // A live socket can still have an unread retirement notice. Reuse requires
+            // a response from this owner; loss without cleanup acknowledgement stays blocked.
+            await existing.client.status();
+          } catch (error) {
+            if (existing.client.connected) {
+              throw error;
+            }
+          }
+        }
+        if (matches && (existing.ownership !== "borrowed" || existing.client.connected)) {
+          const current = applyInternalRelayToken(
+            state,
+            profile.name,
+            existing.ownership === "borrowed" ? null : existing.internalToken,
+          );
           if (current) {
             Object.assign(profile, current);
           }
@@ -185,13 +203,66 @@ async function ensureDesiredRelay(params: {
         }
         applyInternalRelayToken(state, profile.name, null);
       }
-      let handle: ExtensionRelayHandle | undefined;
+      let handle: ExtensionRelayResource | undefined;
       try {
-        handle = await startExtensionRelayServer({
-          port: profile.cdpPort,
-          token,
-          allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
-        });
+        try {
+          handle = await startExtensionRelayServer({
+            port: profile.cdpPort,
+            profileName: profile.name,
+            token,
+            allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
+          });
+        } catch (error) {
+          if (extractErrorCode(error) !== "EADDRINUSE") {
+            throw error;
+          }
+        }
+        if (!handle) {
+          const client = await RelayOwnerClient.connect({
+            port: profile.cdpPort,
+            profile: profile.name,
+            token,
+            signal,
+          });
+          let unregister = () => {};
+          handle = {
+            ownership: "borrowed",
+            port: profile.cdpPort,
+            token,
+            allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
+            client,
+            close: async () => {
+              await client.close();
+              unregister();
+            },
+          };
+          actor.cleanupRelays.add(handle);
+          const status = await client.status();
+          if (!handle.allowLegacyAuth && status.allowLegacyAuth) {
+            throw new Error(
+              "Existing relay permits legacy authentication; its owner must retire it before this stricter profile can use it.",
+            );
+          }
+          const borrowed = handle;
+          const assertCurrent = () => {
+            if (
+              map.get(profile.name) !== borrowed ||
+              state.profiles.get(profile.name) !== runtime ||
+              actor.transitionReason ||
+              actor.terminal ||
+              actor.cleanupRelays.has(borrowed) ||
+              state.resolved.extensionRelayToken !== token ||
+              resolveProfile(state.resolved, profile.name)?.cdpPort !== borrowed.port
+            ) {
+              throw new Error("Borrowed relay profile lease was superseded");
+            }
+          };
+          client.adoptProfileLease(assertCurrent);
+          unregister = registerBorrowedRelayCdpAccess(
+            `http://127.0.0.1:${profile.cdpPort}`,
+            borrowed,
+          );
+        }
         actor.cleanupRelays.add(handle);
         signal.throwIfAborted();
         const currentProfile = resolveProfile(state.resolved, profile.name);
@@ -207,7 +278,7 @@ async function ensureDesiredRelay(params: {
         const currentWithInternalAuth = applyInternalRelayToken(
           state,
           profile.name,
-          handle.internalToken,
+          handle.ownership === "borrowed" ? null : handle.internalToken,
         );
         if (!currentWithInternalAuth) {
           throw new Error(`Extension relay profile "${profile.name}" disappeared during startup.`);

@@ -40,7 +40,7 @@ import {
   activeQueuedMessageEdit,
   beginQueuedMessageEdit,
   cancelQueuedMessageEdit,
-  isQueuedMessageRemovalBlocked,
+  isQueuedMessageBeingEdited,
   QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
   QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR,
   updateQueuedMessageEdit,
@@ -61,7 +61,7 @@ import {
   normalizeSidebarLayout,
   openSlot,
 } from "./sidebar-layout.ts";
-import { resetToolStream } from "./tool-stream.ts";
+import { resetToolStream, type RunOutputUsage } from "./tool-stream.ts";
 
 type ChatPageElement = {
   getBoundingClientRect?: () => DOMRect;
@@ -190,7 +190,7 @@ export function createPageState(
     chatEffectiveQueueMode: undefined,
     chatAttachments: [],
     chatRunId: null,
-    chatRunUsageById: new Map<string, number>(),
+    chatRunUsageById: new Map<string, RunOutputUsage>(),
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunStartup: null,
@@ -324,7 +324,7 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.removeQueuedMessage = (id) => {
-    if (isQueuedMessageRemovalBlocked(state, id)) {
+    if (isQueuedMessageBeingEdited(state, id)) {
       setChatError(state, QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR);
       renderLifecycle.invalidate();
       return;
@@ -376,7 +376,10 @@ export function createPageState(
       );
   };
   state.cancelQueuedChatMessageEdit = () => {
-    cancelQueuedMessageEdit(state);
+    if (cancelQueuedMessageEdit(state)) {
+      // Reconnect may have parked the drain on this local hold; Cancel does not write storage.
+      void resumeStoredChatOutboxes(state);
+    }
     renderLifecycle.invalidate();
   };
   state.updateSidebarLayout = (layout) => {

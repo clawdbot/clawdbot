@@ -32,7 +32,7 @@ import {
   isAcpSessionKey,
   isUiGlobalScopeConfigured,
   normalizeAgentId,
-  resolveUiCanonicalMainSessionKey,
+  readSessionDefaults,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiSessionNavigationParentKey,
@@ -520,7 +520,7 @@ export function resolveSidebarMainSessionKey(input: {
   // Global-scope gateways advertise the canonical main session as the
   // literal "global" key; a synthesized agent key would never match it.
   if (isUiGlobalScopeConfigured(host)) {
-    return resolveUiCanonicalMainSessionKey(host);
+    return normalizeOptionalString(readSessionDefaults(host)?.mainSessionKey) ?? "global";
   }
   return buildAgentMainSessionKey({
     agentId: input.agentId,

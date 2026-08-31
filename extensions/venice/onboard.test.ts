@@ -25,7 +25,9 @@ describe("Venice onboarding", () => {
     { label: "custom", cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0.5 } },
   ])("preserves existing $label pricing when onboarding again", ({ cost }) => {
     const config = applyVeniceConfig({});
-    const model = config.models!.providers!.venice!.models[0]!;
+    const model = config.models!.providers!.venice!.models.find(
+      ({ id }) => id === "qwen-3-7-plus",
+    )!;
     model.cost = { ...cost };
 
     const reapplied = applyVeniceConfig(config);

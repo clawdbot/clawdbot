@@ -5,15 +5,13 @@ import fsp from "node:fs/promises";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import path from "node:path";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { boundedWorkerError } from "../gateway/worker-environments/worker-error.js";
 import type { WorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_MANIFEST_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
 } from "../gateway/worker-environments/workspace-inventory-limits.js";
-import {
-  parseWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifestEntry,
-} from "../gateway/worker-environments/workspace-manifest.js";
+import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
 import { absoluteEntryMatches } from "../gateway/worker-environments/workspace-reconcile-fs.js";
 import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
@@ -26,7 +24,6 @@ import {
   isStagedInputPath,
   stagedInputDirectoriesFromEntries,
 } from "../media/staged-inputs.js";
-import { runExec } from "../process/exec.js";
 import {
   nodeWorkspaceTransferBlobPath,
   NodeWorkerWorkspaceTransferError,
@@ -40,12 +37,9 @@ import {
   openNodeWorkerTransferHttpRequest,
   type NodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
-import {
-  captureManifest,
-  runWorkspaceCommand,
-  TRANSFER_TIMEOUT_MS,
-  workspaceCommandEnv,
-} from "./node-worker-workspace-commands.js";
+import { captureManifest, runWorkspaceCommand } from "./node-worker-workspace-commands.js";
+import { initializeNodeWorkerGitWorkspace } from "./node-worker-workspace-git.js";
+import { copyNodeWorkerProjectSeedObjects } from "./node-worker-workspace-seeds.js";
 
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
 const transferLog = createSubsystemLogger("node-host/worker-workspace");
@@ -144,83 +138,6 @@ function workspacePath(root: string, relative: string): string {
     throw new Error("workspace transfer manifest escaped its workspace");
   }
   return candidate;
-}
-
-async function initializeGitWorkspace(params: {
-  workspaceDir: string;
-  manifestHome: string;
-  packPath: string;
-  baseCommit: string;
-  entries: WorkerWorkspaceManifestEntry[];
-  signal?: AbortSignal;
-}): Promise<void> {
-  const objectFormat = params.baseCommit.length === 40 ? "sha1" : "sha256";
-  if (params.baseCommit.length !== 40 && params.baseCommit.length !== 64) {
-    throw new Error("workspace transfer Git base object id is invalid");
-  }
-  const git = async (args: string[], options: { input?: string; maxOutputBytes?: number } = {}) =>
-    await runWorkspaceCommand({
-      workspaceDir: params.workspaceDir,
-      homeDir: params.manifestHome,
-      argv: ["git", "-C", params.workspaceDir, ...args],
-      ...(options.input === undefined ? {} : { input: options.input }),
-      signal: params.signal,
-      ...(options.maxOutputBytes === undefined ? {} : { maxOutputBytes: options.maxOutputBytes }),
-    });
-  await git(["init", "--quiet", `--object-format=${objectFormat}`, "."]);
-  const pack = await fsp.open(params.packPath, "r");
-  try {
-    await runExec("git", ["-C", params.workspaceDir, "index-pack", "--stdin"], {
-      cwd: params.workspaceDir,
-      baseEnv: workspaceCommandEnv(params.manifestHome),
-      stdinFileDescriptor: pack.fd,
-      signal: params.signal,
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-      maxBuffer: 256 * 1024,
-      logOutput: false,
-    });
-  } finally {
-    await pack.close();
-  }
-  await fsp.writeFile(path.join(params.workspaceDir, ".git", "shallow"), `${params.baseCommit}\n`);
-  const actual = (await git(["rev-parse", "--verify", `${params.baseCommit}^{commit}`])).trim();
-  if (actual !== params.baseCommit) {
-    throw new Error("workspace transfer Git base does not match the synced pack");
-  }
-  await git(["update-ref", "refs/heads/openclaw-worker", params.baseCommit]);
-  await git(["symbolic-ref", "HEAD", "refs/heads/openclaw-worker"]);
-  await git(["read-tree", params.baseCommit]);
-  const index = await git(["ls-files", "--stage", "-z"], {
-    maxOutputBytes: MAX_WORKSPACE_MANIFEST_BYTES,
-  });
-  const gitlinks: string[] = [];
-  const basePaths = new Set<string>();
-  for (const record of index.split("\0").filter(Boolean)) {
-    const separator = record.indexOf("\t");
-    if (separator < 0) {
-      continue;
-    }
-    const indexedPath = record.slice(separator + 1);
-    if (record.startsWith("160000 ")) {
-      gitlinks.push(indexedPath);
-    } else {
-      basePaths.add(indexedPath);
-    }
-  }
-  if (gitlinks.length > 0) {
-    await git(["update-index", "--skip-worktree", "-z", "--stdin"], {
-      input: `${gitlinks.join("\0")}\0`,
-    });
-  }
-  const checkoutPaths = params.entries
-    .map((entry) => entry.path)
-    .filter((entryPath) => basePaths.has(entryPath));
-  if (checkoutPaths.length > 0) {
-    await git(["checkout-index", "-z", "--stdin"], {
-      input: `${checkoutPaths.join("\0")}\0`,
-    });
-  }
-  await fsp.rm(params.packPath, { force: true });
 }
 
 const workspaceTransferQueues = new Map<string, Promise<void>>();
@@ -340,6 +257,8 @@ async function replaceWorkspace(workspaceDir: string, staging: string): Promise<
 }
 
 async function downloadWorkspace(params: {
+  seedsRoot?: string;
+  gatewayNamespace?: string;
   gatewayUrl: string;
   tlsFingerprint?: string;
   cloudflareAccess?: CloudflareAccessCredentials;
@@ -352,6 +271,7 @@ async function downloadWorkspace(params: {
 }): Promise<string> {
   const startedAt = performance.now();
   let packDownloadMs: number | undefined;
+  let baseSource: "prepared-project-seed" | "gateway-pack" | undefined;
   const raw = await downloadBuffer(
     {
       gatewayUrl: params.gatewayUrl,
@@ -368,6 +288,9 @@ async function downloadWorkspace(params: {
     MAX_WORKSPACE_MANIFEST_BYTES,
   );
   const manifest = parseWorkerWorkspaceManifest(raw.toString("utf8"), params.transfer.manifestRef);
+  if (params.transfer.seedKey && (!manifest.baseCommit || params.transfer.attachments)) {
+    throw new Error("Prepared project seeds require a Git workspace transfer");
+  }
   const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
   if (
     params.transfer.attachments &&
@@ -405,32 +328,61 @@ async function downloadWorkspace(params: {
       }
     }
     if (manifest.baseCommit) {
-      const packPath = path.join(staging, ".openclaw-base.pack");
-      const packStartedAt = performance.now();
-      await downloadFile({
-        request: {
-          gatewayUrl: params.gatewayUrl,
-          tlsFingerprint: params.tlsFingerprint,
-          cloudflareAccess: params.cloudflareAccess,
-          routePath: nodeWorkspaceTransferPackPath(
-            params.environmentId,
-            params.transfer.manifestRef,
-          ),
-          method: "GET",
-          token: params.transfer.token,
+      try {
+        let seeded = false;
+        if (params.transfer.seedKey) {
+          baseSource = "prepared-project-seed";
+          if (!params.seedsRoot || !params.gatewayNamespace) {
+            throw new Error("Prepared project seed has no machine cache owner");
+          }
+          seeded = await copyNodeWorkerProjectSeedObjects({
+            seedsRoot: params.seedsRoot,
+            gatewayNamespace: params.gatewayNamespace,
+            seedKey: params.transfer.seedKey,
+            workspaceDir: staging,
+            signal: params.signal,
+          });
+        }
+        let packPath: string | undefined;
+        if (!seeded) {
+          baseSource = "gateway-pack";
+          packPath = path.join(staging, ".openclaw-base.pack");
+          const packStartedAt = performance.now();
+          await downloadFile({
+            request: {
+              gatewayUrl: params.gatewayUrl,
+              tlsFingerprint: params.tlsFingerprint,
+              cloudflareAccess: params.cloudflareAccess,
+              routePath: nodeWorkspaceTransferPackPath(
+                params.environmentId,
+                params.transfer.manifestRef,
+              ),
+              method: "GET",
+              token: params.transfer.token,
+              signal: params.signal,
+            },
+            destination: packPath,
+          });
+          packDownloadMs = performance.now() - packStartedAt;
+        }
+        await initializeNodeWorkerGitWorkspace({
+          workspaceDir: staging,
+          manifestHome: params.manifestHome,
+          packPath,
+          baseCommit: manifest.baseCommit,
+          entries: manifest.entries,
           signal: params.signal,
-        },
-        destination: packPath,
-      });
-      packDownloadMs = performance.now() - packStartedAt;
-      await initializeGitWorkspace({
-        workspaceDir: staging,
-        manifestHome: params.manifestHome,
-        packPath,
-        baseCommit: manifest.baseCommit,
-        entries: manifest.entries,
-        signal: params.signal,
-      });
+        });
+      } catch (error) {
+        params.signal?.throwIfAborted();
+        if (baseSource === "prepared-project-seed") {
+          throw new NodeWorkerWorkspaceTransferError(
+            `workspace-transfer-failed: prepared project seed is invalid: ${boundedWorkerError(error)}`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
     }
     const blobApplyStartedAt = performance.now();
     for (const directory of manifest.directories ?? []) {
@@ -522,6 +474,7 @@ async function downloadWorkspace(params: {
       direction: "download",
       outcome: "succeeded",
       durationMs: performance.now() - startedAt,
+      ...(baseSource === undefined ? {} : { baseSource }),
       ...(packDownloadMs === undefined ? {} : { packDownloadMs }),
       blobApplyMs,
     });
@@ -636,6 +589,8 @@ async function uploadWorkspace(params: {
 }
 
 export async function runNodeWorkerWorkspaceTransfer(params: {
+  seedsRoot?: string;
+  gatewayNamespace?: string;
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;

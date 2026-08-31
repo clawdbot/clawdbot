@@ -210,9 +210,7 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("export NO_COLOR=1");
     expect(script).toContain("unset COLORTERM");
     expect(script).toContain('source "$script_parent_dir/lib/plain-gh.sh"');
-    expect(script).toContain("OPENCLAW_GH_BIN=");
     expect(script).toContain("for cmd in git gh jq rg pnpm node");
-    expect(script).toContain('missing+=("real-gh")');
     expect(script).not.toContain("gh() {");
     expect(script).toContain("scripts/watch-pr-ci.mjs");
     expect(script).toContain("scripts/watch-pr-ci.mts");
@@ -236,6 +234,28 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("only support PRs targeting main");
   });
 
+  itPosix("preserves the caller's gh route environment through startup", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      cpSync("scripts/lib/plain-gh.sh", join(fixture.canonical, "scripts/lib/plain-gh.sh"));
+      writeFileSync(
+        join(fixture.canonical, "scripts/pr-lib/worktree.sh"),
+        `list_pr_worktrees() { /bin/sh -c 'printf "%s\\n" "\${OPENCLAW_GH_BIN-absent}"'; }\n`,
+      );
+      for (const override of [undefined, "", join(fixture.bin, "gh")]) {
+        const result = spawnSync(join(fixture.canonical, "scripts/pr"), ["ls"], {
+          cwd: fixture.canonical,
+          encoding: "utf8",
+          env: { ...fixture.env, OPENCLAW_GH_BIN: override },
+        });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toBe(`${override ?? "absent"}\n`);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("routes cached reads and writer-sensitive operations through their owning gh seams", () => {
     const script = readScript("scripts/pr");
     const common = readScript("scripts/pr-lib/common.sh");
@@ -247,8 +267,6 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain('base_json=$(read_pr_view_json "$pr" "baseRefName")');
     expect(common).toContain('gh pr view "$pr" --json "$fields"');
     expect(worktree).toContain('metadata=$(read_pr_view_json "$pr"');
-    expect(worktree).toContain('gh_plain api --paginate "repos/{owner}/{repo}/pulls/$pr/files');
-    expect(review).toContain("reviewer=$(gh_plain api user --jq .login");
     expect(review).toContain('gh_plain pr edit "$pr" --add-assignee "$reviewer"');
     expect(push).toContain('gh_plain api graphql --input - <<< "$payload"');
     expect(merge).toContain('gh_plain pr merge "$pr"');
@@ -680,66 +698,66 @@ exit 1
     expect(result.stderr).toBe("");
   });
 
-  it("resolves review writer identity and assignment through the real GitHub CLI", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-review-writer-"));
-    const bin = join(dir, "bin");
-    const pathCalls = join(dir, "path-calls.log");
-    const realCalls = join(dir, "real-calls.log");
-    const realGh = join(dir, "real-gh");
-    mkdirSync(bin);
-    writeFileSync(
-      join(bin, "gh"),
-      `#!/bin/sh
-printf '%s\n' "$*" >> "$OPENCLAW_TEST_PATH_CALLS"
-exit 9
-`,
-    );
-    writeFileSync(
-      realGh,
-      `#!/bin/sh
-printf '%s\n' "$*" >> "$OPENCLAW_TEST_REAL_CALLS"
+  it.each(["default", "override"])(
+    "resolves review writer identity through the selected protected gh (%s)",
+    (route) => {
+      const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-review-writer-"));
+      const bin = join(dir, "bin");
+      const calls = join(dir, "calls.log");
+      mkdirSync(bin);
+      const protectedGh = `#!/bin/sh
+printf '%s\\n' "$*" >> "$OPENCLAW_TEST_CALLS"
 case "$1 $2" in
-  "api user") printf 'maintainer\n' ;;
-  "pr edit") exit 0 ;;
-  *) exit 2 ;;
+  "api user") printf 'relay-reader\\n' ;;
+  "api graphql") printf 'writer-maintainer\\n' ;;
+  "pr edit") [ "$5" = writer-maintainer ] ;;
+  *) exit 19 ;;
 esac
-`,
-    );
-    chmodSync(join(bin, "gh"), 0o755);
-    chmodSync(realGh, 0o755);
-
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        [
-          "source scripts/lib/plain-gh.sh",
-          "source scripts/pr-lib/review.sh",
-          'enter_worktree() { cd "$OPENCLAW_TEST_ROOT"; mkdir -p .local; }',
-          "mark_pr_operation_side_effects_started() { :; }",
-          "print_relevant_log_excerpt() { :; }",
-          "review_claim 42",
-        ].join("\n"),
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_GH_BIN: realGh,
-          OPENCLAW_TEST_PATH_CALLS: pathCalls,
-          OPENCLAW_TEST_REAL_CALLS: realCalls,
-          OPENCLAW_TEST_ROOT: dir,
-          PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
-        },
-      },
-    );
-    const realInvocations = readFileSync(realCalls, "utf8");
-    rmSync(dir, { recursive: true, force: true });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(realInvocations).toContain("api user --jq .login");
-    expect(realInvocations).toContain("pr edit 42 --add-assignee maintainer");
-    expect(existsSync(pathCalls)).toBe(false);
-  });
+`;
+      const pathGh = join(bin, "gh");
+      const overrideGh = join(dir, "selected-gh");
+      writeFileSync(pathGh, route === "default" ? protectedGh : "#!/bin/sh\nexit 19\n");
+      writeFileSync(overrideGh, protectedGh);
+      chmodSync(pathGh, 0o755);
+      chmodSync(overrideGh, 0o755);
+      try {
+        const result = spawnSync(
+          "bash",
+          [
+            "-c",
+            [
+              "source scripts/lib/plain-gh.sh",
+              "source scripts/pr-lib/common.sh",
+              "source scripts/pr-lib/review.sh",
+              'enter_worktree() { cd "$OPENCLAW_TEST_ROOT"; mkdir -p .local; }',
+              "review_claim 42",
+            ].join("\n"),
+          ],
+          {
+            cwd: process.cwd(),
+            encoding: "utf8",
+            env: {
+              HOME: dir,
+              GH_TOKEN: "synthetic-writer-token",
+              OPENCLAW_GH_BIN: route === "override" ? overrideGh : "",
+              OPENCLAW_TEST_CALLS: calls,
+              OPENCLAW_TEST_ROOT: dir,
+              PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+            },
+          },
+        );
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+        expect(result.stdout).toContain("@writer-maintainer assigned to PR #42");
+        expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+          expect.stringContaining("api graphql -f query=query { viewer { login } }"),
+          "pr edit 42 --add-assignee writer-maintainer",
+        ]);
+        expect(readFileSync(join(dir, ".local/review-claim-user-attempt-1.log"), "utf8")).toBe(
+          "writer-maintainer\n",
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });

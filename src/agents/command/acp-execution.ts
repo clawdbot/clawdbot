@@ -72,6 +72,7 @@ export async function runAcpAgentCommand(params: {
     sessionId: params.sessionId,
     agentId: params.sessionAgentId,
     lifecycleGeneration: params.lifecycleGeneration,
+    projectSessionActive: !params.suppressVisibleSessionEffects,
     ...(params.suppressVisibleSessionEffects ? { isControlUiVisible: false } : {}),
   });
   attemptExecutionRuntime.emitAcpLifecycleStart({

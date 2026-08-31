@@ -25,7 +25,7 @@ import {
   clearAgentRunContext,
   getAgentRunContext,
   getAgentRunContextOwnership,
-  hasProjectedAgentRunForSession,
+  resolveProjectedAgentRunProgressState,
   releaseAgentRunContext,
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
@@ -709,7 +709,9 @@ describe("worker live events", () => {
       }
 
       expect(getAgentRunContext(RUN)).toBeUndefined();
-      expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(false);
+      expect(
+        resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID }),
+      ).toBeUndefined();
     },
   );
 
@@ -735,7 +737,9 @@ describe("worker live events", () => {
       lifecycleGeneration,
       projectSessionActive: true,
     });
-    expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(true);
+    expect(resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID })).toBe(
+      "running",
+    );
     expect(events.map((event) => [event.stream, event.data.phase ?? event.data.delta])).toEqual([
       ["lifecycle", "start"],
       ["assistant", "worker"],
@@ -753,7 +757,9 @@ describe("worker live events", () => {
     expect(end?.data.phase).toBe("end");
     clearAgentRunContext(RUN, end?.lifecycleGeneration, end?.contextClaimId);
     expect(getAgentRunContext(RUN)).toBeUndefined();
-    expect(hasProjectedAgentRunForSession({ sessionKeys: [KEY], sessionId: SID })).toBe(false);
+    expect(
+      resolveProjectedAgentRunProgressState({ sessionKeys: [KEY], sessionId: SID }),
+    ).toBeUndefined();
   });
 
   it("shares a compatible non-exclusive Gateway run owner", () => {

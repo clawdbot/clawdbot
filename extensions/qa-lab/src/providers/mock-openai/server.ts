@@ -39,6 +39,7 @@ import {
   QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
   QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
   QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
+  QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE,
   QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
@@ -1056,6 +1057,10 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
+  const isActiveEmptyResponseSideEffectExhaustion =
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
@@ -1374,17 +1379,20 @@ async function buildResponsesPayload(
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body));
   }
-  if (isActiveEmptyResponseSideEffectRecovery) {
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      return buildAssistantEvents(
-        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
-      );
-    }
+  if (isActiveEmptyResponseSideEffectRecovery || isActiveEmptyResponseSideEffectExhaustion) {
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("write", {
         path: "qa-empty-response-side-effect.txt",
         content: "side effect completed once\n",
       });
+    }
+    if (isActiveEmptyResponseSideEffectExhaustion) {
+      return buildAssistantEvents("");
+    }
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      return buildAssistantEvents(
+        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+      );
     }
     return buildAssistantEvents("");
   }

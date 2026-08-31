@@ -43,7 +43,6 @@ import {
   appendCanvasBlockToAssistantMessage,
   buildMessageKeys,
   canvasPreviewBaseIdentity,
-  collapseSequentialDuplicateMessages,
   createCanvasAssistantMessage,
   extractChatMessagePreview,
   findCanvasInsertionIndex,
@@ -60,7 +59,7 @@ import {
   transcriptPositionTimestamp,
   turnHasMatchingAssistant,
   type TurnInsertionBounds,
-  userTurnSendIdentity,
+  userTurnRunId,
 } from "./chat-thread-items.ts";
 import {
   applyPersistedToolInvocationBounds,
@@ -202,7 +201,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         ? t(noticeKind.summaryKey)
         : extractTextCached(msg)?.replace(/^\[System\] /u, "");
       if (text?.trim()) {
-        const boundaryId = userTurnSendIdentity(msg);
         items.push({
           kind: "notice",
           key: itemKey,
@@ -212,7 +210,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),
           text,
           timestamp: normalized.timestamp,
-          ...(boundaryId ? { boundaryId } : {}),
+          ...optionalBoundaryIdentity(userTurnRunId(msg)),
         });
       }
       continue;
@@ -696,5 +694,5 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       props.searchOpen ? props.searchQuery : undefined,
     ),
   );
-  return groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items)));
+  return groupMessages(coalesceToolActivityMessages(items));
 }

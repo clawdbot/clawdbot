@@ -63,6 +63,14 @@ type ExistingAgentSchemaMeta = {
   schemaVersion: number | null;
 };
 
+export function migratedSessionColumn(
+  columns: ReadonlySet<string>,
+  columnName: string,
+  fallback: string,
+): string {
+  return columns.has(columnName) ? columnName : fallback;
+}
+
 const AGENT_SCHEMA_COMPATIBILITY = {
   allowCompatibleAdditiveColumns: true,
   allowedMissingTables: [
@@ -82,6 +90,7 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
   allowedMissingColumns: [
+    "session_pending_inputs.consumed_event_id",
     "session_transcript_active_events.context_eligible",
     "session_conversations.route_context_json",
     "standing_intents.creator_sender",

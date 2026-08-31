@@ -98,13 +98,12 @@ describe("Telegram QA transport adapter", () => {
     mocks.shouldRetainQaGatewayCredentialLease.mockResolvedValue(false);
   });
 
-  it("leases a Test Server userbot and configures the SUT proxy", async () => {
+  it("leases a Test Server userbot and isolates its shared group by default", async () => {
     const adapter = await createTelegramQaTransportAdapter({
       adapterOptions: {
         credentialSource: "convex",
         credentialRole: "ci",
         repoRoot: "/checkout",
-        transportPolicy: { requireGroupMention: true },
       },
       messages: {},
     } as never);

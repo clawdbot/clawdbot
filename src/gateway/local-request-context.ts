@@ -94,6 +94,8 @@ function createLocalGatewayRequestContext(
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    // Embedded calls have no running Gateway application owner.
+    isConfigReloadSettled: () => false,
     notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,

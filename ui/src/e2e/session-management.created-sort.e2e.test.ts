@@ -1,11 +1,12 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
   createSessionManagementE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
   uiProofArtifactDir,
 } from "./session-management.test-support.ts";
@@ -49,7 +50,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, olderRows[0]!.key));
       const rows = page.locator(".sidebar-recent-session");
       await expect.poll(() => rows.count(), { timeout: 10_000 }).toBe(10);
       const retainedSessionKey = olderRows[5]!.key;

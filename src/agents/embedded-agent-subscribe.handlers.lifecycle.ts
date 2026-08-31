@@ -154,6 +154,7 @@ export function handleAgentEnd(
     const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
       sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
       provider: lastAssistant.provider,
       model: lastAssistant.model,
     });

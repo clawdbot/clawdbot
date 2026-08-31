@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
@@ -171,7 +171,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": collaborativeSessionsList() },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:collaboration"));
     const collaborativeRow = currentPage.locator('[data-session-key="agent:main:collaboration"]');
     const overflowRow = currentPage.locator('[data-session-key="agent:main:release-planning"]');
     const singleOwnerRow = currentPage.locator('[data-session-key="agent:main:single-owner"]');
@@ -304,7 +304,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"], true) },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -425,7 +425,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": allSessions },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await gateway.setMethodResponse("sessions.list", {
       ...allSessions,
@@ -482,7 +482,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -507,7 +507,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
 
@@ -552,7 +552,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": draftSessionsList() },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     const ownDraft = currentPage.locator('[data-session-key="agent:main:ada"]');
     const otherDraft = currentPage.locator('[data-session-key="agent:main:bob"]');
     await ownDraft.waitFor();
@@ -660,7 +660,7 @@ suite.define(() => {
       },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByLabel("Session sharing").click();
     const publish = currentPage.getByText("Publish draft", { exact: true });
@@ -696,7 +696,7 @@ suite.define(() => {
       methodResponses: { "sessions.list": sessions },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
@@ -753,7 +753,7 @@ suite.define(() => {
       },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByLabel("Session sharing").click();
     await gateway.waitForRequest("session.members.listEvidence");
@@ -869,7 +869,7 @@ suite.define(() => {
       },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.locator(".chat-pane__sharing-trigger").click();
     await gateway.waitForRequest("session.members.listEvidence");

@@ -38,7 +38,8 @@ export function requireInheritedWorkerProfileAuthorization(
   }
 }
 
-export function requireProviderProvisionTimeoutMs(
+export function requireProviderOperationTimeoutMs(
+  operation: "provision" | "destroy",
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs === undefined) {
@@ -46,7 +47,7 @@ export function requireProviderProvisionTimeoutMs(
   }
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMER_TIMEOUT_MS) {
     throw new Error(
-      `Worker provider provision timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
+      `Worker provider ${operation} timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
     );
   }
   return timeoutMs;

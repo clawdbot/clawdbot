@@ -5504,6 +5504,7 @@ public struct SessionCatalog: Codable, Sendable {
     public let id: String
     public let label: String
     public let capabilities: SessionCatalogCapabilities
+    public let shareroute: [String: AnyCodable]?
     public let hosts: [SessionCatalogHost]
     public let error: [String: AnyCodable]?
 
@@ -5511,14 +5512,25 @@ public struct SessionCatalog: Codable, Sendable {
         id: String,
         label: String,
         capabilities: SessionCatalogCapabilities,
+        shareroute: [String: AnyCodable]? = nil,
         hosts: [SessionCatalogHost],
         error: [String: AnyCodable]? = nil)
     {
         self.id = id
         self.label = label
         self.capabilities = capabilities
+        self.shareroute = shareroute
         self.hosts = hosts
         self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case capabilities
+        case shareroute = "shareRoute"
+        case hosts
+        case error
     }
 }
 
@@ -5528,6 +5540,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
     public let text: String?
     public let timestamp: String?
     public let model: String?
+    public let sender: SessionParticipant?
     public let truncated: Bool?
     public let raw: AnyCodable?
 
@@ -5537,6 +5550,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
         text: String? = nil,
         timestamp: String? = nil,
         model: String? = nil,
+        sender: SessionParticipant? = nil,
         truncated: Bool? = nil,
         raw: AnyCodable? = nil)
     {
@@ -5545,6 +5559,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
         self.text = text
         self.timestamp = timestamp
         self.model = model
+        self.sender = sender
         self.truncated = truncated
         self.raw = raw
     }
@@ -6379,6 +6394,7 @@ public struct SessionRow: Codable, Sendable {
     public let spawnedworkspacedir: String?
     public let spawnedcwd: String?
     public let permissionmode: SessionPermissionMode?
+    public let permissionmodepending: Bool?
     public let sessionroot: String?
     public let createdvia: AnyCodable?
     public let createdactor: SessionCreatedActor?
@@ -6453,6 +6469,7 @@ public struct SessionRow: Codable, Sendable {
         spawnedworkspacedir: String? = nil,
         spawnedcwd: String? = nil,
         permissionmode: SessionPermissionMode? = nil,
+        permissionmodepending: Bool? = nil,
         sessionroot: String? = nil,
         createdvia: AnyCodable? = nil,
         createdactor: SessionCreatedActor? = nil,
@@ -6526,6 +6543,7 @@ public struct SessionRow: Codable, Sendable {
         self.spawnedworkspacedir = spawnedworkspacedir
         self.spawnedcwd = spawnedcwd
         self.permissionmode = permissionmode
+        self.permissionmodepending = permissionmodepending
         self.sessionroot = sessionroot
         self.createdvia = createdvia
         self.createdactor = createdactor
@@ -6601,6 +6619,7 @@ public struct SessionRow: Codable, Sendable {
         case spawnedworkspacedir = "spawnedWorkspaceDir"
         case spawnedcwd = "spawnedCwd"
         case permissionmode = "permissionMode"
+        case permissionmodepending = "permissionModePending"
         case sessionroot = "sessionRoot"
         case createdvia = "createdVia"
         case createdactor = "createdActor"
@@ -20791,6 +20810,7 @@ public struct ChatHistoryParams: Codable, Sendable {
     public let limit: Int?
     public let offset: Int?
     public let pendingbefore: Int?
+    public let inputrunids: [String]?
     public let messageid: String?
     public let sessionid: String?
     public let maxchars: Int?
@@ -20802,6 +20822,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         limit: Int? = nil,
         offset: Int? = nil,
         pendingbefore: Int? = nil,
+        inputrunids: [String]? = nil,
         messageid: String? = nil,
         sessionid: String? = nil,
         maxchars: Int? = nil)
@@ -20812,6 +20833,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         self.limit = limit
         self.offset = offset
         self.pendingbefore = pendingbefore
+        self.inputrunids = inputrunids
         self.messageid = messageid
         self.sessionid = sessionid
         self.maxchars = maxchars
@@ -20824,6 +20846,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         case limit
         case offset
         case pendingbefore = "pendingBefore"
+        case inputrunids = "inputRunIds"
         case messageid = "messageId"
         case sessionid = "sessionId"
         case maxchars = "maxChars"
@@ -20839,6 +20862,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
     public let inflightrun: AnyCodable?
     public let metadata: AnyCodable?
     public let pendinginputs: [String: AnyCodable]?
+    public let inputconsumptions: [[String: AnyCodable]]?
 
     public init(
         kind: String,
@@ -20848,7 +20872,8 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         agentslist: AnyCodable? = nil,
         inflightrun: AnyCodable? = nil,
         metadata: AnyCodable? = nil,
-        pendinginputs: [String: AnyCodable]? = nil)
+        pendinginputs: [String: AnyCodable]? = nil,
+        inputconsumptions: [[String: AnyCodable]]? = nil)
     {
         self.kind = kind
         self.messages = messages
@@ -20858,6 +20883,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         self.inflightrun = inflightrun
         self.metadata = metadata
         self.pendinginputs = pendinginputs
+        self.inputconsumptions = inputconsumptions
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -20869,6 +20895,7 @@ public struct ChatHistoryDeltaResult: Codable, Sendable {
         case inflightrun = "inFlightRun"
         case metadata
         case pendinginputs = "pendingInputs"
+        case inputconsumptions = "inputConsumptions"
     }
 }
 
