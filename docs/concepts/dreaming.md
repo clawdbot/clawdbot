@@ -12,14 +12,16 @@ Dreaming is the background memory consolidation system in `memory-core`. It move
 
 <Note>
 Dreaming is enabled by default. Set
-`plugins.entries.memory-core.config.dreaming.enabled: false` to disable it.
+`plugins.entries.<memory-plugin>.config.dreaming.enabled: false` on the active memory
+plugin (by default `memory-core`) to disable it.
 To exclude only one agent while leaving memory search available, set
 `agents.entries.<id>.memory.dreaming.enabled: false`.
 </Note>
 
 ## Per-agent participation
 
-The global `plugins.entries.memory-core.config.dreaming.enabled` switch owns the cadence and
+The global `plugins.entries.<memory-plugin>.config.dreaming.enabled` switch on the active
+memory plugin (selected by `plugins.slots.memory`, by default `memory-core`) owns the cadence and
 phase policy. `agents.entries.<id>.memory.dreaming.enabled` controls whether one configured agent
 participates in automatic Dreaming. Omission and `true` preserve participation; `false` excludes
 the agent from recall tracking, transcript ingestion, scheduled and heartbeat processing,

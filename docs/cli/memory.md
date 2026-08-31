@@ -459,9 +459,9 @@ phases, run in order on one schedule: **light** (sort/stage short-term
 material), **REM** (reflect and surface themes), **deep** (promote durable
 facts into `MEMORY.md`). Only deep writes to `MEMORY.md`.
 
-- Enable with `plugins.entries.memory-core.config.dreaming.enabled: true`
-  (default `true`); `memory-core` auto-manages the sweep cron job, no manual
-  `openclaw cron add` required.
+- Enable with `plugins.entries.<memory-plugin>.config.dreaming.enabled: true` on the active
+  memory plugin (by default `memory-core`; default `true`); the active memory plugin
+  auto-manages the sweep cron job, no manual `openclaw cron add` required.
 - Toggle from chat with `/dreaming on|off`; inspect with `/dreaming status`
   (or `/dreaming`/`/dreaming help`). `on`/`off` requires channel owner status
   or gateway `operator.admin`; `status` and help stay available to anyone who
@@ -475,7 +475,8 @@ facts into `MEMORY.md`). Only deep writes to `MEMORY.md`.
   signals and default thresholds; explicit CLI flags remain one-run overrides.
 - Scheduled runs fan out across every configured agent's memory workspace.
 
-Scheduled defaults (`plugins.entries.memory-core.config.dreaming`):
+Scheduled defaults (`plugins.entries.<memory-plugin>.config.dreaming` on the active memory
+plugin, by default `memory-core`):
 
 | Key                                    | Default     |
 | -------------------------------------- | ----------- |

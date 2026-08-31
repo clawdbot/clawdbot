@@ -254,7 +254,8 @@ short-term recall signals, scores candidates, and promotes only qualified
 owner or agent-derived items into long-term memory (`MEMORY.md`):
 
 - **Default on**: disable it with
-  `plugins.entries.memory-core.config.dreaming.enabled: false`.
+  `plugins.entries.<memory-plugin>.config.dreaming.enabled: false` on the active memory
+  plugin (by default `memory-core`).
 - **Scheduled**: when enabled, `memory-core` auto-manages one recurring cron
   job for a full dreaming sweep.
 - **Thresholded**: promotions must pass score, recall-frequency, and

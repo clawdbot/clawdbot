@@ -673,7 +673,7 @@ before applying it. Source session transcripts remain in the session store.
 
 ## Dreaming
 
-Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
+Dreaming is configured under `plugins.entries.<memory-plugin>.config.dreaming` on the active memory plugin (selected by `plugins.slots.memory`, by default `memory-core`), not under `memory.search`.
 
 Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as an implementation detail.
 

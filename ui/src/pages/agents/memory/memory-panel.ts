@@ -442,13 +442,25 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const agentExcludedByConfig = !configuredDreaming.engineOff && !agentParticipation.enabled;
     const dreamingStatus =
       configuredDreaming.enabled && agentParticipation.enabled ? dreaming.dreamingStatus : null;
+    // Doctor reports shared-workspace ambiguity to both co-owners, including the
+    // agent that is explicitly excluded. That agent gates the cached payload
+    // below, so the specific diagnosis would be lost before exclusionNotice
+    // reads it; recover it from the cached reason while stale counts and phases
+    // stay suppressed. The ambiguity notice carries the recovery action
+    // (separate the workspaces) that the generic exclusion notice hides.
+    const cachedExclusionReason = agentExcludedByConfig
+      ? dreaming.dreamingStatus?.exclusionReason === "shared-workspace-ambiguity"
+        ? "shared-workspace-ambiguity"
+        : undefined
+      : undefined;
+    const exclusionReason = dreamingStatus?.exclusionReason ?? cachedExclusionReason;
     const agentIncluded = !configuredDreaming.engineOff && agentParticipation.enabled;
     const effectiveDreamingOn =
       dreamingStatus?.enabled ?? (configuredDreaming.enabled && agentIncluded);
     const exclusionNotice =
-      dreamingStatus?.exclusionReason === "shared-workspace-ambiguity"
+      exclusionReason === "shared-workspace-ambiguity"
         ? t("dreaming.header.sharedWorkspaceAmbiguity")
-        : dreamingStatus?.exclusionReason === "agent-config-disabled" || agentExcludedByConfig
+        : exclusionReason === "agent-config-disabled" || agentExcludedByConfig
           ? t("dreaming.header.agentExcluded")
           : null;
     const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
