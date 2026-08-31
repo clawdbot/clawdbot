@@ -250,15 +250,6 @@ export async function resolveModelAsync(
       };
     }
     const providerConfig = resolveConfiguredProviderConfig(cfg, normalizedRef.provider);
-    const authProfile = resolveDynamicModelAuthProfile({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      cfg,
-      agentDir: resolvedAgentDir,
-      authProfileId: options?.authProfileId,
-      authProfileMode: options?.authProfileMode,
-      preferredProfile: options?.preferredProfile,
-    });
     const preparedMetadataSnapshot = preparedModelRuntime?.metadataSnapshot;
     let providerStaticCatalogLookup: Promise<ProviderRuntimeModel | undefined> | undefined;
     const resolveStaticCatalogModel = async () => {
@@ -304,6 +295,15 @@ export async function resolveModelAsync(
       });
     };
     const resolveDynamicAttempt = async () => {
+      const authProfile = resolveDynamicModelAuthProfile({
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+        cfg,
+        agentDir: resolvedAgentDir,
+        authProfileId: options?.authProfileId,
+        authProfileMode: options?.authProfileMode,
+        preferredProfile: options?.preferredProfile,
+      });
       const preparedDynamicModel = await runtimeHooks.prepareProviderDynamicModel({
         provider: normalizedRef.provider,
         config: cfg,

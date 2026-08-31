@@ -164,8 +164,17 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function oxlintShard(name: string, config: string, ...targets: string[]) {
-  return { name, args: ["--tsconfig", `config/tsconfig/oxlint.${config}.json`, ...targets] };
+function oxlintShard(
+  name: string,
+  config: "core" | "extensions" | "scripts",
+  ...targets: string[]
+) {
+  const projects = {
+    core: "config/tsconfig/oxlint.core.json",
+    extensions: "extensions/tsconfig.json",
+    scripts: "config/tsconfig/oxlint.scripts.json",
+  };
+  return { name, args: ["--tsconfig", projects[config], ...targets] };
 }
 
 const PLUGIN_FIXTURE_DIRECTORIES = [
@@ -237,14 +246,14 @@ describe("run-oxlint", () => {
     expect(
       shouldPrepareExtensionPackageBoundaryArtifacts([
         "--tsconfig",
-        "config/tsconfig/oxlint.extensions.json",
+        "extensions/tsconfig.json",
         "extensions/telegram/src/index.ts",
       ]),
     ).toBe(true);
     expect(
       shouldPrepareExtensionPackageBoundaryArtifacts([
         "--tsconfig=config/tsconfig/oxlint.core.json",
-        "--tsconfig=config/tsconfig/oxlint.extensions.json",
+        "--tsconfig=extensions/tsconfig.json",
       ]),
     ).toBe(true);
   });

@@ -37,6 +37,7 @@ import {
   registerSignalExitGate,
   waitForSignalExitBarriers,
 } from "../signal-exit-barrier.js";
+import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
@@ -564,6 +565,9 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   preManagedServiceStop: PreManagedServiceStop | undefined;
   root?: string;
   jsonMode: boolean;
+  nodeRunner?: string;
+  timeoutMs?: number;
+  invocationCwd?: string;
 }): Promise<void> {
   const before = params.preManagedServiceStop;
   if (!before?.stopped || !before.serviceEnv) {
@@ -583,22 +587,32 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
     });
     // Recovery follows the verified installation or the update's returned replacement root.
-    const revalidated = await revalidateManagedGatewayServiceAfterUpdate({
+    await revalidateManagedGatewayServiceAfterUpdate({
       state,
       root: params.root ?? verdict.root,
       preManagedServiceStop: before,
     });
-    await service.restart({
-      env: state.env,
-      preserveDefinition: revalidated.kind !== "owned" || !revalidated.refreshDefinition,
-      stdout: serviceControlStdoutForMode(params.jsonMode),
-    });
+    // The installed CLI owns the current config dialect and restart health check.
+    // Recovery preserves the service definition and never bypasses its guards.
+    await runUpdatedInstallGatewayCommand(
+      {
+        result: { root: params.root ?? verdict.root },
+        opts: { json: params.jsonMode },
+        invocationEnv: before.serviceEnv,
+        serviceEnv: state.env,
+        nodeRunner: params.nodeRunner,
+        timeoutMs: params.timeoutMs,
+        invocationCwd: params.invocationCwd,
+      },
+      "restart",
+      true,
+    );
     if (!params.jsonMode) {
       defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
     }
   } catch (err) {
     defaultRuntime.error(
-      `Failed to restart managed gateway service after failed update: ${String(err)}`,
+      `Failed to restart managed gateway service after failed update: ${String(err)}. Run \`openclaw gateway status --deep\` before restarting it manually.`,
     );
   }
 }

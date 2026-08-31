@@ -1,52 +1,98 @@
-// Covers option wiring on the message read command.
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import {
+  itWithFish,
+  itWithPowerShell,
+  PowerShellCompletionRunner,
+  runGeneratedBashCompletion,
+  runGeneratedFishCompletion,
+} from "../../completion-cli.test-support.js";
 import type { MessageCliHelpers } from "./helpers.js";
 import { registerMessageReadEditDeleteCommands } from "./register.read-edit-delete.js";
 
-function createHelpers(runMessageAction: MessageCliHelpers["runMessageAction"]): MessageCliHelpers {
-  return {
-    withMessageBase: (command) => command.option("--channel <channel>", "Channel"),
-    withMessageTarget: (command) => command.option("-t, --target <dest>", "Target"),
-    withRequiredMessageTarget: (command) => command.requiredOption("-t, --target <dest>", "Target"),
+const powerShellCompletion = new PowerShellCompletionRunner();
+afterAll(async () => {
+  await powerShellCompletion.close();
+});
+
+function createReadProgram() {
+  const program = new Command().name("openclaw").exitOverride();
+  program.configureOutput({ writeErr: () => {} });
+  const message = program.command("message");
+  const runMessageAction = vi.fn(async () => undefined);
+  const helpers: MessageCliHelpers = {
+    withMessageBase: (command) => command.option("--channel <channel>"),
+    withMessageTarget: (command) => command.option("-t, --target <target>"),
+    withRequiredMessageTarget: (command) => command.requiredOption("-t, --target <target>"),
     runMessageAction,
   };
+  registerMessageReadEditDeleteCommands(message, helpers);
+  return { program, message, runMessageAction };
 }
 
-function createMessageProgram() {
-  const runMessageAction = vi.fn(
-    async (_action: string, _opts: Record<string, unknown>) => undefined,
-  );
-  const message = new Command().exitOverride();
-  message.configureOutput({ writeErr: () => {} });
-  registerMessageReadEditDeleteCommands(message, createHelpers(runMessageAction));
-  return { message, runMessageAction };
-}
-
-describe("registerMessageReadEditDeleteCommands", () => {
-  it("accepts the read options that reach a channel handler", async () => {
-    const { message, runMessageAction } = createMessageProgram();
-
-    await message.parseAsync(["read", "-t", "discord:123", "--around", "42"], { from: "user" });
-
+describe("message read legacy option visibility", () => {
+  it("keeps the shipped spelling accepted while forwarding supported read options", async () => {
+    const { program, runMessageAction } = createReadProgram();
+    await program.parseAsync(
+      ["message", "read", "--target", "channel:123", "--include-thread", "--around", "42"],
+      { from: "user" },
+    );
     expect(runMessageAction).toHaveBeenCalledWith(
       "read",
-      expect.objectContaining({ around: "42" }),
+      expect.objectContaining({
+        target: "channel:123",
+        around: "42",
+        includeThread: true,
+      }),
     );
   });
 
-  it("keeps --include-thread accepted as a compatibility spelling", async () => {
-    const { message, runMessageAction } = createMessageProgram();
-
-    await message.parseAsync(["read", "-t", "discord:123", "--include-thread"], { from: "user" });
-
-    expect(runMessageAction).toHaveBeenCalledWith("read", expect.any(Object));
+  it("rejects an unknown option at the same parser boundary", async () => {
+    const { program, runMessageAction } = createReadProgram();
+    await expect(
+      program.parseAsync(["message", "read", "--target", "channel:123", "--unknown-read-option"], {
+        from: "user",
+      }),
+    ).rejects.toMatchObject({ code: "commander.unknownOption" });
+    expect(runMessageAction).not.toHaveBeenCalled();
   });
 
-  it("no longer advertises --include-thread in help", () => {
-    const { message } = createMessageProgram();
+  it("shows supported read flags while omitting the inert spelling", () => {
+    const { message } = createReadProgram();
     const read = message.commands.find((command) => command.name() === "read");
-
-    expect(read?.helpInformation()).not.toContain("--include-thread");
+    expect(read).toBeDefined();
+    const help = read!.helpInformation();
+    expect(help).toContain("--around <id>");
+    expect(help).toContain("--thread-id <id>");
+    expect(help).not.toContain("--include-thread");
   });
+
+  const engines = [
+    {
+      name: "Bash",
+      test: it.skipIf(process.platform === "win32"),
+      complete: (program: Command) =>
+        runGeneratedBashCompletion(program, ["openclaw", "message", "read", "--"]),
+    },
+    {
+      name: "Fish",
+      test: itWithFish,
+      complete: (program: Command) =>
+        runGeneratedFishCompletion(program, "openclaw message read --"),
+    },
+    {
+      name: "PowerShell",
+      test: itWithPowerShell,
+      complete: (program: Command) =>
+        powerShellCompletion.complete(program, "openclaw message read --"),
+    },
+  ];
+  for (const engine of engines) {
+    engine.test(`hides the inert spelling from real ${engine.name} completions`, async () => {
+      const completions = await engine.complete(createReadProgram().program);
+      expect(completions).toContain("--around");
+      expect(completions).toContain("--thread-id");
+      expect(completions).not.toContain("--include-thread");
+    });
+  }
 });

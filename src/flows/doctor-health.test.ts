@@ -5,8 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { assertNoUnmigratedWorkspaceState } from "../agents/workspace-legacy-state.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
+import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import {
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
@@ -60,6 +62,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
+  note: vi.fn(),
   outro: mocks.outro,
 }));
 
@@ -753,6 +756,79 @@ describe("runDoctorHealthFlow", () => {
       expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(fs.readFileSync(archive, "utf8")).toBe("invalid JSON\n");
+    });
+  });
+
+  it.each(["default", "configured"] as const)(
+    "fails repair when a startup-blocking %s legacy session store remains",
+    async (layout) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const storePath =
+          layout === "configured"
+            ? state.path("custom", "sessions.json")
+            : state.statePath("agents", "main", "sessions", "sessions.json");
+        fs.mkdirSync(path.dirname(storePath), { recursive: true });
+        fs.writeFileSync(storePath, '{"agent:main:legacy":');
+        mocks.config.mockReturnValue(
+          layout === "configured" ? { session: { store: storePath } } : {},
+        );
+        const before = fs.readFileSync(storePath);
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+        await runCommandWithRuntime(runtime, () =>
+          runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+        );
+
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Legacy session store requires migration"),
+        );
+        expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+        expect(fs.readFileSync(storePath)).toEqual(before);
+      });
+    },
+  );
+
+  it("fails public repair after the Gateway lock skips session import", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = await state.writeText(
+        "agents/main/sessions/sessions.json",
+        JSON.stringify({
+          "agent:main:legacy": { sessionId: "legacy-session", updatedAt: 1 },
+        }),
+      );
+      const before = fs.readFileSync(storePath);
+      const gatewayLock = await acquireGatewayLock({
+        allowInTests: true,
+        env: state.env,
+        port: 19566,
+      });
+      if (!gatewayLock) {
+        throw new Error("expected Gateway lock");
+      }
+      mocks.runContributions.mockImplementation(async (ctx) => {
+        await noteSessionTranscriptHealth({
+          cfg: ctx.cfg,
+          env: state.env,
+          shouldRepair: true,
+        });
+      });
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      try {
+        await runCommandWithRuntime(runtime, () =>
+          runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+        );
+      } finally {
+        await gatewayLock.release();
+      }
+
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Legacy session store requires migration"),
+      );
+      expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+      expect(fs.readFileSync(storePath)).toEqual(before);
     });
   });
 

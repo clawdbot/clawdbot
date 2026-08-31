@@ -8,6 +8,73 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it("maintains configured providers on the existing timer with no environments", async () => {
+    vi.useFakeTimers();
+    const maintain = vi.fn(async () => {});
+    const workerService = support.createService(support.createProvider(), {
+      maintainProviders: maintain,
+    });
+
+    expect(support.testState.store.list()).toEqual([]);
+    workerService.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(maintain).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(25);
+    expect(maintain).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(1);
+    await workerService.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps maintenance off reconciliation and allocation while shutdown aborts and drains it", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const maintainProviders = vi.fn(async (_signal: AbortSignal) => pending);
+    const workerService = support.createService(support.createProvider(), { maintainProviders });
+    let stopped = false;
+    let stopping: Promise<void> | undefined;
+    try {
+      await workerService.reconcileOnce();
+      await workerService.reconcileOnce();
+      expect(maintainProviders).toHaveBeenCalledOnce();
+      await expect(
+        workerService.create("development", "during-maintenance"),
+      ).resolves.toMatchObject({ state: "ready" });
+      stopping = workerService.stop().then(() => {
+        stopped = true;
+      });
+      expect(maintainProviders.mock.calls[0]![0].aborted).toBe(true);
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+    } finally {
+      finish();
+      await stopping;
+    }
+    expect(stopped).toBe(true);
+    await workerService.reconcileOnce();
+    expect(maintainProviders).toHaveBeenCalledOnce();
+  });
+
+  it("reports failed maintenance and retries on the next sweep", async () => {
+    const warn = vi.fn();
+    const maintainProviders = vi.fn(async () => {
+      throw new Error("fixture maintenance failure");
+    });
+    const workerService = support.createService(support.createProvider(), {
+      maintainProviders,
+      logger: { warn },
+    });
+    await workerService.reconcileOnce();
+    await support.waitForFast(() => expect(warn).toHaveBeenCalledOnce());
+    await workerService.reconcileOnce();
+    await support.waitForFast(() => expect(maintainProviders).toHaveBeenCalledTimes(2));
+    expect(warn).toHaveBeenCalledWith(
+      "Worker provider maintenance sweep failed; cleanup will retry",
+    );
+  });
+
   it("reconciles unrelated leases concurrently", async () => {
     support.seedReady("worker-concurrent-a");
     support.seedReady("worker-concurrent-b");

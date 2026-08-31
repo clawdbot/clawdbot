@@ -12,7 +12,10 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
+import {
+  ensureOpenClawAgentDatabaseSchema,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "../state/openclaw-agent-db.js";
 
 const STARTUP_REFUSAL =
   "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.";
@@ -160,7 +163,100 @@ function seedOwnerlessSchemaOnlyAgentDatabase(stateDir: string): string {
   return databasePath;
 }
 
+function seedV17AdditiveRepairDatabase(stateDir: string): string {
+  const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const database = new DatabaseSync(databasePath);
+  try {
+    ensureOpenClawAgentDatabaseSchema(database, {
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      path: databasePath,
+      register: false,
+    });
+    database.exec(`
+      DROP TABLE session_participants;
+      DROP TRIGGER session_conversations_route_context_invalidate_after_update;
+      ALTER TABLE session_conversations DROP COLUMN route_context_json;
+      DROP INDEX idx_agent_transcript_event_identity_sequence;
+      PRAGMA user_version = 17;
+      UPDATE schema_meta SET schema_version = 17;
+    `);
+  } finally {
+    database.close();
+  }
+  return databasePath;
+}
+
 describe("doctor invalid config process exit", () => {
+  it("repairs the v17 additive schema through doctor --fix", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-doctor-v17-additive-"));
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
+    fs.writeFileSync(configPath, "{}\n");
+    const databasePath = seedV17AdditiveRepairDatabase(stateDir);
+    const runtimeRoot = createSourceRuntime(root);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    const args = [
+      path.join(runtimeRoot, "src", "entry.ts"),
+      "doctor",
+      "--fix",
+      "--non-interactive",
+      "--yes",
+      "--no-workspace-suggestions",
+    ];
+
+    const first = runSourceRuntime(runtimeRoot, env, args, 60_000);
+    expect(first.error, first.stderr).toBeUndefined();
+    expect(first.status, first.stderr).toBe(0);
+    expect(`${first.stdout}\n${first.stderr}`).toContain("v17 -> v19");
+
+    const repaired = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(repaired.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+      expect(
+        repaired
+          .prepare(
+            "SELECT name FROM pragma_table_info('session_conversations') WHERE name = 'route_context_json'",
+          )
+          .get()?.name,
+      ).toBe("route_context_json");
+      expect(
+        repaired
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'session_conversations_route_context_invalidate_after_update'",
+          )
+          .get()?.name,
+      ).toBe("session_conversations_route_context_invalidate_after_update");
+      expect(
+        repaired
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_transcript_event_identity_sequence'",
+          )
+          .get()?.name,
+      ).toBe("idx_agent_transcript_event_identity_sequence");
+    } finally {
+      repaired.close();
+    }
+
+    const second = runSourceRuntime(runtimeRoot, env, args, 60_000);
+    expect(second.error, second.stderr).toBeUndefined();
+    expect(second.status, second.stderr).toBe(0);
+    expect(`${second.stdout}\n${second.stderr}`).not.toMatch(
+      /Skipped agent database migration|Upgraded agent database schema/u,
+    );
+  });
+
   it("keeps Doctor UI checks inside the source runtime fixture", () => {
     const root = fs.realpathSync(tempDirs.make("openclaw-doctor-runtime-owner-"));
     const runtimeRoot = createSourceRuntime(root);

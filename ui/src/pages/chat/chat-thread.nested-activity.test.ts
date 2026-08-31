@@ -61,20 +61,14 @@ describe("durable nested activity composition", () => {
   it("repositions separately arriving completions without changing raw history", () => {
     const exec = completedCall("exec", "exec", 1);
     const second = completedCall("second", "read", 3, { afterRawSeq: 1, startOrder: 1 });
-    expect(renderedToolIds([user, exec, second])).toEqual(["tool:exec", "tool:second"]);
+    expect(renderedToolIds([user, exec, second])).toEqual(["exec", "second"]);
 
     const wait = completedCall("wait", "wait", 4);
     const first = completedCall("first", "read", 5, { afterRawSeq: 1, startOrder: 0 });
     const third = completedCall("third", "read", 6, { afterRawSeq: 4, startOrder: 2 });
     const history = [user, exec, second, wait, first, third];
     const original = structuredClone(history);
-    expect(renderedToolIds(history)).toEqual([
-      "tool:exec",
-      "tool:first",
-      "tool:second",
-      "tool:wait",
-      "tool:third",
-    ]);
+    expect(renderedToolIds(history)).toEqual(["exec", "first", "second", "wait", "third"]);
     expect(history).toEqual(original);
   });
 
@@ -89,11 +83,7 @@ describe("durable nested activity composition", () => {
       __openclawToolStreamResultReceived: true,
       timestamp: 0,
     };
-    expect(renderedToolIds([user, exec, wait, first], [live])).toEqual([
-      "tool:exec",
-      "tool:first",
-      "tool:wait",
-    ]);
+    expect(renderedToolIds([user, exec, wait, first], [live])).toEqual(["exec", "first", "wait"]);
   });
 
   it.each([
@@ -143,13 +133,7 @@ describe("durable nested activity composition", () => {
         return cards.length > 0 ? cards.map((card) => card.id) : [item.role];
       });
     });
-    expect(visibleOrder).toEqual([
-      "user",
-      "stream",
-      "tool:exec",
-      ...ids.map((id) => `tool:${id}`),
-      "tool:wait",
-    ]);
+    expect(visibleOrder).toEqual(["user", "stream", "exec", ...ids, "wait"]);
     const rendered = items.flatMap((item) =>
       item.kind === "group" ? item.messages.map(({ message }) => message) : [],
     );
@@ -183,11 +167,7 @@ describe("durable nested activity composition", () => {
       __openclawToolStreamResultReceived: true,
       timestamp: 0,
     };
-    expect(renderedToolIds([user, exec, wait, first], [live])).toEqual([
-      "tool:first",
-      "tool:exec",
-      "tool:wait",
-    ]);
+    expect(renderedToolIds([user, exec, wait, first], [live])).toEqual(["first", "exec", "wait"]);
   });
 
   it("uses a completed anchor's physical position rather than its relocated start", () => {
@@ -196,10 +176,10 @@ describe("durable nested activity composition", () => {
     const earlier = completedCall("earlier", "read", 5, { afterRawSeq: 1, startOrder: 0 });
     const later = completedCall("later", "read", 6, { afterRawSeq: 5, startOrder: 1 });
     expect(renderedToolIds([user, exec, wait, earlier, later])).toEqual([
-      "tool:exec",
-      "tool:earlier",
-      "tool:wait",
-      "tool:later",
+      "exec",
+      "earlier",
+      "wait",
+      "later",
     ]);
   });
 });

@@ -11,12 +11,44 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalog: (...args: unknown[]) => mocks.loadCatalog(...args),
 }));
 
-import { loadModelCatalog } from "./agent-runtime.js";
+import {
+  loadModelCatalog,
+  resolveThinkingDefaultWithRuntimeCatalog,
+} from "openclaw/plugin-sdk/agent-runtime";
 
 describe("agent-runtime model catalog compatibility", () => {
   beforeEach(() => {
     mocks.getSnapshot.mockReset();
     mocks.loadCatalog.mockReset();
+  });
+
+  it("uses the shipped thinking catalog callback", async () => {
+    const readCatalog = vi.fn(async () => []);
+
+    await expect(
+      resolveThinkingDefaultWithRuntimeCatalog({
+        cfg: { agents: { defaults: { thinkingDefault: "low" } } },
+        provider: "example",
+        model: "example-model",
+        loadModelCatalog: readCatalog,
+      }),
+    ).resolves.toBe("low");
+    expect(readCatalog).toHaveBeenCalledOnce();
+  });
+
+  it("propagates failures from the shipped thinking catalog callback", async () => {
+    const failure = new Error("catalog unavailable");
+
+    await expect(
+      resolveThinkingDefaultWithRuntimeCatalog({
+        cfg: {},
+        provider: "example",
+        model: "example-model",
+        loadModelCatalog: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
   });
 
   it("keeps legacy cache-only reads nonblocking", async () => {

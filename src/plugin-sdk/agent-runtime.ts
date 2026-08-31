@@ -1,3 +1,4 @@
+import { resolveThinkingDefaultWithRuntimeCatalogCore } from "../agents/model-thinking-default.js";
 import {
   getPreparedModelCatalogSnapshot,
   loadPreparedModelCatalog,
@@ -67,8 +68,26 @@ export {
   parseModelRef,
   resolveAllowedModelRef,
   resolveModelRefFromString,
-  resolveThinkingDefaultWithRuntimeCatalog,
 } from "../agents/model-selection.js";
+
+// Preserve the v2026.7.1-2 callback contract at the SDK boundary; internal
+// owners use loadRuntimeCatalog. Remove only at an approved SDK-breaking boundary.
+export function resolveThinkingDefaultWithRuntimeCatalog(
+  params: Omit<
+    Parameters<typeof resolveThinkingDefaultWithRuntimeCatalogCore>[0],
+    "loadRuntimeCatalog"
+  > & {
+    loadModelCatalog: Parameters<
+      typeof resolveThinkingDefaultWithRuntimeCatalogCore
+    >[0]["loadRuntimeCatalog"];
+  },
+) {
+  const { loadModelCatalog: loadRuntimeCatalog, ...rest } = params;
+  return resolveThinkingDefaultWithRuntimeCatalogCore({
+    ...rest,
+    loadRuntimeCatalog,
+  });
+}
 
 export { EmbeddedBlockChunker } from "../agents/embedded-agent-block-chunker.js";
 export { formatReasoningMessage } from "../agents/embedded-agent-utils.js";

@@ -81,6 +81,9 @@ unresolved SecretRef on the selected channel/account fails the action closed.
 | `search`        | Discord                                                                                                         | `--guild-id`, `--query`                                        | `--channel-id`, `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`.                                                                                                                                                                                                           |
 | `member info`   | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--user-id`                                                    | `--guild-id` (Discord).                                                                                                                                                                                                                                                                                |
 
+The legacy `message read --include-thread` spelling remains accepted for existing
+scripts but has no effect.
+
 ### Send
 
 ```bash

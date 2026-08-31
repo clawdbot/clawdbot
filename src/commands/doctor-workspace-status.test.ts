@@ -227,6 +227,52 @@ describe("noteWorkspaceStatus", () => {
     ]);
   });
 
+  it("reports npm target lookup failure without an uninstallable fix hint", () => {
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
+    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      ...createPluginLoadResult({ plugins: [] }),
+    });
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
+    mocks.listTaskFlowRecords.mockReturnValue([]);
+
+    const findings = collectWorkspaceStatusHealthFindings(
+      { plugins: { entries: { brave: { enabled: true } } } },
+      {
+        pluginVersionDrift: {
+          gatewayVersion: "2026.7.1-2",
+          drifts: [
+            {
+              pluginId: "brave",
+              installedVersion: "2026.7.1-beta.2",
+              gatewayVersion: "2026.7.1-2",
+              source: "npm",
+              packageName: "@openclaw/brave-plugin",
+              spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
+              targetResolution: {
+                status: "unresolved",
+                packageName: "@openclaw/brave-plugin",
+                requestedTarget: "2026.7.1",
+                error: "npm registry did not resolve @openclaw/brave-plugin@2026.7.1: HTTP 404",
+              },
+            },
+          ],
+        },
+      },
+    );
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        message: expect.stringContaining("Repair target resolution failed"),
+        fixHint: expect.stringContaining("No install command generated"),
+      }),
+    ]);
+    expect(findings[0]?.fixHint).not.toContain("openclaw plugins update");
+    expect(findings[0]?.fixHint).not.toContain("openclaw gateway restart");
+  });
+
   it("collects compatibility warnings, plugin diagnostics, and TaskFlow recovery findings", async () => {
     mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
@@ -372,6 +418,12 @@ describe("noteWorkspaceStatus", () => {
               source: "npm",
               packageName: "@openclaw/brave-plugin",
               spec: "@openclaw/brave-plugin@2026.6.9",
+              targetResolution: {
+                status: "resolved",
+                packageName: "@openclaw/brave-plugin",
+                requestedTarget: "2026.6.10-beta.1",
+                version: "2026.6.10-beta.1",
+              },
             },
           ],
         },

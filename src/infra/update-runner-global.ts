@@ -162,6 +162,7 @@ export async function runGlobalUpdate(params: {
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion },
     steps: packageUpdate.steps,
+    recovery: packageUpdate.recovery,
     durationMs: Date.now() - startedAt,
   };
 }

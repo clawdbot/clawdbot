@@ -51,11 +51,11 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
                 label: "OpenAI",
                 configured: true,
                 aliases: options.aliases ?? [],
-                models: ["gpt-live-1-boulder-alpha"],
+                models: ["gpt-live-1-codex"],
                 voices: ["marin"],
                 voicesByModel: { "gpt-live-1-codex": ["cove", "spruce"] },
                 transports: options.transports ?? ["gateway-relay"],
-                defaultModel: options.defaultModel ?? "gpt-live-1-boulder-alpha",
+                defaultModel: options.defaultModel ?? "gpt-live-1-codex",
               },
               {
                 id: "xai",
@@ -149,7 +149,7 @@ afterEach(() => {
 });
 
 describe("isTalkGptLiveModel", () => {
-  it.each(["gpt-live", "gpt-live-1-codex", " GPT-Live-1-Boulder-Alpha "])(
+  it.each(["gpt-live", "gpt-live-1-codex", " Gpt-Live-1-Codex "])(
     "accepts the GPT-Live family: %s",
     (model) => {
       expect(isTalkGptLiveModel(model)).toBe(true);
@@ -351,7 +351,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
   });
 
   it("removes forced consult routing when OpenAI GPT-Live keeps gateway relay", async () => {
-    const removeFormValue = await selectModel("gpt-live-1-boulder-alpha", {
+    const removeFormValue = await selectModel("gpt-live-1-codex", {
       consultRouting: " Force-Agent-Consult ",
       transports: ["gateway-relay"],
     });
@@ -362,16 +362,10 @@ describe("TalkSettingsPage realtime transport mutation", () => {
   });
 
   it.each([
-    [
-      "provider-direct routing",
-      "gpt-live-1-boulder-alpha",
-      "provider-direct",
-      "openai",
-      "gateway-relay",
-    ],
+    ["provider-direct routing", "gpt-live-1-codex", "provider-direct", "openai", "gateway-relay"],
     ["another model", "gpt-realtime", "force-agent-consult", "openai", "gateway-relay"],
-    ["another provider", "gpt-live-1-boulder-alpha", "force-agent-consult", "xai", "gateway-relay"],
-    ["another transport", "gpt-live-1-boulder-alpha", "force-agent-consult", "openai", "webrtc"],
+    ["another provider", "gpt-live-1-codex", "force-agent-consult", "xai", "gateway-relay"],
+    ["another transport", "gpt-live-1-codex", "force-agent-consult", "openai", "webrtc"],
   ] as const)(
     "preserves consult routing for %s",
     async (_label, model, consultRouting, provider, transport) => {
@@ -406,8 +400,8 @@ describe("TalkSettingsPage realtime transport mutation", () => {
   });
 
   it.each([
-    ["catalog default", "gpt-live-1-boulder-alpha", undefined],
-    ["provider fallback", "gpt-realtime-2.1", "gpt-live-1-boulder-alpha"],
+    ["catalog default", "gpt-live-1-codex", undefined],
+    ["provider fallback", "gpt-realtime-2.1", "gpt-live-1-codex"],
   ])(
     "removes forced consult when a provider switch activates a GPT-Live %s",
     async (_label, defaultModel, openAIProviderModel) => {
@@ -434,20 +428,16 @@ describe("TalkSettingsPage realtime transport mutation", () => {
   });
 
   it("preserves transport when the catalog is unavailable", async () => {
-    expect(
-      await selectModel("gpt-live-1-boulder-alpha", { unavailable: true }),
-    ).not.toHaveBeenCalled();
+    expect(await selectModel("gpt-live-1-codex", { unavailable: true })).not.toHaveBeenCalled();
   });
 
   it("preserves transport when the provider advertises no transport capabilities", async () => {
-    expect(
-      await selectModel("gpt-live-1-boulder-alpha", { transports: [] }),
-    ).not.toHaveBeenCalled();
+    expect(await selectModel("gpt-live-1-codex", { transports: [] })).not.toHaveBeenCalled();
   });
 
   it("removes provider websocket from a selected GPT-Live model", async () => {
     expect(
-      await selectModel("gpt-live-1-boulder-alpha", {
+      await selectModel("gpt-live-1-codex", {
         transport: "provider-websocket",
         transports: ["provider-websocket", "webrtc"],
       }),
@@ -456,13 +446,13 @@ describe("TalkSettingsPage realtime transport mutation", () => {
 
   it("preserves a transport advertised by the explicit provider", async () => {
     expect(
-      await selectModel("gpt-live-1-boulder-alpha", { transports: ["gateway-relay"] }),
+      await selectModel("gpt-live-1-codex", { transports: ["gateway-relay"] }),
     ).not.toHaveBeenCalled();
   });
 
   it("resolves an explicit provider alias before preserving transport", async () => {
     expect(
-      await selectModel("gpt-live-1-boulder-alpha", {
+      await selectModel("gpt-live-1-codex", {
         aliases: ["openai-preview"],
         provider: "openai-preview",
         transports: ["gateway-relay"],
@@ -472,7 +462,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
 
   it("uses the auto-selected provider before preserving transport", async () => {
     expect(
-      await selectModel("gpt-live-1-boulder-alpha", {
+      await selectModel("gpt-live-1-codex", {
         activeProvider: "openai",
         provider: null,
         transports: ["gateway-relay"],
@@ -482,7 +472,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
 
   it("removes transport only when the resolved provider positively excludes it", async () => {
     expect(
-      await selectModel("gpt-live-1-boulder-alpha", { transports: ["webrtc"] }),
+      await selectModel("gpt-live-1-codex", { transports: ["webrtc"] }),
     ).toHaveBeenCalledOnce();
   });
 

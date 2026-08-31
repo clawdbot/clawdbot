@@ -41,6 +41,12 @@ function ensureDependencyIgnores(root) {
 
 function prepare(root) {
   ensureDependencyIgnores(root);
+  // Preserve source-checkout identity through preflight clones and global links;
+  // packaged postinstall cleanup would otherwise delete the fixture's build stamps.
+  for (const directory of ["src", "extensions"]) {
+    fs.mkdirSync(path.join(root, directory), { recursive: true });
+    fs.writeFileSync(path.join(root, directory, ".gitkeep"), "");
+  }
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
   // npm still resolves omitted dev dependencies; this fixture runs the packed runtime.

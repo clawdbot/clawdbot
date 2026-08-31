@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { refitTestTimings, type CiTimingRun } from "../../scripts/lib/ci-test-timings-refit.mts";
 import {
@@ -69,6 +70,86 @@ it("rejects non-plain timing objects even when their fields are valid", () => {
 });
 
 describe("CI test timing refit", () => {
+  it("ingests the native UI reporters without losing case progress or suite hooks", async () => {
+    const { default: config } = await import("../vitest/vitest.ui-e2e.config.ts");
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const artifacts = path.join(root, ".artifacts");
+    fs.mkdirSync(artifacts, { recursive: true });
+    const directory = mkdtempSync(path.join(artifacts, "ci-ui-timings-"));
+    const files = ["ui/src/e2e/first.e2e.test.ts", "ui/src/e2e/second.e2e.test.ts"];
+    const configFile = path.join(directory, "vitest.config.mjs");
+    try {
+      for (const file of files) {
+        fs.mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
+        writeFileSync(
+          path.join(directory, file),
+          `import { setTimeout } from "node:timers/promises";
+import { beforeAll, afterAll, it } from "vitest";
+beforeAll(() => setTimeout(50));
+afterAll(() => setTimeout(50));
+it("reports completed case progress", () => {});
+it.skip("retains skipped coverage", () => {});
+it.todo("retains todo coverage");
+`,
+        );
+      }
+      writeFileSync(
+        configFile,
+        `export default ${JSON.stringify({
+          root: directory,
+          test: {
+            name: "ui-e2e",
+            include: files,
+            reporters: config.test?.reporters,
+            fileParallelism: false,
+          },
+        })};\n`,
+      );
+      const runs = [1, 2].map((id) => {
+        const result = spawnSync(
+          process.execPath,
+          ["scripts/run-vitest.mjs", "run", "--config", configFile, "--configLoader", "runner"],
+          {
+            cwd: root,
+            encoding: "utf8",
+            timeout: 30_000,
+            env: { ...process.env, GITHUB_STEP_SUMMARY: path.join(directory, "summary.md") },
+          },
+        );
+        expect(result.status, result.stderr || result.stdout).toBe(0);
+        const text = stripVTControlCharacters(result.stdout);
+        expect(text).toContain("> reports completed case progress");
+        const nativeFileDurations = [...text.matchAll(/\.e2e\.test\.ts[^\n]*\)\s+(\d+)ms/gu)];
+        expect(nativeFileDurations, text).toHaveLength(files.length);
+        // Native file time includes both suite hooks, unlike the case-only verbose rows.
+        expect(nativeFileDurations.every((match) => Number(match[1]) >= 90)).toBe(true);
+        return timingRun(id, [{ kind: "uiE2e", text: result.stdout }]);
+      });
+      expect(refitTestTimings(runs).timings.uiE2e.fileSeconds).toEqual(
+        Object.fromEntries(files.map((file) => [file, 1])),
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts completed passed file summaries once, excluding failed, skipped and unfinished files", () => {
+    const log = [
+      `✓ |ui-e2e| ${measuredFile} (3 tests | 1 skipped | 1 todo) 4000ms`,
+      `✓ \u001b[32mui-e2e\u001b[0m ${measuredFile} (3 tests | 1 skipped | 1 todo) 4000ms`,
+      "❯ ui-e2e ui/src/e2e/failed.e2e.test.ts (1 test | 1 failed) 20s",
+      "❯ ui-e2e ui/src/e2e/timeout.e2e.test.ts (0 test) 30s",
+      "↓ ui-e2e ui/src/e2e/skipped.e2e.test.ts (1 test | 1 skipped) 0ms",
+      "Duration 56s (transform 1s, setup 1s, tests 54s, environment 0ms)",
+      "✓ ui-e2e ui/src/e2e/unfinished.e2e.test.ts (1 test) 5s",
+    ].join("\n");
+    const runs = [1, 2].map((id) => timingRun(id, [{ kind: "uiE2e", text: log }]));
+    expect(refitTestTimings(runs).timings.uiE2e).toEqual({
+      fileSeconds: { [measuredFile]: 4 },
+      perFileOverheadSeconds: 2,
+    });
+  });
+
   it("records per-file medians without outliers or one-run weights and measures excluded overhead", () => {
     const pageFile = "ui/src/pages/settings/measured.e2e.test.ts";
     const singleFile = "ui/src/e2e/single.e2e.test.ts";

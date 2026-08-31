@@ -5,7 +5,12 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
-import { replaceSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
+import {
+  loadExactSessionEntryReadOnly,
+  replaceSessionEntry,
+  updateSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 
@@ -74,6 +79,7 @@ import {
   listSessionsFromStoreAsync,
   loadGatewaySessionEntryReadOnly,
   loadGatewaySessionRow,
+  loadSessionEntry,
 } from "./session-utils.js";
 
 const MAIN_AGENT_ID = "main";
@@ -209,6 +215,30 @@ describe("single gateway session row child projections", () => {
     resetPluginRuntimeStateForTest();
     subagentRegistryReadMock.setSubagentRunsForTest([]);
     vi.clearAllMocks();
+  });
+
+  test("hides internal effects from listings while preserving exact reads for private history", async () => {
+    await withSingleRowCacheStore(
+      "openclaw-single-row-hidden-effects-",
+      "/tmp/openclaw-single-row-hidden-effects",
+      async ({ now, storePath }) => {
+        const hidden = resolveInternalSessionEffectsIdentity({
+          agentId: MAIN_AGENT_ID,
+          runId: "suppressed-effects",
+        });
+        await seedSessionEntries(storePath, {
+          [hidden.sessionKey]: parentSession(hidden.sessionId, now),
+        });
+
+        expect(loadSessionEntry(hidden.sessionKey).entry).toBeUndefined();
+        expect(loadGatewaySessionEntryReadOnly(hidden.sessionKey).entry?.sessionId).toBe(
+          hidden.sessionId,
+        );
+        expect(loadExactSessionEntryReadOnly({ ...hidden, storePath })?.entry.sessionId).toBe(
+          hidden.sessionId,
+        );
+      },
+    );
   });
 
   test("keeps direct children visible with at most one candidate scan per exact snapshot", async () => {

@@ -239,7 +239,8 @@ export async function admitChatSend(params: {
       }
       return;
     }
-    const latestSession = loadSessionEntry(sessionLoadKey, sessionLoadOptions);
+    // Admission only reads these entries; borrowing avoids cloning every unrelated session.
+    const latestSession = loadSessionEntry(sessionLoadKey, { ...sessionLoadOptions, clone: false });
     if (sessionRoutingChanged(latestSession.cfg)) {
       throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
     }

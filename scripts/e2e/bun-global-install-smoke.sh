@@ -52,7 +52,7 @@ cleanup() {
   fi
 }
 
-dump_failure_logs() {
+dump_debug_logs() {
   local status="$1"
   echo "bun global install smoke failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
@@ -102,7 +102,7 @@ prepare_ai_candidate() {
 }
 
 trap cleanup EXIT
-trap 'status=$?; dump_failure_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 run_with_timeout() {
   local timeout_ms="$1"

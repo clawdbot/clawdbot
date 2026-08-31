@@ -783,6 +783,25 @@ describe("scripts/pr process-group platform guard", () => {
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("scripts/pr per-PR operation lock", () => {
   it.each([
+    ["ls-files --others --exclude-standard -z", "require_no_foreign_untracked"],
+    ["diff --name-only --no-renames -z", "require_no_ignored_transition_paths"],
+    ["check-ignore -z --stdin", "require_no_ignored_transition_paths"],
+    ["diff --cached --name-only --no-renames -z", "validate_review_transition_state"],
+  ])("rejects failed %s reads in %s", (query, guard) => {
+    const repoDir = createRepo();
+    const head = refOid(repoDir, "HEAD");
+    const result = runLockShell(repoDir, [
+      "git() {",
+      `  case "$*" in ${JSON.stringify(query)}*) echo 'fixture query failed' >&2; return 7 ;; esac`,
+      '  command git "$@"',
+      "}",
+      `${guard} 42 ${head} ${head} || exit $?`,
+    ]);
+    expect(result.stderr).toContain("fixture query failed");
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+  });
+
+  it.each([
     ...(["healthy", "first", "second"] as const).flatMap((failure) =>
       [false, true]
         .filter((existing) => !existing || failure !== "second")
@@ -842,6 +861,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       // that a previous successful main fetch left before this invocation.
       git("update-ref", "refs/remotes/origin/main", cachedMain);
       git("update-ref", "refs/heads/pr-42", cachedMain);
+      const canonicalFetchHead = readFileSync(join(repoDir, ".git/FETCH_HEAD"), "utf8");
       expect(git("rev-parse", "refs/remotes/origin/main")).toBe(cachedMain);
       expect(git("ls-remote", "origin", "refs/pull/42/head")).toBe(
         `${pullHead}\trefs/pull/42/head`,
@@ -934,15 +954,22 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         'original=("$@")',
-        'if [ "${1-}" = -C ]; then shift 2; fi',
-        'case "${1-}" in --git-dir=*) shift ;; esac',
+        'prefix=("$OPENCLAW_TEST_REAL_GIT")',
+        'if [ "${1-}" = -C ]; then prefix+=("$1" "$2"); shift 2; fi',
+        'case "${1-}" in --git-dir=*) prefix+=("$1"); shift ;; esac',
         'if [ "${1-}" = fetch ]; then',
-        '  target="${3-}"; [[ " $* " != *" +refs/heads/main:refs/remotes/origin/main "* ]] || target=main',
+        '  refspec=""; for arg in "$@"; do case "$arg" in -*) ;; *) refspec="$arg" ;; esac; done',
+        '  target="$refspec"; case "$refspec" in refs/heads/main|+refs/heads/main:*) target=main ;; esac',
         '  result=0; "$OPENCLAW_TEST_REAL_GIT" "${original[@]}" || result=$?',
         '  printf "fetch:%s:%s\\n" "$target" "$result" >> "$OPENCLAW_TEST_EVENTS"',
-        '  if [ "$target" = main ] && [ "$result" -eq 0 ] && [ "$OPENCLAW_TEST_FAILURE" = second ] && [ ! -e "$OPENCLAW_TEST_FIRST_MAIN" ]; then',
-        '    "$OPENCLAW_TEST_REAL_GIT" -C "$OPENCLAW_TEST_REPO" rev-parse refs/remotes/origin/main > "$OPENCLAW_TEST_FIRST_MAIN"',
-        '    "$OPENCLAW_TEST_REAL_GIT" --git-dir="$OPENCLAW_TEST_ORIGIN" update-ref -d refs/heads/main',
+        '  if [ "$target" = main ] && [ "$result" -eq 0 ]; then',
+        '    destination=FETCH_HEAD; case "$refspec" in *:*) destination="${refspec#*:}" ;; esac',
+        '    fetched=$("${prefix[@]}" rev-parse "$destination")',
+        '    if [ "$destination" = FETCH_HEAD ]; then printf "checkpoint:%s\\n" "$fetched" >> "$OPENCLAW_TEST_EVENTS"; fi',
+        '    if [ "$OPENCLAW_TEST_FAILURE" = second ] && [ ! -e "$OPENCLAW_TEST_FIRST_MAIN" ]; then',
+        '      printf "%s\\n" "$fetched" > "$OPENCLAW_TEST_FIRST_MAIN"',
+        '      "$OPENCLAW_TEST_REAL_GIT" --git-dir="$OPENCLAW_TEST_ORIGIN" update-ref -d refs/heads/main',
+        "    fi",
         "  fi",
         '  exit "$result"',
         "fi",
@@ -961,7 +988,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
         OPENCLAW_TEST_PR_METADATA: metadataPath,
         OPENCLAW_TEST_GH_EVENTS: ghEventsPath,
         OPENCLAW_TEST_REAL_GIT: realGit,
-        OPENCLAW_TEST_REPO: repoDir,
         OPENCLAW_TEST_ORIGIN: originDir,
         OPENCLAW_TEST_EVENTS: eventsPath,
         OPENCLAW_TEST_FIRST_MAIN: firstMainPath,
@@ -993,6 +1019,16 @@ describePosix("scripts/pr per-PR operation lock", () => {
         expect.soft(git("branch", "--show-current")).toBe("main");
         expect.soft(git("write-tree")).toBe(canonicalTree);
         expect.soft(git("diff", "--exit-code")).toBe("");
+        expect.soft(git("rev-parse", "refs/remotes/origin/main")).toBe(cachedMain);
+        expect
+          .soft(readFileSync(join(repoDir, ".git/FETCH_HEAD"), "utf8"))
+          .toBe(canonicalFetchHead);
+        expect
+          .soft(
+            events.filter((event) => event.startsWith("checkpoint:")),
+            output,
+          )
+          .toEqual(failure === "healthy" ? [`checkpoint:${remoteMain}`] : []);
         if (failure === "auth" && (command === "review-init" || command === "review-claim")) {
           // The exact GH trace distinguishes the intended auth failure from an
           // unexpected fixture command that the auth diagnostic would also hide.
@@ -1007,7 +1043,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
           expect.soft(controller.exitCode, output).toBe(1);
           expect.soft(output).toContain("GitHub CLI auth is not usable");
           expect.soft(events.filter(Boolean), output).toEqual([]);
-          expect.soft(git("rev-parse", "refs/remotes/origin/main")).toBe(cachedMain);
           expect.soft(git("rev-parse", "refs/heads/pr-42")).toBe(cachedMain);
           expect.soft(existsSync(worktreeDir)).toBe(existing);
           if (existing) {
@@ -1070,7 +1105,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
           }
           // Nested validation shares the same captured main snapshot.
           expect.soft(fetches, output).toEqual(["fetch:main:0"]);
-          expect.soft(git("rev-parse", "refs/remotes/origin/main")).toBe(remoteMain);
           expect.soft(output).toContain("review guard passed");
           if (command === "review-tests") {
             expect.soft(controller.exitCode, output).toBe(1);
@@ -1113,9 +1147,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
         expect.soft(output).toContain("couldn't find remote ref refs/heads/main");
         expect.soft(output).not.toContain("wrote=.local/pr-meta.json");
         expect.soft(git("rev-parse", "refs/heads/pr-42")).toBe(cachedMain);
-        expect
-          .soft(git("rev-parse", "refs/remotes/origin/main"))
-          .toBe(failure === "first" ? cachedMain : remoteMain);
         if (failure === "second") {
           expect.soft(readFileSync(firstMainPath, "utf8").trim()).toBe(remoteMain);
         }
@@ -2049,20 +2080,23 @@ describePosix("scripts/pr per-PR operation lock", () => {
       await cleanupRecordedProcessGroup(daemonPidFile, daemonPgid);
     }
   });
-  it("joins worktree-list producers before releasing a successful operation lock", async () => {
+  it("joins Git read producers before releasing a successful operation lock", async () => {
     const repoDir = createRepo();
     const producerExited = join(repoDir, "worktree-producer-exited");
     const result = await runSupervisedOperation(repoDir, "joined-worktree-operation.sh", [
       "acquire_pr_operation_lock 42",
       "git() {",
-      '  if [ "$1" = worktree ] && [ "$2" = list ]; then',
-      "    printf 'worktree %s\\0branch refs/heads/pr-42\\0\\0' \"$PWD\"",
-      "    exec 1>&-",
-      "    sleep 0.1",
-      "    : >worktree-producer-exited",
-      "    return 0",
-      "  fi",
-      '  command git "$@"',
+      "  local result=0",
+      '  case "$*" in',
+      '    "worktree list"*) printf \'worktree %s\\0branch refs/heads/pr-42\\0\\0\' "$PWD" ;;',
+      '    "ls-files --others --exclude-standard -z"|"diff --name-only --no-renames -z "*|"diff --cached --name-only --no-renames -z "*) ;;',
+      '    "check-ignore -z --stdin") result=1 ;;',
+      '    *) command git "$@"; return $? ;;',
+      "  esac",
+      "  exec 1>&-",
+      "  sleep 0.1",
+      "  : >worktree-producer-exited",
+      '  return "$result"',
       "}",
       'worktree_is_registered "$PWD"',
       "test -f worktree-producer-exited",
@@ -2070,6 +2104,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
       'resolved="$(worktree_path_for_branch pr-42)"',
       'test "$resolved" = "$PWD"',
       "test -f worktree-producer-exited",
+      'head="$(git rev-parse HEAD)"',
+      "for guard in require_no_foreign_untracked require_no_ignored_transition_paths validate_review_transition_state; do",
+      "  rm worktree-producer-exited",
+      '  "$guard" 42 "$head" "$head" || exit $?',
+      "  test -f worktree-producer-exited",
+      "done",
     ]);
     expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
     expect(existsSync(producerExited)).toBe(true);

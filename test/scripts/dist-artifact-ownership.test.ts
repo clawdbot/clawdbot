@@ -690,7 +690,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       write(root, "pnpm.cjs", checkpoint("lint-build-started"));
       const consumer = start(root, path.join(root, "scripts/run-oxlint.mts"), [
         "--tsconfig",
-        "config/tsconfig/oxlint.extensions.json",
+        "extensions/tsconfig.json",
         "extensions",
       ]);
       const ready = await consumer.event("lint-consuming");

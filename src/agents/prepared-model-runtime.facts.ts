@@ -453,7 +453,6 @@ export async function prepareWorkspaceBuildGroup(
   };
   return await withPluginRuntimeGenerationScope(
     {
-      config: input.config,
       metadataSnapshot: pluginMetadataSnapshot,
       pluginRegistry: runtimePluginRegistry,
     },
