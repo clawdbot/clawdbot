@@ -92,6 +92,7 @@ describe("FileSettingsStorage", () => {
           ),
         );
         const originalExists = fs.existsSync;
+        const originalLstat = fs.lstatSync;
         let committedDuringRead = false;
         try {
           await Promise.race([
@@ -104,9 +105,8 @@ describe("FileSettingsStorage", () => {
           expect(existsSync(`${settingsPath}.lock`)).toBe(true);
           // Return the real observation, but let the independently locked writer
           // commit before the next probe. File-first probing then returns stale defaults.
-          vi.spyOn(fs, "existsSync").mockImplementation((filePath) => {
-            const observed = originalExists(filePath);
-            if (!committedDuringRead && (filePath === settingsPath || filePath === settingsDir)) {
+          const commitDuringObservation = () => {
+            if (!committedDuringRead) {
               committedDuringRead = true;
               fs.writeFileSync(continuePath, "continue");
               const deadline = Date.now() + 5_000;
@@ -117,6 +117,19 @@ describe("FileSettingsStorage", () => {
                 }
                 Atomics.wait(pause, 0, 0, 2);
               }
+            }
+          };
+          vi.spyOn(fs, "existsSync").mockImplementation((filePath) => {
+            const observed = originalExists(filePath);
+            if (filePath === settingsPath) {
+              commitDuringObservation();
+            }
+            return observed;
+          });
+          vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
+            const observed = originalLstat(...args);
+            if (args[0] === `${settingsPath}.lock`) {
+              commitDuringObservation();
             }
             return observed;
           });
@@ -180,14 +193,92 @@ describe("FileSettingsStorage", () => {
     expect(existsSync(settingsPath)).toBe(false);
   });
 
-  it("creates a missing directory when the callback writes", () => {
-    const root = fixtures.createTempDir("openclaw-settings-write-");
-    const settingsDir = join(root, "agent");
-    const settingsPath = join(settingsDir, "settings.json");
-    const storage = new FileSettingsStorage(settingsDir, settingsDir);
-
-    storage.withLock("global", () => JSON.stringify({ theme: "dark" }));
-
-    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({ theme: "dark" });
-  });
+  it.each(["global", "project"] as const)(
+    "preserves independent concurrent first writes to %s settings",
+    (scope) =>
+      fixtures.run(async () => {
+        const root = fixtures.createTempDir("openclaw-settings-concurrent-create-");
+        const agentDir = join(root, "agent");
+        const settingsDir = scope === "global" ? agentDir : join(root, ".openclaw");
+        const settingsPath = join(settingsDir, "settings.json");
+        const firstEntered = join(root, "first-entered");
+        const contenderReady = join(root, "contender-ready");
+        const abort = new AbortController();
+        const writers: ReturnType<typeof runNodeScript>[] = [];
+        const startWriter = (field: string) => {
+          const writer = fixtures.track(
+            runNodeScript(
+              [
+                "--import",
+                new URL("../../../scripts/tsx.mjs", import.meta.url).href,
+                "--input-type=module",
+                "--eval",
+                String.raw`
+                  import { existsSync, writeFileSync } from "node:fs";
+                  const [moduleUrl, root, agentDir, scope, settingsPath, firstEntered, contenderReady, field] = process.argv.slice(1);
+                  const { FileSettingsStorage } = await import(moduleUrl);
+                  if (field === "theme" && existsSync(settingsPath + ".lock")) {
+                    writeFileSync(contenderReady, "waiting for lock");
+                  }
+                  new FileSettingsStorage(root, agentDir).withLock(scope, (current) => {
+                    if (field === "defaultModel") {
+                      writeFileSync(firstEntered, "ready");
+                      const deadline = Date.now() + 5_000;
+                      const pause = new Int32Array(new SharedArrayBuffer(4));
+                      while (!existsSync(contenderReady)) {
+                        if (Date.now() >= deadline) throw new Error("contender did not reach settings");
+                        Atomics.wait(pause, 0, 0, 2);
+                      }
+                    } else {
+                      writeFileSync(contenderReady, "entered callback");
+                    }
+                    return JSON.stringify({
+                      ...(current ? JSON.parse(current) : {}),
+                      [field]: field === "theme" ? "dark" : "mock-model",
+                    });
+                  });
+                `,
+                new URL("./settings-storage.ts", import.meta.url).href,
+                root,
+                agentDir,
+                scope,
+                settingsPath,
+                firstEntered,
+                contenderReady,
+                field,
+              ],
+              process.env,
+              10_000,
+              { signal: abort.signal, requireProcessTreeExit: true },
+            ),
+          );
+          writers.push(writer);
+          return writer;
+        };
+        try {
+          expect(existsSync(settingsDir)).toBe(false);
+          const first = startWriter("defaultModel");
+          await Promise.race([
+            waitForFile(firstEntered, 10_000),
+            first.then((result) => {
+              throw new Error(`first writer exited before contention: ${result.stderr}`);
+            }),
+          ]);
+          // Let the contender either observe the lock or enter the broken unlocked callback.
+          void startWriter("theme");
+          for (const result of await Promise.all(writers)) {
+            expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+          }
+          expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({
+            defaultModel: "mock-model",
+            theme: "dark",
+          });
+          expect(existsSync(`${settingsPath}.lock`)).toBe(false);
+        } finally {
+          abort.abort();
+          await Promise.all(writers);
+        }
+      }),
+    20_000,
+  );
 });
