@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { prepareReturnCovenantGatewayConfig } from "./gateway-config.js";
+import {
+  createReturnCovenantGatewayConfigSnapshot,
+  prepareReturnCovenantGatewayConfig,
+} from "./gateway-config.js";
 
 describe("return-covenant gateway config", () => {
   it("migrates the accepted legacy runtime field in memory without changing source bytes", () => {
@@ -23,6 +26,24 @@ describe("return-covenant gateway config", () => {
       plugins: { entries: { codex: { enabled: true } } },
     });
     expect(raw).toEqual(original);
+    expect(
+      createReturnCovenantGatewayConfigSnapshot({
+        path: "/isolated/openclaw.json",
+        raw,
+      }),
+    ).toMatchObject({
+      config: {
+        gateway: { mode: "local" },
+        agents: { entries: { main: {} } },
+      },
+      snapshot: {
+        path: "/isolated/openclaw.json",
+        exists: true,
+        valid: true,
+        issues: [],
+        legacyIssues: [],
+      },
+    });
   });
 
   it("rejects config that remains invalid after canonical migration", () => {

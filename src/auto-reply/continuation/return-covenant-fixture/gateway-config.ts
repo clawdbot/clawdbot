@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { applyLegacyDoctorMigrations } from "../../../commands/doctor/shared/legacy-config-compat.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { asResolvedSourceConfig, asRuntimeConfig } from "../../../config/materialize.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import { validateConfigObject } from "../../../config/validation.js";
 
 /**
@@ -19,4 +22,32 @@ export function prepareReturnCovenantGatewayConfig(raw: unknown): OpenClawConfig
     throw new Error(`return-covenant gateway config is invalid: ${details}`);
   }
   return validated.config;
+}
+
+export function createReturnCovenantGatewayConfigSnapshot(params: { path: string; raw: unknown }): {
+  config: OpenClawConfig;
+  snapshot: ConfigFileSnapshot;
+} {
+  const config = prepareReturnCovenantGatewayConfig(params.raw);
+  const serialized = stableStringify(params.raw);
+  const sourceConfig = asResolvedSourceConfig(config);
+  const runtimeConfig = asRuntimeConfig(config);
+  return {
+    config,
+    snapshot: {
+      path: params.path,
+      exists: true,
+      raw: serialized,
+      parsed: params.raw,
+      sourceConfig,
+      resolved: sourceConfig,
+      valid: true,
+      runtimeConfig,
+      config: runtimeConfig,
+      hash: createHash("sha256").update(serialized).digest("hex"),
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    },
+  };
 }

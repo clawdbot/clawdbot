@@ -5,7 +5,7 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import { startGatewayServer } from "../../../gateway/server.js";
 import { readReturnCovenantJsonFile } from "./control-file.js";
-import { prepareReturnCovenantGatewayConfig } from "./gateway-config.js";
+import { createReturnCovenantGatewayConfigSnapshot } from "./gateway-config.js";
 
 export async function runReturnCovenantFixtureGateway(): Promise<void> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -14,7 +14,10 @@ export async function runReturnCovenantFixtureGateway(): Promise<void> {
     throw new Error("return-covenant fixture gateway requires config and token authority");
   }
   const rawConfig = await readReturnCovenantJsonFile(configPath);
-  const config = prepareReturnCovenantGatewayConfig(rawConfig);
+  const { config, snapshot } = createReturnCovenantGatewayConfigSnapshot({
+    path: configPath,
+    raw: rawConfig,
+  });
   setRuntimeConfigSnapshot(config, config);
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let requestStop: (() => void) | undefined;
@@ -32,6 +35,7 @@ export async function runReturnCovenantFixtureGateway(): Promise<void> {
       openAiChatCompletionsEnabled: false,
       openResponsesEnabled: false,
       sidecarStartup: "defer",
+      startupConfigSnapshotRead: { snapshot },
     });
     await server.startupSettled;
     await stopped;
