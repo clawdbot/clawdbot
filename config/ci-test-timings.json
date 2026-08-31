@@ -24,12 +24,12 @@
       "agentic-agents-support-hosted-2": 153,
       "agentic-agents-tools": 80,
       "agentic-cli": 136,
-      "agentic-cli-process": 133,
+      "agentic-cli-process": 202,
       "agentic-command-support": 42,
       "agentic-commands-agent-channel": 71,
       "agentic-commands-doctor": 48,
       "agentic-commands-doctor-auth": 19,
-      "agentic-commands-doctor-config-state": 144,
+      "agentic-commands-doctor-config-state": 310,
       "agentic-commands-doctor-device": 2,
       "agentic-commands-doctor-gateway": 7,
       "agentic-commands-doctor-platform": 1,
@@ -138,7 +138,7 @@
     },
     "github": {}
   },
-  "source": "median of 2 successful main CI runs: 33430081185, 33430207455",
+  "source": "median of 2 successful main CI runs: 33441176559, 33441320436",
   "uiE2e": {
     "fileSeconds": {
       "ui/src/e2e/about.e2e.test.ts": 1,

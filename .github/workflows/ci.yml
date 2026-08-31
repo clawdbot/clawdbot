@@ -4088,6 +4088,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          node -e 'const os = require("node:os"); console.log("Native OS resources: " + JSON.stringify({ logicalCpuCount: os.cpus().length, availableParallelism: os.availableParallelism(), osTotalMemoryBytes: os.totalmem(), osFreeMemoryBytes: os.freemem() }));'
           case "$TASK" in
             test)
               # Linux owns the full repo test suite. Keep macOS CI focused on
@@ -4201,9 +4202,9 @@ jobs:
           path: apps/macos/.build
           # SwiftPM retains old dependency traits while resolving cached checkouts.
           # Reuse compiled products across source edits only within the same package graph.
-          key: ${{ runner.os }}-swift-build-v5-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-${{ hashFiles('apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/**/Sources/**', 'apps/swabble/Sources/**') }}
+          key: ${{ runner.os }}-swift-build-v6-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-${{ hashFiles('apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/**/Sources/**', 'apps/swabble/Sources/**') }}
           restore-keys: |
-            ${{ runner.os }}-swift-build-v5-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-
+            ${{ runner.os }}-swift-build-v6-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-
 
       - name: Validate Swift build cache
         id: validate-swift-build-cache
@@ -4218,19 +4219,9 @@ jobs:
           fi
           echo "cache-valid=$cache_valid" >> "$GITHUB_OUTPUT"
 
-      - name: Preserve Swift build cache hit
-        if: steps.swift-build-cache.outputs.cache-hit == 'true' && steps.validate-swift-build-cache.outputs.cache-valid == 'true'
-        run: |
-          set -euo pipefail
-          # Exact source-hash cache hits already match these inputs; checkout
-          # mtimes are the only reason SwiftPM rebuilds cached products.
-          find apps/macos/Sources apps/macos/Tests apps/shared/OpenClawKit/Sources apps/swabble/Sources apps/macos/.build/checkouts \
-            -type f -exec touch -t 200001010000 {} +
-          touch -t 200001010000 \
-            apps/macos/Package.swift \
-            apps/macos/Package.resolved \
-            apps/shared/OpenClawKit/Package.swift \
-            apps/swabble/Package.swift
+      - name: Restore Swift build input timestamps
+        if: steps.validate-swift-build-cache.outputs.cache-valid == 'true' && env.HISTORICAL_TARGET != 'true'
+        run: python3 -I -S scripts/swift-build-cache-metadata.py restore
 
       - name: Show toolchain
         run: |
@@ -4363,6 +4354,12 @@ jobs:
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
+
+      # Builds/tests are serial and leave the source inputs unchanged. Record
+      # their actual metadata with the successful products immediately before save.
+      - name: Record Swift build input timestamps
+        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && env.HISTORICAL_TARGET != 'true'
+        run: python3 -I -S scripts/swift-build-cache-metadata.py record
 
       - name: Save Swift build directory cache
         if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true'

@@ -5,6 +5,7 @@ import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
 } from "../../test/vitest/vitest.agents-paths.mjs";
+import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import {
   gatewayServerExcludedTestFiles,
@@ -958,9 +959,10 @@ function resolveCommandShardName(file: string): string {
 
 function createAgenticCommandSplitShards(): NodeTestSplitShard[] {
   const commandsLightTests = new Set(commandsLightTestFiles);
+  const unitFastFiles = new Set(getUnitFastTestFiles());
   const groups = new Map<string, string[]>();
   for (const file of listTestFiles("src/commands")) {
-    if (commandsLightTests.has(file) || file.endsWith(".e2e.test.ts")) {
+    if (commandsLightTests.has(file) || !isStripeEligibleTestFile(file, unitFastFiles)) {
       continue;
     }
     const shardName = resolveCommandShardName(file);
@@ -2249,6 +2251,7 @@ function listAgentEmbeddedBaseTestFiles(): string[] {
 // must enumerate exactly its config's include set so a stripe union stays a
 // complete, non-overlapping partition of the suite.
 const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
+  ["agentic-cli-process", () => cliProcessTestFiles],
   ["agentic-agents-support", listAgentSupportTestFiles],
   ["agentic-gateway-methods", () => listTestFiles("src/gateway/server-methods")],
   ["core-runtime-config", () => listTestFiles("src/config")],
@@ -2257,15 +2260,15 @@ const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
   ["core-unit-fast-isolated", getUnitFastIsolatedTestFiles],
 ]);
 
-function splitOversizedGithubCompactGroup(
+function splitOversizedCompactGroup(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
-  // Hybrid retries run hosted, so retain hosted-derived striping even though
-  // Blacksmith timings own its attempt-1 packing weights.
-  const githubSeconds = estimateCompactGroupSeconds(group, "github");
+  // Hybrid groups must fit both the first-attempt runner and hosted retries;
+  // a faster retry estimate must not leave a slow first attempt unsplit.
   const profileSeconds = estimateCompactGroupSeconds(group, runnerBackend);
-  if (githubSeconds <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS) {
+  const splitSeconds = Math.max(profileSeconds, estimateCompactGroupSeconds(group, "github"));
+  if (splitSeconds <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS) {
     return [{ group, seconds: profileSeconds }];
   }
 
@@ -2278,7 +2281,7 @@ function splitOversizedGithubCompactGroup(
   // An empty include list falls back to the whole config in the shard runner.
   const stripeCount = Math.min(
     includePatterns.length,
-    Math.ceil(githubSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS),
+    Math.ceil(splitSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS),
   );
   // Keep an expensive file and its build prerequisite with their actual child.
   const weightForFile = /^core-tooling-\d+$/u.test(group.shard_name)
@@ -2327,7 +2330,7 @@ function createCompactNodeTestShardBundles(
       shard_name: shard.shardName,
     });
     const plannedGroups = usesExpandedRunnerProfile(options.runnerBackend)
-      ? splitOversizedGithubCompactGroup(group, options.runnerBackend)
+      ? splitOversizedCompactGroup(group, options.runnerBackend)
       : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     for (const planned of plannedGroups) {
       groups.push(planned.group);

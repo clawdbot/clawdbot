@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { availableParallelism } from "node:os";
 import { it, vi, type TestContext } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
@@ -104,9 +105,9 @@ export function createMacScriptTest() {
     }
   });
   // Keep outer suites sequential: this per-group cap is applied after Vitest's
-  // file-wide limiter is created, so concurrent suites could each admit two cases.
+  // file-wide limiter is created, so concurrent suites could each admit the full cap.
   test.beforeAll(() => {
-    vi.setConfig({ maxConcurrency: 2 });
+    vi.setConfig({ maxConcurrency: Math.min(3, availableParallelism()) });
     return () => vi.resetConfig();
   });
   return test;

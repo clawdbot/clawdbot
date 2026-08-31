@@ -7308,13 +7308,37 @@ exit 1
       (step: WorkflowStep) => step.id === "swift-build-cache",
     );
     const nativeCachePrefix =
-      "${{ runner.os }}-swift-build-v5-graph-${{ steps.swift-toolchain.outputs.key }}-" +
+      "${{ runner.os }}-swift-build-v6-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-" +
       "${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-";
 
     expect(buildCache.with).toMatchObject({
       key: expect.stringContaining(nativeCachePrefix),
       "restore-keys": `${nativeCachePrefix}\n`,
     });
+    const restoreMetadata = macosSwift.steps.find(
+      (step: WorkflowStep) => step.name === "Restore Swift build input timestamps",
+    );
+    const recordMetadata = macosSwift.steps.find(
+      (step: WorkflowStep) => step.name === "Record Swift build input timestamps",
+    );
+    const saveBuildCache = macosSwift.steps.find(
+      (step: WorkflowStep) => step.name === "Save Swift build directory cache",
+    );
+    expect(restoreMetadata.if).toBe(
+      "steps.validate-swift-build-cache.outputs.cache-valid == 'true' && env.HISTORICAL_TARGET != 'true'",
+    );
+    expect(restoreMetadata.run).toBe("python3 -I -S scripts/swift-build-cache-metadata.py restore");
+    expect(recordMetadata.run).toBe("python3 -I -S scripts/swift-build-cache-metadata.py record");
+    expect(recordMetadata.if).toBe(`${saveBuildCache.if} && env.HISTORICAL_TARGET != 'true'`);
+    expect(macosSwift.steps.indexOf(restoreMetadata)).toBeLessThan(
+      macosSwift.steps.indexOf(testStep),
+    );
+    expect(macosSwift.steps.indexOf(recordMetadata)).toBeGreaterThan(
+      macosSwift.steps.indexOf(testStep),
+    );
+    expect(macosSwift.steps.indexOf(recordMetadata) + 1).toBe(
+      macosSwift.steps.indexOf(saveBuildCache),
+    );
     expect(macosSwift.env).not.toHaveProperty("SWIFT_TEST_EXECUTION");
     expect(testStep.id).toBe("swift-test");
     expect(renderStep.if).toBe(

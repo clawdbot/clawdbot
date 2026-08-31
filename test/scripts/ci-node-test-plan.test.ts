@@ -20,7 +20,8 @@ import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
 } from "../vitest/vitest.agents-paths.mjs";
-import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
+import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
+import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
 import { createGatewayClientVitestConfig } from "../vitest/vitest.gateway-client.config.ts";
 import { createGatewayCoreVitestConfig } from "../vitest/vitest.gateway-core.config.ts";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
@@ -153,34 +154,41 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("recomputes runtime preparation for hosted child groups", () => {
-    const consumer = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
-    const target = createNodeTestShards().find((shard) =>
-      shard.includePatterns?.includes(consumer),
-    )!;
-    const original = testTimings.readCompactGroupTimings;
-    vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
-      ...original(profile),
-      [target.shardName]: 400,
-    }));
-    const plan = createNodeTestShardBundles({
-      compactMode: "pull-request",
-      runnerBackend: "hybrid",
-      includeReleaseOnlyPluginShards: false,
-    });
-    const groups = plan
-      .flatMap((job) => job.groups)
-      .filter((group) => group.shard_name.startsWith(`${target.shardName}-hosted-`));
-    expect(groups).toHaveLength(3);
-    expect(
-      groups
-        .filter((group) => group.pretestBuildMode === "runtime")
-        .map((group) => group.includePatterns?.includes(consumer)),
-    ).toEqual([true]);
-    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-      target.includePatterns!.toSorted(),
-    );
-  });
+  it.each([
+    { runnerBackend: "github", slowerProfile: "github" },
+    { runnerBackend: "hybrid", slowerProfile: "github" },
+    { runnerBackend: "hybrid", slowerProfile: "blacksmith" },
+  ])(
+    "bounds $runnerBackend child groups by the slower $slowerProfile path",
+    ({ runnerBackend, slowerProfile }) => {
+      const consumer = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
+      const target = createNodeTestShards().find((shard) =>
+        shard.includePatterns?.includes(consumer),
+      )!;
+      const original = testTimings.readCompactGroupTimings;
+      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
+        ...original(profile),
+        [target.shardName]: profile === slowerProfile ? 400 : 100,
+      }));
+      const plan = createNodeTestShardBundles({
+        compactMode: "pull-request",
+        runnerBackend,
+        includeReleaseOnlyPluginShards: false,
+      });
+      const groups = plan
+        .flatMap((job) => job.groups)
+        .filter((group) => group.shard_name.startsWith(`${target.shardName}-hosted-`));
+      expect(groups).toHaveLength(3);
+      expect(
+        groups
+          .filter((group) => group.pretestBuildMode === "runtime")
+          .map((group) => group.includePatterns?.includes(consumer)),
+      ).toEqual([true]);
+      expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        target.includePatterns!.toSorted(),
+      );
+    },
+  );
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -647,6 +655,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         } else if (owner.shardName === "agentic-agents-support") {
           const expected = ownerScopedTestFiles(agentVitestProjectOwners.support);
           expect(actual.toSorted()).toEqual(expected.toSorted());
+        } else if (owner.shardName === "agentic-cli-process") {
+          expect(actual.toSorted()).toEqual(
+            listMatchedTestFiles(createCliProcessVitestConfig({})).toSorted(),
+          );
         }
       }
     }
@@ -1588,9 +1600,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const commandShardFiles = commandShards
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
-    const expectedCommandFiles = listTestFiles("src/commands")
-      .filter((file) => !commandsLightTestFiles.includes(file) && !file.endsWith(".e2e.test.ts"))
-      .toSorted((a, b) => a.localeCompare(b));
+    const expectedCommandFiles = listMatchedTestFiles(createCommandsVitestConfig({}));
     expect(commandShardFiles).toEqual(expectedCommandFiles);
     expect(new Set(commandShardFiles).size).toBe(commandShardFiles.length);
     expect(agentShards).toEqual([

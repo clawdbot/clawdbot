@@ -59,6 +59,18 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // Fresh profile: 5.1s total, 3.8s import; retain a conservative packing hint.
   ["src/agents/cli-runner.reliability.test.ts", 8],
   ["src/agents/cli-runner.spawn.test.ts", 45],
+  // Median serial file-boundary walls from main runs 33441176559/33441320436;
+  // case sums overcount the help file's concurrent cases.
+  ["src/cli/acp-cli-exit.process.test.ts", 6],
+  ["src/cli/cli-process-child.test-helpers.test.ts", 2],
+  ["src/cli/cron-output.process.test.ts", 23],
+  ["src/cli/gateway-backed-exit.process.test.ts", 105],
+  ["src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts", 4],
+  ["src/cli/gateway-cli/shutdown-hard-exit.process.test.ts", 1],
+  ["src/cli/help-exit.process.test.ts", 27],
+  ["src/cli/hooks-cli.process.test.ts", 12],
+  ["src/cli/mcp-cli.import-boundary.test.ts", 4],
+  ["src/cli/plugins-authoring.process.test.ts", 10],
   // The few CI-derived slow-file hints needed for the three new stripes are
   // rounded checkmark durations from canonical-main run 31691151297.
   ["src/auto-reply/reply/commands-export-session.test.ts", 8],
