@@ -18,10 +18,12 @@ import type {
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  createTranscriptIdentityReader,
   findTranscriptEventInDatabase,
   loadTranscriptEventsFromDatabase,
   readTranscriptEventId,
   readTranscriptEventMessage,
+  readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
@@ -60,6 +62,7 @@ type TranscriptAppendOptions = {
 
 type TranscriptAppendCursor = {
   initialized?: boolean;
+  readIdentity?: ReturnType<typeof createTranscriptIdentityReader>;
   nextSeq?: number;
   appendToIndex?: ReturnType<typeof createTranscriptIndexAppenderInTransaction>;
   updateWindow?: (createdAt: number) => unknown;
@@ -118,8 +121,12 @@ function appendTranscriptEvent(
     cursor.initialized = true;
   }
   const identity = readTranscriptEventIdentity(persistedEvent);
-  if (identity && readTranscriptIdentityByEventId(database, scope.sessionId, identity.eventId)) {
-    return false;
+  if (identity) {
+    // Reuse compilation within this batch, but read fresh rows after every append.
+    cursor.readIdentity ??= createTranscriptIdentityReader(database, scope.sessionId);
+    if (cursor.readIdentity(identity.eventId)) {
+      return false;
+    }
   }
   const idempotencyKeyOwner = identity?.messageIdempotencyKey
     ? readIdempotencyKeyOwner(database, scope.sessionId, identity.messageIdempotencyKey)
@@ -573,23 +580,6 @@ export function updateSqliteTranscriptEventJsonInTransaction(
     });
   }
   scheduleTranscriptProjectionReconcile(database, sessionId, !rebuildSynchronously, {});
-}
-
-export function readTranscriptIdentityByEventId(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-  eventId: string,
-): { eventId: string; parentId: string | null; seq: number } | undefined {
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_event_identities")
-      .select(["event_id", "parent_id", "seq"])
-      .where("session_id", "=", sessionId)
-      .where("event_id", "=", eventId),
-  );
-  return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
 }
 
 function readIdempotencyKeyOwner(
