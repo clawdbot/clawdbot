@@ -44,7 +44,11 @@ suite.define(() => {
         .toBe("research");
       await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
       await expect
-        .poll(() => picker.locator("wa-dropdown").evaluate((element) => element.open))
+        .poll(() =>
+          picker
+            .locator("wa-dropdown")
+            .evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+        )
         .toBe(false);
 
       await trigger.focus();
