@@ -5180,6 +5180,7 @@ describe("update-cli", () => {
             await fs.writeFile(stagedShim, "new shim\n");
           }
         }
+        return undefined;
       });
 
       try {
