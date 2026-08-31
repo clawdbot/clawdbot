@@ -53,9 +53,9 @@ export const GEN_AI_OPERATION_DURATION_BUCKETS = [
 const OTEL_DEFAULT_HISTOGRAM_BUCKETS = [
   0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000,
 ];
-// Agent run / harness durations routinely exceed the SDK default's 10s ceiling.
-// Extend the existing layout through one hour without changing prior buckets.
-export const AGENT_DURATION_MS_BUCKETS = [
+// Model calls routinely exceed the SDK default's 10s ceiling. Extend the
+// existing layout through ten minutes without changing prior buckets.
+export const MODEL_DURATION_MS_BUCKETS = [
   ...OTEL_DEFAULT_HISTOGRAM_BUCKETS,
   15000,
   20000,
@@ -67,9 +67,30 @@ export const AGENT_DURATION_MS_BUCKETS = [
   240000,
   300000,
   600000,
+];
+// Agent run / harness durations can outlive a single model call. Extend the
+// model layout through one hour without changing its finite buckets.
+export const AGENT_DURATION_MS_BUCKETS = [
+  ...MODEL_DURATION_MS_BUCKETS,
   900000,
   1_800_000,
   3_600_000,
+];
+// Process memory values are emitted in bytes and routinely exceed the SDK's
+// unit-agnostic 10,000 ceiling. Match the Prometheus byte scale through 16 GiB.
+export const MEMORY_BYTES_BUCKETS = [
+  ...OTEL_DEFAULT_HISTOGRAM_BUCKETS,
+  16384,
+  65536,
+  262144,
+  1048576,
+  4194304,
+  16777216,
+  67108864,
+  268435456,
+  1073741824,
+  4294967296,
+  17179869184,
 ];
 // openclaw.context.tokens records context window limit/used token counts, which
 // range from a few thousand to >1M for large-context models. Keep the prior

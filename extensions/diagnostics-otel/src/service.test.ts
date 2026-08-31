@@ -4246,6 +4246,40 @@ describe("diagnostics-otel service", () => {
     }
   });
 
+  test("advertises domain buckets for model timing and memory histograms", async () => {
+    const priorSdkBoundaries = [
+      0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000,
+    ];
+    await startOtelService({ metrics: true });
+
+    const modelDurationMetrics = [
+      "openclaw.model_call.duration_ms",
+      "openclaw.model_call.time_to_first_byte_ms",
+    ];
+    for (const metricName of modelDurationMetrics) {
+      const options = histogramCreateOptions(metricName);
+      expect(options?.unit).toBe("ms");
+      expect(options?.advice?.explicitBucketBoundaries).toEqual(
+        expect.arrayContaining([...priorSdkBoundaries, 30000, 600000]),
+      );
+    }
+
+    const memoryMetrics = [
+      "openclaw.memory.rss_bytes",
+      "openclaw.memory.heap_used_bytes",
+      "openclaw.memory.heap_total_bytes",
+      "openclaw.memory.external_bytes",
+      "openclaw.memory.array_buffers_bytes",
+    ];
+    for (const metricName of memoryMetrics) {
+      const options = histogramCreateOptions(metricName);
+      expect(options?.unit).toBe("By");
+      expect(options?.advice?.explicitBucketBoundaries).toEqual(
+        expect.arrayContaining([...priorSdkBoundaries, 1_048_576, 1_073_741_824, 17_179_869_184]),
+      );
+    }
+  });
+
   test.each([
     ["bounds agent identifiers on model usage metric attributes", "Bearer sk-test-secret-value"],
     [

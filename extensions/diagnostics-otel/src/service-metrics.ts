@@ -4,6 +4,8 @@ import {
   CONTEXT_TOKENS_BUCKETS,
   GEN_AI_OPERATION_DURATION_BUCKETS,
   GEN_AI_TOKEN_USAGE_BUCKETS,
+  MEMORY_BYTES_BUCKETS,
+  MODEL_DURATION_MS_BUCKETS,
 } from "./service-constants.js";
 
 const DEFAULT_METRIC_NAME_PREFIX = "openclaw.";
@@ -184,6 +186,7 @@ export function createDiagnosticsMetrics(
   const modelCallDurationHistogram = createHistogram("openclaw.model_call.duration_ms", {
     unit: "ms",
     description: "Model call duration",
+    advice: { explicitBucketBoundaries: MODEL_DURATION_MS_BUCKETS },
   });
   const modelCallRequestBytesHistogram = createHistogram("openclaw.model_call.request_bytes", {
     unit: "By",
@@ -198,6 +201,7 @@ export function createDiagnosticsMetrics(
     {
       unit: "ms",
       description: "Elapsed time before the first streamed model response event",
+      advice: { explicitBucketBoundaries: MODEL_DURATION_MS_BUCKETS },
     },
   );
   const modelFailoverCounter = createCounter("openclaw.model.failover", {
@@ -219,22 +223,27 @@ export function createDiagnosticsMetrics(
   const memoryRssHistogram = createHistogram("openclaw.memory.rss_bytes", {
     unit: "By",
     description: "Resident set size reported by diagnostic memory samples",
+    advice: { explicitBucketBoundaries: MEMORY_BYTES_BUCKETS },
   });
   const memoryHeapUsedHistogram = createHistogram("openclaw.memory.heap_used_bytes", {
     unit: "By",
     description: "Heap used bytes reported by diagnostic memory samples",
+    advice: { explicitBucketBoundaries: MEMORY_BYTES_BUCKETS },
   });
   const memoryHeapTotalHistogram = createHistogram("openclaw.memory.heap_total_bytes", {
     unit: "By",
     description: "Heap total bytes reported by diagnostic memory samples",
+    advice: { explicitBucketBoundaries: MEMORY_BYTES_BUCKETS },
   });
   const memoryExternalHistogram = createHistogram("openclaw.memory.external_bytes", {
     unit: "By",
     description: "External memory bytes reported by diagnostic memory samples",
+    advice: { explicitBucketBoundaries: MEMORY_BYTES_BUCKETS },
   });
   const memoryArrayBuffersHistogram = createHistogram("openclaw.memory.array_buffers_bytes", {
     unit: "By",
     description: "ArrayBuffer bytes reported by diagnostic memory samples",
+    advice: { explicitBucketBoundaries: MEMORY_BYTES_BUCKETS },
   });
   const memoryPressureCounter = createCounter("openclaw.memory.pressure", {
     unit: "1",
