@@ -8,6 +8,7 @@ import {
   validateSystemAgentChatParams,
   validateSystemAgentChatHistoryParams,
   validateSystemAgentSetupActivateParams,
+  validateSystemAgentSetupActivateStartParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
@@ -70,7 +71,7 @@ import {
   verifyGatewaySetupInference,
 } from "./system-agent-execution.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /**
@@ -89,6 +90,7 @@ export type SystemAgentChatSession =
 const MAX_SYSTEM_AGENT_SESSIONS = 8;
 const SYSTEM_AGENT_SEED_HISTORY_LIMIT = 30;
 const DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT = 100;
+const ACTIVATION_SESSION_TIMEOUT_MS = 8 * 60 * 1000;
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
 const PROVIDER_PREPARE_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const systemAgentSessionQueues = new WeakMap<
@@ -219,6 +221,52 @@ function queueDelegatedApproval(params: {
   return record.id;
 }
 
+async function startSetupActivationWizard(params: {
+  sessionId: string;
+  activation: Pick<
+    Parameters<typeof activateGatewaySetupInference>[0],
+    "kind" | "agentId" | "modelRef" | "authChoice" | "apiKey" | "workspace"
+  >;
+  timeoutMs: number;
+  context: GatewayRequestContext;
+  respond: RespondFn;
+}) {
+  const session = await createAdmittedWizardSession(
+    () =>
+      new WizardSession(
+        async (prompter, signal, runnerSession) => {
+          const result = await activateGatewaySetupInference({
+            ...params.activation,
+            surface: "gateway",
+            runtime: {
+              ...defaultRuntime,
+              exit: (code: number | undefined): never => {
+                throw new Error(`setup step exited with code ${String(code)}`);
+              },
+            },
+            prompter,
+            signal,
+            isCancelled: () => signal.aborted,
+            onCommitStarted: () => runnerSession.lockCancellation(),
+          });
+          if (!result.ok) throw new Error(result.error);
+          runnerSession.setModelActivation({
+            modelRef: result.modelRef,
+            ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
+          });
+        },
+        { timeoutMs: params.timeoutMs },
+      ),
+  );
+  if (!session) {
+    respondSetupAdmissionBusy(params.respond);
+    return;
+  }
+  params.context.wizardSessions.set(params.sessionId, session);
+  // Return ownership before any prompt so cancellation survives a lost start reply.
+  params.respond(true, { sessionId: params.sessionId, done: false, status: "running" }, undefined);
+}
+
 export const systemAgentHandlers: GatewayRequestHandlers = {
   "openclaw.approval.list": async ({ respond, client, context }) => {
     const manager = context.systemAgentApprovalManager;
@@ -302,46 +350,34 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const sessionId = params.sessionId;
-    const session = await createAdmittedWizardSession(
-      () =>
-        new WizardSession(
-          async (prompter, signal, runnerSession) => {
-            const result = await activateGatewaySetupInference({
-              kind: "provider-auth",
-              ...(params.agentId ? { agentId: params.agentId } : {}),
-              authChoice: params.authChoice,
-              ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
-              surface: "gateway",
-              runtime: {
-                ...defaultRuntime,
-                exit: (code: number | undefined): never => {
-                  throw new Error(`setup step exited with code ${String(code)}`);
-                },
-              },
-              prompter,
-              signal,
-              isCancelled: () => signal.aborted,
-              onCommitStarted: () => runnerSession.lockCancellation(),
-            });
-            if (!result.ok) {
-              throw new Error(result.error);
-            }
-            runnerSession.setModelActivation({
-              modelRef: result.modelRef,
-              ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
-            });
-          },
-          { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
-        ),
-    );
-    if (!session) {
-      respondSetupAdmissionBusy(respond);
+    const { sessionId, ...activation } = params;
+    await startSetupActivationWizard({
+      sessionId,
+      activation: { ...activation, kind: "provider-auth" },
+      timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS,
+      context,
+      respond,
+    });
+  },
+  /** Activate a detected or manual route with server-owned capability review. */
+  "openclaw.setup.activate.start": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSystemAgentSetupActivateStartParams,
+        "openclaw.setup.activate.start",
+        respond,
+      )
+    )
       return;
-    }
-    context.wizardSessions.set(sessionId, session);
-    // Return ownership immediately so the client can cancel while provider auth waits.
-    respond(true, { sessionId, done: false, status: "running" }, undefined);
+    const { sessionId, ...activation } = params;
+    await startSetupActivationWizard({
+      sessionId,
+      activation,
+      timeoutMs: ACTIVATION_SESSION_TIMEOUT_MS,
+      context,
+      respond,
+    });
   },
   /** Run one provider-owned prepare flow over the shared wizard transport. */
   "openclaw.setup.prepare.start": async ({ params, respond, context }) => {

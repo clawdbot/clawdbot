@@ -919,6 +919,107 @@ struct OnboardingAISetupTests {
             "openclaw.setup.prepare.start")
     }
 
+    @Test(arguments: ["accept", "decline", "cancel"], [false, true])
+    func `activation consent uses shared wizard`(decision: String, manual: Bool) async throws {
+        let recorder = AISetupRequestRecorder()
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "ActivationConsent"))
+        let session = makeAISetupRequestSession(
+            recorder: recorder,
+            handler: { task, request in
+                var payload: [String: Any]
+                switch request.method {
+                case "openclaw.setup.detect":
+                    task.emitReceiveSuccess(.data(manual
+                            ? detectedSetupResponse(id: request.id)
+                            : selectableCandidatesDetectedSetupResponse(id: request.id)))
+                    return
+                case "openclaw.setup.activate":
+                    task.emitReceiveSuccess(.data(failedActivationResponse(id: request.id)))
+                    return
+                case "openclaw.setup.activate.start":
+                    #expect(request.params["kind"] as? String == (manual ? "api-key" : "codex-cli"))
+                    let sessionID = try #require(request.params["sessionId"] as? String)
+                    task.emitReceiveSuccess(.data(wizardStartResponse(id: request.id, sessionID: sessionID)))
+                    return
+                case "wizard.next":
+                    let answer = request.params["answer"] as? [String: Any]
+                    switch answer?["stepId"] as? String {
+                    case "review":
+                        payload = ["done": false, "status": "running", "step": [
+                            "id": "consent", "type": "confirm", "executor": "client",
+                            "message": "Accept the reviewed plugin capabilities?", "initialValue": false,
+                        ]]
+                    case "consent":
+                        let accepted = try #require(answer?["value"] as? Bool)
+                        #expect(accepted == (decision == "accept"))
+                        payload = accepted
+                            ? ["done": true, "status": "done", "modelActivation": ["modelRef": "openai/gpt-5.5"]]
+                            : ["done": true, "status": "cancelled", "error": "Plugin capability review was declined."]
+                    default:
+                        payload = ["done": false, "status": "running", "step": [
+                            "id": "review", "type": "note", "executor": "client",
+                            "title": "Plugin capabilities",
+                            "message": "Review the staged runtime package and its capabilities.",
+                        ]]
+                    }
+                case "wizard.cancel":
+                    payload = ["status": "cancelled", "error": "cancelled"]
+                default:
+                    return
+                }
+                try task.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
+                    "type": "res", "id": request.id, "ok": true, "payload": payload,
+                ])))
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.activate", "openclaw.setup.activate.start"],
+                    capabilities: ["openclaw-setup-model-ref"]))
+            })
+        let gateway = try makeAISetupGateway(url: #require(URL(string: "ws://example.invalid")), session: session)
+        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
+        let activation = Task {
+            await model.detectAndAutoConnect()
+            if manual {
+                model.manualProviderID = "openai-api-key"
+                model.manualKey = "fixture-key"
+                model.submitManualKey()
+            }
+        }
+        defer {
+            model.resetForGatewayChange()
+            activation.cancel()
+        }
+        for _ in 0..<400 where model.authStep == nil {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(model.authStep?.title == "Plugin capabilities")
+        #expect(!model.connected)
+        model.continueProviderAuth()
+        for _ in 0..<400 where model.authStep?.id != "consent" {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(model.authStep.map(wizardStepType) == "confirm")
+        #expect(!model.authConfirmation)
+        if decision == "cancel" {
+            model.cancelProviderAuth()
+        } else {
+            model.authConfirmation = decision == "accept"
+            model.continueProviderAuth()
+        }
+        for _ in 0..<400 where model.isBusy {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(model.connected == (decision == "accept"))
+        #expect(!model.pendingActivationVerification)
+        #expect(model.activeAuthOption == nil)
+        let requests = await recorder.snapshot()
+        #expect(!requests.methods.contains("openclaw.setup.activate"))
+        #expect(requests.methods.filter { $0 == "openclaw.setup.activate.start" }.count == 1)
+    }
+
     @Test func `prepare starts the shared wizard and polls gateway progress`() async throws {
         let recorder = AISetupRequestRecorder()
         let frames = AISetupSocketGeneration()

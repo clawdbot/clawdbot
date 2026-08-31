@@ -90,6 +90,13 @@ or downloads a model. Ollama checks `/api/ps` for loaded models; an eligible
 model that is only installed on disk requires explicit setup through
 **Choose connection** → **Local only**. See [Ollama](/providers/ollama).
 
+When a connection needs a runtime plugin, the app and dashboard show the
+staged package's source and capabilities, with integrity when available before installing or
+enabling it. Review the details, then explicitly confirm acceptance to continue.
+Declining or cancelling stops that setup attempt without selecting another
+inference route. You can retry or choose a different connection. Installation
+progress and the final live model check stay in the same setup flow.
+
 To use a Claude subscription when the Gateway host has no Claude CLI login, run
 `claude setup-token` on any machine with Claude Code installed, then paste the
 printed token as **Anthropic setup-token** under **Connect with an API key or

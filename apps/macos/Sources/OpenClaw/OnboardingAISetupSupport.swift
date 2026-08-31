@@ -183,11 +183,13 @@ extension OnboardingAISetupModel {
     enum ProviderWizardKind: Equatable {
         case auth
         case prepare
+        case activation
 
         var startMethod: String {
             switch self {
             case .auth: "openclaw.setup.auth.start"
             case .prepare: "openclaw.setup.prepare.start"
+            case .activation: "openclaw.setup.activate.start"
             }
         }
     }
@@ -329,6 +331,9 @@ extension OnboardingAISetupModel {
     }
 
     static func activationFailureIsDefinitive(_ error: Error) -> Bool {
+        if case OnboardingAISetupError.activationCancelled = error {
+            return true
+        }
         if let response = error as? GatewayResponseError {
             let code = response.code.uppercased()
             let message = response.message.lowercased()
@@ -348,6 +353,7 @@ extension OnboardingAISetupModel {
         guard let response = error as? GatewayResponseError else { return false }
         return [
             "openclaw.setup.activate",
+            "openclaw.setup.activate.start",
             "openclaw.setup.auth.start",
             "openclaw.setup.prepare.start",
         ].contains(response.method) &&
@@ -440,9 +446,18 @@ extension OnboardingAISetupModel {
 
 enum OnboardingAISetupError: LocalizedError {
     case providerCatalogUnavailable
+    case activationCancelled
+    case activationOutcomeUnavailable
+    case activationFailed(String)
 
     var errorDescription: String? {
         switch self {
+        case .activationCancelled:
+            "AI setup was cancelled. No inference route was selected. Choose a connection to try again."
+        case .activationOutcomeUnavailable:
+            "AI setup ended before its result was received. OpenClaw will verify the Gateway before trying again."
+        case let .activationFailed(message):
+            message
         case .providerCatalogUnavailable:
             "The Gateway is running an older OpenClaw version that doesn’t provide the " +
                 "supported provider list. Update OpenClaw on the gateway, then try again."

@@ -7,6 +7,7 @@ import {
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
+import { WizardSession } from "../wizard/session.js";
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -154,6 +155,47 @@ describe("Codex runtime plugin install repair", () => {
       });
     },
   );
+
+  it("bridges fresh runtime installer progress through a hosted wizard", async () => {
+    mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async ({ cfg, prompter }) => {
+      prompter.progress("Installing runtime").stop();
+      const accepted = await prompter.confirm({
+        message: "Continue installation?",
+        initialValue: false,
+      });
+      return {
+        cfg,
+        pluginId: "codex",
+        installed: accepted,
+        status: accepted ? "installed" : "skipped",
+      };
+    });
+    const { ensureCodexRuntimePluginForModelSelection } =
+      await import("./codex-runtime-plugin-install.js");
+    const session = new WizardSession(async (prompter) => {
+      const result = await ensureCodexRuntimePluginForModelSelection({
+        cfg: {},
+        model: "openai/gpt-5.6-luna",
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+      expect(result.ok).toBe(true);
+    });
+    try {
+      const progress = await session.next();
+      expect(progress).toMatchObject({
+        done: false,
+        step: { type: "progress", message: "Installing runtime" },
+      });
+      const confirmation = await session.next();
+      expect(confirmation.step).toMatchObject({ type: "confirm", initialValue: false });
+      await session.answer(confirmation.step!.id, true);
+      await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
+    } finally {
+      session.cancel();
+      await session.whenSettled();
+    }
+  });
 
   it("surfaces non-fatal ClawHub repair notices to warning-only callers", async () => {
     const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";

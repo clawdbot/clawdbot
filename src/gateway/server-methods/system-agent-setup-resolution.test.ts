@@ -8,7 +8,9 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WizardNextResultSchema } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildPluginCapabilityConsentReview } from "../../plugins/capability-consent.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { createPluginCapabilityConsentPrompter } from "../../wizard/plugin-capability-consent.js";
 import type { WizardSession } from "../../wizard/session.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
 import { systemAgentHandlers } from "./system-agent.js";
@@ -108,6 +110,89 @@ describe("openclaw.setup provider resolution", () => {
     vi.resetAllMocks();
     resetCommandQueueStateForTest();
   });
+
+  it.each([true, false, "true", "cancel"])(
+    "keeps runtime capability consent server-owned through activation (%s)",
+    async (answer) => {
+      const { wizardSessions, context } = makeContext();
+      const sessionId = "runtime-consent";
+      const commit = vi.fn();
+      const review = buildPluginCapabilityConsentReview({
+        pluginId: "test-runtime",
+        manifest: { name: "Test runtime" },
+        config: {},
+        record: { source: "npm", spec: "@example/runtime@1.0.0", integrity: "sha512-fixture" },
+      });
+      setupInferenceMocks.activateSetupInference.mockImplementationOnce(async (params) => {
+        const acknowledgment = await createPluginCapabilityConsentPrompter(params.prompter, () =>
+          params.signal.throwIfAborted(),
+        )(review);
+        if (!acknowledgment) {
+          return { ok: false, status: "unavailable", error: "Capabilities were not accepted." };
+        }
+        expect(acknowledgment.reviewToken).toBe(review.reviewToken);
+        commit();
+        return {
+          ok: true,
+          modelRef: "example/model",
+          latencyMs: 1,
+          lines: [],
+          gatewayRestartRequired: true,
+        };
+      });
+      const { calls, respond } = makeRespond();
+      await systemAgentHandler("openclaw.setup.activate.start")({
+        params: { sessionId, kind: "codex-cli", modelRef: "example/model" },
+        respond,
+        context,
+      } as never);
+      expect(calls[0]).toMatchObject({
+        ok: true,
+        payload: { sessionId, done: false, status: "running" },
+      });
+      const session = expectDefined(wizardSessions.get(sessionId), "activation wizard session");
+      const note = await callWizardNext(context, { sessionId });
+      expect(note.step).toMatchObject({ type: "note", title: "Plugin capabilities" });
+      expect(JSON.stringify(note)).not.toContain(review.reviewToken);
+      const confirmation = await callWizardNext(context, {
+        sessionId,
+        answer: { stepId: expectDefined(note.step, "capability review").id },
+      });
+      expect(confirmation.step).toMatchObject({ type: "confirm", initialValue: false });
+      expect(commit).not.toHaveBeenCalled();
+      if (answer === "cancel") {
+        await expectDefined(
+          wizardHandlers["wizard.cancel"],
+          "wizard cancel",
+        )({
+          params: { sessionId },
+          respond: () => undefined,
+          context,
+        } as never);
+        await whenAdmittedWizardSessionSettled(session);
+      } else {
+        const done = await callWizardNext(context, {
+          sessionId,
+          answer: {
+            stepId: expectDefined(confirmation.step, "capability decision").id,
+            value: answer,
+          },
+        });
+        expect(done).toMatchObject(
+          answer === true
+            ? {
+                done: true,
+                status: "done",
+                modelActivation: { modelRef: "example/model", gatewayRestartRequired: true },
+              }
+            : { done: true, status: "cancelled" },
+        );
+        if (answer !== true) expect(done).not.toHaveProperty("modelActivation");
+      }
+      expect(commit).toHaveBeenCalledTimes(answer === true ? 1 : 0);
+      expect(wizardSessions.has(sessionId)).toBe(false);
+    },
+  );
 
   it.each([
     ["missing", null],
