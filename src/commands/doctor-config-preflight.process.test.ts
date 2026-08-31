@@ -181,7 +181,20 @@ describe("doctor invalid config process exit", () => {
         version: 1,
         agents: {
           jup: {
-            allowlist: [{ pattern: "/usr/bin/rg", lastUsedAt: null, lastUsedCommand: null }],
+            allowlist: [
+              {
+                pattern: "/usr/bin/rg",
+                source: "allow-always",
+                lastUsedAt: null,
+                lastUsedCommand: null,
+              },
+              {
+                pattern: "=command:durable",
+                source: "allow-always",
+                lastUsedAt: null,
+                lastUsedCommand: null,
+              },
+            ],
           },
         },
       }),
@@ -209,6 +222,7 @@ describe("doctor invalid config process exit", () => {
     expect(result.status, output).toBe(0);
     expect(result.signal, output).toBeNull();
     expect(output).toContain("Imported legacy exec approvals into shared SQLite state.");
+    expect(output).toContain("Exec approvals updated: removed 1 older generated approval");
     expect(output).toContain("Doctor complete.");
 
     expect(fs.existsSync(approvalsPath)).toBe(false);
@@ -219,7 +233,8 @@ describe("doctor invalid config process exit", () => {
       const row = database
         .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'")
         .get() as { raw_json?: string } | undefined;
-      expect(row?.raw_json).toContain('"pattern": "/usr/bin/rg"');
+      expect(row?.raw_json).not.toContain('"pattern": "/usr/bin/rg"');
+      expect(row?.raw_json).toContain('"pattern": "=command:durable"');
       expect(row?.raw_json).not.toContain("lastUsedAt");
       expect(row?.raw_json).not.toContain("lastUsedCommand");
     } finally {

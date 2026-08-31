@@ -644,11 +644,15 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/bench-sqlite-reliability.test.ts", 34],
   ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
   ["test/scripts/changed-lanes.test.ts", 5],
+  // PR run 33360253877: keep the process proofs apart instead of pricing each
+  // at 3s. Git-owner's serial baseline remains a conservative packing weight.
+  ["test/scripts/ci-git-owner.test.ts", 367],
   ["test/scripts/ci-workflow-guards.test.ts", 12],
   ["test/scripts/crabbox-wrapper.test.ts", 19],
   ["test/scripts/find-reusable-release-validation.test.ts", 8],
   ["test/scripts/install-sh.test.ts", 6],
   ["test/scripts/kitchen-sink-rpc-walk.test.ts", 5],
+  ["test/scripts/managed-child-process.test.ts", 52],
   ["test/scripts/openclaw-live-updater.test.ts", 18],
   ["test/scripts/parallels-smoke-model.test.ts", 8],
   ["test/scripts/plugin-clawhub-release.test.ts", 5],
@@ -656,6 +660,8 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/plugin-sdk-surface-report.test.ts", 6],
   ["test/scripts/pr-operation-lock.test.ts", 27],
   ["test/scripts/test-projects.test.ts", 8],
+  ["test/scripts/vitest-worker-artifacts.test.ts", 181],
+  ["test/scripts/vitest-worker-artifacts.transforms.test.ts", 70],
 ]);
 const DEFAULT_STRIPE_FILE_SECONDS = 3;
 
@@ -2382,9 +2388,14 @@ function createCompactNodeTestShardBundles(
       : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     for (const planned of plannedGroups) {
       groups.push(planned.group);
-      // Synthesized hosted stripes need their divided parent weight. Native
-      // groups must reach the runner-specific stripe estimator during rebalance.
-      if (planned.group.shard_name !== group.shard_name) {
+      // A divided parent estimate covers only unmeasured hosted stripes. Once
+      // sampled, the child's runner-specific timing owns admission and rebalance.
+      if (
+        planned.group.shard_name !== group.shard_name &&
+        readCompactGroupTimings(options.runnerBackend === "github" ? "github" : "blacksmith")[
+          planned.group.shard_name
+        ] === undefined
+      ) {
         synthesizedSplitSeconds.set(planned.group.shard_name, planned.seconds);
       }
     }

@@ -32,7 +32,7 @@ import {
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
-import { mergeProviderModels } from "./models-config.merge.js";
+import { mergeProviderModels, type SourceModelFields } from "./models-config.merge.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -73,7 +73,7 @@ type ImplicitProviderParams = {
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
-  sourceModelInputOmissions?: ReadonlySet<string>;
+  sourceModelFields?: SourceModelFields;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -267,7 +267,7 @@ function mergeImplicitProviderConfig(params: {
   existing: ProviderConfig | undefined;
   implicit: ProviderConfig;
   dynamicProviderModels?: boolean;
-  sourceModelInputOmissions?: ReadonlySet<string>;
+  sourceModelFields?: SourceModelFields;
   manifestPlugins?: PluginMetadataSnapshot["manifestRegistry"]["plugins"];
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
@@ -280,7 +280,7 @@ function mergeImplicitProviderConfig(params: {
   }
   return mergeProviderModels(implicit, existing, {
     providerId,
-    sourceModelInputOmissions: params.sourceModelInputOmissions,
+    sourceModelFields: params.sourceModelFields,
     manifestPlugins: params.manifestPlugins,
     preserveConfiguredModelMembership:
       !params.dynamicProviderModels && Array.isArray(existing.models) && existing.models.length > 0,
@@ -482,7 +482,7 @@ async function resolvePluginImplicitProviders(
           config: ctx.config,
           providerId,
         }),
-        sourceModelInputOmissions: ctx.sourceModelInputOmissions,
+        sourceModelFields: ctx.sourceModelFields,
         manifestPlugins: ctx.pluginMetadataSnapshot?.manifestRegistry.plugins,
       });
       discovered[providerId] = resolveImplicitProviderAuthMarker({

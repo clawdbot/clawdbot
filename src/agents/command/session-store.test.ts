@@ -1069,7 +1069,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionId: first.sessionId,
         sessionKey: first.sessionKey!,
         storePath: first.storePath,
-        sessionStore: first.sessionStore!,
+        sessionStore: {},
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result: {

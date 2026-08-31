@@ -520,6 +520,68 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it.each(["audioAsVoice", "replyToCurrent"])(
+      "ignores the entire delivery record when %s has an invalid flag",
+      (field) => {
+        for (const value of [false, null, 0, "true"]) {
+          const result = normalizeMessage({
+            role: "assistant",
+            content: "The answer remains visible.",
+            openclawDelivery: {
+              audioAsVoice: true,
+              replyToCurrent: true,
+              replyToId: "target",
+              [field]: value,
+            },
+          });
+          expect(result.content).toEqual([{ type: "text", text: "The answer remains visible." }]);
+          expect(result).not.toHaveProperty("audioAsVoice");
+          expect(result).not.toHaveProperty("replyTarget");
+        }
+      },
+    );
+
+    it.each([Number.NaN, Infinity, -Infinity])(
+      "omits non-finite canvas and media dimensions: %s",
+      (value) => {
+        const result = normalizeMessage({
+          role: "assistant",
+          content: [
+            {
+              type: "canvas",
+              preview: {
+                kind: "canvas",
+                render: "url",
+                url: "/canvas/one",
+                preferredHeight: value,
+              },
+            },
+            {
+              type: "video",
+              url: "/media/clip",
+              sizeBytes: value,
+              durationMs: value,
+              width: value,
+              height: value,
+            },
+          ],
+        });
+        expect(result.content).toEqual([
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              url: "/canvas/one",
+            },
+            rawText: null,
+          },
+          { type: "attachment", attachment: { kind: "video", url: "/media/clip", label: "Video" } },
+        ]);
+      },
+    );
+
     it("marks media-only audio attachments as voice notes from delivery facts", () => {
       const result = normalizeMessage({
         role: "assistant",

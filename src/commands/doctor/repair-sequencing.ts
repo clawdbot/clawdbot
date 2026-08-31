@@ -5,7 +5,6 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
-import { repairObsoleteGeneratedExecApprovals } from "../../infra/exec-approvals-generated-migration.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -111,13 +110,6 @@ export async function runDoctorRepairSequence(params: {
     }
     return params.runWithPluginMetadataSnapshot(resolveCurrentPluginMetadataScope(), run);
   };
-
-  const removedExecApprovals = repairObsoleteGeneratedExecApprovals();
-  if (removedExecApprovals > 0) {
-    changeNotes.push(
-      `Exec approvals updated: removed ${removedExecApprovals} older generated ${removedExecApprovals === 1 ? "approval" : "approvals"} that were not tied to a working directory. Manual allowlist rules were not changed. Rerun affected workflows and choose "Always allow here" when prompted.`,
-    );
-  }
 
   const applyMutation = (mutation: {
     config: DoctorConfigMutationState["candidate"];

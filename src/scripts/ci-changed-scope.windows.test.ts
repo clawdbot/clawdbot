@@ -4,6 +4,20 @@ import { describe, expect, it } from "vitest";
 const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs");
 
 describe("detectChangedScope Windows routing", () => {
+  it("routes the Canvas pnpm runner and its native regression to Windows", () => {
+    for (const runnerPath of [
+      "extensions/canvas/scripts/pnpm-runner.mjs",
+      "extensions/canvas/scripts/pnpm-runner.test.ts",
+    ]) {
+      expect(detectChangedScope([runnerPath]), runnerPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+
+    expect(detectChangedScope(["extensions/canvas/src/a2ui-jsonl.ts"]).runWindows).toBe(false);
+  });
+
   it("routes source CLI invocation owners and their native proof to Windows", () => {
     for (const sourceCliPath of [
       "src/infra/openclaw-cli-invocation.ts",
@@ -83,6 +97,27 @@ describe("detectChangedScope Windows routing", () => {
       "src/test-utils/openclaw-test-state.test.ts",
     ]) {
       expect(detectChangedScope([fixturePath]), fixturePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
+  it("routes process-start identity and every consumer of it to Windows", () => {
+    // The owner, the Windows probe behind it, and the consumers that admit or
+    // recover work from that identity. The real-host proof only runs on this
+    // lane, so if any of them stops routing here a Windows regression merges
+    // unchecked. The proof itself is included: it is test-only, and test-only
+    // paths do not reach the lane through the general Windows scope.
+    for (const identityPath of [
+      "src/shared/pid-alive.ts",
+      "test/e2e/windows-cron-process-identity.e2e.test.ts",
+      "src/infra/windows-process-start.ts",
+      "src/infra/gateway-lock.ts",
+      "src/node-host/node-worker-process-identity.ts",
+      "src/cron/store/run-receipt-store.ts",
+    ]) {
+      expect(detectChangedScope([identityPath]), identityPath).toMatchObject({
         runNode: true,
         runWindows: true,
       });

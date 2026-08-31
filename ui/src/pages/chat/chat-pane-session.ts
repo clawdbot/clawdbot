@@ -27,7 +27,7 @@ import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessio
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
-import { loadChatBranches } from "./chat-history.ts";
+import { loadChatBranches } from "./chat-history-branches.ts";
 import {
   CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS,
   catalogRawResult,

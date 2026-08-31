@@ -21,7 +21,6 @@ import {
 } from "./provider-catalog-live-normalize.internal.js";
 import {
   buildSingleProviderApiKeyCatalog,
-  clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
 } from "./provider-catalog-shared.js";
 import type { ManifestProviderCatalogEntry } from "./provider-catalog-shared.js";
@@ -44,7 +43,8 @@ export type LiveModelCatalogHeaderContext = {
   discoveryApiKey?: string;
 };
 
-export { clearLiveCatalogCacheForTests };
+export { normalizeOpenRouterModelPricing } from "@openclaw/model-catalog-core/model-catalog-pricing";
+export { clearLiveCatalogCacheForTests } from "./provider-catalog-shared.js";
 export {
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,

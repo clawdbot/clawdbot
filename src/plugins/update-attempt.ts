@@ -31,12 +31,12 @@ import {
 
 export function formatNewerExactPinnedNpmDefaultLineMessage(params: {
   pluginId: string;
-  effectiveSpec: string;
+  recordedSpec: string;
   currentVersion: string;
   newer: { packageName: string; registryLine: "beta" | "latest"; version: string };
 }): string {
   return (
-    `${params.pluginId} is pinned to ${params.effectiveSpec} (installed ${params.currentVersion}); ` +
+    `${params.pluginId} is pinned to ${params.recordedSpec} (installed ${params.currentVersion}); ` +
     `registry ${params.newer.registryLine} resolves to ${params.newer.version}. ` +
     `Pass \`openclaw plugins update ${params.newer.packageName}@${params.newer.registryLine}\` to follow that registry line.`
   );
@@ -306,7 +306,7 @@ export async function buildDryRunPluginUpdateOutcome(params: {
     !params.hasOfficialNpmSpec
       ? await resolveNewerExactPinnedNpmDefaultLine({
           currentVersion: params.currentVersion,
-          effectiveSpec: params.effectiveSpec,
+          recordedSpec: params.record.spec,
           probeNpmVersion: npmProbeVersion,
           updateChannel: params.updateChannel,
           timeoutMs: params.timeoutMs,
@@ -315,10 +315,10 @@ export async function buildDryRunPluginUpdateOutcome(params: {
 
   if (unchanged) {
     const message =
-      newerExactPinnedDefaultLine && params.effectiveSpec
+      newerExactPinnedDefaultLine && params.record.spec
         ? formatNewerExactPinnedNpmDefaultLineMessage({
             pluginId: params.pluginId,
-            effectiveSpec: params.effectiveSpec,
+            recordedSpec: params.record.spec,
             currentVersion: currentLabel,
             newer: newerExactPinnedDefaultLine,
           }) + params.channelFallbackSuffix
