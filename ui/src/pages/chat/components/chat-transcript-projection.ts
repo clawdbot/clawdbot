@@ -30,7 +30,7 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { assistantGroupIsForwardedBoundary } from "../chat-turn-boundary.ts";
+import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { getToolTitlesVersion, scheduleToolTitlesForTranscript } from "../tool-titles.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
@@ -224,9 +224,7 @@ export function projectChatTranscript(
   // A forwarded cross-session message is another voice in the room: the thread
   // stops rendering as a compact direct exchange and identity chrome returns.
   const hasForwardedGroups = chatItems.some(
-    (item) =>
-      item.kind === "group" &&
-      (Boolean(item.senderSession) || assistantGroupIsForwardedBoundary(item)),
+    (item) => item.kind === "group" && hasForwardedSource(item),
   );
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
