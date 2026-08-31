@@ -1,0 +1,139 @@
+title: Microsoft Teams delivers a reply's presentation on the inbound reply path
+
+scenario:
+  id: msteams-reply-presentation
+  surface: channels
+  coverage:
+    primary:
+      - microsoft-teams.native-approval-cards
+  objective: Verify the Microsoft Teams inbound reply path resolves a reply's portable presentation into an Adaptive Card, and still keeps the producer's authored fallback text when Teams cannot render that presentation natively.
+  successCriteria:
+    - A /status reply reaches the Teams direct conversation through the loopback Bot Framework Connector.
+    - No activity in that reply carries an Adaptive Card attachment, because every structured block degraded to text.
+    - The authored status body survives instead of being replaced by a generated card.
+    - A reply whose presentation Teams can carry reaches the connector as an Adaptive Card attachment instead of prose.
+  regressionRefs:
+    - https://github.com/openclaw/openclaw/issues/133295
+  docsRefs:
+    - docs/channels/msteams.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/msteams/src/presentation.ts
+    - extensions/msteams/src/messenger.ts
+    - src/infra/outbound/deliver-payload.ts
+  execution:
+    kind: flow
+    channel: msteams
+    summary: Send /status in a Teams direct conversation through the real Gateway and the real Microsoft Teams plugin, then inspect the activities that reached the loopback Bot Framework Connector.
+    config:
+      conversationId: msteams-reply-authored-fallback-dm
+      cardConversationId: msteams-reply-presentation-card
+      command: /status
+      cardPromptNeedle: Where should this deploy?
+      cardPrompt: >-
+        Structured question QA check. Call ask_user exactly once and then reply with the
+        exact marker `MSTEAMS-CARD-OK`.
+        QA routing marker: tool search qa check target=ask_user ask_user_fixture=single.
+      adaptiveCardContentType: application/vnd.microsoft.card.adaptive
+      authoredTextNeedle: "📚 Context:"
+
+flow:
+  steps:
+    - name: keeps the authored status body and sends no card
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: direct
+            senderId: driver
+            senderName: Teams QA Driver
+            text: { ref: config.command }
+        # Wait only for the reply to arrive, never for the asserted shape: a run that
+        # replaces the authored body with a card must fail on the assertion below with
+        # the activity in hand, not time out with nothing to show.
+        - call: waitForCondition
+          saveAs: statusReply
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startIndex).find((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 250
+        - call: sleep
+          args: [2000]
+        - set: replyActivities
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId)"
+        - set: cardActivities
+          value:
+            expr: "replyActivities.filter((message) => (message.attachments ?? []).some((attachment) => attachment.mimeType === config.adaptiveCardContentType))"
+        - assert:
+            expr: cardActivities.length === 0
+            message:
+              expr: "`/status reached Teams as an Adaptive Card, so the authored fallback was replaced: ${JSON.stringify(cardActivities.map((message) => ({ text: message.text, attachments: message.attachments })))}`"
+        - assert:
+            expr: "replyActivities.some((message) => String(message.text ?? '').includes(config.authoredTextNeedle))"
+            message:
+              expr: "`authored /status body did not survive: ${JSON.stringify(replyActivities.map((message) => message.text))}`"
+      detailsExpr: "`activities=${replyActivities.length} cards=${cardActivities.length} first=${String(statusReply.text ?? '').split('\\n')[0]}`"
+
+    - name: delivers a renderable presentation as an Adaptive Card
+      actions:
+        - set: cardStartIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id: { ref: config.cardConversationId }
+              kind: direct
+            senderId: driver
+            senderName: Teams QA Driver
+            text: { ref: config.cardPrompt }
+        - call: waitForCondition
+          saveAs: pendingQuestion
+          args:
+            - lambda:
+                async: true
+                expr: "(await env.gateway.call('question.list', {})).questions.find((question) => question.status === 'pending' && question.questions.some((entry) => entry.question === config.cardPromptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 250
+        - call: waitForCondition
+          saveAs: cardActivity
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(cardStartIndex).find((message) => message.direction === 'outbound' && message.conversation.id === config.cardConversationId)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 250
+        - call: sleep
+          args: [2000]
+        - set: cardReplyActivities
+          value:
+            expr: "state.getSnapshot().messages.slice(cardStartIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === config.cardConversationId)"
+        - set: deliveredCard
+          value:
+            expr: "(() => { const attachment = cardReplyActivities.flatMap((message) => message.attachments ?? []).find((entry) => entry.mimeType === config.adaptiveCardContentType); return attachment ? JSON.parse(Buffer.from(attachment.contentBase64, 'base64').toString('utf8')) : undefined; })()"
+        - assert:
+            expr: "deliveredCard?.type === 'AdaptiveCard'"
+            message:
+              expr: "`the reply's presentation did not reach Teams as an Adaptive Card: ${JSON.stringify(cardReplyActivities.map((message) => ({ text: message.text, attachments: message.attachments })))}`"
+        - assert:
+            expr: "JSON.stringify(deliveredCard.body ?? []).includes(config.cardPromptNeedle)"
+            message:
+              expr: "`the delivered card lost the reply's content: ${JSON.stringify(deliveredCard)}`"
+        # Leave no pending question behind: an unresolved run keeps the agent blocked for
+        # every later scenario sharing this Gateway.
+        - set: resolution
+          value:
+            expr: "env.gateway.call('question.resolve', { id: pendingQuestion.id, answers: { answers: { deploy_target: ['Staging (Recommended)'] } }, resolvedBy: 'qa-lab' })"
+        - assert:
+            expr: "resolution.status === 'answered'"
+            message:
+              expr: "`question did not resolve: ${JSON.stringify(resolution)}`"
+      detailsExpr: "`card blocks=${(deliveredCard.body ?? []).length} actions=${(deliveredCard.actions ?? []).length}`"

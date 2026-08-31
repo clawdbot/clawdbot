@@ -9,6 +9,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   reserveMSTeamsQaWebhookPort,
   startMSTeamsQaBotFrameworkServer,
@@ -18,6 +19,7 @@ type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
+const ADAPTIVE_CARD_CONTENT_TYPE = "application/vnd.microsoft.card.adaptive";
 const SERVICE_URL = "https://smba.trafficmanager.net/qa";
 const APP_ID = "qa-msteams-app";
 const TENANT_ID = "qa-msteams-tenant";
@@ -52,6 +54,29 @@ function renderMSTeamsQaText(text: string) {
 
 function activityText(activity: Record<string, unknown>) {
   return typeof activity.text === "string" ? activity.text : "";
+}
+
+// The QA bus records reply text; an Adaptive Card carries its content in the activity's
+// attachments instead, so a card-only reply would reach scenarios as an empty message.
+function activityCardAttachments(activity: Record<string, unknown>, activityId: string) {
+  const attachments = Array.isArray(activity.attachments) ? activity.attachments : [];
+  return attachments.flatMap((attachment, index) => {
+    const record = asOptionalRecord(attachment);
+    if (record?.contentType !== ADAPTIVE_CARD_CONTENT_TYPE) {
+      return [];
+    }
+    return [
+      {
+        id: `${activityId}-card-${index}`,
+        kind: "file" as const,
+        mimeType: ADAPTIVE_CARD_CONTENT_TYPE,
+        fileName: "adaptive-card.json",
+        contentBase64: Buffer.from(JSON.stringify(record.content ?? null), "utf8").toString(
+          "base64",
+        ),
+      },
+    ];
+  });
 }
 
 function createMSTeamsQaBotToken() {
@@ -112,12 +137,14 @@ export async function createMSTeamsQaTransportAdapter(
       const kind = conversationKindByNativeId.get(outbound.conversationId) ?? "channel";
       const conversationId =
         logicalConversationByNativeId.get(outbound.conversationId) ?? outbound.conversationId;
+      const cardAttachments = activityCardAttachments(outbound.activity, outbound.activityId);
       const message = await context.messages.addOutboundMessage({
         accountId,
         to: `${kind === "direct" ? "dm" : kind}:${conversationId}`,
         senderId: APP_ID,
         text: activityText(outbound.activity),
         timestamp: Date.now(),
+        ...(cardAttachments.length > 0 ? { attachments: cardAttachments } : {}),
         ...(outbound.threadId
           ? { threadId: busByNativeMessageId.get(outbound.threadId) ?? outbound.threadId }
           : {}),
