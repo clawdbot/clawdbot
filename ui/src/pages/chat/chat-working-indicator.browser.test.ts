@@ -27,14 +27,16 @@ describeBrowser("working claw browser layout", () => {
     await browser?.close();
   });
 
-  it("optically lowers the asymmetric claw without moving the row layout", async () => {
+  it("centers the claw when grouped chat styles load after the indicator styles", async () => {
     const page = await browser.newPage({ viewport: { width: 640, height: 240 } });
     try {
       const css = [
         "ui/src/styles/base.css",
         "ui/src/styles/components.css",
-        "ui/src/styles/chat/grouped.css",
         "ui/src/styles/chat/tool-cards.css",
+        // Production code splitting can attach grouped chat CSS after the
+        // indicator chunk. The centering invariant must not depend on order.
+        "ui/src/styles/chat/grouped.css",
       ]
         .map((file) => readStyleSheet(file))
         .join("\n");
@@ -56,6 +58,7 @@ describeBrowser("working claw browser layout", () => {
         };
         const svg = document.querySelector<SVGElement>(".chat-reading-indicator svg")!;
         return {
+          display: getComputedStyle(document.querySelector(".chat-reading-indicator")!).display,
           layoutCenter: center(".chat-reading-indicator"),
           paintedCenter: center(".chat-reading-indicator svg"),
           statusCenter: center(".chat-working-indicator__status"),
@@ -63,9 +66,11 @@ describeBrowser("working claw browser layout", () => {
         };
       });
 
+      // As a flex item, inline-flex is blockified to flex in computed style.
+      expect(geometry.display).toBe("flex");
       expect(geometry.layoutCenter).toBeCloseTo(geometry.statusCenter, 3);
-      expect(geometry.paintedCenter - geometry.statusCenter).toBeCloseTo(1, 1);
-      expect(geometry.translate).toBe("0px 1px");
+      expect(geometry.paintedCenter).toBeCloseTo(geometry.statusCenter, 3);
+      expect(geometry.translate).toBe("none");
     } finally {
       await page.close();
     }

@@ -783,6 +783,8 @@ img.chat-avatar.chat-avatar--logo {
 
 /* Keep the working claw on the same left edge as the flat text column. */
 .chat-group.assistant .chat-bubble.chat-reading-indicator {
+  display: inline-flex;
+  align-items: center;
   padding: 10px 0;
 }
 
