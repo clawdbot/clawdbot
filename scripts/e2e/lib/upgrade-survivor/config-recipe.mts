@@ -179,26 +179,6 @@ const configuredPluginInstallSteps = [
 
 const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
-    "recovery-cleanup",
-    [
-      {
-        id: "recovery-agents",
-        intent: "recovery-cleanup",
-        argv: [
-          "config",
-          "set",
-          "agents.list",
-          JSON.stringify([
-            ...JSON.parse(readConfigSection("agents.json")).list,
-            { id: "recovery-clean", workspace: "~/workspace/recovery-clean" },
-            { id: "recovery-protected", workspace: "~/workspace/recovery-protected" },
-          ]),
-          "--strict-json",
-        ],
-      },
-    ],
-  ],
-  [
     "acpx-openclaw-tools-bridge",
     [
       {
@@ -279,13 +259,29 @@ export function resolveUpgradeSurvivorConfigSteps(
   if (updateChannel !== "stable" && updateChannel !== "beta") {
     throw new Error(`invalid upgrade survivor update channel: ${updateChannel}`);
   }
+  const sharedSteps = sharedRecipe.slice(0, -1).map((step) => {
+    if (scenario !== "recovery-cleanup" || step.id !== "agents") {
+      return step;
+    }
+    const agentsJson = step.argv[3];
+    if (agentsJson === undefined) {
+      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+    }
+    // Extend the canonical roster before the baseline adapter chooses entries or legacy list.
+    // A second agents.list write bypasses that version contract and can lose ownership defaults.
+    const agents = JSON.parse(agentsJson);
+    agents.entries["recovery-clean"] = { workspace: "~/workspace/recovery-clean" };
+    agents.entries["recovery-protected"] = { workspace: "~/workspace/recovery-protected" };
+    const argv = [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)];
+    return Object.assign({}, step, { argv });
+  });
   return [
     {
       id: "update-channel",
       intent: "update",
       argv: ["config", "set", "update.channel", updateChannel],
     },
-    ...sharedRecipe.slice(0, -1),
+    ...sharedSteps,
     ...resolveScenarioConfigSteps(scenario),
     ...(validateStep ? [validateStep] : []),
   ];
