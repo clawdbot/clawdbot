@@ -5,7 +5,7 @@ import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
-import { describeFailoverError } from "../failover-error.js";
+import { getFailoverErrorCode } from "../failover/error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import {
   AGENT_RUN_SUPERSEDED_STOP_REASON,
@@ -18,7 +18,7 @@ import type { AgentAttemptResult } from "./runtime-loaders.js";
 const log = createSubsystemLogger("agents/agent-command");
 
 const formatLifecycleError = (error: unknown): string =>
-  renderFailoverCodeUserCopy(describeFailoverError(error).code) ?? formatErrorMessage(error);
+  renderFailoverCodeUserCopy(getFailoverErrorCode(error)) ?? formatErrorMessage(error);
 
 function resolveTerminalLogLevel(
   outcome: AgentRunTerminalOutcome,
