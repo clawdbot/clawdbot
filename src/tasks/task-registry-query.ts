@@ -154,13 +154,10 @@ export async function listTaskRecordPage(params: {
   let matchingCount = 0;
   let heapReady = false;
   let scannedCount = 0;
-  // Freeze the scan length so tasks appended while this request yields cannot
-  // extend one bounded page request indefinitely.
-  const scanLimit = tasks.size;
-  for (const task of tasks.values()) {
-    if (scannedCount >= scanLimit) {
-      break;
-    }
+  // Registry updates replace records. Freeze references before yielding so one
+  // page sees stable membership and values without cloning or sorting them all.
+  const taskSnapshot = [...tasks.values()];
+  for (const task of taskSnapshot) {
     scannedCount += 1;
     // Yield large scans in small deterministic slices so task history cannot
     // monopolize the Gateway event loop while other requests are waiting.

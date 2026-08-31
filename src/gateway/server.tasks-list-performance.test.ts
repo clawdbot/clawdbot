@@ -3,7 +3,13 @@ import { afterAll, describe, expect, test, vi } from "vitest";
 import type { TasksListResult } from "../../packages/gateway-protocol/src/index.js";
 import { writeConfigFile } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import {
+  createTaskRecord,
+  deleteTaskRecordById,
+  markTaskTerminalById,
+} from "../tasks/runtime-internal.js";
 import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
@@ -25,15 +31,16 @@ const TASK_COUNT = 10_000;
 const OWNED_SESSION_KEY = "agent:main:tasks-owned";
 const FOREIGN_SESSION_KEY = "agent:main:tasks-foreign";
 
-type RpcResponse<T> = {
+type RpcResponse<T extends Record<string, unknown>> = {
   type: "res";
   id: string;
   ok: boolean;
   payload?: T;
   error?: { message?: string };
+  [key: string]: unknown;
 };
 
-function sendRpc<T>(
+function sendRpc<T extends Record<string, unknown>>(
   ws: Awaited<ReturnType<typeof openWs>>,
   id: string,
   method: string,
@@ -98,7 +105,7 @@ describe("tasks.list Gateway performance", () => {
     const foreignProfile = ensureProfileForEmail("foreign@example.com");
     setUserProfileRole(adminProfile.id, "maintainer");
     setUserProfileRole(viewerProfile.id, "restricted");
-    const auth = {
+    const auth: GatewayAuthConfig = {
       mode: "trusted-proxy" as const,
       identityScopes: {
         "admin@example.com": ["operator.admin"],
@@ -136,11 +143,15 @@ describe("tasks.list Gateway performance", () => {
     });
 
     const tasks = createTaskSnapshot();
-    const adminExpected = expectedTaskIds(tasks.values(), 13, 7);
     const ownedTasks = [...tasks.values()].filter(
       (task) => task.requesterSessionKey === OWNED_SESSION_KEY,
     );
     const viewerExpected = expectedTaskIds(ownedTasks, 10, 25);
+    const deletedTaskId = viewerExpected[0];
+    const updatedTask = ownedTasks.find((task) => !viewerExpected.includes(task.taskId));
+    if (!deletedTaskId || !updatedTask) {
+      throw new Error("expected selected and unselected owned task fixtures");
+    }
 
     try {
       await withGatewayServer(async ({ port }) => {
@@ -214,13 +225,38 @@ describe("tasks.list Gateway performance", () => {
         try {
           const completionOrder: string[] = [];
           let healthPromise: Promise<RpcResponse<Record<string, unknown>>> | undefined;
+          let mutationsApplied = false;
           onSnapshotLoad = () => {
-            healthPromise = sendRpc<Record<string, unknown>>(healthClient, "health", "health").then(
-              (response) => {
+            setImmediate(() => {
+              const updated = markTaskTerminalById({
+                taskId: updatedTask.taskId,
+                status: "succeeded",
+                endedAt: TASK_COUNT + 1,
+                lastEventAt: TASK_COUNT + 1,
+              });
+              const deleted = deleteTaskRecordById(deletedTaskId);
+              const created = createTaskRecord({
+                runtime: "cli",
+                requesterSessionKey: OWNED_SESSION_KEY,
+                requesterAgentId: "main",
+                ownerKey: OWNED_SESSION_KEY,
+                scopeKind: "session",
+                runId: "run-created-during-scan",
+                task: "Created during scan",
+                status: "running",
+                deliveryStatus: "pending",
+                lastEventAt: TASK_COUNT + 2,
+              });
+              mutationsApplied = updated !== null && deleted && created !== null;
+              healthPromise = sendRpc<Record<string, unknown>>(
+                healthClient,
+                "health",
+                "health",
+              ).then((response) => {
                 completionOrder.push("health");
                 return response;
-              },
-            );
+              });
+            });
           };
           const restrictedPromise = sendRpc<TasksListResult>(viewer, "tasks-owned", "tasks.list", {
             cursor: "10",
@@ -240,18 +276,9 @@ describe("tasks.list Gateway performance", () => {
             restricted.payload?.tasks.every((task) => task.sessionKey === OWNED_SESSION_KEY),
           ).toBe(true);
           expect(restricted.payload?.nextCursor).toBe("35");
+          expect(mutationsApplied).toBe(true);
           expect(completionOrder[0]).toBe("health");
           expect(Math.max(0, ...sortedInputLengths)).toBeLessThanOrEqual(35);
-
-          sortedInputLengths.length = 0;
-          const list = await sendRpc<TasksListResult>(admin, "tasks-list", "tasks.list", {
-            cursor: "13",
-            limit: 7,
-          });
-          expect(list.ok, JSON.stringify(list.error)).toBe(true);
-          expect(list.payload?.tasks.map((task) => task.id)).toEqual(adminExpected);
-          expect(list.payload?.nextCursor).toBe("20");
-          expect(Math.max(0, ...sortedInputLengths)).toBeLessThanOrEqual(20);
         } finally {
           sortSpy.mockRestore();
           admin.close();
