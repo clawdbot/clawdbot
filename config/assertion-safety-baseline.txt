@@ -2057,7 +2057,7 @@ src/agents/tools/gateway-tool.ts	5
 src/agents/tools/gateway.ts	1
 src/agents/tools/goal-tools.ts	4
 src/agents/tools/heartbeat-response-tool.ts	1
-src/agents/tools/image-generate-tool.ts	15
+src/agents/tools/image-generate-tool.ts	14
 src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	3
 src/agents/tools/in-process-gateway.ts	1
