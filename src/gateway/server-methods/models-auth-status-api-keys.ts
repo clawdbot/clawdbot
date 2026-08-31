@@ -43,12 +43,26 @@ export function resolveProviderApiKeys(
     config: cfg,
     env: process.env,
   });
+  const owners = authAliasLookupParams.metadataSnapshot?.owners;
+  const modelCapableIds = new Set(
+    [
+      ...(owners?.providers ?? new Map()).keys(),
+      ...(owners?.modelCatalogProviders ?? new Map()).keys(),
+      ...(owners?.cliBackends ?? new Map()).keys(),
+    ]
+      .map((id) => normalizeProviderId(id))
+      .filter((id): id is string => Boolean(id)),
+  );
+  const envLookupProviderIds = listProviderEnvAuthLookupKeys(lookupMaps).filter((id) => {
+    const normalized = normalizeProviderId(id);
+    return Boolean(normalized) && modelCapableIds.has(normalized);
+  });
   const providerIds = new Set<string>([
     ...Object.keys(cfg.models?.providers ?? {}),
     ...Object.values(cfg.auth?.profiles ?? {})
       .map((profile) => profile?.provider)
       .filter((provider): provider is string => typeof provider === "string"),
-    ...listProviderEnvAuthLookupKeys(lookupMaps),
+    ...envLookupProviderIds,
   ]);
   const apiKeys = new Map<string, ModelAuthStatusProvider["apiKey"]>();
   for (const rawProvider of providerIds) {

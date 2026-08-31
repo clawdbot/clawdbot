@@ -625,6 +625,7 @@ describe("models.authStatus", () => {
       {
         id: "prepared-auth",
         origin: "bundled",
+        providers: ["prepared-owner"],
         setup: {
           providers: [{ id: "prepared-owner", envVars: ["PREPARED_OWNER_API_KEY"] }],
         },
@@ -647,6 +648,14 @@ describe("models.authStatus", () => {
       },
       manifestRegistry: { plugins },
       plugins,
+      owners: {
+        providers: new Map([
+          ["prepared-owner", ["prepared-auth"]],
+          ["prepared-owner-alias", ["prepared-auth"]],
+        ]),
+        modelCatalogProviders: new Map(),
+        cliBackends: new Map(),
+      },
     });
     vi.stubEnv("PREPARED_OWNER_API_KEY", "prepared-owner-secret");
 
@@ -656,6 +665,150 @@ describe("models.authStatus", () => {
       expect.objectContaining({
         providers: expect.arrayContaining(["prepared-owner", "prepared-owner-alias"]),
       }),
+    );
+  });
+
+  it("excludes credential-only tool plugins from env auth status providers", async () => {
+    const plugins = [
+      {
+        id: "brave",
+        origin: "bundled",
+        setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
+        contracts: { webSearchProviders: ["brave"] },
+      },
+    ];
+    setPreparedMetadataSnapshot({
+      index: { plugins: [] },
+      manifestRegistry: { plugins },
+      plugins,
+      owners: {
+        providers: new Map(),
+        modelCatalogProviders: new Map(),
+        cliBackends: new Map(),
+      },
+    });
+    vi.stubEnv("BRAVE_API_KEY", "bsa-test");
+
+    await readAuthStatus();
+
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: expect.not.arrayContaining(["brave"]) }),
+    );
+  });
+
+  it("keeps a model provider and drops a sibling tool plugin sharing an env var", async () => {
+    const plugins = [
+      {
+        id: "qwen",
+        origin: "bundled",
+        providers: ["qwen", "dashscope", "modelstudio"],
+        modelCatalog: { providers: { qwen: {}, "qwen-token-plan": {} } },
+        setup: {
+          providers: [{ id: "qwen", envVars: ["DASHSCOPE_API_KEY"] }],
+        },
+      },
+      {
+        id: "alibaba",
+        origin: "bundled",
+        setup: { providers: [{ id: "alibaba", envVars: ["DASHSCOPE_API_KEY"] }] },
+        contracts: { videoGenerationProviders: ["alibaba"] },
+      },
+    ];
+    setPreparedMetadataSnapshot({
+      index: { plugins: [] },
+      manifestRegistry: { plugins },
+      plugins,
+      owners: {
+        providers: new Map([
+          ["qwen", ["qwen"]],
+          ["dashscope", ["qwen"]],
+          ["modelstudio", ["qwen"]],
+        ]),
+        modelCatalogProviders: new Map([
+          ["qwen", ["qwen"]],
+          ["qwen-token-plan", ["qwen"]],
+        ]),
+        cliBackends: new Map(),
+      },
+    });
+    vi.stubEnv("DASHSCOPE_API_KEY", "ds-test");
+
+    await readAuthStatus();
+
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: expect.arrayContaining(["qwen"]) }),
+    );
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: expect.not.arrayContaining(["alibaba"]) }),
+    );
+  });
+
+  it("keeps multiple model providers that share an env var", async () => {
+    const plugins = [
+      {
+        id: "minimax",
+        origin: "bundled",
+        providers: ["minimax", "minimax-portal"],
+        setup: {
+          providers: [
+            { id: "minimax", envVars: ["MINIMAX_API_KEY"] },
+            { id: "minimax-portal", envVars: ["MINIMAX_API_KEY"] },
+          ],
+        },
+      },
+    ];
+    setPreparedMetadataSnapshot({
+      index: { plugins: [] },
+      manifestRegistry: { plugins },
+      plugins,
+      owners: {
+        providers: new Map([
+          ["minimax", ["minimax"]],
+          ["minimax-portal", ["minimax"]],
+        ]),
+        modelCatalogProviders: new Map(),
+        cliBackends: new Map(),
+      },
+    });
+    vi.stubEnv("MINIMAX_API_KEY", "m-test");
+
+    await readAuthStatus();
+
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: expect.arrayContaining(["minimax", "minimax-portal"]),
+      }),
+    );
+  });
+
+  it("keeps an explicitly configured provider even when it is not a model owner", async () => {
+    const plugins = [
+      {
+        id: "brave",
+        origin: "bundled",
+        setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
+        contracts: { webSearchProviders: ["brave"] },
+      },
+    ];
+    mocks.getRuntimeConfig.mockReturnValue({
+      models: { providers: { brave: { api: "openai" } } },
+    });
+    setPreparedMetadataSnapshot({
+      index: { plugins: [] },
+      manifestRegistry: { plugins },
+      plugins,
+      owners: {
+        providers: new Map(),
+        modelCatalogProviders: new Map(),
+        cliBackends: new Map(),
+      },
+    });
+    vi.stubEnv("BRAVE_API_KEY", "bsa-test");
+
+    await readAuthStatus();
+
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: expect.arrayContaining(["brave"]) }),
     );
   });
 
