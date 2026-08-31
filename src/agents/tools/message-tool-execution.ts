@@ -492,7 +492,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         sourceReplySinkDeliveryMode === "message_tool_only" &&
         (action === "send" || action === "reply")
       ) {
-        if (Date.now() - recentPollVote.recordedAt > POLL_VOTE_ECHO_TTL_MS) {
+        if (Date.now() - recentPollVote.recordedAt >= POLL_VOTE_ECHO_TTL_MS) {
           recentPollVoteBySession.delete(pollEchoSessionKey);
         } else if (pollVoteEchoRoute === recentPollVote.route) {
           const vote = recentPollVote;

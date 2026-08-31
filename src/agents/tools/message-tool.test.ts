@@ -1015,6 +1015,29 @@ describe("poll vote echo guard", () => {
     expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
   });
 
+  it("allows a same-route echo at the exact TTL boundary", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(100_000);
+      const sessionKey = "agent:test:imessage:direct:ttl-boundary";
+      const voteTool = createPollVoteTool("Black", sessionKey);
+      await castBlueVote(voteTool);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      const nextRunTool = createPollVoteTool("Black", sessionKey);
+      const result = await nextRunTool.execute("send", {
+        action: "send",
+        channel: "imessage",
+        message: "🦞 Black.",
+      });
+
+      expect(result.details).not.toMatchObject({ status: "suppressed" });
+      expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not suppress a later-run echo from a different conversation", async () => {
     const voteTool = createPollVoteTool("Black", "agent:test:imessage:direct:convo-a");
     await castBlueVote(voteTool);
