@@ -5,7 +5,6 @@ import type {
   MessageOrigin,
   RichBlock,
   RichBlockCaption,
-  RichMessageButton,
   RichText,
   User,
 } from "grammy/types";
@@ -121,10 +120,6 @@ function joinRichText(parts: string[], separator: string): string {
   return parts.map(compactRichText).filter(Boolean).join(separator);
 }
 
-function renderRichMessageButton(button: RichMessageButton): string {
-  return renderRichInlineText(button.text);
-}
-
 function renderRichInlineText(value: RichText | undefined): string {
   if (value === undefined) {
     return "";
@@ -138,8 +133,6 @@ function renderRichInlineText(value: RichText | undefined): string {
   switch (value.type) {
     case "anchor":
       return "";
-    case "button":
-      return renderRichMessageButton(value.button);
     case "custom_emoji":
       return value.alternative_text;
     case "mathematical_expression":
@@ -166,7 +159,6 @@ function renderRichBlock(block: RichBlock): string {
     case "footer":
     case "thinking":
       return renderRichInlineText(block.text);
-    case "expandable_blockquote":
     case "pullquote":
       return joinRichText(
         [renderRichInlineText(block.text), renderRichInlineText(block.credit ?? "")],
@@ -202,14 +194,11 @@ function renderRichBlock(block: RichBlock): string {
       );
     case "animation":
     case "audio":
-    case "document":
     case "map":
     case "photo":
     case "video":
     case "voice_note":
       return renderRichCaption(block.caption);
-    case "buttons":
-      return joinRichText(block.buttons.map(renderRichMessageButton), "\n");
     case "anchor":
     case "divider":
       return "";
