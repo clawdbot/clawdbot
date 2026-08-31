@@ -16,6 +16,7 @@ import {
 import {
   attachPluginInstallTransaction,
   isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionSink,
 } from "../../../plugins/install-transaction.js";
 import type {
   PluginInstallArtifactConsentHandler,
@@ -4215,10 +4216,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       resolution: { integrity: "sha512-rejected-active-root" },
     });
     let committed = false;
+    const rollbackOrder: string[] = [];
     const commit = vi.fn(async () => {
       committed = true;
     });
-    const rollback = vi.fn(async () => {});
+    const rollback = vi.fn(async () => {
+      rollbackOrder.push("payload");
+    });
     mocks.installPluginFromNpmSpec.mockImplementationOnce(
       async (callbacks: MockNpmInstallCallbacks) => {
         await invokeMockNpmInstallPrecommit({
@@ -4234,6 +4238,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           committed = true;
           return installResult;
         }
+        resolvePluginInstallTransactionSink(callbacks)?.push({
+          commit: async () => {},
+          rollback: async () => {
+            rollbackOrder.push("earlier");
+          },
+        });
         return attachPluginInstallTransaction(installResult, { commit, rollback });
       },
     );
@@ -4254,6 +4264,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(committed).toBe(false);
     expect(commit).not.toHaveBeenCalled();
     expect(rollback).toHaveBeenCalledOnce();
+    expect(rollbackOrder).toEqual(["payload", "earlier"]);
     expect(hasRetainedManagedNpmInstallMarker(installDir)).toBe(false);
     expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(result.changes).toEqual([]);
