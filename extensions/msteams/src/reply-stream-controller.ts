@@ -207,22 +207,29 @@ export function createTeamsReplyStreamController(params: {
 
   // A native stream carries text and nothing else, so the text-free remainder still goes
   // to block delivery; dropping the whole payload would drop media and controls with the
-  // streamed text. Exception: "fallback" text is the prose rendering of the whole
-  // presentation, so for those the stream delivered the presentation's content too and
-  // only controls a channel renders natively are still missing.
+  // streamed text. "fallback" text is the prose rendering of the whole presentation, so
+  // for those the stream already delivered every block that degrades to prose and only
+  // the natively rendered controls remain.
   const suppressedFinalRemainder = (payload: ReplyPayload): Maybe<ReplyPayload> => {
-    const presentation = normalizeMessagePresentation(payload.presentation);
-    const streamCarriedThePresentation =
-      payload.presentationTextMode === "fallback" &&
-      !presentation?.blocks.some(isMessagePresentationInteractiveBlock);
+    const presentation =
+      payload.presentationTextMode === "fallback"
+        ? normalizeMessagePresentation(payload.presentation)
+        : undefined;
+    if (!presentation) {
+      const remainder = { ...payload, text: undefined };
+      return hasOutboundReplyContent(remainder) ? remainder : undefined;
+    }
+    const controls = presentation.blocks.filter(isMessagePresentationInteractiveBlock);
     const {
       presentation: _presentation,
       presentationTextMode: _presentationTextMode,
       ...withoutPresentation
     } = payload;
-    const remainder = streamCarriedThePresentation
-      ? { ...withoutPresentation, text: undefined }
-      : { ...payload, text: undefined };
+    const remainder = {
+      ...withoutPresentation,
+      text: undefined,
+      ...(controls.length > 0 ? { presentation: { blocks: controls } } : {}),
+    };
     return hasOutboundReplyContent(remainder) ? remainder : undefined;
   };
 
@@ -269,12 +276,14 @@ export function createTeamsReplyStreamController(params: {
       if (entry.kind === "payload") {
         return [entry.payload];
       }
-      const hasMedia = Boolean(entry.payload.mediaUrl || entry.payload.mediaUrls?.length);
+      // Same subtraction as a suppressed final: the stream carried this entry's text,
+      // so only what it could not carry is still owed to the user.
       const text = replacementFallback?.text;
-      if (!text && !hasMedia) {
-        return [];
+      if (!text) {
+        const remainder = suppressedFinalRemainder(entry.payload);
+        return remainder ? [remainder] : [];
       }
-      return [{ ...entry.payload, text: text || undefined }];
+      return [{ ...entry.payload, text }];
     });
     deferredReplacementEntries = [];
     return payloads;

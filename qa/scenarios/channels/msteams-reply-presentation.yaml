@@ -130,6 +130,11 @@ flow:
             expr: "resolution.status === 'answered'"
             message:
               expr: "`question did not resolve: ${JSON.stringify(resolution)}`"
+        # Deliberately not asserted: the card's `actions`. This step drives ask_user, whose
+        # buttons carry `question` actions, and the Teams card builder maps only
+        # url/web-app/command/callback - so the card arrives with its content and no
+        # actions. Mapping that action type needs a card-submit round trip and is a
+        # separate change; the mapped action types are covered in presentation.reply.test.ts.
         - assert:
             expr: "deliveredCard?.type === 'AdaptiveCard'"
             message:

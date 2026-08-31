@@ -173,6 +173,42 @@ describe("msteams reply presentation", () => {
     expect(prepared.text).toBe("Deploy finished\n\n[Open]");
   });
 
+  it("maps every button action Teams renders natively", () => {
+    const [message] = renderReply({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Open docs", url: "https://example.com/docs" },
+              { label: "Retry", action: { type: "command", command: "/retry" } },
+              { label: "Approve", value: "approve" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(message?.card?.actions).toEqual([
+      { type: "Action.OpenUrl", title: "Open docs", url: "https://example.com/docs" },
+      { type: "Action.Submit", title: "Retry", data: "/retry" },
+      { type: "Action.Submit", title: "Approve", data: { value: "approve", label: "Approve" } },
+    ]);
+  });
+
+  it("keeps a fallback reply's prose as the delivered content even though the card replaces it", () => {
+    const [message] = renderReply({
+      text: "Deploy finished\n\n[Open]",
+      presentationTextMode: "fallback",
+      presentation: PRESENTATION,
+    });
+
+    // The card renders these controls natively, so the prose does not go inside it - but
+    // the delivery record still has to say what the user was shown.
+    expect(message?.text).toBe("Deploy finished\n\n[Open]");
+    expect(JSON.stringify(message?.card?.body)).not.toContain("[Open]");
+  });
+
   it("does not turn a silent reply into a card", () => {
     // NO_REPLY is the agent choosing to stay silent. The text path drops it; the card
     // path must not put it in front of the user as the card's first line instead.

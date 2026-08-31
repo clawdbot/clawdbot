@@ -243,13 +243,15 @@ export function renderReplyPayloadsToMessages(
     // on its own: a controls-only reply would otherwise be skipped as empty.
     const card = readMSTeamsPresentationCard(payload);
     if (card) {
+      // The card renders this reply inside itself, so its text never becomes activity
+      // text; it stays on the message as the content delivery records report. Fallback
+      // prose is stripped from the card but is still what the message conveys.
+      const content = payload.text ?? rawPayload.text;
       // A silent reply is a sentinel, not content: it must not become the card's body.
-      if (isSilentReplyText(payload.text?.trim(), SILENT_REPLY_TOKEN)) {
+      if (isSilentReplyText(content?.trim(), SILENT_REPLY_TOKEN)) {
         continue;
       }
-      // The card renders this text inside itself, so it never becomes activity text; it
-      // stays on the message as the content delivery records report.
-      out.push({ card, ...(payload.text ? { text: payload.text } : {}) });
+      out.push({ card, ...(content ? { text: content } : {}) });
       continue;
     }
     const reply = resolveSendableOutboundReplyParts(payload, {

@@ -265,6 +265,25 @@ describe("createTeamsReplyStreamController", () => {
     );
   });
 
+  it("keeps a replaced reply's controls after the stream acknowledged its text", async () => {
+    const stream = makeAcknowledgedStream();
+    const ctrl = makeController({ stream });
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open run", value: "open" }] }],
+    };
+
+    ctrl.onPartialReply({ text: "abcde" });
+    stream.acknowledge("abcde");
+    ctrl.onPartialReply({ text: "abXYZ" });
+    expect(ctrl.preparePayload({ text: "abcdef", presentation })).toBeUndefined();
+
+    // The replacement carries the text, so the deferred entry is subtracted the same way
+    // a suppressed final is: dropping it whole took the controls with the text.
+    await expect(ctrl.finalize()).resolves.toMatchObject({
+      postNativePayloads: [{ text: undefined, presentation }],
+    });
+  });
+
   it("suppresses a replacement when emit synchronously discovers Stop", async () => {
     const stream = makeAcknowledgedStream();
     const ctrl = makeController({ stream });
@@ -431,18 +450,30 @@ describe("createTeamsReplyStreamController", () => {
     ).toBeUndefined();
   });
 
-  it("keeps a streamed reply's controls even when its text is the fallback prose", () => {
+  it("leaves only the controls when a streamed reply's text was the fallback prose", () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
-    ctrl.onPartialReply({ text: "streamed" });
-    const presentation = {
-      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open run", value: "open" }] }],
+    const buttons = {
+      type: "buttons" as const,
+      buttons: [{ label: "Open run", value: "open" }],
     };
+    // The shape ask_user produces: the question and its option list as text blocks, then
+    // the buttons, with the payload text holding the prose rendering of all three.
+    const presentation = {
+      title: "Deploy",
+      blocks: [{ type: "text" as const, text: "Which region?" }, buttons],
+    };
+    ctrl.onPartialReply({ text: "Deploy\n\nWhich region?\n\n- Open run" });
 
-    // Prose cannot carry a control the channel renders natively, so the buttons remain.
+    // Prose cannot carry a control the channel renders natively, so the buttons remain -
+    // but the text blocks and the title were in the prose the stream just delivered.
     expect(
-      ctrl.preparePayload({ text: "streamed", presentationTextMode: "fallback", presentation }),
-    ).toEqual({ text: undefined, presentationTextMode: "fallback", presentation });
+      ctrl.preparePayload({
+        text: "Deploy\n\nWhich region?\n\n- Open run",
+        presentationTextMode: "fallback",
+        presentation,
+      }),
+    ).toEqual({ text: undefined, presentation: { blocks: [buttons] } });
   });
 
   it("allows fallback delivery for second text segment after tool calls", () => {
@@ -988,6 +1019,31 @@ describe("createTeamsReplyStreamController", () => {
         messageId: "stream-acknowledged",
       });
       expect(stream.events.off).toHaveBeenCalledWith(0);
+    });
+
+    it("does not repeat controls the remainder already delivered when close produces nothing", async () => {
+      const stream = makeAcknowledgedStream();
+      const ctrl = makeController({ stream });
+      const presentation = {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Open run", value: "open" }] }],
+      };
+
+      ctrl.onPartialReply({ text: "hello there" });
+      stream.acknowledge("hello");
+      expect(ctrl.preparePayload({ text: "hello there", presentation })).toEqual({
+        text: undefined,
+        presentation,
+      });
+      stream.close.mockResolvedValueOnce(undefined);
+
+      // The remainder already carried the controls to block delivery, so the fallback
+      // that covers the unacknowledged text must not send them a second time.
+      await expect(ctrl.finalize()).resolves.toEqual({
+        visibleReplySent: true,
+        content: "hello",
+        messageId: "stream-acknowledged",
+        fallbackPayload: { text: " there" },
+      });
     });
 
     it("honors cancellation after an acknowledged stream prefix", async () => {
