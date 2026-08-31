@@ -1,8 +1,10 @@
 // Plugin MCP serve tests cover serving plugin tools over MCP.
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   consumeAdjustedParamsForToolCall,
   type HookContext,
@@ -13,6 +15,8 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
 } from "../agents/agent-tools.before-tool-call.state.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -28,6 +32,7 @@ const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled:
 const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
+const tempDirs = createTempDirTracker();
 
 vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool,
@@ -71,6 +76,7 @@ afterEach(() => {
   routeLogsToStderrMock.mockReset();
   resetAdjustedParamsByToolCallIdForTests();
   resetGlobalHookRunner();
+  tempDirs.cleanup();
 });
 
 function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
@@ -207,6 +213,71 @@ describe("plugin tools MCP server", () => {
     expect(resolvePolicy.toolAllowlist).toEqual(["dangerous_plugin_tool", "benign_plugin_tool"]);
     expect(resolvePolicy.toolDenylist).toEqual(["memory_forget", "dangerous_plugin_tool"]);
     expect(tools.map((tool) => tool.name)).toEqual(["benign_plugin_tool"]);
+  });
+
+  it("applies stored ACP session caps after configured agent policy", async () => {
+    const dangerousExecute = vi.fn().mockResolvedValue({ content: "unexpected" });
+    const benignExecute = vi.fn().mockResolvedValue({ content: "allowed" });
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "dangerous_plugin_tool",
+        description: "Denied tool",
+        parameters: { type: "object", properties: {} },
+        execute: dangerousExecute,
+      },
+      {
+        name: "benign_plugin_tool",
+        description: "Allowed tool",
+        parameters: { type: "object", properties: {} },
+        execute: benignExecute,
+      },
+    ] as unknown as AnyAgentTool[]);
+    const stateRoot = tempDirs.make("openclaw-plugin-tools-mcp-policy-");
+    const storeTemplate = path.join(stateRoot, "agents", "{agentId}", "sessions", "sessions.json");
+    const agentSessionKey = "agent:research:acp:session-1";
+    await replaceSessionEntry(
+      {
+        sessionKey: agentSessionKey,
+        storePath: storeTemplate.replace("{agentId}", "research"),
+      },
+      {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["benign_plugin_tool"],
+        inheritedToolDeny: ["dangerous_plugin_tool"],
+      } as SessionEntry,
+    );
+    const config = {
+      session: { store: storeTemplate },
+      plugins: { enabled: true },
+      tools: { allow: ["dangerous_plugin_tool", "benign_plugin_tool"] },
+      agents: {
+        list: [
+          {
+            id: "research",
+            tools: { allow: ["dangerous_plugin_tool", "benign_plugin_tool"] },
+          },
+        ],
+      },
+    } as never;
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    const tools = resolvePluginToolsForMcp({ config, agentSessionKey });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["benign_plugin_tool"]);
+    const handlers = createPluginToolsMcpHandlers(tools);
+    await expect(handlers.listTools()).resolves.toMatchObject({
+      tools: [{ name: "benign_plugin_tool" }],
+    });
+    await expect(handlers.callTool({ name: "dangerous_plugin_tool" })).resolves.toMatchObject({
+      isError: true,
+    });
+    expect(dangerousExecute).not.toHaveBeenCalled();
+    await expect(handlers.callTool({ name: "benign_plugin_tool" })).resolves.toMatchObject({
+      content: [{ type: "text", text: "allowed" }],
+    });
+    expect(benignExecute).toHaveBeenCalledOnce();
   });
 
   it("lists registered plugin tools and serializes non-array tool content", async () => {

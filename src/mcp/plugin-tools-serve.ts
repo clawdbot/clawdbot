@@ -9,6 +9,7 @@
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
+import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import {
   applyToolPolicyPipeline,
@@ -70,19 +71,30 @@ function resolvePluginToolPolicy(params: {
   );
   const globalPolicy = effective.globalPolicy;
   const agentPolicy = effective.agentPolicy;
-  const policies = [profilePolicy, globalPolicy, agentPolicy];
+  const { subagentPolicy, inheritedToolPolicy } = resolveRequesterToolPolicies({
+    config: params.config,
+    agentId: effective.agentId,
+    sessionKey: params.sessionKey,
+    subagentSessionKey: params.sessionKey,
+    senderPolicyMode: "never",
+  });
+  const policies = [profilePolicy, globalPolicy, agentPolicy, subagentPolicy, inheritedToolPolicy];
   const toolAllowlist = collectExplicitAllowlist(policies);
   const toolDenylist = collectExplicitDenylist(policies);
   return {
     ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
     ...(toolDenylist.length > 0 ? { toolDenylist } : {}),
-    steps: buildDefaultToolPolicyPipelineSteps({
-      profilePolicy,
-      profile,
-      globalPolicy,
-      agentPolicy,
-      agentId: effective.agentId,
-    }).map((step) => ({ ...step, suppressUnavailableCoreToolWarning: true })),
+    steps: [
+      ...buildDefaultToolPolicyPipelineSteps({
+        profilePolicy,
+        profile,
+        globalPolicy,
+        agentPolicy,
+        agentId: effective.agentId,
+      }),
+      { policy: subagentPolicy, label: "subagent tools.allow" },
+      { policy: inheritedToolPolicy, label: "inherited tools" },
+    ].map((step) => ({ ...step, suppressUnavailableCoreToolWarning: true })),
   };
 }
 
