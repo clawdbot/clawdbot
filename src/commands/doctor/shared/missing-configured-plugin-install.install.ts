@@ -27,6 +27,11 @@ import {
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
 import {
+  attachPluginInstallTransaction,
+  copyPluginInstallTransactionRequest,
+  resolvePluginInstallTransaction,
+} from "../../../plugins/install-transaction.js";
+import {
   isUnavailableNpmTarget,
   type PluginNpmInstallArtifactPrecommitHandler,
 } from "../../../plugins/install-types.js";
@@ -45,6 +50,11 @@ import {
   resolveNpmPackageInstallPath,
 } from "./missing-configured-plugin-install.records.js";
 import { isPostCoreConvergencePass } from "./update-phase.js";
+
+function carryPluginInstallTransaction<T extends object>(source: object, target: T): T {
+  const transaction = resolvePluginInstallTransaction(source);
+  return transaction ? attachPluginInstallTransaction(target, transaction) : target;
+}
 
 function shouldFallbackClawHubToNpm(params: {
   result: { ok: false; code?: string };
@@ -106,10 +116,12 @@ export async function installCandidate(params: {
 }> {
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   try {
-    const result = await installCandidatePackage({
-      ...params,
-      onCapabilityConsent: consent.onCapabilityConsent,
-    });
+    const result = await installCandidatePackage(
+      copyPluginInstallTransactionRequest(params, {
+        ...params,
+        onCapabilityConsent: consent.onCapabilityConsent,
+      }),
+    );
     consent.rethrowCallbackError();
     return result;
   } catch (error) {
@@ -135,6 +147,8 @@ async function installCandidatePackage(
   const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
   const changes: string[] = [];
   const warnings: string[] = [];
+  const installParams = <T extends object>(value: T): T =>
+    copyPluginInstallTransactionRequest(params, value);
   // A channel fallback changes which artifact the operator gets, so it must stay
   // visible on the success path instead of being dropped with the attempt log.
   const channelNotices: string[] = [];
@@ -218,19 +232,21 @@ async function installCandidatePackage(
       install: async (spec) => {
         usedClawHubSpec = spec;
         const attemptConsent = await prepareConsent("clawhub", spec);
-        const result = await installPluginFromClawHub({
-          spec,
-          config: params.config,
-          extensionsDir,
-          env: params.env,
-          expectedPluginId: candidate.pluginId,
-          onBeforePluginArtifactCommit: attemptConsent.onBeforePluginArtifactCommit,
-          mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
-          logger: {
-            terminalLinks: false,
-            warn: (message) => warnings.push(stripAnsi(message)),
-          },
-        });
+        const result = await installPluginFromClawHub(
+          installParams({
+            spec,
+            config: params.config,
+            extensionsDir,
+            env: params.env,
+            expectedPluginId: candidate.pluginId,
+            onBeforePluginArtifactCommit: attemptConsent.onBeforePluginArtifactCommit,
+            mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
+            logger: {
+              terminalLinks: false,
+              warn: (message) => warnings.push(stripAnsi(message)),
+            },
+          }),
+        );
         return { result, capabilityConsent: attemptConsent };
       },
       isRetryable: (attempt) => !attempt.result.ok && isUnavailableClawHubTarget(attempt.result),
@@ -241,7 +257,7 @@ async function installCandidatePackage(
     const clawhubInstallSpecLabel = sanitizeTerminalText(usedClawHubSpec);
     if (clawhubResult.ok) {
       const pluginId = clawhubResult.pluginId;
-      return {
+      return carryPluginInstallTransaction(clawhubResult, {
         records: {
           ...params.records,
           [pluginId]: capabilityConsent.applyAcceptedSurface(pluginId, {
@@ -260,7 +276,7 @@ async function installCandidatePackage(
         ],
         notices: [...channelNotices, ...warnings],
         warnings: [],
-      };
+      });
     }
     if (
       !npmInstallSpec ||
@@ -295,20 +311,22 @@ async function installCandidatePackage(
   const npmInstallMode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
   const runNpmInstall = async (spec: string, mode: "install" | "update") => {
     const capabilityConsent = await prepareConsent("npm", spec);
-    const result = await installPluginFromNpmSpec({
-      spec,
-      config: params.config,
-      extensionsDir,
-      npmDir,
-      expectedPluginId: candidate.pluginId,
-      expectedIntegrity: candidate.expectedIntegrity,
-      onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
-      onBeforeNpmPluginArtifactCommit: params.onBeforeNpmPluginArtifactCommit,
-      ...(candidate.trustedSourceLinkedOfficialInstall
-        ? { trustedSourceLinkedOfficialInstall: true }
-        : {}),
-      mode,
-    });
+    const result = await installPluginFromNpmSpec(
+      installParams({
+        spec,
+        config: params.config,
+        extensionsDir,
+        npmDir,
+        expectedPluginId: candidate.pluginId,
+        expectedIntegrity: candidate.expectedIntegrity,
+        onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+        onBeforeNpmPluginArtifactCommit: params.onBeforeNpmPluginArtifactCommit,
+        ...(candidate.trustedSourceLinkedOfficialInstall
+          ? { trustedSourceLinkedOfficialInstall: true }
+          : {}),
+        mode,
+      }),
+    );
     return { result, capabilityConsent };
   };
   const installOnce = async (spec: string) => {
@@ -343,7 +361,7 @@ async function installCandidatePackage(
     };
   }
   const pluginId = result.pluginId;
-  return {
+  return carryPluginInstallTransaction(result, {
     records: {
       ...params.records,
       [pluginId]: capabilityConsent.applyAcceptedSurface(pluginId, {
@@ -369,7 +387,7 @@ async function installCandidatePackage(
     ],
     notices: channelNotices,
     warnings: [],
-  };
+  });
 }
 
 function isPluginAlreadyExistsError(error: string): boolean {

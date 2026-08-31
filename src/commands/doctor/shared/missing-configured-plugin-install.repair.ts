@@ -8,6 +8,10 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
 } from "../../../plugins/config-state.js";
+import {
+  requestDeferredPluginInstall,
+  resolvePluginInstallTransaction,
+} from "../../../plugins/install-transaction.js";
 import type { PluginNpmInstallArtifactPrecommitHandler } from "../../../plugins/install-types.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import {
@@ -549,13 +553,13 @@ async function repairMissingPluginInstallsWithLease(
     const enforceVersionBoundRuntimeCohort =
       candidate.versionBoundToOpenClaw === true &&
       candidate.trustedSourceLinkedOfficialInstall === true;
-    let installed = await installCandidate({
+    const candidateInstallParams = {
       candidate,
       config: params.cfg,
       records: nextRecords,
       env,
       updateChannel,
-      mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
+      mode: shouldReplaceBrokenOfficialInstall ? ("update" as const) : ("install" as const),
       preferNpm: preferNpmInstalls,
       ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId)
         ? { repairReason: "stale-version-bound-runtime" as const }
@@ -564,14 +568,29 @@ async function repairMissingPluginInstallsWithLease(
       ...(enforceVersionBoundRuntimeCohort
         ? { onBeforeNpmPluginArtifactCommit: validateVersionBoundRuntimeNpmArtifact }
         : {}),
-    });
-    if (!installed.failedPluginId && enforceVersionBoundRuntimeCohort) {
-      const accepted = await acceptVersionBoundRuntimeRecord({
-        pluginId: candidate.pluginId,
-        previousRecord: record,
-        repairedRecord: installed.records[candidate.pluginId],
-      });
+    };
+    let installed = await installCandidate(
+      enforceVersionBoundRuntimeCohort
+        ? requestDeferredPluginInstall(candidateInstallParams)
+        : candidateInstallParams,
+    );
+    const installTransaction = resolvePluginInstallTransaction(installed);
+    if (installed.failedPluginId) {
+      await installTransaction?.rollback();
+    } else if (enforceVersionBoundRuntimeCohort) {
+      let accepted: Awaited<ReturnType<typeof acceptVersionBoundRuntimeRecord>>;
+      try {
+        accepted = await acceptVersionBoundRuntimeRecord({
+          pluginId: candidate.pluginId,
+          previousRecord: record,
+          repairedRecord: installed.records[candidate.pluginId],
+        });
+      } catch (error) {
+        await installTransaction?.rollback();
+        throw error;
+      }
       if ("error" in accepted) {
+        await installTransaction?.rollback();
         installed = {
           records: previousRecords,
           changes: [],
@@ -579,14 +598,17 @@ async function repairMissingPluginInstallsWithLease(
           warnings: [...installed.warnings, accepted.error],
           failedPluginId: candidate.pluginId,
         };
-      } else if (accepted.record !== installed.records[candidate.pluginId]) {
-        installed = {
-          ...installed,
-          records: {
-            ...installed.records,
-            [candidate.pluginId]: accepted.record,
-          },
-        };
+      } else {
+        if (accepted.record !== installed.records[candidate.pluginId]) {
+          installed = {
+            ...installed,
+            records: {
+              ...installed.records,
+              [candidate.pluginId]: accepted.record,
+            },
+          };
+        }
+        await installTransaction?.commit();
       }
     }
     if (shouldReplaceBrokenOfficialInstall) {
