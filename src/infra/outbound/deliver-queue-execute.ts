@@ -238,6 +238,15 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       await params.onPlatformSendDispatch?.();
       params.abortSignal?.throwIfAborted();
     },
+    assertDirectAdapterHandoff: () => {
+      params.assertDirectAdapterHandoff?.();
+      params.abortSignal?.throwIfAborted();
+      assertSessionWriterDeliveryAuthorized(
+        params.deliveryCompletion?.kind === "pending-final"
+          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
+          : undefined,
+      );
+    },
     onPlatformSendDispatch: async () => {
       params.abortSignal?.throwIfAborted();
       // Once any payload returns an identity, unknown-after-send protects the whole batch.

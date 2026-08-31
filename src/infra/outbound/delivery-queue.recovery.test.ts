@@ -620,6 +620,41 @@ describe("delivery-queue recovery", () => {
       expect(result).toEqual(RECOVERY_SUMMARY.failed);
     },
   );
+  it("rejects a recovered pending final when its writer changes after the awaited handoff", async () => {
+    const deliveryId = "pending-final-stale-after-handoff";
+    const { completion } = await createPendingFinalRecoveryFixture(deliveryId, {
+      withWriterAuthority: true,
+    });
+    const platformSend = vi.fn();
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      await params.onDirectAdapterHandoff?.();
+      const current = loadSessionEntry({
+        sessionKey: completion.sessionKey,
+        storePath: completion.storePath,
+      });
+      if (!current) {
+        throw new Error("test invariant: pending-final recovery session must exist");
+      }
+      await replaceSessionEntry(
+        { sessionKey: completion.sessionKey, storePath: completion.storePath },
+        {
+          ...current,
+          activeWriterRunId: "replacement-writer",
+          lifecycleRevision: "replacement-revision",
+          updatedAt: Date.now(),
+        },
+      );
+      params.assertDirectAdapterHandoff?.();
+      await platformSend();
+      return [];
+    });
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(platformSend).not.toHaveBeenCalled();
+    expect(result).toEqual(RECOVERY_SUMMARY.failed);
+  });
   it.each(["suppressed", "rejected", "sent"] as const)(
     "acks a persisted %s conversation operation without replaying it",
     async (state) => {

@@ -309,6 +309,9 @@ function buildRecoveryDeliverParams(
           onDirectAdapterHandoff: async () => {
             assertSessionWriterDeliveryAuthorized(pendingFinalWriterAuthority);
           },
+          assertDirectAdapterHandoff: () => {
+            assertSessionWriterDeliveryAuthorized(pendingFinalWriterAuthority);
+          },
           onPlatformSendDispatch: async () => {
             assertSessionWriterDeliveryAuthorized(pendingFinalWriterAuthority);
           },
