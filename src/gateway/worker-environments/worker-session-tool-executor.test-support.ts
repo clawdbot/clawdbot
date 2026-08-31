@@ -118,6 +118,7 @@ async function createWorkerSessionToolTestFixture(
   const delegatedAuthorities: AgentRunDelegatedAuthority[] = [];
   const sourceOperationalRun = createOperationalRunInstanceRef(sourceClaim.runId);
   delegatedAuthorities.push(claimAgentRunDelegatedAuthority(sourceOperationalRun));
+  let sourceRunActive = true;
   const rootAdmission = tryBeginGatewayRootWorkAdmission();
   if (!rootAdmission) {
     throw new Error("Worker fixture could not admit its parent turn");
@@ -129,6 +130,11 @@ async function createWorkerSessionToolTestFixture(
       options.collectExecutionIdentity !== false ? PARENT_EXECUTION_IDENTITY_TOKEN : undefined,
       sourceOperationalRun,
       { agentId: SOURCE.agentId, sessionKey: SOURCE.sessionKey },
+      () => {
+        if (!sourceRunActive) {
+          throw new Error("source worker run ended");
+        }
+      },
     );
   });
   const identity: WorkerConnectionIdentity = {
@@ -314,6 +320,9 @@ async function createWorkerSessionToolTestFixture(
     execute,
     sourceClaim,
     delegatedAuthorities,
+    closeSourceRun: () => {
+      sourceRunActive = false;
+    },
     spawnState,
     activate,
     setEntry,

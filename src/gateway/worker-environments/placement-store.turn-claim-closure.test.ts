@@ -219,6 +219,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     createExecutionIdentityAdmissionToken(placementClosedClaim.runId),
     placementClosedRun,
     { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
+    () => {},
   );
   const placementCapability = getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim);
   if (!placementCapability) {
@@ -250,6 +251,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     createExecutionIdentityAdmissionToken(runClosedClaim.runId),
     runClosedOperational,
     { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
+    () => {},
   );
   const runCapability = getWorkerTurnExecutionIdentityCapability(store, runClosedClaim);
   if (!runCapability) {
@@ -285,7 +287,7 @@ it("lets an unaudited admitted worker complete the exact turn that closes its ow
   }
   try {
     await rootAdmission.run(async () =>
-      bindWorkerTurnOwner(store, claim, undefined, operationalRunInstance, SESSION),
+      bindWorkerTurnOwner(store, claim, undefined, operationalRunInstance, SESSION, () => {}),
     );
     await getWorkerTurnExecutionIdentityCapability(store, claim)?.run((owner) => {
       expect(owner.executionIdentityToken).toBeUndefined();
@@ -373,7 +375,8 @@ it.each([
     });
     let replacement: typeof claim | undefined;
     try {
-      const bind = () => bindWorkerTurnOwner(store, claim, undefined, instance, SESSION, prepare);
+      const bind = () =>
+        bindWorkerTurnOwner(store, claim, undefined, instance, SESSION, () => {}, prepare);
       if (scenario === "root admission") {
         if (!admission) {
           throw new Error("expected root admission");

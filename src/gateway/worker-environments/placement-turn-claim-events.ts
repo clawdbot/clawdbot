@@ -102,6 +102,7 @@ export function bindWorkerTurnOwner(
   token: ExecutionIdentityAdmissionToken | undefined,
   operationalRunInstance: OperationalRunInstanceRef,
   source: { agentId: string; sessionKey: string },
+  assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
 ): void {
   const scope = captureGatewayRootWorkAdmissionContinuationScope();
@@ -114,6 +115,7 @@ export function bindWorkerTurnOwner(
   const owners = workerTurnOwners.get(path) ?? new Map();
   let owner: BoundWorkerTurnOwner;
   const assertActive = () => {
+    assertRunActive();
     if (
       owners.get(claim.sessionId) !== owner ||
       !store.validateTurnClaim(claim) ||

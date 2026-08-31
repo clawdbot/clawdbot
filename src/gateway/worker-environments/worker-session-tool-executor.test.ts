@@ -548,10 +548,17 @@ describe("worker session tool topology", () => {
     } satisfies ExecutionIdentityAdmissionToken;
     const childOperationalRun = createOperationalRunInstanceRef(childClaim.runId);
     delegatedAuthorities.push(claimAgentRunDelegatedAuthority(childOperationalRun));
-    bindWorkerTurnOwner(placements, childClaim, childExecutionIdentityToken, childOperationalRun, {
-      agentId: CHILD.agentId,
-      sessionKey: spawnedChildKey,
-    });
+    bindWorkerTurnOwner(
+      placements,
+      childClaim,
+      childExecutionIdentityToken,
+      childOperationalRun,
+      {
+        agentId: CHILD.agentId,
+        sessionKey: spawnedChildKey,
+      },
+      () => {},
+    );
     const childIdentity: WorkerConnectionIdentity = {
       ...identity,
       environmentId: CHILD.environmentId,
@@ -640,6 +647,7 @@ describe("worker session tool topology", () => {
       },
       grandchildOperationalRun,
       { agentId: GRANDCHILD.agentId, sessionKey: spawnedGrandchildKey! },
+      () => {},
     );
     const grandchildSend = await execute({
       identity: {
@@ -700,7 +708,7 @@ describe.each([false, true])(
     it.each([false, true])(
       "launches the child only while the parent owner is active (closed=%s)",
       async (closed) => {
-        const { setEntry, spawn, placements, sourceClaim, delegatedAuthorities } = getFixture();
+        const { setEntry, spawn, placements, sourceClaim, closeSourceRun } = getFixture();
         setEntry(SOURCE.sessionKey, SOURCE.sessionId);
         const dispatch = dispatchChild.getMockImplementation();
         if (!dispatch) {
@@ -718,7 +726,7 @@ describe.each([false, true])(
         await provisioning.promise;
         let drained: Promise<void> | undefined;
         if (closed) {
-          releaseAgentRunDelegatedAuthority(delegatedAuthorities[0]!);
+          closeSourceRun();
           drained = placements.closeWorkerTurnToolState(sourceClaim);
           // Parent teardown retains this claim until the admitted spawn settles.
           expect(placements.validateTurnClaim(sourceClaim)).toBe(true);

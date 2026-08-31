@@ -211,6 +211,7 @@ describe("worker environment service", () => {
       }),
       operationalRun,
       { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      () => {},
     );
     const gate = createWorkerSessionPlacementGate(store);
     const workerService = support.createService(support.createProvider(), { placementStore: gate });
@@ -286,6 +287,7 @@ describe("worker environment service", () => {
       }),
       firstOperationalRun,
       { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      () => {},
     );
     let resumeInstallation: (() => void) | undefined;
     support.testState.prepareInstallation = vi.fn(
@@ -339,6 +341,7 @@ describe("worker environment service", () => {
         }),
         secondOperationalRun,
         { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+        () => {},
       );
       resumeInstallation?.();
 

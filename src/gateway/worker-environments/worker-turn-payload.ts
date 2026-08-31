@@ -124,6 +124,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     runtimeIdentity.executionIdentityToken,
     admittedRunContext.operationalRunInstance,
     { agentId: params.agentId, sessionKey: params.sessionKey },
+    assertActive,
     params.turn.prepareAssistantTranscriptMessage,
   );
   return {
