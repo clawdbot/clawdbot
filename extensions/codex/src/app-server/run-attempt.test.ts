@@ -2111,6 +2111,33 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("keeps a direct requester wake as the current prompt when resuming native history", async () => {
+    const sessionFile = path.join(tempDir, "session-requester-wake.jsonl");
+    const storePath = path.join(tempDir, "sessions-requester-wake.json");
+    const workspaceDir = path.join(tempDir, "workspace-requester-wake");
+    const harness = createResumeHarness();
+    const params = createParams(sessionFile, workspaceDir, {
+      sessionId: "session-requester-wake",
+      sessionKey: "agent:main:session-requester-wake",
+    });
+    await attachSqliteSessionTarget(params, storePath, "session-requester-wake");
+    await appendSqliteHistoryMessage(params, userMessage("original sequential request", 1));
+    await appendSqliteHistoryMessage(params, assistantMessage("yielded", 2));
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      historyCoveredThrough: new Date(0).toISOString(),
+    });
+    params.prompt = "[Subagent Context] child wave completed; continue with the next wave.";
+    params.suppressNextUserMessagePersistence = true;
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText = (turnStart?.params as { input?: Array<{ text?: string }> })?.input?.[0]?.text;
+    expect(inputText).toContain("child wave completed");
+    expect(inputText).not.toBe("original sequential request");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+  });
+
   it("delivers completed assistant text when an orphan native tool call lacks a matching result", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(

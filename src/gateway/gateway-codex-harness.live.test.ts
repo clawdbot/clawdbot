@@ -458,8 +458,15 @@ function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): str
             // One truncated 300 KB tool result is only a few thousand tokens.
             "model_auto_compact_token_limit=4000",
             "tool_output_token_limit=10000",
-          ]
-        : undefined;
+        ]
+      : undefined;
+  const openAiBaseUrl = process.env.OPENAI_BASE_URL?.trim();
+  if (openAiBaseUrl) {
+    return buildCodexHarnessAppServerArgs([
+      ...(overrides ?? []),
+      `openai_base_url=${openAiBaseUrl}`,
+    ]);
+  }
   return overrides ? buildCodexHarnessAppServerArgs(overrides) : undefined;
 }
 
@@ -572,6 +579,7 @@ async function writeLiveGatewayConfig(params: {
   workspace: string;
 }): Promise<void> {
   const parsedModel = parseModelKey(params.modelKey);
+  const openAiBaseUrl = process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1";
   const appServerArgs = buildCodexCompactionAppServerArgs(params.compactionMode);
   const cfg: OpenClawConfig = {
     gateway: {
@@ -643,7 +651,7 @@ async function writeLiveGatewayConfig(params: {
               openai: {
                 api: "openai-responses",
                 apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-                baseUrl: "https://api.openai.com/v1",
+                baseUrl: openAiBaseUrl,
                 models: [],
               },
             },
