@@ -63,6 +63,9 @@ type ResumeThreadContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
   clearCurrentBinding: (operation: string) => Promise<void>;
   prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
+  buildLoadedPluginThreadConfig?: (
+    binding: CodexAppServerThreadBinding,
+  ) => Promise<CodexPluginThreadConfig | undefined>;
   prebuiltFinalConfigPatch?: {
     configPatch?: JsonObject;
     nativeHookRelayGeneration?: string;
@@ -136,6 +139,7 @@ export async function resumeExistingCodexThread(
   } = context;
   let resumeReservation: { release: () => void } | undefined;
   let resumeResponseAccepted = false;
+  let checkingLoadedPluginThreadConfig = false;
   const abandonClient =
     params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client));
   try {
@@ -151,10 +155,17 @@ export async function resumeExistingCodexThread(
         configPatch: params.finalConfigPatch,
         nativeHookRelayGeneration: params.nativeHookRelayGeneration,
       };
-    // Codex rebuilds effective config on thread/resume, so replay the app
-    // allowlist persisted at thread/start or plugin tools disappear after one turn.
+    // A cold thread has no scoped inventory yet. Build its complete config before
+    // resume (including scheduled tool ceilings), then admit the loaded thread below.
+    const pluginThreadConfig =
+      context.prebuiltPluginThreadConfig ??
+      (params.pluginThreadConfig?.requiresCurrentPolicyCheck
+        ? await lifecycleTiming.measure("plugin-config-build", () =>
+            params.pluginThreadConfig?.build(),
+          )
+        : undefined);
     const pluginAppsConfigPatch =
-      context.prebuiltPluginThreadConfig?.configPatch ??
+      pluginThreadConfig?.configPatch ??
       (params.pluginThreadConfig?.enabled && resumeBinding.pluginAppPolicyContext
         ? buildCodexPluginAppsConfigPatchFromPolicyContext(resumeBinding.pluginAppPolicyContext)
         : undefined);
@@ -212,14 +223,26 @@ export async function resumeExistingCodexThread(
     resumeResponseAccepted = true;
     assertCodexThreadAcceptsDirectInput(response.thread);
     context.assertResumeConfiguration?.();
-    if (resumeBinding.pendingResumeConfiguration) {
-      await attestCodexPluginThreadApps({
-        client: params.client,
-        threadId: response.thread.id,
-        appIds: context.prebuiltPluginThreadConfig?.provisionalAppIds ?? [],
-        signal: params.signal,
-      });
+    // Current-policy denial must release this subscription and stop, not retry
+    // as a fresh thread. A confirmed config change still follows normal rotation.
+    checkingLoadedPluginThreadConfig = true;
+    const loadedPluginThreadConfig = await context.buildLoadedPluginThreadConfig?.(resumeBinding);
+    if (
+      loadedPluginThreadConfig &&
+      loadedPluginThreadConfig.fingerprint !==
+        (pluginThreadConfig?.fingerprint ?? resumeBinding.pluginAppsFingerprint)
+    ) {
+      checkingLoadedPluginThreadConfig = false;
+      throw new Error("Codex thread app policy changed; a fresh thread configuration is required");
     }
+    await attestCodexPluginThreadApps({
+      client: params.client,
+      threadId: response.thread.id,
+      appIds:
+        loadedPluginThreadConfig?.provisionalAppIds ?? pluginThreadConfig?.provisionalAppIds ?? [],
+      signal: params.signal,
+    });
+    checkingLoadedPluginThreadConfig = false;
     if (
       ringZeroActive ||
       isMessageOnlyCodexSourceReply(params.params) ||
@@ -278,13 +301,11 @@ export async function resumeExistingCodexThread(
         resumeBinding.connectionScope === "supervision"
           ? buildCodexAppServerConnectionFingerprint(params.appServer, params.params.agentDir)
           : params.appServerRuntimeFingerprint,
-      pluginAppsFingerprint:
-        context.prebuiltPluginThreadConfig?.fingerprint ?? resumeBinding.pluginAppsFingerprint,
+      pluginAppsFingerprint: pluginThreadConfig?.fingerprint ?? resumeBinding.pluginAppsFingerprint,
       pluginAppsInputFingerprint:
-        context.prebuiltPluginThreadConfig?.inputFingerprint ??
-        resumeBinding.pluginAppsInputFingerprint,
+        pluginThreadConfig?.inputFingerprint ?? resumeBinding.pluginAppsInputFingerprint,
       pluginAppPolicyContext:
-        context.prebuiltPluginThreadConfig?.policyContext ?? resumeBinding.pluginAppPolicyContext,
+        pluginThreadConfig?.policyContext ?? resumeBinding.pluginAppPolicyContext,
       contextEngine: contextEngineBinding,
       environmentSelectionFingerprint,
     } satisfies Partial<Omit<CodexAppServerThreadBinding, "threadId">>;
@@ -389,6 +410,7 @@ export async function resumeExistingCodexThread(
       }
     }
     if (
+      checkingLoadedPluginThreadConfig ||
       resumeBinding.pendingResumeConfiguration ||
       error instanceof CodexThreadDirectInputError ||
       params.signal?.aborted

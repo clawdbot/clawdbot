@@ -129,6 +129,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "sessionId"
   | "sessionKey"
   | "sandboxSessionKey"
+  | "sandboxAgentId"
   | "agentId"
   | "provider"
   | "modelId"
@@ -780,6 +781,7 @@ function resolvePluginHarnessToolPolicies(
     // Compaction can supply an execution owner without its own session key.
     sessionKey: params.sessionKey ?? (params.agentId ? undefined : sandboxSessionKey),
     classificationSessionKey: sandboxSessionKey,
+    classificationAgentId: params.sandboxAgentId,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const capabilityProfile = resolveConversationCapabilityProfile({

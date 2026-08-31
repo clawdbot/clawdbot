@@ -310,12 +310,15 @@ export async function prepareDirectCompactionAttempt(
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
+  const sandboxAgentId =
+    params.sandboxAgentId ??
+    (sandboxSessionKey === sessionKey ? earlyAgentIds.sessionAgentId : undefined);
   const placementParams = params as typeof params & { sandbox?: SandboxContext | null };
   const sandbox =
     placementParams.sandbox === undefined
       ? await resolveSandboxContext({
           config: params.config,
-          agentId: sandboxSessionKey === sessionKey ? earlyAgentIds.sessionAgentId : undefined,
+          agentId: sandboxAgentId,
           execOverrides: params.execOverrides,
           sessionKey: sandboxSessionKey,
           workspaceDir: resolvedWorkspace,
@@ -368,6 +371,7 @@ export async function prepareDirectCompactionAttempt(
       hasRuntimeAuthExchange,
       resolvedWorkspace,
       sandboxSessionKey,
+      sandboxAgentId,
       sandbox,
       effectiveWorkspace,
       effectiveCwd,

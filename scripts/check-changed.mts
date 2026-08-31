@@ -35,8 +35,10 @@ import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
+import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
 
 type ChangedCheckCommand = {
+  coreTestCheck?: "checkBoundary" | "checkTypes";
   name: string;
   args: string[];
   bin?: string;
@@ -683,8 +685,22 @@ export function createChangedCheckPlan(
 
   // Typechecking alone accepts extension imports; the graph guard also covers
   // shared test/tooling dependencies that core tests can pull into their graph.
+  const changedTestPaths = result.paths.filter(
+    (file) => getChangedPathFacts(file).surface !== "docs",
+  );
+  const narrowCoreTests =
+    !runAll &&
+    !lanes.core &&
+    !lanes.ui &&
+    !lanes.tooling &&
+    !lanes.liveDockerTooling &&
+    changedTestPaths.length > 0 &&
+    changedTestPaths.every((file) => /^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file));
   if (runAll || lanes.core || lanes.coreTests || lanes.ui || lanes.tooling) {
     add("core tsgo graph boundary", ["lint:tmp:tsgo-core-boundary"]);
+    if (narrowCoreTests) {
+      commands.at(-1)!.coreTestCheck = "checkBoundary";
+    }
   }
 
   if (runAll || lanes.scripts || result.paths.includes("scripts/check-script-erasability.mjs")) {
@@ -733,6 +749,9 @@ export function createChangedCheckPlan(
   }
   if (lanes.coreTests) {
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
+    if (narrowCoreTests) {
+      commands.at(-1)!.coreTestCheck = "checkTypes";
+    }
   }
   if (lanes.ui) {
     addTypecheck("typecheck UI", ["tsgo:ui"]);
@@ -1001,9 +1020,15 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
     return 0;
   }
 
+  const coreTestCheck = plan.commands.some((command) => command.coreTestCheck)
+    ? (await import("./run-tsgo-core-test-shards.mts")).createChangedCoreTestCheck(
+        result.paths.filter((file) => getChangedPathFacts(file).surface !== "docs"),
+        createSparseTsgoSkipEnv(childEnv),
+      )
+    : undefined;
   const timings: ChangedCheckTiming[] = [];
   for (const command of plan.commands) {
-    const status = await runPlanCommand(command, timings);
+    const status = await runPlanCommand(command, timings, coreTestCheck);
     if (status !== 0) {
       printSummary(timings, options);
       return status;
@@ -1042,7 +1067,18 @@ async function runPnpm(command: ChangedCheckCommand, timings: ChangedCheckTiming
   return await runCommand(createPnpmManagedCommand(command), timings);
 }
 
-async function runPlanCommand(command: ChangedCheckCommand, timings: ChangedCheckTiming[]) {
+async function runPlanCommand(
+  command: ChangedCheckCommand,
+  timings: ChangedCheckTiming[],
+  coreTestCheck?: ReturnType<typeof createChangedCoreTestCheck>,
+) {
+  if (command.coreTestCheck && coreTestCheck) {
+    return await runCommand(
+      createPnpmManagedCommand(command),
+      timings,
+      coreTestCheck[command.coreTestCheck],
+    );
+  }
   if (command.bin) {
     return await runCommand({ ...command, bin: command.bin }, timings);
   }
@@ -1117,16 +1153,19 @@ export function cleanupCorepackPnpmShimDir() {
 async function runCommand(
   command: ChangedCheckCommand & { bin: string },
   timings: ChangedCheckTiming[],
+  run?: () => Promise<number>,
 ) {
   const startedAt = performance.now();
   console.error(`\n[check:changed] ${command.name}`);
   let status = 1;
   try {
-    status = await runManagedCommand({
-      bin: command.bin,
-      args: command.args,
-      env: command.env ?? resolveLocalCheckEnv(),
-    });
+    status = run
+      ? await run()
+      : await runManagedCommand({
+          bin: command.bin,
+          args: command.args,
+          env: command.env ?? resolveLocalCheckEnv(),
+        });
   } catch (error) {
     console.error(error);
   }

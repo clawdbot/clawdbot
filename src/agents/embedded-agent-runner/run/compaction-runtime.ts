@@ -121,6 +121,8 @@ export async function compactEmbeddedRunForRecovery(
   const runtimeContext = {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: runParams.sessionKey,
+      sandboxSessionKey: runParams.sandboxSessionKey,
+      sandboxAgentId: runParams.sandboxAgentId,
       messageChannel: runParams.messageChannel,
       messageProvider: runParams.messageProvider,
       clientCaps: runParams.clientCaps,
