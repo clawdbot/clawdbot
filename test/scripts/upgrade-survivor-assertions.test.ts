@@ -1,4 +1,5 @@
 // Upgrade Survivor Assertions tests cover upgrade survivor assertions script behavior.
+import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -1135,6 +1136,7 @@ process.stdout.write(sessionDir + "\\n");
         ]);
 
         for (const row of seededRows) {
+          assert(row);
           const transcriptPath = join(sessionsDir, `${String(row.sessionId)}.jsonl`);
           expect(row.sessionFile).toBe(transcriptPath);
           expect(JSON.parse(readFileSync(transcriptPath, "utf8")).id).toBe(row.sessionId);
