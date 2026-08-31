@@ -19,7 +19,7 @@ import type { ChatPageHost } from "../chat-state-host.ts";
 import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import {
   chatPaneHeaderSessionRow as row,
-  describeFetchCalls,
+  mockWorkspaceIconFetch,
   mountChatPaneHeader,
   type ChatPaneHeaderProps,
 } from "./chat-pane-header.test-support.ts";
@@ -36,6 +36,7 @@ const containers: HTMLElement[] = [];
 afterEach(() => {
   vi.useRealTimers();
   containers.splice(0).forEach((container) => container.remove());
+  vi.restoreAllMocks();
   Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__");
 });
 
@@ -846,7 +847,7 @@ describe("chat pane workspace chip icon", () => {
   });
 
   it("keeps the folder glyph while credentials are not ready", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const fetchSpy = mockWorkspaceIconFetch();
     const { container, element } = await mountChip({
       routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
       authTokens: [],
@@ -855,34 +856,31 @@ describe("chat pane workspace chip icon", () => {
     expect(element).not.toBeNull();
     expect(container.querySelector(".workspace-icon")).toBeNull();
     expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-    expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).not.toHaveBeenCalled();
-    fetchSpy.mockRestore();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("keeps the folder glyph when the icon route fails", async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("workspace icon unavailable"));
+    const fetchSpy = mockWorkspaceIconFetch().mockRejectedValue(
+      new Error("workspace icon unavailable"),
+    );
     const { container } = await mountChip({
       routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
       authTokens: ["token"],
       authReady: true,
     });
     await Promise.resolve();
-    expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledWith(
+    expect(fetchSpy).toHaveBeenCalledWith(
       "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
       expect.objectContaining({ headers: { Authorization: "Bearer token" } }),
     );
     expect(container.querySelector(".workspace-icon")).toBeNull();
     expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-    fetchSpy.mockRestore();
   });
 
   it("recovers the workspace icon after a transient route timeout", async () => {
     vi.useFakeTimers();
     const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
+    const fetchSpy = mockWorkspaceIconFetch()
       .mockResolvedValueOnce({
         ok: false,
         status: 503,
@@ -894,36 +892,32 @@ describe("chat pane workspace chip icon", () => {
         blob: async () => png,
       } as unknown as Response);
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:recovered-workspace-icon");
-    try {
-      const { container, element } = await mountChip({
-        routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
-        authTokens: ["token"],
-        authReady: true,
-      });
-      await Promise.resolve();
-      expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledOnce();
-      expect(container.querySelector(".workspace-icon")).toBeNull();
-      expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
+    const { container, element } = await mountChip({
+      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
+      authTokens: ["token"],
+      authReady: true,
+    });
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(container.querySelector(".workspace-icon")).toBeNull();
+    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
 
-      await vi.advanceTimersByTimeAsync(1_000);
-      await Promise.resolve();
-      await element?.updateComplete;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+    await element?.updateComplete;
 
-      expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledTimes(2);
-      expect(container.querySelector("openclaw-workspace-icon")).toBe(element);
-      expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
-        "blob:recovered-workspace-icon",
-      );
-    } finally {
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-    }
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(container.querySelector("openclaw-workspace-icon")).toBe(element);
+    expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
+      "blob:recovered-workspace-icon",
+    );
   });
 
   it("does not refetch a missing project icon when the header rerenders", async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue({ ok: false, status: 404 } as Response);
+    const fetchSpy = mockWorkspaceIconFetch().mockResolvedValue({
+      ok: false,
+      status: 404,
+    } as Response);
     const workspaceIcon = {
       routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
       authTokens: ["token"],
@@ -943,7 +937,7 @@ describe("chat pane workspace chip icon", () => {
     await element?.updateComplete;
     await Promise.resolve();
 
-    expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     render(
       html`${renderChatPaneHeader({
         ...mounted.props,
@@ -951,16 +945,12 @@ describe("chat pane workspace chip icon", () => {
       })}`,
       mounted.container,
     );
-    await vi.waitFor(() =>
-      expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledTimes(2),
-    );
-    fetchSpy.mockRestore();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
   });
 
   it("retries the next credential when a stale token is rejected", async () => {
     const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
+    const fetchSpy = mockWorkspaceIconFetch()
       .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
       .mockResolvedValueOnce({
         ok: true,
@@ -977,11 +967,10 @@ describe("chat pane workspace chip icon", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(fetchSpy, describeFetchCalls(fetchSpy.mock.calls)).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(fetchSpy.mock.calls[1]?.[1]).toMatchObject({
       headers: { Authorization: "Bearer session-password" },
     });
-    vi.restoreAllMocks();
   });
 });
 

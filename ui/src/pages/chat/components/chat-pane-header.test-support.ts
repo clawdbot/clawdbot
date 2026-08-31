@@ -64,24 +64,15 @@ export function mountChatPaneHeader(
   return { container, props };
 }
 
-export function describeFetchCalls(calls: readonly (readonly unknown[])[]): string {
-  const requests = calls.map(([input]) => {
-    if (typeof input !== "string") {
-      return "non-string";
+export function mockWorkspaceIconFetch() {
+  const workspaceFetch = vi.fn<typeof fetch>();
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    // Other header elements fetch assets asynchronously. They must not consume
+    // workspace retry responses or count as authenticated icon requests.
+    if (typeof input === "string" && input.startsWith("/__openclaw__/workspace-icon/")) {
+      return workspaceFetch(input, init);
     }
-    if (input === "/__openclaw__/workspace-icon/agent%3Amain%3Aone") {
-      return "workspace-one";
-    }
-    if (input === "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering") {
-      return "workspace-recovering";
-    }
-    if (input.startsWith("/__openclaw__/workspace-icon/")) {
-      return "other-workspace";
-    }
-    if (input.startsWith("data:image/svg+xml,")) {
-      return "svg-data";
-    }
-    return "other-string";
+    return Promise.resolve(new Response(null, { status: 404 }));
   });
-  return `fetch request categories: ${JSON.stringify(requests)}`;
+  return workspaceFetch;
 }
