@@ -160,6 +160,27 @@ function listArchiveBatch(database: DatabaseSync, cursor: ArchiveCursor): Archiv
   });
 }
 
+export function transcriptDirectiveArchivesNeedMigration(
+  database: DatabaseSync,
+  start: ArchiveCursor,
+): boolean {
+  let cursor = start;
+  while (true) {
+    const batch = listArchiveBatch(database, cursor);
+    if (batch.length === 0) {
+      return false;
+    }
+    if (batch.some((planned) => planned.changed)) {
+      return true;
+    }
+    const last = batch.at(-1);
+    if (!last) {
+      return false;
+    }
+    cursor = { generation: last.generation, sessionId: last.sessionId };
+  }
+}
+
 function assertArchiveSourceUnchanged(database: DatabaseSync, planned: ArchiveRowPlan): boolean {
   const db = getNodeSqliteKysely<TranscriptArchiveMigrationDatabase>(database);
   const current = executeSqliteQueryTakeFirstSync(

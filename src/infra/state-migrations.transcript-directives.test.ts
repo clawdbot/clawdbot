@@ -532,6 +532,50 @@ describe("historical transcript directive migration", () => {
     expect(opened.db.isOpen).toBe(true);
   });
 
+  it("leaves canonical archives and their active writer untouched", async () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-current-archive-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const archived = messageEvent({
+      content: [{ type: "text", text: "Already canonical" }],
+      id: "archived-canonical",
+      role: "assistant",
+      timestamp: 1,
+    });
+    const archiveBytes = Buffer.from(`${JSON.stringify(archived)}\n`, "utf8");
+    opened.db
+      .prepare(
+        `INSERT INTO session_transcript_archives(
+          session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
+          archive_name,created_at,published_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        "archived-canonical",
+        "generation",
+        "agent:main:archived-canonical",
+        "deleted",
+        "identity",
+        archiveBytes,
+        createHash("sha256").update(archiveBytes).digest("hex"),
+        "canonical.jsonl.deleted.2026-01-01T00-00-00.000Z.generation",
+        1,
+        null,
+      );
+
+    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+
+    expect(opened.db.isOpen).toBe(true);
+    expect(
+      opened.db
+        .prepare("SELECT 1 FROM schema_meta WHERE meta_key = ?")
+        .get("historical-transcript-directives-v1"),
+    ).toBeUndefined();
+  });
+
   it("continues preflight after an unreadable target", async () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-preflight-targets-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

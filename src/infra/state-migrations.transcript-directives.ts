@@ -29,6 +29,7 @@ import { resolveAgentDatabaseMigrationTargets } from "./state-migrations.media-p
 import {
   migrateTranscriptDirectiveArchives,
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
+  transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 import { transformHistoricalTranscriptEvent } from "./state-migrations.transcript-directives-transform.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
@@ -385,19 +386,20 @@ function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
     if (cursor.phase === "complete") {
       return false;
     }
-    if (cursor.phase === "archives") {
+    if (
+      cursor.phase === "transcripts" &&
+      transcriptSessionsNeedMigration(database, params.pathname, cursor.sessionId)
+    ) {
       return true;
     }
-    if (transcriptSessionsNeedMigration(database, params.pathname, cursor.sessionId)) {
-      return true;
-    }
-    const hasArchiveTable = database
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get("session_transcript_archives");
-    if (!hasArchiveTable) {
-      return !hasActiveAgentDatabaseLease(params.agentId, params.env);
-    }
-    if (database.prepare("SELECT 1 FROM session_transcript_archives LIMIT 1").get()) {
+    if (
+      transcriptDirectiveArchivesNeedMigration(
+        database,
+        cursor.phase === "archives"
+          ? { generation: cursor.generation, sessionId: cursor.sessionId }
+          : { generation: "", sessionId: "" },
+      )
+    ) {
       return true;
     }
     return !hasActiveAgentDatabaseLease(params.agentId, params.env);
