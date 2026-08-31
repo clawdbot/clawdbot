@@ -133,6 +133,7 @@ type DynamicToolBuildParams = {
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   runAbortController: AbortController;
   sessionAgentId: string;
+  policyAgentId: string;
   pluginConfig: CodexPluginConfig;
   profilerEnabled?: boolean;
   cronCreatorToolAllowlistRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistRef"];
@@ -158,17 +159,6 @@ type DynamicToolBuildParams = {
   };
   registerRunCleanup?: OpenClawCodingToolsOptions["registerRunCleanup"];
 };
-/** Splits sandbox and run session keys so tool calls can bind to both scopes when needed. */
-function resolveOpenClawCodingToolsSessionKeys(
-  params: EmbeddedRunAttemptParams,
-  sandboxSessionKey: string,
-): Pick<OpenClawCodingToolsOptions, "sessionKey" | "runSessionKey"> {
-  return {
-    sessionKey: sandboxSessionKey,
-    runSessionKey:
-      params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
-  };
-}
 /** Returns the canonical channel used for Codex message routing and receipts. */
 export function resolveCodexMessageToolProvider(
   params: Pick<EmbeddedRunAttemptParams, "messageChannel" | "messageProvider">,
@@ -284,7 +274,6 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const loadAgentHarnessModule = async () =>
     (agentHarnessModule ??= await import("openclaw/plugin-sdk/agent-harness"));
   toolBuildStages.mark("load-agent-harness-tools");
-  const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: params.config,
@@ -300,6 +289,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     );
     const options: OpenClawCodingToolsOptions = {
       agentId: input.sessionAgentId,
+      policyAgentId: input.policyAgentId,
       ...toolRunContext,
       exec: {
         ...params.execOverrides,
@@ -338,7 +328,11 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       scheduledToolPolicy: params.scheduledToolPolicy,
       allowGatewaySubagentBinding:
         params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
-      ...sessionKeys,
+      sessionKey: input.sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== input.sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
       sessionId: params.sessionId,
       runId: params.runId,
       approvalReviewerDeviceId: params.approvalReviewerDeviceId,
@@ -490,7 +484,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
           config: params.config,
           modelProvider: params.model.provider,
           modelId: params.modelId,
-          agentId: input.sessionAgentId,
+          agentId: input.policyAgentId,
           sessionKey: input.sandboxSessionKey,
           sandboxToolPolicy: input.sandbox?.tools,
           messageProvider: resolveCodexMessageToolProvider(params),
@@ -878,7 +872,7 @@ function shouldExposeSandboxExecDynamicTool(input: DynamicToolBuildParams): bool
   }
   if (
     isCodexNativeExecutionBlockedByNodeExecHost(input.params, {
-      agentId: input.sessionAgentId,
+      agentId: input.policyAgentId,
       runtimeSessionKey: input.sandboxSessionKey,
       sandbox: input.sandbox,
     })
@@ -940,7 +934,7 @@ function resolveCodexNativeExecutionPolicyForDynamicTools(
     config: input.params.config,
     sessionKey: resolveCodexRuntimePolicySessionKey(input.params, input.sandboxSessionKey),
     sessionId: input.params.sessionId,
-    agentId: input.sessionAgentId,
+    agentId: input.policyAgentId,
     execOverrides: input.params.execOverrides,
     sandboxAvailable: input.sandbox?.enabled,
     readRuntimeSessionEntry: true,

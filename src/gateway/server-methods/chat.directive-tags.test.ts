@@ -63,7 +63,7 @@ import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-gran
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
-import { handleChatSend, handleChatSendWithRuntimeTools } from "./chat-send-handler.js";
+import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -1318,7 +1318,9 @@ async function runNonStreamingChatSend(params: {
     context: params.context,
   };
   if (params.runtimeToolsAllow) {
-    await handleChatSendWithRuntimeTools(handlerOptions, params.runtimeToolsAllow);
+    await handleTrustedInternalChatSend(handlerOptions, undefined, {
+      toolsAllow: params.runtimeToolsAllow,
+    });
   } else {
     await handler(handlerOptions);
   }
