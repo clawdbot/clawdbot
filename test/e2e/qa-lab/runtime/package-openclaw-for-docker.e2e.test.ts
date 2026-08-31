@@ -472,6 +472,7 @@ describe("package-openclaw-for-docker", () => {
     );
     expect(fs.existsSync(path.join(sourceDir, "dist/postinstall-inventory.json"))).toBe(false);
     expect(fs.existsSync(path.join(sourceDir, "dist/openclaw-install-guard"))).toBe(false);
+    expect(fs.existsSync(path.join(sourceDir, ".openclaw-lifecycle-pending"))).toBe(false);
   });
 
   it("rejects duplicate package artifact CLI options", () => {
@@ -512,6 +513,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/npm-json-output.mts",
       "scripts/lib/optional-bundled-clusters.mjs",
       "scripts/lib/output-root-guard.mjs",
+      "scripts/lib/package-lifecycle-marker.mjs",
       "scripts/lib/record-shared.mjs",
       "scripts/lib/release-notes-compaction.mjs",
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",

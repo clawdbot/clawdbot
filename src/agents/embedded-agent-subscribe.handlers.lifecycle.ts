@@ -150,6 +150,7 @@ export function handleAgentEnd(
     const rawError = lastAssistant.errorMessage?.trim();
     const failoverReason = classifyFailoverReason(rawError ?? "", {
       provider: lastAssistant.provider,
+      providerPlugin: null,
     });
     const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,

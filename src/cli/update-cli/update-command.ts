@@ -205,9 +205,6 @@ async function updateCommandInternal(
       await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
       throw err;
     }
-
-    // Cleanup deletes handoff directories, so previews and rejected invocations must never run it.
-    await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
@@ -614,6 +611,9 @@ async function updateCommandInternal(
 
   // Preload execution and recovery before the package swap can remove these chunks.
   const { executeMutableUpdate, finishUpdate } = await import("./update-execution.runtime.js");
+
+  // Cleanup deletes handoff directories, so previews and rejected invocations must never run it.
+  await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
 
   // Startup migrations belong to the freshly installed Doctor. Admit shared-state
   // mutation only after every pre-install refusal has passed.

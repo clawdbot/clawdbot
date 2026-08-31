@@ -293,6 +293,7 @@ export function prepareEmbeddedAttemptStream(input: {
     reasoningMode: attempt.reasoningLevel ?? "off",
     thinkingLevel: attempt.thinkLevel,
     toolResultFormat: attempt.toolResultFormat,
+    toolProgressDetail: attempt.toolProgressDetail,
     shouldEmitToolResult: attempt.shouldEmitToolResult,
     shouldEmitToolOutput: attempt.shouldEmitToolOutput,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,

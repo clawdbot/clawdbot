@@ -451,6 +451,36 @@ describe("cron store", () => {
     }
   });
 
+  it("rolls back quarantine deletion when the restored cron row cannot commit", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeStore("atomic-recovery-job", true);
+    await saveCronStore(storePath, store);
+    const entry = {
+      sourceIndex: 0,
+      reason: "invalid-schedule" as const,
+      job: { id: "atomic-recovery-job" },
+    };
+    saveCronQuarantinedJobs({ storePath, nowMs: 123, entries: [entry] });
+    const database = openOpenClawStateDatabase().db;
+    database.exec(
+      "CREATE TEMP TRIGGER fail_cron_recovery_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron recovery rejected'); END",
+    );
+    try {
+      await expect(
+        saveCronJobsStore(storePath, store, { deleteQuarantineEntries: [entry] }),
+      ).rejects.toThrow("cron recovery rejected");
+      expect(loadCronQuarantinedJobs(storePath)).toEqual([{ ...entry, quarantinedAtMs: 123 }]);
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
+        "atomic-recovery-job",
+      ]);
+    } finally {
+      database.exec("DROP TRIGGER fail_cron_recovery_update");
+    }
+
+    await saveCronJobsStore(storePath, store, { deleteQuarantineEntries: [entry] });
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
+  });
+
   it("runs post-commit hooks only after the cron write commits", async () => {
     const { storePath } = await makeStorePath();
     const store = makeStore("post-commit-hook", true);

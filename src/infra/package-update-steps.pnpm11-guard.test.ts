@@ -321,7 +321,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
               await fs.mkdir(path.join(newPackageRoot, "scripts"), { recursive: true });
               await Promise.all([
                 fs.writeFile(
-                  path.join(newPackageRoot, "dist", "openclaw-install-guard"),
+                  path.join(newPackageRoot, ".openclaw-lifecycle-pending"),
                   "pending\n",
                   "utf8",
                 ),
@@ -354,7 +354,6 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
               await expect(
                 fs.readFile(path.join(newPackageRoot, ".openclaw-lifecycle-pending"), "utf8"),
               ).resolves.toBe("pending\n");
-              await fs.rm(path.join(newPackageRoot, "dist", "openclaw-install-guard"));
             } else if (name === "pnpm package postinstall") {
               expect(argv).toEqual([
                 process.execPath,
@@ -363,6 +362,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
               await expect(
                 fs.readFile(path.join(newPackageRoot, ".openclaw-lifecycle-pending"), "utf8"),
               ).resolves.toBe("pending\n");
+              await fs.rm(path.join(newPackageRoot, ".openclaw-lifecycle-pending"));
             } else {
               throw new Error(`unexpected step: ${name}`);
             }
@@ -804,7 +804,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
           await fs.mkdir(path.join(packageRoot, "scripts"), { recursive: true });
           await Promise.all([
             fs.writeFile(
-              path.join(packageRoot, "dist", "openclaw-install-guard"),
+              path.join(packageRoot, ".openclaw-lifecycle-pending"),
               "pending\n",
               "utf8",
             ),
@@ -819,10 +819,11 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
               "utf8",
             ),
           ]);
-        } else if (name === "pnpm package preinstall") {
-          await fs.rm(path.join(packageRoot, "dist", "openclaw-install-guard"));
         }
         const exitCode = name === "pnpm package postinstall" && firstAttempt ? 1 : 0;
+        if (name === "pnpm package postinstall" && exitCode === 0) {
+          await fs.rm(path.join(packageRoot, ".openclaw-lifecycle-pending"));
+        }
         return {
           name,
           command: argv.join(" "),
@@ -859,6 +860,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       expect(recovered.afterVersion).toBe("2.0.0");
       expect(runStep.mock.calls.map(([call]) => call.name)).toEqual([
         "global update",
+        "pnpm package preinstall",
         "pnpm package postinstall",
       ]);
       await expectPathMissing(path.join(packageRoot, ".openclaw-lifecycle-pending"));

@@ -234,13 +234,13 @@ async function handleChatHistoryRequest({
     respond(false, undefined, requestedAgent.error);
     return;
   }
-  const requestedAgentId = requestedAgent.agentId;
-  const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
   const { cfg, storePath, store, entry, canonicalKey } = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,
     () =>
       loadGatewaySessionEntryReadOnly(sessionKey, {
-        ...sessionLoadOptions,
+        agentId: requestedAgent.agentId,
+        // Exact reads own their nested JSON; history only projects that snapshot.
+        clone: false,
         includeStoreChildEntries: true,
       }),
     {

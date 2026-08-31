@@ -7,6 +7,13 @@ repo_root() {
   # the same from main checkout or any linked worktree.
   local base_dir
   local common_git_dir
+  # Anchor-exec handoff (see scripts/pr): the wrapper runs from materialized
+  # temp-dir bytes with no git context of its own; the handoff env carries the
+  # repository the run addresses.
+  if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
+    (cd "$OPENCLAW_PR_ANCHOR_REPO_ROOT" && pwd)
+    return
+  fi
   base_dir="${script_parent_dir:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
   if common_git_dir=$(git -C "$base_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
