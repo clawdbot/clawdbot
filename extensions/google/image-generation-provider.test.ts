@@ -169,6 +169,25 @@ describe("Google image-generation provider", () => {
     });
   });
 
+  it("does not derive a 2K imageSize from size for the 1K-only Lite model", async () => {
+    mockGoogleApiKeyAuth();
+    const fetchMock = installGoogleFetchMock();
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-lite-image",
+      prompt: "draw a cat",
+      cfg: {},
+      size: "1536x1024",
+    });
+
+    const request = fetchRequest(fetchMock);
+    expect(JSON.parse(request.body ?? "").generationConfig.imageConfig).toEqual({
+      aspectRatio: "3:2",
+    });
+  });
+
   it.each([
     ["empty", ""],
     ["whitespace-only", "   "],

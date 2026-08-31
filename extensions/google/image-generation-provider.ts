@@ -57,6 +57,7 @@ function normalizeGoogleImageModel(model: string | undefined): string {
 
 function mapSizeToImageConfig(
   size: string | undefined,
+  model: string,
 ): { aspectRatio?: string; imageSize?: "2K" | "4K" } | undefined {
   const trimmed = size?.trim();
   if (!trimmed) {
@@ -72,6 +73,12 @@ function mapSizeToImageConfig(
     ["1792x1024", "16:9"],
   ]);
   const aspectRatio = mapping.get(normalized);
+
+  // Lite is a fixed 1K tier; a size-derived imageSize would forward an
+  // unsupported 2K/4K to Google, so only map aspectRatio for that model.
+  if (model === GOOGLE_LITE_IMAGE_MODEL) {
+    return aspectRatio ? { aspectRatio } : undefined;
+  }
 
   const [widthRaw, heightRaw] = normalized.split("x");
   const width = parseStrictPositiveInteger(widthRaw);
@@ -195,7 +202,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           capability: "image",
           transport: "http",
         });
-      const imageConfig = mapSizeToImageConfig(req.size);
+      const imageConfig = mapSizeToImageConfig(req.size, model);
       const inputParts = (req.inputImages ?? []).map((image) => ({
         inlineData: {
           mimeType: image.mimeType,
