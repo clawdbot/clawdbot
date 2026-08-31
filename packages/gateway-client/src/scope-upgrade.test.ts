@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { GatewayProtocolRequestOptions } from "./protocol-request.js";
 import { GatewayScopeUpgrade } from "./scope-upgrade.js";
 
@@ -95,7 +95,11 @@ describe("GatewayScopeUpgrade", () => {
     const first = client.requestScopeUpgrade({ binding, scopes });
     const duplicate = client.requestScopeUpgrade({ binding, scopes });
     expect(duplicate).toBe(first);
-    const firstWaitSignal = await waitStarted.promise;
+    const firstWaitSignal = await withTestTimeout(
+      waitStarted.promise,
+      1_000,
+      "Scope upgrade wait did not start",
+    );
     expect(firstWaitSignal).toBeDefined();
     expect(request).toHaveBeenCalledTimes(2);
 
@@ -104,7 +108,7 @@ describe("GatewayScopeUpgrade", () => {
     expect(firstWaitSignal?.aborted).toBe(true);
     waitStarted = createDeferred<AbortSignal | undefined>();
     const restarted = client.requestScopeUpgrade({ binding, scopes });
-    await waitStarted.promise;
+    await withTestTimeout(waitStarted.promise, 1_000, "Scope upgrade wait did not restart");
     expect(request).toHaveBeenCalledTimes(4);
     client.cancelScopeUpgrade();
     await expect(restarted).rejects.toBeDefined();
