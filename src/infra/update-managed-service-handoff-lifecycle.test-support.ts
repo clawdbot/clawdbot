@@ -176,7 +176,7 @@ export function registerManagedLaunchdHandoffRestorationTests(
     kind: "launchd",
     options?: ManagedServiceManagerBoundaryOptions,
   ) => Promise<ManagedServiceManagerBoundaryResult>,
-  itUnix: typeof import("vitest").it,
+  itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
 ): void {
   itUnix("parks and restores the exact launchd service from its detached helper", async () => {
