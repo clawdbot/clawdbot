@@ -80,7 +80,7 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow(
-      "LLM error server_error: An error occurred while processing your request.",
+      "⚠️ openai/gpt-5.4 request failed (provider internal error). This is usually temporary — try again shortly.",
     );
   });
 });
