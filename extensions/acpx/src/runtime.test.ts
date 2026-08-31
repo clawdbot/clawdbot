@@ -332,12 +332,16 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
-  it("rebuilds the managed plugin-tools delegate after a fresh reset", async () => {
+  it("rejects cached model changes and rebuilds after closing a fresh reset", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
     };
     const { runtime } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex"],
+      },
       pluginToolsMcpBridgeEnabled: true,
       mcpServers: [
         {
@@ -350,12 +354,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const exposedRuntime = runtime as unknown as {
       managedToolsSessionDelegates: Map<string, unknown>;
-      retiredManagedToolsSessionDelegates: Map<string, Set<unknown>>;
       resolveManagedToolsDelegateForSession(
         sessionKey: string,
         model?: string,
       ): {
         close: AcpRuntime["close"];
+        ensureSession: AcpRuntime["ensureSession"];
         options?: {
           mcpServers?: Array<{ env?: Array<{ name: string; value: string }>; name: string }>;
         };
@@ -363,21 +367,39 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     };
 
     const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(
-      "agent:worker:main",
+      "agent:codex:main",
       "openai/gpt-5.5",
     );
-    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
+    const firstEnsure = vi.spyOn(firstDelegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:main",
+      backend: "acpx",
+      runtimeSessionName: "codex-first",
+      acpxRecordId: "codex-first",
+    });
+    const firstClose = vi.spyOn(firstDelegate, "close").mockResolvedValue(undefined);
 
-    await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:main",
+      agent: "codex",
+      mode: "persistent",
+      model: "openai/gpt-5.5",
+    });
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:codex:main",
+        agent: "codex",
+        mode: "persistent",
+        model: "openai/gpt-5.6",
+      }),
+    ).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
+    expect(firstEnsure).toHaveBeenCalledOnce();
 
-    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(false);
-    expect(
-      exposedRuntime.retiredManagedToolsSessionDelegates
-        .get("agent:worker:main")
-        ?.has(firstDelegate),
-    ).toBe(true);
+    await runtime.prepareFreshSession({ sessionKey: "agent:codex:main" });
+
+    expect(firstClose).toHaveBeenCalledOnce();
+    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:codex:main")).toBe(false);
     const secondDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(
-      "agent:worker:main",
+      "agent:codex:main",
       "openai/gpt-5.6",
     );
     expect(secondDelegate).not.toBe(firstDelegate);
@@ -385,22 +407,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       name: "OPENCLAW_TOOLS_MCP_MODEL_REF",
       value: "openai/gpt-5.6",
     });
-    const firstClose = vi.spyOn(firstDelegate, "close").mockResolvedValue(undefined);
-    const secondClose = vi.spyOn(secondDelegate, "close").mockResolvedValue(undefined);
-
-    await runtime.close({
-      handle: {
-        sessionKey: "agent:worker:main",
-        backend: "acpx",
-        runtimeSessionName: "agent:worker:main",
-      },
-      reason: "fresh-reset-cleanup",
-    });
-
-    expect(firstClose).toHaveBeenCalledOnce();
-    expect(secondClose).toHaveBeenCalledOnce();
-    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(false);
-    expect(exposedRuntime.retiredManagedToolsSessionDelegates.has("agent:worker:main")).toBe(false);
   });
 
   it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
