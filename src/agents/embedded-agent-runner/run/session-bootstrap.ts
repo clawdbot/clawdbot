@@ -218,7 +218,6 @@ export function backfillSessionKey(params: {
       : resolveSessionKeyForRequestCore({
           cfg: params.config,
           sessionId: params.sessionId,
-          clone: false,
         });
     return normalizeOptionalString(resolved.sessionKey);
   } catch (err) {

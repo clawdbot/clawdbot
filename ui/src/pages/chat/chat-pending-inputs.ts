@@ -15,6 +15,7 @@ import { removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
+  adoptInitialUserMessage,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   setChatSessionProjection,
@@ -116,11 +117,21 @@ export function applyChatPendingInputs(
   page: ChatPendingInputsPage | undefined,
   options: { before?: number; consumptions?: ChatInputConsumptions } = {},
 ): void {
+  const handoff = state.initialUserMessage?.read(state.sessionKey, state.client ?? null);
   pendingInputViews.set(state, {
     sessionKey: state.sessionKey,
     sessionId: state.currentSessionId ?? null,
     agentId: resolveUiSelectedSessionAgentId(state),
-    page: page ?? { items: [], total: 0 },
+    page:
+      page && handoff
+        ? {
+            ...page,
+            items: page.items.map((input) => ({
+              ...input,
+              message: adoptInitialUserMessage(input.message, handoff, input.runId),
+            })),
+          }
+        : (page ?? { items: [], total: 0 }),
     before: options.before,
     loading: false,
   });
@@ -128,6 +139,13 @@ export function applyChatPendingInputs(
     [...(page?.items ?? []), ...(options.consumptions ?? [])].map((item) => item.runId),
   );
   if (acceptedRunIds.size) {
+    if (handoff && acceptedRunIds.has(handoff.pendingRunId)) {
+      state.initialUserMessage?.retire(
+        state.sessionKey,
+        state.client ?? null,
+        handoff.pendingRunId,
+      );
+    }
     // The server owns accepted input even after an interruption. Retiring the
     // outbox copy prevents reconnect from silently submitting it a second time.
     for (const item of state.chatQueue) {

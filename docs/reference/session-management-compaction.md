@@ -85,23 +85,27 @@ transaction, so a superseded run cannot write to the transcript.
 
 ### Downgrading After The SQLite Flip
 
-Restore archived legacy transcript artifacts before running an older
-file-backed OpenClaw version:
+Stop the Gateway and back up its state. Using the current SQLite-capable OpenClaw
+version, restore archived legacy session stores and transcript artifacts before
+starting an older file-backed version:
 
 ```bash
 openclaw doctor --session-sqlite restore --session-sqlite-all-agents
 ```
 
-The migration leaves legacy `sessions.json` files in place for support and
-rollback, but hot transcript JSONL files that were imported into SQLite are
-renamed into `session-sqlite-import-archive/`. Older file-backed runtimes follow
-the `sessionFile` paths in `sessions.json`, so they need those artifacts restored
-before startup. Restore uses migration manifests, moves only recorded archived
-artifacts whose original paths are missing, and leaves the SQLite database in
-place for forward recovery.
+The migration archives imported hot transcript JSONL files and verified, fully
+covered legacy `sessions.json` stores in `session-sqlite-import-archive/`.
+Legacy stores with incomplete coverage or blocking migration issues remain in
+place. Older file-backed runtimes need both `sessions.json` and the artifacts
+referenced by its `sessionFile` paths at their original locations before startup.
 
-Sessions created after the SQLite flip are SQLite-only and will not appear to an
-older file-backed runtime. If you re-upgrade after a downgrade, run the Doctor
+Restore uses migration manifests, moves only recorded archived artifacts whose
+original paths are missing, reports conflicts rather than overwriting existing
+files, and leaves the SQLite database in place for forward recovery.
+
+Restore does not export changes made only in SQLite after migration. Sessions
+created after the SQLite flip are SQLite-only and will not appear to an older
+file-backed runtime. If you re-upgrade after a downgrade, run the Doctor
 inspection and validation sequence again so OpenClaw can verify restored legacy
 artifacts before importing.
 
@@ -120,7 +124,7 @@ A `sessionKey` identifies which conversation bucket you are in (routing + isolat
 
 | Pattern                      | Example                                                     |
 | ---------------------------- | ----------------------------------------------------------- |
-| Main/direct chat (per agent) | `agent:<agentId>:<mainKey>` (default `main`)                |
+| Main/direct chat (per agent) | `agent:<agentId>:main`                                      |
 | Group                        | `agent:<agentId>:<channel>:group:<id>`                      |
 | Room/channel (Discord/Slack) | `agent:<agentId>:<channel>:channel:<id>` or `...:room:<id>` |
 | Cron                         | `cron:<job.id>`                                             |

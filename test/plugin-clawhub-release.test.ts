@@ -1823,9 +1823,7 @@ exit 0
     const invocations = readFileSync(markerPath, "utf8");
     const resolvedRepoDir = realpathSync(repoDir);
     expect(invocations).toContain(`--workdir ${resolvedRepoDir}`);
-    expect(invocations).toContain(
-      `package pack ${join(resolvedRepoDir, "extensions/demo-plugin")}`,
-    );
+    expect(invocations).toContain("package pack .");
     expect(invocations).toContain("package publish ");
     expect(invocations).toContain(".tgz --tags latest");
     expect(invocations).toContain("--dry-run");

@@ -61,7 +61,8 @@ import {
   normalizeSidebarLayout,
   openSlot,
 } from "./sidebar-layout.ts";
-import { resetToolStream, type RunOutputUsage } from "./tool-stream.ts";
+import type { RunOutputUsage } from "./tool-stream-contract.ts";
+import { resetToolStream } from "./tool-stream.ts";
 
 type ChatPageElement = {
   getBoundingClientRect?: () => DOMRect;

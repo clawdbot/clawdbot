@@ -26,6 +26,16 @@ const formatCommit = (value?: string | null) => {
   return normalizeLowercaseStringOrEmpty(match[0].slice(0, 7));
 };
 
+export function gitCommitPrefixesMatch(left: string, right: string): boolean {
+  const normalizedLeft = normalizeLowercaseStringOrEmpty(left);
+  const normalizedRight = normalizeLowercaseStringOrEmpty(right);
+  return (
+    normalizedLeft.length >= 7 &&
+    normalizedRight.length >= 7 &&
+    (normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft))
+  );
+}
+
 const cachedGitCommitBySearchDir = new Map<string, string | null>();
 const GIT_COMMIT_CACHE_LIMIT = 256;
 declare const WORKER_DEPLOY_BUILD: boolean;

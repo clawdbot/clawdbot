@@ -1057,15 +1057,20 @@ jobs:
             command: pnpm test:e2e:gateway --shard=4/4
           - name: UI 1/4
             command: pnpm test:ui:e2e --shard=1/4
+            build_command: pnpm build:ci-artifacts
           - name: UI 2/4
             command: pnpm test:ui:e2e --shard=2/4
+            build_command: pnpm build:ci-artifacts
           - name: UI 3/4
             command: pnpm test:ui:e2e --shard=3/4
+            build_command: pnpm build:ci-artifacts
           - name: UI 4/4
             command: pnpm test:ui:e2e --shard=4/4
+            build_command: pnpm build:ci-artifacts
           - name: Agent plugin Gateway
             command: pnpm test:e2e:agent-plugin-gateway
             target_script: test:e2e:agent-plugin-gateway
+            build_command: pnpm build:ci-artifacts
     env:
       OPENCLAW_BUILD_PRIVATE_QA: "1"
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
@@ -1088,7 +1093,8 @@ jobs:
       - name: Build dist for repo E2E
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build
+        # Gateway shards pack and type-check packages; runtime-only suites keep SDK checks without global declarations.
+        run: ${{ matrix.build_command || 'pnpm build' }}
 
       - name: Install Playwright Chromium
         run: pnpm --dir ui exec playwright install --with-deps chromium
@@ -1542,6 +1548,7 @@ jobs:
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
       - name: Validate Docker E2E credentials
+        id: validate_credentials
         if: contains(matrix.profiles, inputs.release_test_profile)
         shell: bash
         env:
@@ -1581,7 +1588,8 @@ jobs:
           fi
 
       - name: Run Docker E2E chunk
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        # Missing live credentials still fail this job, but must not suppress non-live diagnostics.
+        if: ${{ !cancelled() && contains(matrix.profiles, inputs.release_test_profile) && (success() || steps.validate_credentials.outcome == 'failure') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1928,6 +1936,7 @@ jobs:
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
       - name: Validate Docker E2E credentials
+        id: validate_credentials
         shell: bash
         env:
           CREDENTIALS: ${{ steps.plan.outputs.credentials }}
@@ -1966,6 +1975,7 @@ jobs:
           fi
 
       - name: Run targeted Docker E2E lanes
+        if: ${{ !cancelled() && (success() || steps.validate_credentials.outcome == 'failure') }}
         shell: bash
         env:
           ARTIFACT_SUFFIX: ${{ steps.plan.outputs.artifact_suffix }}

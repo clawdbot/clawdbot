@@ -1,6 +1,7 @@
 /**
  * Resolves bundled static catalog rows for embedded-agent model selection.
  */
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../../config/types.models.js";
@@ -65,17 +66,6 @@ function normalizeStaticCatalogInput(
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }
 
-function normalizeStaticCatalogCost(
-  cost: NormalizedModelCatalogRow["cost"],
-): ProviderRuntimeModel["cost"] {
-  return {
-    input: cost?.input ?? 0,
-    output: cost?.output ?? 0,
-    cacheRead: cost?.cacheRead ?? 0,
-    cacheWrite: cost?.cacheWrite ?? 0,
-  };
-}
-
 /** Converts a normalized catalog row into the provider runtime model shape. */
 function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
   return {
@@ -86,7 +76,7 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     baseUrl: row.baseUrl ?? "",
     reasoning: row.reasoning,
     input: normalizeStaticCatalogInput(row.input),
-    cost: normalizeStaticCatalogCost(row.cost),
+    cost: normalizeResolvedPricing(row.cost ?? {}),
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextWindows: row.contextWindows?.map((option) => ({ ...option })),
     contextWindowDefault: row.contextWindowDefault,
@@ -110,7 +100,7 @@ function completeProviderStaticCatalogModel(
     baseUrl: model.baseUrl ?? "",
     reasoning: model.reasoning ?? false,
     input: normalizeStaticCatalogInput(model.input),
-    cost: model.cost ?? normalizeStaticCatalogCost(undefined),
+    cost: model.cost ?? normalizeResolvedPricing({}),
     contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextTokens: model.contextTokens,
     maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,

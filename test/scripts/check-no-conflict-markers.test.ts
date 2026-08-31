@@ -25,62 +25,40 @@ function createRepository(files: Record<string, string | Buffer>): string {
 }
 
 describe("check-no-conflict-markers", () => {
-  it("finds git conflict markers at the start of lines", () => {
+  it("reports exact lines across tracked text files and unusual paths", () => {
+    const conflict = "before\n<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\nafter\n";
     const rootDir = createRepository({
-      "src/conflict.ts": [
-        "const ok = true;",
-        "<<<<<<< HEAD",
-        "value = left;",
-        "=======",
-        "value = right;",
-        ">>>>>>> main",
-      ].join("\n"),
+      "src/conflict.ts": conflict,
+      "CHANGELOG.md": "<<<<<<< HEAD\nconflict\n>>>>>>> main\n",
+      "scripts/bundled-plugin-metadata-runtime.mjs":
+        "<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\n",
+      "docs/new\nline.md": conflict,
+      "docs/weird name (v2).md": conflict,
     });
 
     expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([
+      { filePath: "CHANGELOG.md", lines: [1, 3] },
+      { filePath: "docs/new\nline.md", lines: [2, 4, 6] },
+      { filePath: "docs/weird name (v2).md", lines: [2, 4, 6] },
+      { filePath: "scripts/bundled-plugin-metadata-runtime.mjs", lines: [1, 3, 5] },
       { filePath: "src/conflict.ts", lines: [2, 4, 6] },
     ]);
   });
 
-  it("ignores marker-like text when it is indented or inline", () => {
+  it("ignores clean text, inline or indented markers, and binary marker bytes", () => {
     const rootDir = createRepository({
-      "src/clean.ts": [
+      "src/clean.ts": "const x = 1;\n",
+      "docs/examples.md": [
         "Example:",
         "  <<<<<<< HEAD",
         "const text = '======= not a conflict';",
         "========",
       ].join("\n"),
+      // An actual marker prefix followed by NUL must still be excluded by git grep -I.
+      "assets/image.png": Buffer.from("<<<<<<< HEAD\n\0"),
     });
 
-    expect(findConflictMarkersInTrackedFiles(rootDir)).toStrictEqual([]);
-  });
-
-  it("scans text files and skips binary files", () => {
-    const rootDir = createRepository({
-      "CHANGELOG.md": "<<<<<<< HEAD\nconflict\n>>>>>>> main\n",
-      "image.png": Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]),
-    });
-
-    expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([
-      { filePath: "CHANGELOG.md", lines: [1, 3] },
-    ]);
-  });
-
-  it("finds conflict markers in tracked files using git grep", () => {
-    const scriptFile = "scripts/bundled-plugin-metadata-runtime.mjs";
-    const rootDir = createRepository({
-      [scriptFile]: [
-        "<<<<<<< HEAD",
-        'const left = "left";',
-        "=======",
-        'const right = "right";',
-        ">>>>>>> branch",
-      ].join("\n"),
-    });
-
-    expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([
-      { filePath: scriptFile, lines: [1, 3, 5] },
-    ]);
+    expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([]);
   });
 
   it("disables configured git grep colors before parsing records", () => {
@@ -93,41 +71,6 @@ describe("check-no-conflict-markers", () => {
 
     expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([
       { filePath: conflictFile, lines: [1, 3, 5] },
-    ]);
-  });
-
-  it("returns no violations when tracked files have no conflict markers", () => {
-    const rootDir = createRepository({ "src/clean.ts": "const x = 1;\n" });
-
-    expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([]);
-  });
-
-  it("skips binary tracked files via git grep binary exclusion", () => {
-    // Marker-like bytes inside a binary file must still be excluded by git grep -I.
-    const rootDir = createRepository({
-      "assets/image.png": Buffer.from([0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x20, 0x00]),
-    });
-
-    expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([]);
-  });
-
-  it.each([
-    [
-      "handles tracked files with spaces and unusual characters in paths",
-      "docs/weird name (v2).md",
-    ],
-    [
-      "reports tracked filenames containing newlines without mangling the path",
-      "docs/weird\nname.md",
-    ],
-  ])("%s", (_name, file) => {
-    // NUL framing must preserve the complete path, including embedded newlines.
-    const rootDir = createRepository({
-      [file]: "before\n<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> branch\nafter\n",
-    });
-
-    expect(findConflictMarkersInTrackedFiles(rootDir)).toEqual([
-      { filePath: file, lines: [2, 4, 6] },
     ]);
   });
 

@@ -3203,7 +3203,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.loadSessionEntryCalls).toContainEqual({
       rawKey: "agent:work:main",
-      opts: { agentId: "work", includeStoreChildEntries: true },
+      opts: { agentId: "work", clone: false, includeStoreChildEntries: true },
     });
   });
 

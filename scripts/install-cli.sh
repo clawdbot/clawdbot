@@ -1225,7 +1225,7 @@ fix_npm_prefix_if_needed() {
   mkdir -p "$target"
   "$(npm_bin)" config set prefix "$target"
 
-  local path_line="export PATH=\\\"${target}/bin:\\$PATH\\\""
+  local path_line="export PATH=\"${target}/bin:\$PATH\""
   for rc in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
     if [[ -f "$rc" ]] && ! grep -q ".npm-global" "$rc"; then
       echo "$path_line" >> "$rc"
@@ -1400,7 +1400,9 @@ install_openclaw() {
   )
   local resolved_requested="$requested"
   if [[ -n "${REQUIRED_COMPATIBLE_VERSION:-}" ]]; then
-    resolved_requested="$(resolve_npm_openclaw_version "$requested")"
+    # || true: a failed npm view must reach the explicit fail below instead
+    # of dying silently through set -e with no error event.
+    resolved_requested="$(resolve_npm_openclaw_version "$requested" || true)"
     if [[ -z "$resolved_requested" ]]; then
       fail "Could not resolve OpenClaw ${requested} before compatibility checking."
     fi
