@@ -8,6 +8,7 @@ import {
 import { formatGatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
 import {
+  formatLaunchdStderrRewriteGuidance,
   resolveAdvertisedLaunchdStderr,
   readPersistedLaunchdStderrPath,
 } from "../../daemon/launchd-stdio.js";
@@ -511,7 +512,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(advertisedStderr.path)}`);
       } else {
         defaultRuntime.error(
-          `${errorText("Errors:")} suppressed (/dev/null). Rewrite the LaunchAgent with ${formatCliCommand("openclaw gateway install")}.`,
+          `${errorText("Errors:")} suppressed (/dev/null). ${formatLaunchdStderrRewriteGuidance()}`,
         );
       }
     }

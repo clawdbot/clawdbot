@@ -116,8 +116,8 @@ Logging:
   `gateway-<profile>.log`)
 - launchd stderr: `~/Library/Logs/openclaw/gateway.err.log` (profiles use
   `gateway-<profile>.err.log`). Existing LaunchAgents keep
-  `StandardErrorPath` at `/dev/null` until `openclaw gateway install` or a
-  rewrite-capable `openclaw gateway restart` updates the plist.
+  `StandardErrorPath` at `/dev/null` until `openclaw gateway restart` or
+  `openclaw gateway install --force` updates the plist.
 - If the host loops with repeated `EADDRINUSE` or fast restarts, check for
   duplicate `ai.openclaw.gateway` / `ai.openclaw.node` LaunchAgents and the
   launchd-marker workaround in

@@ -1,5 +1,6 @@
 /** Reads persisted LaunchAgent stdio paths so status does not invent them. */
 import fs from "node:fs";
+import { formatCliCommand } from "../cli/command-format.js";
 import { parseLaunchdPlistStdioPaths } from "./launchd-plist.js";
 import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import type { GatewayServiceEnv } from "./service-types.js";
@@ -28,4 +29,9 @@ export function resolveAdvertisedLaunchdStderr(
     return { kind: "suppressed" };
   }
   return { kind: "file", path: persistedStderrPath };
+}
+
+/** Loaded LaunchAgents skip a plain install; restart or install --force rewrites stderr. */
+export function formatLaunchdStderrRewriteGuidance(env: GatewayServiceEnv = process.env): string {
+  return `Rewrite the LaunchAgent with ${formatCliCommand("openclaw gateway restart", env)} or ${formatCliCommand("openclaw gateway install --force", env)}.`;
 }

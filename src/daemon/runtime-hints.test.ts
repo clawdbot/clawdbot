@@ -31,7 +31,7 @@ describe("buildPlatformRuntimeLogHints", () => {
       }),
     ).toEqual([
       "Launchd stdout (if installed): /Users/test/Library/Logs/openclaw/gateway.log",
-      `Launchd stderr (if installed): suppressed (/dev/null). Rewrite the LaunchAgent with ${formatCliCommand("openclaw gateway install")}.`,
+      `Launchd stderr (if installed): suppressed (/dev/null). Rewrite the LaunchAgent with ${formatCliCommand("openclaw gateway restart")} or ${formatCliCommand("openclaw gateway install --force")}.`,
       "Restart attempts: /tmp/openclaw-state/logs/gateway-restart.log",
     ]);
   });

@@ -75,13 +75,17 @@ const launchdStdioMocks = vi.hoisted(() => ({
   readPersistedLaunchdStderrPath: vi.fn(() => "/Users/test/Library/Logs/openclaw/gateway.err.log"),
 }));
 
-vi.mock("../../daemon/launchd-stdio.js", () => ({
-  readPersistedLaunchdStderrPath: launchdStdioMocks.readPersistedLaunchdStderrPath,
-  resolveAdvertisedLaunchdStderr: (persistedStderrPath: string | null) =>
-    !persistedStderrPath || persistedStderrPath === "/dev/null"
-      ? { kind: "suppressed" as const }
-      : { kind: "file" as const, path: persistedStderrPath },
-}));
+vi.mock("../../daemon/launchd-stdio.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../daemon/launchd-stdio.js")>();
+  return {
+    ...actual,
+    readPersistedLaunchdStderrPath: launchdStdioMocks.readPersistedLaunchdStderrPath,
+    resolveAdvertisedLaunchdStderr: (persistedStderrPath: string | null) =>
+      !persistedStderrPath || persistedStderrPath === "/dev/null"
+        ? { kind: "suppressed" as const }
+        : { kind: "file" as const, path: persistedStderrPath },
+  };
+});
 
 vi.mock("../../daemon/restart-logs.js", () => ({
   resolveGatewayLogPaths: () => ({
@@ -639,7 +643,9 @@ describe("printDaemonStatus", () => {
 
     const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
     expect(errors).toContain("suppressed (/dev/null)");
-    expect(errors).toContain("openclaw gateway install");
+    expect(errors).toContain("openclaw gateway restart");
+    expect(errors).toContain("openclaw gateway install --force");
+    expect(errors).not.toMatch(/openclaw gateway install(?! --force)/);
     expect(errors).not.toContain("gateway.err.log");
   });
 

@@ -1,7 +1,12 @@
 // Launchd stdio helpers must follow the installed plist, not the rewrite target.
 import { describe, expect, it } from "vitest";
+import { formatCliCommand } from "../cli/command-format.js";
 import { parseLaunchdPlistStdioPaths } from "./launchd-plist.js";
-import { isLaunchdStdioSuppressed, resolveAdvertisedLaunchdStderr } from "./launchd-stdio.js";
+import {
+  formatLaunchdStderrRewriteGuidance,
+  isLaunchdStdioSuppressed,
+  resolveAdvertisedLaunchdStderr,
+} from "./launchd-stdio.js";
 
 describe("launchd stdio advertisement", () => {
   it("reads StandardErrorPath from the persisted plist", () => {
@@ -23,5 +28,12 @@ describe("launchd stdio advertisement", () => {
     expect(isLaunchdStdioSuppressed(null)).toBe(true);
     expect(resolveAdvertisedLaunchdStderr("/dev/null")).toEqual({ kind: "suppressed" });
     expect(resolveAdvertisedLaunchdStderr(null)).toEqual({ kind: "suppressed" });
+  });
+
+  it("points a loaded legacy LaunchAgent at rewrite-capable commands", () => {
+    const guidance = formatLaunchdStderrRewriteGuidance({});
+    expect(guidance).toContain(formatCliCommand("openclaw gateway restart"));
+    expect(guidance).toContain(formatCliCommand("openclaw gateway install --force"));
+    expect(guidance).not.toMatch(/openclaw gateway install(?! --force)/);
   });
 });

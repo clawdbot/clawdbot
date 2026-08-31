@@ -7,6 +7,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
+  formatLaunchdStderrRewriteGuidance,
   resolveAdvertisedLaunchdStderr,
   readPersistedLaunchdStderrPath,
 } from "../../daemon/launchd-stdio.js";
@@ -471,7 +472,7 @@ export async function appendStatusAllDiagnosis(params: {
         }
       } else {
         lines.push(
-          `  ${muted("# stderr: suppressed (/dev/null); rewrite the LaunchAgent with openclaw gateway install")}`,
+          `  ${muted(`# stderr: suppressed (/dev/null); ${formatLaunchdStderrRewriteGuidance()}`)}`,
         );
       }
       lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
