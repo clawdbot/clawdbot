@@ -68,4 +68,60 @@ describe("legacy media persistence additive schema repair", () => {
       repaired.close();
     }
   });
+
+  it("converges schema-17 session additions before validating the repaired canonical schema", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-schema-17-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`
+        DROP TRIGGER session_conversations_route_context_invalidate_after_update;
+        ALTER TABLE session_conversations DROP COLUMN route_context_json;
+        DROP INDEX idx_agent_transcript_event_identity_sequence;
+        DROP TABLE session_participants;
+        PRAGMA user_version = 17;
+      `);
+      database
+        .prepare(
+          "UPDATE schema_meta SET schema_version = ?, app_version = ? WHERE meta_key = 'primary'",
+        )
+        .run(17, "legacy-test");
+    } finally {
+      database.close();
+    }
+
+    const result = await migrateLegacyMediaPersistence({ env });
+    expect(result.warnings).toEqual([]);
+    const repaired = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(repaired.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(
+        repaired
+          .prepare(
+            "SELECT name FROM pragma_table_info('session_conversations') WHERE name = 'route_context_json'",
+          )
+          .get(),
+      ).toEqual({ name: "route_context_json" });
+      expect(
+        repaired
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
+          .get("session_conversations_route_context_invalidate_after_update"),
+      ).toEqual({ name: "session_conversations_route_context_invalidate_after_update" });
+      expect(
+        repaired
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
+          .get("idx_agent_transcript_event_identity_sequence"),
+      ).toEqual({ name: "idx_agent_transcript_event_identity_sequence" });
+    } finally {
+      repaired.close();
+    }
+  });
 });

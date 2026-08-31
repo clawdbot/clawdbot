@@ -716,15 +716,17 @@ export function ensureOpenClawAgentDatabaseSchema(
   if (readSqliteUserVersion(db) === AGENT_MEDIA_SCHEMA_VERSION) {
     assertAgentDatabaseMaintenanceAuthority();
     const legacySql = withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL);
-    // Keep canonical index recovery reachable before rebuilding the v17 identity table.
+    // Keep canonical index recovery and additive convergence reachable before rebuilding v17 identity.
     verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
       allowMissingColumns: true,
-      validateAfterRepair: () =>
+      validateAfterRepair: () => {
+        ensureSessionAdditiveColumns(db);
         assertAgentSchemaVersion(
           db,
           { agentId, pathname, version: AGENT_MEDIA_SCHEMA_VERSION },
           legacySql,
-        ),
+        );
+      },
     });
   }
   assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
