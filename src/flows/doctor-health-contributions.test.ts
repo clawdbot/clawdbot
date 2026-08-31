@@ -1133,7 +1133,18 @@ describe("doctor health contributions", () => {
       },
       sourceConfigValid: false,
       shouldRepair: true,
+      options: { nonInteractive: true, repair: true },
       env: {},
+    });
+    const pendingOwners = [
+      "- Workspace setup and attestations: legacy files → shared SQLite state",
+      "- TUI last-session pointers: legacy JSON file → shared SQLite state",
+      ...Array.from({ length: 20 }, (_, index) => `- Test owner ${index + 1}: legacy state`),
+    ];
+    mocks.detectLegacyStateMigrations.mockResolvedValue({
+      preview: pendingOwners,
+      warnings: [],
+      notices: [],
     });
     mocks.replaceConfigFile.mockRejectedValueOnce(
       Object.assign(
@@ -1179,6 +1190,16 @@ describe("doctor health contributions", () => {
       expect.stringContaining("agents.defaults.heartbeat.every"),
       "Doctor warnings",
     );
+    const deferredPanels = mocks.note.mock.calls.filter(
+      ([, title]) => title === "Legacy state deferred",
+    );
+    expect(deferredPanels).toHaveLength(1);
+    expect(deferredPanels[0]?.[0]).toContain(pendingOwners[0]);
+    expect(deferredPanels[0]?.[0]).toContain(pendingOwners[1]);
+    expect(deferredPanels[0]?.[0]).toContain("2 additional pending owners were omitted");
+    expect(deferredPanels[0]?.[0]).toContain("No listed legacy source was removed.");
+    expect(deferredPanels[0]?.[0]).toContain('rerun "openclaw doctor --fix"');
+    expect(mocks.runLegacyStateMigrations).not.toHaveBeenCalled();
 
     // A later write pass must not retry the identical candidate or duplicate the warning.
     mocks.note.mockClear();

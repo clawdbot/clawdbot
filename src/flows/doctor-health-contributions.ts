@@ -31,6 +31,43 @@ const loadDoctorCoreChecksModule = async () => await import("./doctor-core-check
 const loadNoteModule = async () => await import("../../packages/terminal-core/src/note.js");
 const loadOnboardHelpersModule = async () => await import("../commands/onboard-helpers.js");
 const loadSecretTypesModule = async () => await import("../config/types.secrets.js");
+const MAX_DEFERRED_LEGACY_STATE_OWNERS = 20;
+
+async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.options.repair !== true && ctx.options.yes !== true) {
+    return;
+  }
+  const [{ detectLegacyStateMigrations }, { prepareLegacySessionSurfaces }] = await Promise.all([
+    import("../infra/state-migrations.doctor.js"),
+    import("../plugins/legacy-session-surfaces.js"),
+  ]);
+  const legacyState = await detectLegacyStateMigrations({
+    cfg: ctx.cfg,
+    doctorOnlyStateMigrations: true,
+    ...(ctx.env ? { env: ctx.env } : {}),
+    legacySessionSurfaces: prepareLegacySessionSurfaces({ config: ctx.cfg }),
+  });
+  if (legacyState.preview.length === 0) {
+    return;
+  }
+  const { note } = await loadNoteModule();
+  const displayedOwners = legacyState.preview.slice(0, MAX_DEFERRED_LEGACY_STATE_OWNERS);
+  const omittedOwnerCount = legacyState.preview.length - displayedOwners.length;
+  note(
+    [
+      "Pending owners:",
+      ...displayedOwners,
+      ...(omittedOwnerCount > 0
+        ? [
+            `${omittedOwnerCount} additional pending ${omittedOwnerCount === 1 ? "owner was" : "owners were"} omitted from this bounded report.`,
+          ]
+        : []),
+      "No listed legacy source was removed.",
+      'Fix the config errors above, then rerun "openclaw doctor --fix".',
+    ].join("\n"),
+    "Legacy state deferred",
+  );
+}
 
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { formatCliCommand } = await loadCommandFormatModule();
@@ -507,13 +544,17 @@ async function runDoctorHealthContributionList(
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
   for (const contribution of contributions) {
     try {
-      if (!runWithPluginMetadataSnapshot) {
+      const run = async () => {
         await contribution.run(ctx);
+        if (ctx.configWriteRefusal) {
+          await reportDeferredLegacyState(ctx);
+        }
+      };
+      if (!runWithPluginMetadataSnapshot) {
+        await run();
       } else {
         const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
-        await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
-          contribution.run(ctx),
-        );
+        await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
       }
       if (ctx.configWriteRefusal) {
         // Later repairs consume the candidate. Stop before they persist state
