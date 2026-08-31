@@ -9,7 +9,6 @@ import {
   collectRunJobsFromPages,
   isRetryableGhJsonErrorMessage,
   parseRunTimingArgs,
-  selectRecentMainPushCiRuns,
   selectLatestMainPushCiRun,
   summarizePnpmStoreWarmupBarrier,
   summarizeRunTimings,
@@ -100,20 +99,6 @@ describe("scripts/ci-run-timings.mjs", () => {
       event: "push",
       headSha: "current",
     });
-  });
-
-  it("keeps recent timing comparisons on successful main pushes", () => {
-    expect(
-      selectRecentMainPushCiRuns(
-        [
-          { databaseId: 4, event: "workflow_dispatch", status: "completed", conclusion: "success" },
-          { databaseId: 3, event: "push", status: "in_progress", conclusion: null },
-          { databaseId: 2, event: "push", status: "completed", conclusion: "failure" },
-          { databaseId: 1, event: "push", status: "completed", conclusion: "success" },
-        ],
-        10,
-      ),
-    ).toEqual([{ databaseId: 1, event: "push", status: "completed", conclusion: "success" }]);
   });
 
   it("normalizes paginated GitHub Actions job payloads", () => {
@@ -501,6 +486,69 @@ if (endpoint.includes("actions/workflows/ci.yml/runs?")) {
       expect(report.runs[0].jobTimings.map((job: { name: string }) => job.name)).toEqual([
         "preflight",
         "checks-node-compact-large-1",
+      ]);
+    } finally {
+      rmSync(fixtureDir, { force: true, recursive: true });
+    }
+  });
+
+  it("runs --recent with a push-only GitHub CLI query and output", () => {
+    const fixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-ci-timings-recent-"));
+    const fakeGhPath = path.join(fixtureDir, "gh");
+    const queryArgsPath = path.join(fixtureDir, "query-args.json");
+    const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+    writeFileSync(
+      fakeGhPath,
+      `#!/usr/bin/env node
+const { writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "run" && args[1] === "list") {
+  writeFileSync(process.env.QUERY_ARGS_PATH, JSON.stringify(args));
+  console.log(JSON.stringify([
+    { databaseId: 201, event: "workflow_dispatch", headSha: "dispatch", status: "completed", conclusion: "success" },
+    { databaseId: 202, event: "push", headSha: "push", status: "completed", conclusion: "success" }
+  ]));
+} else if (args[0] === "run" && args[1] === "view" && args[2] === "202") {
+  console.log(JSON.stringify({ status: "completed", conclusion: "success", createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:01:00Z" }));
+} else if (args.join(" ").includes("actions/runs/202/jobs?")) {
+  console.log(JSON.stringify({ total_count: 1, jobs: [
+    { id: 1, name: "checks-node-compact-small-1", status: "completed", conclusion: "success", created_at: "2026-08-31T00:00:05Z", started_at: "2026-08-31T00:00:10Z", completed_at: "2026-08-31T00:00:40Z" }
+  ] }));
+} else {
+  console.error("unexpected gh invocation", args.join(" "));
+  process.exit(2);
+}
+`,
+    );
+    chmodSync(fakeGhPath, 0o755);
+
+    try {
+      const result = spawnSync(process.execPath, ["scripts/ci-run-timings.mjs", "--recent", "2"], {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_GH_BIN: fakeGhPath,
+          QUERY_ARGS_PATH: queryArgsPath,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("CI run 202");
+      expect(result.stdout).not.toContain("CI run 201");
+      expect(JSON.parse(readFileSync(queryArgsPath, "utf8"))).toEqual([
+        "run",
+        "list",
+        "--branch",
+        "main",
+        "--event",
+        "push",
+        "--workflow",
+        "CI",
+        "--limit",
+        "8",
+        "--json",
+        "databaseId,headSha,event,status,conclusion",
       ]);
     } finally {
       rmSync(fixtureDir, { force: true, recursive: true });

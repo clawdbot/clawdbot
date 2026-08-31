@@ -294,7 +294,7 @@ function getLatestMainPushCiRunId() {
   return String(databaseId);
 }
 
-export function selectRecentMainPushCiRuns(runs, limit) {
+function selectRecentMainPushCiRuns(runs, limit) {
   return runs
     .filter(
       (run) => run.event === "push" && run.status === "completed" && run.conclusion === "success",
