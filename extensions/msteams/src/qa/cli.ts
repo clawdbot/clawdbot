@@ -6,7 +6,7 @@ import {
   type LiveTransportQaCommandOptions,
 } from "openclaw/plugin-sdk/qa-runner-runtime";
 
-const DEFAULT_MSTEAMS_QA_SCENARIOS = ["channel-canary"] as const;
+const DEFAULT_MSTEAMS_QA_SCENARIOS = ["channel-canary", "msteams-reply-presentation"] as const;
 
 const loadMSTeamsQaAdapterRuntime = createLazyCliRuntimeLoader<
   typeof import("./adapter.runtime.js")

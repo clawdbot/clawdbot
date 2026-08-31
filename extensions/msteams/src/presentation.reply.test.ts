@@ -1,4 +1,5 @@
 // Msteams tests cover the controls an agent reply offers on the monitor reply path.
+import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../runtime-api.js";
 import { renderReplyPayloadsToMessages } from "./messenger.js";
@@ -29,6 +30,9 @@ describe("msteams reply presentation", () => {
     // the reply path turns a payload into Teams messages.
     expect(renderReply({ text: "Deploy finished", presentation: PRESENTATION })).toEqual([
       {
+        // The card is the whole message; `text` rides along only as the content the
+        // delivery record reports, and buildActivity never sends it separately.
+        text: "Deploy finished",
         card: {
           type: "AdaptiveCard",
           version: "1.4",
@@ -121,6 +125,21 @@ describe("msteams reply presentation", () => {
       ],
       actions: [{ type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } }],
     });
+  });
+
+  it("does not turn a silent reply into a card", () => {
+    // NO_REPLY is the agent choosing to stay silent. The text path drops it; the card
+    // path must not put it in front of the user as the card's first line instead.
+    expect(renderReply({ text: SILENT_REPLY_TOKEN, presentation: PRESENTATION })).toEqual([]);
+  });
+
+  it("keeps the card's text as the message's delivered content", () => {
+    const [message] = renderReply({ text: "Deploy finished", presentation: PRESENTATION });
+
+    // The dispatcher records `text` as what the reply delivered; without it a card-only
+    // message reports empty content on the partial-failure path.
+    expect(message?.text).toBe("Deploy finished");
+    expect(message?.card).toBeDefined();
   });
 
   it("leaves a reply without a presentation untouched", () => {

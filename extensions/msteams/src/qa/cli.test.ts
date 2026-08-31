@@ -18,7 +18,7 @@ describe("Microsoft Teams QA CLI", () => {
     runLiveTransportQaSuiteCommand.mockClear();
   });
 
-  it("runs the shared channel canary by default", async () => {
+  it("runs the shared canary and the reply-presentation scenario by default", async () => {
     const qa = new Command();
     msteamsQaCliRegistration.register(qa);
 
@@ -46,7 +46,7 @@ describe("Microsoft Teams QA CLI", () => {
         primaryModel: "openai/gpt-5.4",
         providerMode: "mock-openai",
       }),
-    ).toEqual(["channel-canary"]);
+    ).toEqual(["channel-canary", "msteams-reply-presentation"]);
   });
 
   it("honors explicit scenario selection", async () => {

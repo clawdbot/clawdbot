@@ -146,6 +146,40 @@ describe("Microsoft Teams QA transport adapter", () => {
       to: "channel:qa-primary",
     });
 
+    const card = { type: "AdaptiveCard", version: "1.4", body: [], actions: [] };
+    const cardResponse = await fetch(
+      `${bootstrapConfig.connectorUrl}qa/v3/conversations/${encodeURIComponent(
+        "19:qa-primary@thread.tacv2",
+      )}/activities`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${bootstrapConfig.botToken}`,
+          "content-type": "application/json",
+          "x-openclaw-msteams-qa-nonce": bootstrapConfig.nonce!,
+        },
+        body: JSON.stringify({
+          type: "message",
+          attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", content: card }],
+        }),
+      },
+    );
+    expect(cardResponse.status).toBe(200);
+    // A card-only reply has no activity text, so a scenario can only see it through the
+    // recorded attachment.
+    const cardCall = addOutboundMessage.mock.calls.at(-1)?.[0] as {
+      text: string;
+      attachments?: Array<{ mimeType: string; contentBase64: string }>;
+    };
+    expect(cardCall.text).toBe("");
+    expect(cardCall.attachments).toHaveLength(1);
+    expect(cardCall.attachments?.[0]?.mimeType).toBe("application/vnd.microsoft.card.adaptive");
+    expect(
+      JSON.parse(
+        Buffer.from(cardCall.attachments?.[0]?.contentBase64 ?? "", "base64").toString("utf8"),
+      ),
+    ).toEqual(card);
+
     await adapter.cleanup?.();
     await expect(fs.access(bootstrapPath)).rejects.toThrow();
   });

@@ -12,7 +12,11 @@ import {
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { hasReplyContent } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  isMessagePresentationInteractiveBlock,
+  normalizeMessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { extractMessageId } from "./media-helpers.js";
@@ -201,12 +205,25 @@ export function createTeamsReplyStreamController(params: {
     return { ...payload, text: remainingText || undefined };
   };
 
-  // A native stream carries text and nothing else. Media and portable controls are
-  // separate content, so the text-free remainder still goes to block delivery; dropping
-  // the whole payload would drop them along with the streamed text.
+  // A native stream carries text and nothing else, so the text-free remainder still goes
+  // to block delivery; dropping the whole payload would drop media and controls with the
+  // streamed text. Exception: "fallback" text is the prose rendering of the whole
+  // presentation, so for those the stream delivered the presentation's content too and
+  // only controls a channel renders natively are still missing.
   const suppressedFinalRemainder = (payload: ReplyPayload): Maybe<ReplyPayload> => {
-    const remainder = { ...payload, text: undefined };
-    return hasReplyContent(remainder) ? remainder : undefined;
+    const presentation = normalizeMessagePresentation(payload.presentation);
+    const streamCarriedThePresentation =
+      payload.presentationTextMode === "fallback" &&
+      !presentation?.blocks.some(isMessagePresentationInteractiveBlock);
+    const {
+      presentation: _presentation,
+      presentationTextMode: _presentationTextMode,
+      ...withoutPresentation
+    } = payload;
+    const remainder = streamCarriedThePresentation
+      ? { ...withoutPresentation, text: undefined }
+      : { ...payload, text: undefined };
+    return hasOutboundReplyContent(remainder) ? remainder : undefined;
   };
 
   // What that remainder already delivered must not return through the fallback, which

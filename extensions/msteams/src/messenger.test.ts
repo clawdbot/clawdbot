@@ -832,10 +832,13 @@ describe("msteams messenger", () => {
 
     it("sends a reply's presentation card as the activity's adaptive-card attachment", async () => {
       const card = { type: "AdaptiveCard", version: "1.4", body: [], actions: [] };
-      const activity = await buildActivity({ card }, baseRef);
+      const activity = await buildActivity({ card, text: "Deploy finished" }, baseRef);
       expect(activity.attachments).toEqual([
         { contentType: "application/vnd.microsoft.card.adaptive", content: card },
       ]);
+      // The card renders the reply's text; sending it as activity text as well would
+      // show the same answer twice above the card.
+      expect(activity.text).toBeUndefined();
       expect(requireAiGeneratedEntity(activity.entities).additionalType).toEqual([
         "AIGeneratedContent",
       ]);

@@ -402,6 +402,49 @@ describe("createTeamsReplyStreamController", () => {
     });
   });
 
+  it("drops a streamed reply's presentation when its text already rendered it", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+    ctrl.onPartialReply({ text: "Runs by region: EU 12, US 9" });
+
+    // "fallback" text is the prose rendering of the whole presentation, so a table-only
+    // presentation carries nothing the stream did not already deliver. Sending it anyway
+    // restates the table under the answer the user just read.
+    expect(
+      ctrl.preparePayload({
+        text: "Runs by region: EU 12, US 9",
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            {
+              type: "table" as const,
+              caption: "Runs by region",
+              headers: ["Region", "Runs"],
+              rows: [
+                ["EU", "12"],
+                ["US", "9"],
+              ],
+            },
+          ],
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a streamed reply's controls even when its text is the fallback prose", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+    ctrl.onPartialReply({ text: "streamed" });
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open run", value: "open" }] }],
+    };
+
+    // Prose cannot carry a control the channel renders natively, so the buttons remain.
+    expect(
+      ctrl.preparePayload({ text: "streamed", presentationTextMode: "fallback", presentation }),
+    ).toEqual({ text: undefined, presentationTextMode: "fallback", presentation });
+  });
+
   it("allows fallback delivery for second text segment after tool calls", () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });

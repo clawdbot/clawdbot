@@ -24,6 +24,8 @@ scenario:
   execution:
     kind: flow
     channel: msteams
+    suiteIsolation: isolated
+    isolationReason: Drives a Teams direct conversation and leaves a pending question open until the step resolves it.
     summary: Send /status in a Teams direct conversation through the real Gateway and the real Microsoft Teams plugin, then inspect the activities that reached the loopback Bot Framework Connector.
     config:
       conversationId: msteams-reply-authored-fallback-dm

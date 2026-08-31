@@ -240,7 +240,13 @@ export function renderReplyPayloadsToMessages(
     // on its own: a controls-only reply would otherwise be skipped as empty.
     const card = readMSTeamsPresentationCard(payload);
     if (card) {
-      out.push({ card });
+      // A silent reply is a sentinel, not content: it must not become the card's body.
+      if (isSilentReplyText(payload.text?.trim(), SILENT_REPLY_TOKEN)) {
+        continue;
+      }
+      // The card renders this text inside itself, so it never becomes activity text; it
+      // stays on the message as the content delivery records report.
+      out.push({ card, ...(payload.text ? { text: payload.text } : {}) });
       continue;
     }
     const reply = resolveSendableOutboundReplyParts(payload, {
@@ -301,6 +307,16 @@ async function buildActivity(
     feedbackLoopEnabled: options?.feedbackLoopEnabled ?? false,
   };
 
+  // A card already renders this message's text, so the activity carries the card alone;
+  // `msg.text` stays the logical content the delivery record reports.
+  if (msg.card) {
+    activity.entities = [AI_GENERATED_ENTITY];
+    activity.attachments = [
+      { contentType: "application/vnd.microsoft.card.adaptive", content: msg.card },
+    ];
+    return activity;
+  }
+
   if (msg.text) {
     // Parse mentions from text (format: @[Name](id))
     const { text: formattedText, entities } = parseMentions(msg.text);
@@ -310,13 +326,6 @@ async function buildActivity(
     activity.entities = [...(entities.length > 0 ? entities : []), AI_GENERATED_ENTITY];
   } else {
     activity.entities = [AI_GENERATED_ENTITY];
-  }
-
-  if (msg.card) {
-    activity.attachments = [
-      { contentType: "application/vnd.microsoft.card.adaptive", content: msg.card },
-    ];
-    return activity;
   }
 
   if (msg.mediaUrl) {

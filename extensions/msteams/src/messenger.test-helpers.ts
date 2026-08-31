@@ -1,12 +1,12 @@
 // Msteams test helpers build a Bot Framework app double and capture the activity a
-// rendered message produces, so both the messenger tests and the reply-presentation
-// tests assert against one send path.
+// rendered message produces, so the messenger tests assert every rendered shape against
+// one send path.
 import { vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { sendMSTeamsMessages } from "./messenger.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-export type MockAppOptions = {
+type MockAppOptions = {
   createFn?: (activity: unknown) => Promise<unknown>;
   onClientCreated?: (serviceUrl: string, conversationId: string) => void;
   onReference?: (ref: unknown) => void;
