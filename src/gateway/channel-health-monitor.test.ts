@@ -13,7 +13,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     getRuntimeSnapshot: vi.fn(() => ({ channels: {}, channelAccounts: {} })),
     getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
     startChannels: vi.fn(async () => {}),
-    startChannel: vi.fn(async () => {}),
+    startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
@@ -637,6 +637,7 @@ describe("channel-health-monitor", () => {
           account.connected = false;
           account.restartPending = true;
           account.reconnectAttempts = 0;
+          return new Map();
         }),
       },
     );
@@ -666,6 +667,7 @@ describe("channel-health-monitor", () => {
           account.connected = false;
           account.restartPending = true;
           account.reconnectAttempts = 0;
+          return new Map();
         }),
       },
     );
@@ -697,6 +699,7 @@ describe("channel-health-monitor", () => {
           account.connected = false;
           account.restartPending = true;
           account.reconnectAttempts = 0;
+          return new Map();
         }),
       },
     );
@@ -723,6 +726,7 @@ describe("channel-health-monitor", () => {
           account.connected = false;
           account.restartPending = true;
           account.reconnectAttempts = 0;
+          return new Map();
         }),
       },
     );
@@ -763,6 +767,7 @@ describe("channel-health-monitor", () => {
             account.connected = true;
             account.restartPending = false;
           }
+          return new Map();
         }),
       },
     );
@@ -879,6 +884,7 @@ describe("channel-health-monitor", () => {
       {
         startChannel: vi.fn(async () => {
           await startGate;
+          return new Map();
         }),
       },
     );
