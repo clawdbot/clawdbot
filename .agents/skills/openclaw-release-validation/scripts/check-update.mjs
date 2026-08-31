@@ -25,6 +25,14 @@ async function readJson(path) {
   }
 }
 
+async function readMetadataJson(root, filename) {
+  for (const directory of OPENCLAW_METADATA_DIRECTORIES) {
+    const value = await readJson(join(root, directory, filename));
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
 async function sha256(path) {
   return createHash("sha256")
     .update(await readFile(path))
@@ -212,10 +220,8 @@ async function main() {
   let canonical = { ref: EXPECTED_REF, version: null };
 
   try {
-    const originPath = join(skillDirectory, ".clawhub", "origin.json");
-    const lockPath = join(installRoot, ".clawhub", "lock.json");
-    const origin = await readJson(originPath);
-    const lock = await readJson(lockPath);
+    const origin = await readMetadataJson(skillDirectory, "origin.json");
+    const lock = await readMetadataJson(installRoot, "lock.json");
     const installedVersion = origin?.installedVersion;
     const sourceMatches =
       origin?.slug === SLUG &&
