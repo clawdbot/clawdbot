@@ -18,8 +18,10 @@ const COMPACTION_ID = "cmp_gateway_replay";
 const COMPACTION_DATA = "opaque-gateway-compaction";
 
 type CapturedRequest = {
-  body: { input?: unknown[] };
+  body: { input?: unknown[]; instructions?: unknown };
 };
+
+type MockModelScenario = "compaction-replay" | "llama-overflow-recovery";
 
 type MockModelServer = {
   baseUrl: string;
@@ -42,7 +44,7 @@ describe("Gateway OpenAI Responses compaction replay", () => {
     "replays persisted provider state on the next embedded turn",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const modelServer = await startMockModelServer();
+      const modelServer = await startMockModelServer("compaction-replay");
       modelServers.push(modelServer);
       const instance = await createOpenClawTestInstance({
         name: "gateway-openai-compaction-replay",
@@ -133,6 +135,63 @@ describe("Gateway OpenAI Responses compaction replay", () => {
       }
     },
   );
+
+  it(
+    "compacts and retries current llama.cpp overflow through Gateway",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const modelServer = await startMockModelServer("llama-overflow-recovery");
+      modelServers.push(modelServer);
+      const instance = await createOpenClawTestInstance({
+        name: "gateway-llama-overflow-recovery",
+        config: createTestConfig(modelServer.baseUrl),
+        env: {
+          OPENCLAW_DEBUG_MODEL_TRANSPORT: "1",
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        },
+      });
+      instances.push(instance);
+      await instance.startGateway();
+
+      const client = await connectGatewayClient({
+        url: instance.url,
+        token: instance.gatewayToken,
+        role: "operator",
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+      });
+      try {
+        await runAgentTurn(client, "seed transcript");
+        let proofError: unknown;
+        try {
+          await runAgentTurn(client, "trigger llama overflow recovery");
+        } catch (error) {
+          proofError = error;
+        }
+
+        expect(modelServer.requests).toHaveLength(4);
+        expect(JSON.stringify(modelServer.requests[1]?.body)).toContain(
+          "trigger llama overflow recovery",
+        );
+        expect(JSON.stringify(modelServer.requests[2]?.body)).toContain("seed transcript");
+        expect(JSON.stringify(modelServer.requests[3]?.body)).toContain(
+          "trigger llama overflow recovery",
+        );
+
+        const logs = instance.logs();
+        expect(logs).toContain("[context-overflow-diag]");
+        expect(logs).toContain("source=assistantError");
+        expect(logs).toContain("Context size has been exceeded.");
+        expect(logs).toContain("context overflow detected");
+        expect(logs).toContain("attempting auto-compaction");
+        expect(logs).toContain("auto-compaction succeeded");
+        expect(logs).toContain("retrying prompt");
+        expect(proofError).toBeUndefined();
+      } finally {
+        await disconnectGatewayClient(client);
+      }
+    },
+  );
 });
 
 function createTestConfig(baseUrl: string): OpenClawConfig {
@@ -145,6 +204,12 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,
         skills: [],
+        compaction: {
+          mode: "default",
+          keepRecentTokens: 1,
+          recentTurnsPreserve: 0,
+          memoryFlush: { enabled: false },
+        },
       },
     },
     tools: { profile: "minimal" },
@@ -202,10 +267,10 @@ function expectCompactionReplay(input: unknown[]): void {
   });
 }
 
-async function startMockModelServer(): Promise<MockModelServer> {
+async function startMockModelServer(scenario: MockModelScenario): Promise<MockModelServer> {
   const requests: CapturedRequest[] = [];
   const server = createServer((request, response) => {
-    void handleRequest(request, response, requests).catch((error: unknown) => {
+    void handleRequest(request, response, requests, scenario).catch((error: unknown) => {
       response.writeHead(500, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: String(error) } }));
     });
@@ -234,6 +299,7 @@ async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
   requests: CapturedRequest[],
+  scenario: MockModelScenario,
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   if (request.method === "GET" && url.pathname === "/v1/models") {
@@ -251,10 +317,18 @@ async function handleRequest(
   }
   const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as CapturedRequest["body"];
   requests.push({ body });
-  writeModelResponse(response, requests.length);
+  writeModelResponse(response, requests.length, scenario);
 }
 
-function writeModelResponse(response: ServerResponse, sequence: number): void {
+function writeModelResponse(
+  response: ServerResponse,
+  sequence: number,
+  scenario: MockModelScenario,
+): void {
+  if (scenario === "llama-overflow-recovery") {
+    writeOverflowRecoveryResponse(response, sequence);
+    return;
+  }
   if (sequence === 1) {
     const compaction = {
       type: "compaction",
@@ -277,7 +351,25 @@ function writeModelResponse(response: ServerResponse, sequence: number): void {
     ]);
     return;
   }
-  const text = `gateway replay response ${sequence}`;
+  writeTextModelResponse(response, sequence, `gateway replay response ${sequence}`);
+}
+
+function writeOverflowRecoveryResponse(response: ServerResponse, sequence: number): void {
+  if (sequence === 2) {
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "Context size has been exceeded." } }));
+    return;
+  }
+  const text =
+    sequence === 1
+      ? "seed response"
+      : sequence === 3
+        ? "seed transcript summary"
+        : "llama retry ok";
+  writeTextModelResponse(response, sequence, text);
+}
+
+function writeTextModelResponse(response: ServerResponse, sequence: number, text: string): void {
   const message = {
     type: "message",
     id: `msg_gateway_replay_${sequence}`,

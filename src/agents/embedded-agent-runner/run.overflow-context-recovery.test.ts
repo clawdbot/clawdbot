@@ -243,10 +243,10 @@ describe("recoverEmbeddedRunOverflow", () => {
     mocks.warn.mockReset();
   });
 
-  it("uses the canonical assistant classifier when the text heuristic misses", async () => {
+  it("compacts and retries current llama.cpp overflow reported by the assistant", async () => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "error",
-      errorMessage: "400 Your input exceeds the context window of this model",
+      errorMessage: "Context size has been exceeded.",
     });
     const result = await recoverEmbeddedRunOverflow(
       makeInput({ promptError: null, assistantOverflowCandidate }),

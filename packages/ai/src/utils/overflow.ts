@@ -26,7 +26,7 @@ export function isConfiguredContextSizeOverflowError(errorMessage: string): bool
  * - Groq: "Please reduce the length of the messages or completion"
  * - OpenRouter: "This endpoint's maximum context length is X tokens. However, you requested about Y tokens"
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
- * - llama.cpp: "the request exceeds the available context size, try increasing it"
+ * - llama.cpp: "request exceeds the available context size" or "Context size has been exceeded."
  * - LM Studio: "tokens to keep from the initial prompt is greater than the context length"
  * - GitHub Copilot: "prompt token count of X exceeds the limit of Y"
  * - MiniMax: "invalid params, context window exceeds limit"
@@ -55,7 +55,7 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /exceeds (?:the )?maximum allowed input length of [\d,]+ tokens?/i, // OpenRouter/Poolside
   /input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
   /exceeds the limit of \d+/i, // GitHub Copilot
-  /exceeds the available context size/i, // llama.cpp server
+  /(?:exceeds the available context size|context size has been exceeded)/i, // llama.cpp server
   /greater than the context length/i, // LM Studio
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
@@ -77,7 +77,7 @@ const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
   /invalid_argument[\s\S]*maximum number of tokens/i, // Google/Vertex
   /request exceeds the maximum size/i, // Anthropic
-  /context length exceeded/i,
+  /(?:context length exceeded|context size has been exceeded)/i,
   /maximum context length/i,
   /prompt is too long/i,
   /prompt too long/i,
@@ -183,7 +183,7 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
  * - OpenRouter (all backends): "maximum context length is X tokens"
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
- * - llama.cpp: "exceeds the available context size"
+ * - llama.cpp: "exceeds the available context size" or "Context size has been exceeded."
  * - LM Studio: "greater than the context length"
  * - Kimi For Coding: "exceeded model token limit: X (requested: Y)"
  * - z.ai: "tokens in request more than max tokens allowed" or "Prompt exceeds max length"

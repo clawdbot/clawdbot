@@ -132,6 +132,7 @@ export const overflowCases = [
           "prompt (8500 tokens) exceeds the available context size (8192 tokens), try increasing it",
       },
     ],
+    ["patterns-context-llamacpp-size-exceeded", { message: "Context size has been exceeded." }],
     [
       "patterns-context-ds4",
       {
