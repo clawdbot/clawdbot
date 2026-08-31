@@ -1,10 +1,14 @@
 // Install download tests cover downloading skill archives before extraction.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { __setFsSafeTestHooksForTest, getFsSafeTestHooks } from "@openclaw/fs-safe/test-hooks";
+import JSZip from "jszip";
+import * as tar from "tar";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
 import { createInstallDownloadTestState } from "../test-support/install-download-test-utils.js";
@@ -92,8 +96,8 @@ function mockArchiveResponse(buffer: Uint8Array): void {
       ok: true,
       status: 200,
       statusText: "OK",
-      body: Readable.from([Buffer.from(buffer)]),
       headers: new Headers(),
+      body: Readable.from([Buffer.from(buffer)]),
     },
     release: async () => undefined,
   });
@@ -227,6 +231,10 @@ beforeEach(() => {
   hasBinaryMock.mockReturnValue(true);
 });
 
+afterEach(() => {
+  __setFsSafeTestHooksForTest(undefined);
+});
+
 describe("installDownloadSpec extraction safety", () => {
   it("rejects oversized advertised HTTP downloads before staging the response body", async () => {
     let responseCompleted = false;
@@ -272,9 +280,9 @@ describe("installDownloadSpec extraction safety", () => {
         await expect(fileExists(path.join(toolsRoot, "runtime", "oversized.bin"))).resolves.toBe(
           false,
         );
-        await expect(
-          fs.readdir(path.join(toolsRoot, ".openclaw-download-staging")),
-        ).resolves.toEqual([]);
+        await expect(fileExists(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toBe(
+          false,
+        );
       },
     );
   }, 10_000);
@@ -316,8 +324,8 @@ describe("installDownloadSpec extraction safety", () => {
       body,
     );
     expect(release).toHaveBeenCalledOnce();
-    await expect(fs.readdir(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toEqual(
-      [],
+    await expect(fileExists(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toBe(
+      false,
     );
   });
 
@@ -390,9 +398,9 @@ describe("installDownloadSpec extraction safety", () => {
         await expect(fileExists(path.join(toolsRoot, "runtime", "oversized.bin"))).resolves.toBe(
           false,
         );
-        await expect(
-          fs.readdir(path.join(toolsRoot, ".openclaw-download-staging")),
-        ).resolves.toEqual([]);
+        await expect(fileExists(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toBe(
+          false,
+        );
       },
     );
   }, 45_000);
@@ -429,12 +437,244 @@ describe("installDownloadSpec extraction safety", () => {
           Buffer.concat(chunks),
         );
         expect(release).toHaveBeenCalledOnce();
-        await expect(
-          fs.readdir(path.join(toolsRoot, ".openclaw-download-staging")),
-        ).resolves.toEqual([]);
+        await expect(fileExists(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toBe(
+          false,
+        );
       },
     );
   });
+
+  it.each([
+    { name: "new destination", existing: false },
+    { name: "existing destination", existing: true },
+  ])("rejects a SHA-256 mismatch without changing a $name", async ({ existing }) => {
+    const archive = Buffer.from("unverified archive bytes");
+    const expected = "0".repeat(64);
+    const actual = createHash("sha256").update(archive).digest("hex");
+    const entry = buildEntry(`digest-mismatch-${existing ? "existing" : "new"}`);
+    const toolsRoot = resolveSkillToolsRootDir(entry);
+    const targetDir = path.join(toolsRoot, "runtime");
+    if (existing) {
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.writeFile(path.join(targetDir, "existing.txt"), "preserved");
+    }
+    mockArchiveResponse(archive);
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        ...buildDownloadSpec({
+          url: "https://example.invalid/runtime.tar.bz2?token=do-not-disclose",
+          archive: "tar.bz2",
+          targetDir: "runtime",
+        }),
+        sha256: expected,
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("runtime.tar.bz2");
+    expect(result.stderr).toContain(expected);
+    expect(result.stderr).toContain(actual);
+    expect(result.stderr).toContain("download was discarded");
+    expect(result.stderr).toContain("verify the publisher checksum");
+    expect(result.stderr).not.toContain("do-not-disclose");
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    await expect(fileExists(path.join(targetDir, "runtime.tar.bz2"))).resolves.toBe(false);
+    if (existing) {
+      await expect(fs.readdir(toolsRoot)).resolves.toEqual(["runtime"]);
+      await expect(fs.readdir(targetDir)).resolves.toEqual(["existing.txt"]);
+      await expect(fs.readFile(path.join(targetDir, "existing.txt"), "utf8")).resolves.toBe(
+        "preserved",
+      );
+    } else {
+      await expect(fs.readdir(toolsRoot)).resolves.toEqual([]);
+      await expect(fileExists(targetDir)).resolves.toBe(false);
+    }
+  });
+
+  it.each([
+    { name: "a matching SHA-256 digest", verified: true },
+    { name: "no declared digest", verified: false },
+  ])("installs and extracts a download with $name", async ({ verified }) => {
+    const payload = Buffer.from("verified download payload");
+    const entry = buildEntry(`digest-success-${verified ? "verified" : "legacy"}`);
+    const toolsRoot = resolveSkillToolsRootDir(entry);
+    const sha256 = createHash("sha256").update(payload).digest("hex");
+    mockArchiveResponse(payload);
+    mockTarExtractionFlow({
+      listOutput: "package/runtime.txt\n",
+      verboseListOutput: "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/runtime.txt\n",
+      extract: "ok",
+    });
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        url: "https://example.invalid/runtime.tar.bz2",
+        archive: "tar.bz2",
+        extract: true,
+        targetDir: "runtime",
+        ...(verified ? { sha256 } : {}),
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some((call) => (call[0] as string[])[1] === "xf"),
+    ).toBe(true);
+    await expect(fs.readFile(path.join(toolsRoot, "runtime", "runtime.tar.bz2"))).resolves.toEqual(
+      payload,
+    );
+    await expect(fs.readdir(toolsRoot)).resolves.toEqual(["runtime"]);
+    await expect(fs.readdir(path.join(toolsRoot, "runtime"))).resolves.toEqual(["runtime.tar.bz2"]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when the tools root is replaced after verified archive publication",
+    async () => {
+      const verifiedArchive = Buffer.from("verified archive bytes");
+      const replacementArchive = Buffer.from("unverified replacement archive bytes");
+      const entry = buildEntry("verified-post-publication-root-replacement");
+      const toolsRoot = resolveSkillToolsRootDir(entry);
+      const displacedRoot = `${toolsRoot}-displaced`;
+      const archivePath = path.join(toolsRoot, "runtime", "runtime.tar.bz2");
+      const replacementOutput = path.join(toolsRoot, "runtime", "runtime.txt");
+      let extractionArchivePath = "";
+      let extractedArchiveBytes: Buffer | undefined;
+      const release = vi.fn(async () => {
+        const publishedIdentity = await fs.stat(archivePath);
+        await getFsSafeTestHooks()?.afterPublishTargetCreated?.(
+          "exclusive-copy",
+          archivePath,
+          publishedIdentity,
+        );
+      });
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: new Headers(),
+          body: Readable.from([verifiedArchive]),
+        },
+        release,
+      });
+      runCommandWithTimeoutMock.mockImplementation(async (...argv: unknown[]) => {
+        const command = (argv[0] ?? []) as string[];
+        if (command[1] === "tf") {
+          return runCommandResult({ stdout: "runtime.txt\n" });
+        }
+        if (command[1] === "tvf") {
+          return runCommandResult({
+            stdout: "-rw-r--r--  0 0 0 0 Jan  1 00:00 runtime.txt\n",
+          });
+        }
+        if (command[1] === "xf") {
+          extractionArchivePath = command[2] ?? "";
+          extractedArchiveBytes = await fs.readFile(extractionArchivePath);
+          const extractionDir = command[command.indexOf("-C") + 1] ?? "";
+          await fs.writeFile(path.join(extractionDir, "runtime.txt"), extractedArchiveBytes);
+        }
+        return runCommandResult();
+      });
+
+      __setFsSafeTestHooksForTest({
+        afterPublishTargetCreated: async (_method, publishedPath) => {
+          if (publishedPath !== archivePath) {
+            return;
+          }
+          await fs.rename(toolsRoot, displacedRoot);
+          await fs.mkdir(path.join(toolsRoot, "runtime"), { recursive: true });
+          await fs.writeFile(archivePath, replacementArchive);
+        },
+      });
+
+      let result;
+      try {
+        result = await installDownloadSpec({
+          entry,
+          spec: {
+            ...buildDownloadSpec({
+              url: "https://example.invalid/runtime.tar.bz2",
+              archive: "tar.bz2",
+              targetDir: "runtime",
+            }),
+            sha256: createHash("sha256").update(verifiedArchive).digest("hex"),
+          },
+          timeoutMs: 30_000,
+        });
+      } finally {
+        __setFsSafeTestHooksForTest(undefined);
+      }
+
+      expect(result.ok).toBe(false);
+      expect(release).toHaveBeenCalledOnce();
+      expect(extractedArchiveBytes).toEqual(verifiedArchive);
+      expect(extractionArchivePath).not.toBe(archivePath);
+      await expect(fileExists(extractionArchivePath)).resolves.toBe(false);
+      await expect(fileExists(replacementOutput)).resolves.toBe(false);
+      await expect(fs.readFile(archivePath)).resolves.toEqual(replacementArchive);
+      await expect(
+        fs.readFile(path.join(displacedRoot, "runtime", "runtime.tar.bz2")),
+      ).resolves.toEqual(verifiedArchive);
+      expect(getFsSafeTestHooks()).toBeUndefined();
+    },
+  );
+
+  it.each(["tar.gz", "zip"] as const)(
+    "publishes verified %s archives with executable files and empty directories",
+    async (archiveType) => {
+      const entry = buildEntry(`verified-published-${archiveType}`);
+      const fixtureRoot = path.join(workspaceDir, `archive-fixture-${archiveType}`);
+      const packageDir = path.join(fixtureRoot, "package");
+      const executableContents = "#!/bin/sh\nprintf verified\\n\n";
+      await fs.mkdir(path.join(packageDir, "empty"), { recursive: true });
+      await fs.writeFile(path.join(packageDir, "run.sh"), executableContents, { mode: 0o755 });
+
+      let archive: Buffer;
+      if (archiveType === "zip") {
+        const zip = new JSZip();
+        zip.folder("package/empty/");
+        zip.file("package/run.sh", executableContents, { unixPermissions: 0o755 });
+        archive = await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
+      } else {
+        const fixtureArchive = path.join(fixtureRoot, "runtime.tar.gz");
+        await tar.c({ cwd: fixtureRoot, file: fixtureArchive, gzip: true }, ["package"]);
+        archive = await fs.readFile(fixtureArchive);
+      }
+      mockArchiveResponse(archive);
+
+      const archiveName = `runtime.${archiveType}`;
+      const result = await installDownloadSpec({
+        entry,
+        spec: {
+          ...buildDownloadSpec({
+            url: `https://example.invalid/${archiveName}`,
+            archive: archiveType,
+            targetDir: "runtime",
+            stripComponents: 1,
+          }),
+          sha256: createHash("sha256").update(archive).digest("hex"),
+        },
+        timeoutMs: 30_000,
+      });
+
+      const destinationDir = path.join(resolveSkillToolsRootDir(entry), "runtime");
+      expect(result.ok).toBe(true);
+      await expect(fs.readFile(path.join(destinationDir, archiveName))).resolves.toEqual(archive);
+      await expect(fs.readFile(path.join(destinationDir, "run.sh"), "utf8")).resolves.toBe(
+        executableContents,
+      );
+      expect((await fs.stat(path.join(destinationDir, "empty"))).isDirectory()).toBe(true);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(path.join(destinationDir, "run.sh"))).mode & 0o111).toBe(0o111);
+      }
+    },
+  );
 
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
     const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
@@ -514,12 +754,20 @@ describe("installDownloadSpec extraction safety", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it.runIf(process.platform !== "win32")(
-    "fails closed when the lexical tools root is rebound before the final copy",
-    async () => {
-      const entry = buildEntry("base-rebind");
+  it.runIf(process.platform !== "win32").each([
+    { name: "a legacy download", verified: false },
+    { name: "a matching-digest download", verified: true },
+  ])(
+    "fails closed when $name rebinds the lexical tools root before the final copy",
+    async ({ verified }) => {
+      const entry = buildEntry(`base-rebind-${verified ? "verified" : "legacy"}`);
       const safeToolsRoot = resolveSkillToolsRootDir(entry);
-      const outsideRoot = path.join(workspaceDir, "outside-root");
+      const outsideRoot = path.join(
+        workspaceDir,
+        `outside-root-${verified ? "verified" : "legacy"}`,
+      );
+      const payload = Buffer.from("payload");
+      await fs.mkdir(safeToolsRoot, { recursive: true });
       await fs.mkdir(outsideRoot, { recursive: true });
 
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -530,7 +778,7 @@ describe("installDownloadSpec extraction safety", () => {
           headers: new Headers(),
           body: Readable.from(
             (async function* () {
-              yield Buffer.from("payload");
+              yield payload;
               const reboundRoot = `${safeToolsRoot}-rebound`;
               await fs.rename(safeToolsRoot, reboundRoot);
               await fs.symlink(outsideRoot, safeToolsRoot);
@@ -548,6 +796,7 @@ describe("installDownloadSpec extraction safety", () => {
           url: "https://example.invalid/payload.bin",
           extract: false,
           targetDir: "runtime",
+          ...(verified ? { sha256: createHash("sha256").update(payload).digest("hex") } : {}),
         },
         timeoutMs: 30_000,
       });

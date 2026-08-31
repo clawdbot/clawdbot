@@ -21,7 +21,6 @@ import {
   reconcileSkillCollection,
   restoreLatestSkillCollectionBackup,
 } from "./collection-reconcile.js";
-import { getArchivedSkillFiles } from "./curator.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import {
   applySkillProposal,
@@ -515,19 +514,20 @@ describe("skill collection backup and restore", () => {
     await expect(fs.access(skillDir)).rejects.toThrow();
   });
 
-  it("preserves archived lifecycle state when backup commit fails", async () => {
+  it("preserves skill usage when a collection rewrite cannot commit", async () => {
     await writeWorkshopOwnedSkills([
-      { name: "archived", description: "Archived procedure", body: "# Original\n" },
+      { name: "procedure", description: "Recorded procedure", body: "# Original\n" },
     ]);
-    const skillFile = path.join(workspaceDir, "skills", "archived", "SKILL.md");
-    openOpenClawStateDatabase({ env: testState.env })
-      .db.prepare(
-        `INSERT INTO skill_lifecycle (
-          skill_file, skill_key, skill_name, state, pinned,
-          state_changed_at_ms, created_at_ms, archived_reason
+    const skillFile = path.join(workspaceDir, "skills", "procedure", "SKILL.md");
+    const database = openOpenClawStateDatabase({ env: testState.env }).db;
+    database
+      .prepare(
+        `INSERT INTO skill_usage (
+          skill_file, skill_key, skill_name, skill_source,
+          first_used_at_ms, last_used_at_ms, use_count, last_agent_id
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(skillFile, "archived", "Archived", "archived", 0, 10, 1, "unused");
+      .run(skillFile, "procedure", "Procedure", "openclaw-workspace", 1, 10, 3, "main");
     const rename = fs.rename.bind(fs);
     const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
       if (String(oldPath).includes(`${path.sep}.pending-`)) {
@@ -544,8 +544,8 @@ describe("skill collection backup and restore", () => {
         plan: [
           {
             action: "write",
-            name: "archived",
-            description: "Rewritten archived procedure",
+            name: "procedure",
+            description: "Rewritten recorded procedure",
             content: "# Rewritten\n",
           },
         ],
@@ -553,7 +553,9 @@ describe("skill collection backup and restore", () => {
     ).rejects.toThrow("forced backup commit failure");
     renameSpy.mockRestore();
 
-    expect(getArchivedSkillFiles({ env: testState.env })).toEqual(new Set([skillFile]));
+    expect(
+      database.prepare("SELECT use_count FROM skill_usage WHERE skill_file = ?").get(skillFile),
+    ).toEqual({ use_count: 3 });
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
   });
 

@@ -369,6 +369,8 @@ export function buildSelectableDefaultModels(
     (model) => model.available !== false || selected.has(modelCatalogRef(model)),
   );
   const seen = new Set(selectable.map(modelCatalogRef));
+  // An unavailable catalog cannot establish that a saved model is unavailable.
+  const availability = models === null ? {} : { available: false as const };
   for (const ref of selected) {
     if (seen.has(ref)) {
       continue;
@@ -381,7 +383,7 @@ export function buildSelectableDefaultModels(
           model.alias?.trim().toLowerCase() === normalized || model.id.trim() === ref.trim(),
       );
       selectable.push({
-        ...(match ?? { provider: "", id: ref, name: ref, available: false }),
+        ...(match ?? { provider: "", id: ref, name: ref, ...availability }),
         selectionRef: ref,
       });
       continue;
@@ -390,7 +392,7 @@ export function buildSelectableDefaultModels(
       provider: ref.slice(0, slash),
       id: ref.slice(slash + 1),
       name: ref,
-      available: false,
+      ...availability,
     });
   }
   return selectable;

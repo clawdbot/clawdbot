@@ -6,7 +6,6 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
-import { rejectOnboardingOption } from "../../commands/onboard-options.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -45,23 +44,24 @@ const MODERN_ONBOARD_OPTION_KEYS = new Set([
   "json",
 ]);
 
-function validateRecommendationParentOptions(
+async function validateRecommendationParentOptions(
   command: Command,
   runtime: RuntimeEnv,
-  allowJson = false,
-): boolean {
+  json = false,
+): Promise<boolean> {
   const unsupported = listExplicitOptionFlagsExcept(
     command,
-    allowJson ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
+    json ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
   );
   if (unsupported.length === 0) {
     return true;
   }
-  runtime.error(
+  const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
+  return rejectOnboardingOption(
+    { json },
+    runtime,
     `This recommendations command does not support parent option(s): ${unsupported.join(", ")}.`,
   );
-  runtime.exit(1);
-  return false;
 }
 
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
@@ -179,7 +179,7 @@ export function registerOnboardRuntimeOptions(
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
-    .option("--daemon-runtime <runtime>", "Daemon runtime: node")
+    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun (default: node)")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-bootstrap", "Skip creating default agent workspace files")
@@ -227,12 +227,13 @@ function pickOnboardAuthOptionValues(opts: Record<string, unknown>): Partial<Onb
   };
 }
 
-export function resolveOnboardCommandOptions(
+export async function resolveOnboardCommandOptions(
   opts: Record<string, unknown>,
   command: Command,
   runtime: RuntimeEnv,
-): OnboardOptions | false {
+): Promise<OnboardOptions | false> {
   if (opts.customImageInput === true && opts.customTextInput === true) {
+    const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
     const message = "Use either --custom-image-input or --custom-text-input, not both.";
     return rejectOnboardingOption({ json: opts.json === true }, runtime, message);
   }
@@ -320,17 +321,13 @@ export function registerOnboardCommand(program: Command): void {
     .action(async (opts, recommendationsCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
-        if (!validateRecommendationParentOptions(command, defaultRuntime, true)) {
+        const json = Boolean(opts.json || recommendationsCommand.parent?.opts().json);
+        if (!(await validateRecommendationParentOptions(command, defaultRuntime, json))) {
           return;
         }
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        onboardRecommendationsCommand(
-          {
-            json: Boolean(opts.json || recommendationsCommand.parent?.opts().json),
-          },
-          defaultRuntime,
-        );
+        onboardRecommendationsCommand({ json }, defaultRuntime);
       });
     });
 
@@ -342,8 +339,8 @@ export function registerOnboardCommand(program: Command): void {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         if (
-          !validateRecommendationParentOptions(command, defaultRuntime) ||
-          !validateRecommendationParentOptions(recommendations, defaultRuntime)
+          !(await validateRecommendationParentOptions(command, defaultRuntime)) ||
+          !(await validateRecommendationParentOptions(recommendations, defaultRuntime))
         ) {
           return;
         }
@@ -360,8 +357,8 @@ export function registerOnboardCommand(program: Command): void {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         if (
-          !validateRecommendationParentOptions(command, defaultRuntime) ||
-          !validateRecommendationParentOptions(recommendations, defaultRuntime)
+          !(await validateRecommendationParentOptions(command, defaultRuntime)) ||
+          !(await validateRecommendationParentOptions(recommendations, defaultRuntime))
         ) {
           return;
         }
@@ -374,6 +371,7 @@ export function registerOnboardCommand(program: Command): void {
   command.action(async (opts, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
+      const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
       const rejectOption = (message: string) =>
         rejectOnboardingOption({ json: Boolean(opts.json) }, defaultRuntime, message);
       if (opts.modern) {
@@ -420,7 +418,7 @@ export function registerOnboardCommand(program: Command): void {
         );
         return;
       }
-      const onboardingOptions = resolveOnboardCommandOptions(
+      const onboardingOptions = await resolveOnboardCommandOptions(
         opts as Record<string, unknown>,
         commandRuntime,
         defaultRuntime,

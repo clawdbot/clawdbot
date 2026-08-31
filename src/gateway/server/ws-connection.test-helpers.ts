@@ -6,6 +6,7 @@ import { expect, vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { prepareGatewayIngressAttribution } from "../ingress-attribution.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
 import type { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 type AttachGatewayWsConnectionParams = Parameters<typeof attachGatewayWsConnectionHandler>[0];
@@ -22,6 +23,7 @@ export type GatewayWsTestSocket = EventEmitter & {
   send: ReturnType<typeof vi.fn>;
   ping?: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  terminate: ReturnType<typeof vi.fn>;
 };
 
 export function createGatewayWsTestLogger() {
@@ -50,6 +52,9 @@ export function createGatewayWsTestRequestContext(
     unsubscribeAllSessionEvents: vi.fn(),
     nodeRegistry: overrides.nodeRegistry ?? { unregister: vi.fn() },
     nodeUnsubscribeAll: vi.fn(),
+    broadcast: vi.fn(),
+    incrementPresenceVersion: vi.fn(() => 1),
+    getHealthVersion: vi.fn(() => 1),
   };
 }
 
@@ -61,6 +66,7 @@ export function createGatewayWsTestSocket(
   } = {},
 ): GatewayWsTestSocket {
   const socket = Object.assign(new EventEmitter(), {
+    _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
     _socket: {
       remoteAddress: "127.0.0.1",
       remotePort: 1234,
@@ -79,6 +85,7 @@ export function createGatewayWsTestSocket(
         socket.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
       }
     }),
+    terminate: vi.fn(),
   });
   return socket;
 }

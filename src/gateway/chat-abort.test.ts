@@ -69,7 +69,7 @@ function createOps(params: {
   Object.assign(chatRunState.getOrCreate(runId), {
     ...(buffer !== undefined ? { buffer, deltaLastBroadcastText: buffer } : {}),
     deltaSentAt: Date.now(),
-    deltaLastBroadcastLen: buffer?.length ?? 0,
+    assistantScope: { itemId: "assistant-1", prefix: "" },
     agentText: {
       assistant: {
         lastSentAt: Date.now(),
@@ -378,7 +378,7 @@ describe("registerChatAbortController", () => {
     expect(registration.entry?.registrationCleanupRequested).toBe(true);
   });
 
-  it("force-cleans registrations when dispatch fails before lifecycle starts", () => {
+  it("cleans registrations when dispatch fails before lifecycle starts", () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const registration = registerChatAbortController({
       chatAbortControllers,
@@ -388,7 +388,7 @@ describe("registerChatAbortController", () => {
       timeoutMs: 60_000,
     });
 
-    registration.cleanup({ force: true });
+    registration.cleanup();
 
     expect(chatAbortControllers.has("run-before-dispatch")).toBe(false);
   });
@@ -484,7 +484,7 @@ describe("abortChatRunById", () => {
     expectRunAborted({ result, entry, ops, runId });
     expect(ops.chatRunState.runs.get(runId)?.buffer).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.deltaSentAt).toBeUndefined();
-    expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastLen).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.assistantScope).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastText).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);

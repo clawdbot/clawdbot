@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as ttsRuntime from "../../tts/tts.js";
+import { getCoreTtsToolResultMediaUrls } from "./tts-tool-result-provenance.js";
 import { createTtsTool } from "./tts-tool.js";
 
 let textToSpeechSpy: ReturnType<typeof vi.spyOn>;
@@ -58,6 +59,7 @@ describe("createTtsTool", () => {
       audioAsVoice: true,
     });
     expect(JSON.stringify(result.content)).not.toContain("MEDIA:");
+    expect(getCoreTtsToolResultMediaUrls(result)).toEqual(["/tmp/reply.opus"]);
   });
 
   it("uses audioAsVoice from the TTS runtime even when the provider output is not native", async () => {

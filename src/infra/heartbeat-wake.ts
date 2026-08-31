@@ -10,6 +10,7 @@ import type {
   HeartbeatWakeHandler,
   HeartbeatWakeIntent,
   HeartbeatWakeOverride,
+  HeartbeatWakeRequest,
   HeartbeatWakeSource,
 } from "./heartbeat-wake-contracts.js";
 import {
@@ -39,10 +40,12 @@ export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
 export const HEARTBEAT_SKIP_NO_PENDING_EVENT = "no-pending-event";
 export const HEARTBEAT_SKIP_PREEMPTED = "preempted";
+export const HEARTBEAT_SKIP_CHANNEL_NOT_READY = "channel-not-ready";
 const RETRYABLE_HEARTBEAT_SKIP_REASONS = new Set([
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_PREEMPTED,
+  HEARTBEAT_SKIP_CHANNEL_NOT_READY,
 ]);
 const RETRYABLE_GUARD_SKIP_REASONS = new Set(["not-due", "min-spacing", "flood"]);
 
@@ -76,7 +79,6 @@ type PendingWakeReason = {
   sessionKey?: string;
   heartbeat?: HeartbeatWakeOverride;
   scheduledEveryMs?: number;
-  scheduledAnchorMs?: number;
   tasks?: HeartbeatScheduledTask[];
   /** Earliest instant at which this retained wake class may be dispatched. */
   notBeforeMs?: number;
@@ -142,10 +144,6 @@ function resolveWakePriority(params: {
   return REASON_PRIORITY.DEFAULT;
 }
 
-function normalizeWakeReason(reason?: string): string {
-  return normalizeHeartbeatWakeReason(reason);
-}
-
 function mergePendingWakeReasons(
   previous: PendingWakeReason,
   next: PendingWakeReason,
@@ -178,7 +176,6 @@ function mergePendingWakeReasons(
     preferred.retainedWork !== true &&
     (previous.retainedWork === true || next.retainedWork === true);
   const scheduledEveryMs = preferred.scheduledEveryMs ?? other.scheduledEveryMs;
-  const scheduledAnchorMs = preferred.scheduledAnchorMs ?? other.scheduledAnchorMs;
   const immediateBarrierSequences = [
     previous.immediateBarrierSequence,
     next.immediateBarrierSequence,
@@ -202,7 +199,6 @@ function mergePendingWakeReasons(
       ? { heartbeat: preferred.heartbeat ?? other.heartbeat }
       : {}),
     ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
-    ...(scheduledAnchorMs !== undefined ? { scheduledAnchorMs } : {}),
     ...(mergedTasks.length ? { tasks: mergedTasks } : {}),
   };
   if (!bypassRetainedWork && (previous.retainedWork || next.retainedWork)) {
@@ -356,7 +352,6 @@ function queuePendingWakeReason(params: {
   sessionKey?: string;
   heartbeat?: HeartbeatWakeOverride;
   scheduledEveryMs?: number;
-  scheduledAnchorMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
   notBeforeMs?: number;
   blockTargetUntilMs?: number;
@@ -364,7 +359,7 @@ function queuePendingWakeReason(params: {
 }) {
   const requestedAt = params.requestedAt ?? performance.now();
   const enqueueSequence = params.enqueueSequence ?? ++wakeEnqueueSequence;
-  const normalizedReason = normalizeWakeReason(params.reason);
+  const normalizedReason = normalizeHeartbeatWakeReason(params.reason);
   const normalizedAgentId = normalizeHeartbeatWakeTarget(params.agentId);
   const normalizedSessionKey = normalizeHeartbeatWakeTarget(params.sessionKey);
   const wakeTargetKey = resolveHeartbeatWakeTargetKey({
@@ -393,7 +388,6 @@ function queuePendingWakeReason(params: {
     sessionKey: normalizedSessionKey,
     heartbeat: params.heartbeat,
     scheduledEveryMs: params.scheduledEveryMs,
-    scheduledAnchorMs: params.scheduledAnchorMs,
     ...(params.tasks?.length ? { tasks: [...params.tasks] } : {}),
     ...(params.notBeforeMs === undefined ? {} : { notBeforeMs: params.notBeforeMs }),
     ...(params.retainedWork ? { retainedWork: true } : {}),
@@ -415,12 +409,13 @@ function queuePendingWakeReason(params: {
 }
 
 function resolveHeartbeatRetrySchedule(
-  pendingWake: PendingWakeReason,
+  pendingWake: Pick<HeartbeatWakeRequest, "intent">,
   result: Extract<HeartbeatRunResult, { status: "skipped" }>,
 ): { delayMs: number; deferWakeOnly: boolean } {
   const now = Date.now();
   const deferWakeOnly =
     result.reason === HEARTBEAT_SKIP_PREEMPTED ||
+    result.reason === HEARTBEAT_SKIP_CHANNEL_NOT_READY ||
     (result.reason === HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT &&
       (pendingWake.intent === "scheduled" || pendingWake.intent === "task"));
   return {
@@ -435,7 +430,7 @@ function resolveHeartbeatRetrySchedule(
 }
 
 function retryPendingWake(
-  pendingWake: PendingWakeReason,
+  pendingWake: Parameters<typeof queuePendingWakeReason>[0],
   retrySchedule: { delayMs: number; deferWakeOnly: boolean } = {
     delayMs: DEFAULT_RETRY_MS,
     deferWakeOnly: false,
@@ -452,7 +447,6 @@ function retryPendingWake(
     sessionKey: pendingWake.sessionKey,
     heartbeat: pendingWake.heartbeat,
     scheduledEveryMs: pendingWake.scheduledEveryMs,
-    scheduledAnchorMs: pendingWake.scheduledAnchorMs,
     tasks: pendingWake.tasks,
     requestedAt: pendingWake.requestedAt,
     enqueueSequence: pendingWake.enqueueSequence,
@@ -498,9 +492,6 @@ async function dispatchPendingWakeGroup(params: {
         ...(pendingWake.heartbeat ? { heartbeat: pendingWake.heartbeat } : {}),
         ...(pendingWake.scheduledEveryMs !== undefined
           ? { scheduledEveryMs: pendingWake.scheduledEveryMs }
-          : {}),
-        ...(pendingWake.scheduledAnchorMs !== undefined
-          ? { scheduledAnchorMs: pendingWake.scheduledAnchorMs }
           : {}),
         ...(pendingWake.tasks ? { tasks: pendingWake.tasks } : {}),
         ...(pendingWake.retainedWork ? { retainedWork: true } : {}),
@@ -745,7 +736,6 @@ export function requestHeartbeat(opts: {
   sessionKey?: string;
   heartbeat?: HeartbeatWakeOverride;
   scheduledEveryMs?: number;
-  scheduledAnchorMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
 }) {
   const requestedAt = performance.now();
@@ -761,5 +751,15 @@ export function requestHeartbeat(opts: {
       readyAtMs: requestedAt + resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0),
     });
     schedule(coalesceMs);
+  });
+}
+
+/** Transfers a direct attempt to the wake owner's existing retry lifecycle. */
+export function requestHeartbeatRetry(
+  wake: HeartbeatWakeRequest,
+  result: Extract<HeartbeatRunResult, { status: "skipped" }>,
+) {
+  runWithoutOwnedSessionTranscriptWrites(() => {
+    retryPendingWake(wake, resolveHeartbeatRetrySchedule(wake, result));
   });
 }

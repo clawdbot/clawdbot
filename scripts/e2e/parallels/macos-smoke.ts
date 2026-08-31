@@ -1,5 +1,6 @@
 #!/usr/bin/env -S pnpm tsx
 // Macos Smoke script supports OpenClaw repository automation.
+import { readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,7 +14,6 @@ import {
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
   parseMacosDsclUserHomeLine,
-  packOpenClaw,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
@@ -30,7 +30,6 @@ import {
   shouldSkipSnapshotRestore,
   shellQuote,
   validateSnapshotRestoreMode,
-  startHostServer,
   warn,
   withProgressOnStderr,
   writeJson,
@@ -47,7 +46,14 @@ import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runne
 import { MacosDiscordSmoke } from "./macos-discord.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
-import { parseSmokeCliArgs, type SmokeCliOptions } from "./smoke-common.ts";
+import {
+  installSmokeRuntimeCompanions,
+  npmRegistryEnv,
+  packAndServeSmokeArtifact,
+  parseSmokeCliArgs,
+  posixStopGatewayScript,
+  type SmokeCliOptions,
+} from "./smoke-common.ts";
 
 interface MacosOptions extends SmokeCliOptions {
   vmNameExplicit: boolean;
@@ -189,6 +195,7 @@ class MacosSmoke {
   private snapshot!: SnapshotInfo;
   private phases!: PhaseRunner;
   private guest!: MacosGuest;
+  private guestEnv: Record<string, string> = {};
   private discord: MacosDiscordSmoke | null = null;
   private guestUser = "";
   private guestTransport: "current-user" | "sudo" = "current-user";
@@ -238,6 +245,7 @@ class MacosSmoke {
     this.guest = new MacosGuest(
       {
         getTransport: () => this.guestTransport,
+        getEnv: () => this.guestEnv,
         getUser: () => this.guestUser,
         path: guestPath,
         resolveDesktopHome: (user) => this.resolveDesktopHome(user),
@@ -254,12 +262,6 @@ class MacosSmoke {
         : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
-      this.hostIp = resolveHostIp(this.options.hostIp);
-      this.hostPort = await resolveHostPort(
-        this.options.hostPort,
-        this.options.hostPortExplicit,
-        defaultOptions().hostPort,
-      );
 
       say(`VM: ${this.options.vmName}`);
       say(`Snapshot hint: ${this.options.snapshotHint}`);
@@ -273,24 +275,26 @@ class MacosSmoke {
       );
       say(`Run logs: ${this.runDir}`);
 
-      if (await this.needsHostTgz()) {
-        this.artifact = await packOpenClaw({
-          destination: this.tgzDir,
-          packageSpec: this.options.targetPackageSpec,
-          requireControlUi: true,
-        });
+      if (this.needsHostTgz()) {
+        this.hostIp = resolveHostIp(this.options.hostIp);
+        this.hostPort = await resolveHostPort(
+          this.options.hostPort,
+          this.options.hostPortExplicit,
+          defaultOptions().hostPort,
+        );
+        [this.artifact, this.server, this.hostPort] = await packAndServeSmokeArtifact(
+          this.tgzDir,
+          this.options.targetPackageSpec,
+          this.hostIp,
+          this.hostPort,
+          this.artifactLabel(),
+          true,
+          this.options.provider,
+        );
         if (this.options.targetPackageSpec) {
           this.targetExpectVersion =
             this.artifact.version || (await packageVersionFromTgz(this.artifact.path));
         }
-        this.server = await startHostServer({
-          artifactPath: this.artifact.path,
-          dir: this.tgzDir,
-          hostIp: this.hostIp,
-          label: this.artifactLabel(),
-          port: this.hostPort,
-        });
-        this.hostPort = this.server.port;
       } else if (this.targetInstallsDirectly()) {
         this.targetExpectVersion = run(
           "npm",
@@ -384,11 +388,10 @@ class MacosSmoke {
     return Boolean(spec && !/^(https?:|file:|\/|\.\/|\.\.\/|.*\.tgz$)/.test(spec));
   }
 
-  private async needsHostTgz(): Promise<boolean> {
-    if (!this.options.targetPackageSpec) {
-      return true;
-    }
-    return !this.targetInstallsDirectly();
+  private needsHostTgz(): boolean {
+    return this.options.targetPackageSpec
+      ? !this.targetInstallsDirectly()
+      : this.options.mode !== "upgrade";
   }
 
   private artifactLabel(): string {
@@ -419,6 +422,15 @@ class MacosSmoke {
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 60, () => this.verifyTargetVersion());
     await this.phase("fresh.verify-bundle-permissions", 180, () => this.verifyBundlePermissions());
+    await this.phase("fresh.install-companions", 600, () =>
+      installSmokeRuntimeCompanions({
+        provider: this.options.provider,
+        readCli: (args) => this.guestExec([guestOpenClaw, ...args]),
+        installCli: (args) => {
+          this.guestExec([guestOpenClaw, ...args]);
+        },
+      }),
+    );
     await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("fresh.gateway-start", 180, () => this.startManualGatewayIfNeeded());
     await this.phase("fresh.gateway-status", 180, () => this.verifyGateway());
@@ -643,6 +655,8 @@ exec node "$entry" ${argv}`,
   }
 
   private restoreSnapshot(): void {
+    // A restored baseline must resolve public packages, not the previous candidate registry.
+    this.guestEnv = {};
     if (shouldSkipSnapshotRestore()) {
       say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
       this.waitForCurrentUser();
@@ -653,7 +667,7 @@ exec node "$entry" ${argv}`,
     for (let attempt = 1; attempt <= 2; attempt++) {
       const result = run(
         "prlctl",
-        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id, "--skip-resume"],
+        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
         { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(360_000) },
       );
       this.log(result.stdout);
@@ -735,14 +749,12 @@ ${guestOpenClaw} --version`,
   }
 
   private installMain(tempName: string): void {
-    const npmRegistryEnv = this.options.npmRegistry
-      ? `NPM_CONFIG_REGISTRY=${shellQuote(this.options.npmRegistry)} npm_config_registry=${shellQuote(this.options.npmRegistry)} `
-      : "";
+    this.guestEnv = npmRegistryEnv(this.options.npmRegistry ?? this.server?.registry?.url);
     if (this.targetInstallsDirectly()) {
       this
         .guestSh(`printf 'install-source: registry-spec %s\\n' ${shellQuote(this.options.targetPackageSpec || "")}
 for attempt in 1 2; do
-  if ${npmRegistryEnv}${guestNpm} install -g ${shellQuote(this.options.targetPackageSpec || "")}; then
+  if ${guestNpm} install -g ${shellQuote(this.options.targetPackageSpec || "")}; then
     break
   fi
   if [ "$attempt" -eq 2 ]; then
@@ -762,7 +774,7 @@ ${guestOpenClaw} --version`);
 curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
       tgzUrl,
     )} -o /tmp/${tempName}
-${npmRegistryEnv}${guestNpm} install -g /tmp/${tempName}
+${guestNpm} install -g /tmp/${tempName}
 ${guestOpenClaw} --version`);
   }
 
@@ -841,10 +853,15 @@ fi`);
   }
 
   private ensureGuestPnpm(): void {
+    const { packageManager } = JSON.parse(
+      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as { packageManager: string };
+    const spec = packageManager.replace(/\+.*$/u, "");
+    const version = spec.slice("pnpm@".length);
     this.guestSh(String.raw`set -eu
 bootstrap_root=/tmp/openclaw-smoke-pnpm-bootstrap
 bootstrap_bin="$bootstrap_root/node_modules/.bin"
-if [ -x "$bootstrap_bin/pnpm" ]; then
+if [ -x "$bootstrap_bin/pnpm" ] && [ "$("$bootstrap_bin/pnpm" --version)" = ${shellQuote(version)} ]; then
   echo "bootstrap-pnpm: reuse"
   "$bootstrap_bin/pnpm" --version
   exit 0
@@ -852,8 +869,9 @@ fi
 echo "bootstrap-pnpm: install"
 rm -rf "$bootstrap_root"
 mkdir -p "$bootstrap_root"
-npm install --prefix "$bootstrap_root" --no-save pnpm@11
-"$bootstrap_bin/pnpm" --version`);
+node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({private: true, allowScripts: {[process.argv[2]]: true}}))' "$bootstrap_root/package.json" ${shellQuote(spec)}
+npm install --prefix "$bootstrap_root" --no-save ${shellQuote(spec)}
+test "$("$bootstrap_bin/pnpm" --version)" = ${shellQuote(version)}`);
   }
 
   private async runDevChannelUpdate(): Promise<void> {
@@ -959,29 +977,7 @@ sleep 1`,
   }
 
   private guestOpenClaw(args: string[], check: boolean): boolean {
-    const result = run(
-      "prlctl",
-      [
-        "exec",
-        this.options.vmName,
-        ...(this.guestTransport === "sudo"
-          ? [
-              "/usr/bin/sudo",
-              "-H",
-              "-u",
-              this.guestUser,
-              "/usr/bin/env",
-              `HOME=${this.guestHome()}`,
-              `PATH=${guestPath}`,
-            ]
-          : ["--current-user", "/usr/bin/env", `PATH=${guestPath}`]),
-        guestOpenClaw,
-        ...args,
-      ],
-      { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs() },
-    );
-    this.log(result.stdout);
-    this.log(result.stderr);
+    const result = this.guest.run([guestOpenClaw, ...args], { check: false });
     if (check && result.status !== 0) {
       throw new Error(`openclaw ${args.join(" ")} failed`);
     }
@@ -1037,6 +1033,9 @@ exit 1`);
   }
 
   private verifyTurn(): void {
+    this.guestSh(
+      `set -euo pipefail\n${posixStopGatewayScript(this.guestTransport === "sudo" ? undefined : guestOpenClawEntryRunner)}`,
+    );
     this.guestOpenClawEntryExec(["models", "set", this.auth.modelId]);
     const modelProviderConfigBatch = modelProviderConfigBatchJson(
       this.auth.modelId,

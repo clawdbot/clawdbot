@@ -16,6 +16,8 @@ import {
   markReplyPayloadAsTtsSupplement,
   normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
+  resolveAskUserQuestionOptionIndex,
+  resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendPayloadMediaSequence,
@@ -25,6 +27,32 @@ import {
   sendPayloadTextChunkSequence,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
+
+describe("ask_user question option indices", () => {
+  it("reads bounded owner order and matches presented values case-insensitively", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const questionOptionIndices = resolveAskUserQuestionOptionIndices({
+      channelData: { askUser: { questionId, optionValues: ["Staging", "Production"] } },
+    });
+
+    expect(
+      resolveAskUserQuestionOptionIndex({
+        questionOptionIndices,
+        questionId,
+        optionValue: " production ",
+      }),
+    ).toBe(1);
+  });
+
+  it.each([
+    undefined,
+    { questionId: "ask_1", optionValues: ["Only"] },
+    { questionId: "ask_1", optionValues: ["A", " a "] },
+    { questionId: "ask_1", optionValues: ["A", "B", "C", "D", "E"] },
+  ])("rejects missing or ambiguous owner context %#", (askUser) => {
+    expect(resolveAskUserQuestionOptionIndices({ channelData: { askUser } })).toBeUndefined();
+  });
+});
 
 describe("isReasoningReplyPayload", () => {
   it.each([

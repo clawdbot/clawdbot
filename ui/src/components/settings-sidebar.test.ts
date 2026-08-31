@@ -183,7 +183,9 @@ describe("settings sidebar search", () => {
       ),
     ].map((item) => item.textContent?.trim());
     expect(resultLabels).toEqual(["MCP", "Appearance", "Language"]);
-    expect(container.querySelector(".settings-sidebar__item--active")).toBeNull();
+    const active = container.querySelector(".settings-sidebar__item--active");
+    expect(active?.textContent).toContain("Appearance");
+    expect(active?.getAttribute("aria-current")).toBe("page");
 
     const language = container.querySelector<HTMLAnchorElement>(
       '.settings-sidebar__subitem[href="/settings/appearance?section=__appearance__#settings-language"]',
@@ -530,12 +532,18 @@ describe("settings sidebar search", () => {
 
   it("shows the offline retry action without an online status", () => {
     const onRetryConnect = vi.fn();
-    const renderSidebar = (offline: boolean, lastError: string | null, queuedOutboxCount = 0) =>
+    const renderSidebar = (
+      offline: boolean,
+      lastError: string | null,
+      queuedOutboxCount = 0,
+      restartPending = false,
+    ) =>
       render(
         renderSettingsSidebar({
           basePath: "",
           activeRouteId: "appearance",
           offline,
+          restartPending,
           queuedOutboxCount,
           lastError,
           gatewayVersion: "1.0.0",
@@ -569,5 +577,11 @@ describe("settings sidebar search", () => {
     expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
     button?.click();
     expect(onRetryConnect).toHaveBeenCalledOnce();
+
+    renderSidebar(true, null, 3, true);
+    expect(container.querySelector(".sidebar-footer-bar__status--restarting")?.textContent).toBe(
+      "Restarting…",
+    );
+    expect(container.querySelector("button.sidebar-footer-bar__status")).toBeNull();
   });
 });

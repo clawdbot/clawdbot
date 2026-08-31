@@ -11,7 +11,17 @@ import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sess
 import { SessionOwnerSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
+export * from "./sessions-goal.js";
+export { SessionsListParamsSchema, type SessionsListParams } from "./sessions-list.js";
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
+export {
+  SessionParticipantIdentitySchema,
+  SessionParticipantSchema,
+  SessionPersonSchema,
+  type SessionParticipantIdentity,
+  type SessionParticipant,
+  type SessionPerson,
+} from "./session-participant.js";
 export {
   PreservedSessionWorktreeSchema,
   SessionsDeleteParamsSchema,
@@ -388,48 +398,6 @@ export const SessionsDiffResultSchema = closedObject({
   ),
 });
 
-/** Lists sessions with optional scope, activity, label, and preview filters. */
-export const SessionsListParamsSchema = closedObject({
-  /** Maximum rows to return; omitted Gateway RPC calls use a bounded default. */
-  limit: Type.Optional(Type.Integer({ minimum: 1 })),
-  offset: Type.Optional(Type.Integer({ minimum: 0 })),
-  activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
-  /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
-  requireLastInteraction: Type.Optional(Type.Boolean()),
-  sortBy: Type.Optional(Type.Union([Type.Literal("updatedAt"), Type.Literal("lastInteractionAt")])),
-  includeGlobal: Type.Optional(Type.Boolean()),
-  includeUnknown: Type.Optional(Type.Boolean()),
-  /** Limit agent-scoped rows to agents currently present in config. */
-  configuredAgentsOnly: Type.Optional(Type.Boolean()),
-  /**
-   * Read a bounded transcript head projection to derive a title from the first user message.
-   * Use `limit` to bound projection work on large stores.
-   */
-  includeDerivedTitles: Type.Optional(Type.Boolean()),
-  /**
-   * Read a bounded transcript tail projection for the latest visible user or assistant text.
-   * The returned short preview excludes tool, system, reasoning, and silent rows.
-   */
-  includeLastMessage: Type.Optional(Type.Boolean()),
-  label: Type.Optional(SessionLabelString),
-  /** Limit rows to sessions with an explicitly stored Control UI face preference. */
-  boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
-  /** Filter rows by their immutable creator provenance. */
-  creatorId: Type.Optional(NonEmptyString),
-  /** Filter rows by their current assignable owner identity. */
-  ownerId: Type.Optional(NonEmptyString),
-  /** Limit rows to sessions owned by or previously prompted by the authenticated viewer. */
-  involvingMe: Type.Optional(Type.Boolean()),
-  spawnedBy: Type.Optional(NonEmptyString),
-  agentId: Type.Optional(NonEmptyString),
-  search: Type.Optional(Type.String()),
-  /**
-   * True lists archived sessions; "all" lists archived and active;
-   * false or omitted lists active sessions.
-   */
-  archived: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("all")])),
-});
-
 /** Searches one agent's indexed session transcripts, optionally within selected sessions. */
 export const SessionsSearchParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
@@ -597,7 +565,7 @@ const SidebarSectionIdString = Type.String({ minLength: 1, maxLength: 512 });
 /** Custom session group catalog in display order. */
 export const SessionsGroupsListResultSchema = closedObject({
   groups: Type.Array(SessionGroupSchema),
-  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
 });
 
 /** Reads the New Session defaults for the custom group catalog. */
@@ -610,8 +578,8 @@ export const SessionsGroupsDefaultsResultSchema = closedObject({
 
 /** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
 export const SessionsGroupsPutParamsSchema = closedObject({
-  names: Type.Array(SessionLabelString, { maxItems: 200 }),
-  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
+  names: Type.Array(SessionLabelString),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
 });
 
 /** Renames a group and repoints every member session's category. */
@@ -640,7 +608,7 @@ export const SessionsGroupsDeleteParamsSchema = closedObject({ name: SessionLabe
 export const SessionsGroupsMutationResultSchema = closedObject({
   ok: Type.Literal(true),
   groups: Type.Array(SessionGroupSchema),
-  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString, { maxItems: 232 })),
+  sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
   updatedSessions: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
@@ -819,7 +787,6 @@ export const SessionsUsageParamsSchema = closedObject({
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
-export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;

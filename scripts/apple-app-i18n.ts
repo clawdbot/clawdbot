@@ -25,16 +25,6 @@ const IOS_SOURCE_PREFIXES = [
   SHARED_CHAT_UI_SOURCE_PREFIX,
   "apps/shared/OpenClawKit/Sources/OpenClawKit/",
 ] as const;
-const APPLE_CATALOG_KINDS = new Set([
-  "conditional-branch",
-  "ui-call",
-  "ui-call-multiline",
-  "ui-localized-call",
-  "ui-localized-call-multiline",
-  "ui-modifier",
-  "ui-named-argument",
-  "ui-named-argument-multiline",
-]);
 const IOS_CATALOG_EXCLUSIONS = new Set([
   // Product names and preview-only single-character fixtures are intentionally verbatim.
   "OpenClaw",
@@ -207,12 +197,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     'format: String(localized: "Recognizer error: %@")',
     'self.statusText = String(localized: "Triggered")',
   ],
-  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
-    "subtitle: .verbatim(self.agentTotalText)",
-    'AttributedString(localized: "^[\\(count) agent](inflect: true) total")',
-    "func agentMenuRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue",
-    "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
-  ],
   "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
     "private func nodeDetailRow(\n        _ title: OpenClawTextValue,\n        copyLabel: LocalizedStringKey",
     "private func nodeListCard(title: OpenClawTextValue, values: [String])",
@@ -333,11 +317,6 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
     "Text(self.entry.detailText)",
     "Text(account.displayName)",
     "Text(account.detailText)",
-  ],
-  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
-    'subtitle: .verbatim("\\(self.sortedAgents.count) total")',
-    "func agentMenuRow(\n        icon: String,\n        title: String",
-    "func metricTile(\n        icon: String,\n        title: String",
   ],
   "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
     "private func nodeDetailRow(_ title: String",
@@ -574,13 +553,17 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
   }
 }
 
+function isAppleCatalogKind(kind: string): boolean {
+  return kind === "conditional-branch" || kind.startsWith("ui-");
+}
+
 function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
     entry.sites.some(
       (site) =>
         IOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
-        APPLE_CATALOG_KINDS.has(site.kind),
+        isAppleCatalogKind(site.kind),
     ) &&
     (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
     !IOS_CATALOG_EXCLUSIONS.has(entry.source)
@@ -593,7 +576,7 @@ function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
     entry.sites.some(
       (site) =>
         MACOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
-        APPLE_CATALOG_KINDS.has(site.kind),
+        isAppleCatalogKind(site.kind),
     ) &&
     !entry.source.includes("\\(") &&
     !MACOS_CATALOG_EXCLUSIONS.has(entry.source)

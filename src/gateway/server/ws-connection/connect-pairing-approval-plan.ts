@@ -32,7 +32,7 @@ const DEFAULT_TRUSTED_PROXY_DEVICE_AUTO_APPROVE_SCOPES = [
   "operator.questions",
 ] as const;
 
-export function resolveTrustedProxyDeviceAutoApproveScopes(params: {
+function resolveTrustedProxyDeviceAutoApproveScopes(params: {
   requestedScopes: string[];
   hasRequestedScopes: boolean;
   configuredScopes?: string[];
@@ -60,7 +60,8 @@ export type PairingApprovalPlan = {
   /** Request is created silent and immediately self-approved by its lane. */
   silent: boolean;
   allowSilentLocalPairing: boolean;
-  allowTrustedProxyDeviceAutoApproval: boolean;
+  trustedProxyAutoApproveScopes: string[] | null;
+  trustedProxyUser: string | undefined;
   isTrustedProxySameKeyUpgrade: boolean;
   allowSetupCodeHandoffBootstrapPairing: boolean;
   allowControlUiOwnerBootstrapPairing: boolean;
@@ -87,9 +88,10 @@ export async function resolvePairingApprovalPlan(params: {
   deviceId: string;
   devicePublicKey: string;
   scopes: string[];
+  hasRequestedScopes: boolean;
+  connectionScopeCap: (scopes: string[]) => string[];
 }): Promise<PairingApprovalPlan> {
-  const { reason, existingPairedDevice, state, configSnapshot, scopes } = params;
-  const { connectParams } = params;
+  const { reason, existingPairedDevice, state, connectParams, configSnapshot, scopes } = params;
   const {
     role,
     isControlUi,
@@ -101,9 +103,8 @@ export async function resolvePairingApprovalPlan(params: {
     bootstrapTokenCandidate,
     pairingLocality,
   } = state;
-  const allowSilentExistingNonOperatorPairing = !(existingPairedDevice && role !== "operator");
   const allowSilentLocalPairing =
-    allowSilentExistingNonOperatorPairing &&
+    !(existingPairedDevice && role !== "operator") &&
     shouldAllowSilentLocalPairing({
       autoApproveLocal: configSnapshot.gateway?.nodes?.pairing?.autoApproveLocal,
       locality: pairingLocality,
@@ -135,13 +136,21 @@ export async function resolvePairingApprovalPlan(params: {
   // mismatch stays a manual owner decision (possible deviceId squat).
   const isTrustedProxySameKeyUpgrade =
     reason === "scope-upgrade" && existingPairedDevice?.publicKey === params.devicePublicKey;
-  const allowTrustedProxyDeviceAutoApproval =
+  const trustedProxyAutoApproveScopes =
     ((reason === "not-paired" && !existingPairedDevice) || isTrustedProxySameKeyUpgrade) &&
     role === "operator" &&
     (isBrowserOperatorUi || isWebchat) &&
     authMethod === "trusted-proxy" &&
     Boolean(trustedProxyUser) &&
-    trustedProxyAutoApproveConfig?.enabled === true;
+    trustedProxyAutoApproveConfig?.enabled === true
+      ? params.connectionScopeCap(
+          resolveTrustedProxyDeviceAutoApproveScopes({
+            requestedScopes: scopes,
+            hasRequestedScopes: params.hasRequestedScopes,
+            configuredScopes: trustedProxyAutoApproveConfig?.scopes,
+          }),
+        )
+      : null;
   const isSetupCodeMobileNodeConnect = isMobileNodeBootstrapConnect({
     role,
     scopes,
@@ -226,7 +235,8 @@ export async function resolvePairingApprovalPlan(params: {
       allowSetupCodeHandoffBootstrapPairing ||
       allowControlUiOperatorBootstrapPairing,
     allowSilentLocalPairing,
-    allowTrustedProxyDeviceAutoApproval,
+    trustedProxyAutoApproveScopes,
+    trustedProxyUser,
     isTrustedProxySameKeyUpgrade,
     allowSetupCodeHandoffBootstrapPairing,
     allowControlUiOwnerBootstrapPairing,

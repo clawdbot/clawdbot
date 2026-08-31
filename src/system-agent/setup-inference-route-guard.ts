@@ -8,7 +8,7 @@ import {
 
 function withoutAgentIdentity(projection: DefaultInferenceRouteProjection): unknown {
   const agent = isRecord(projection.agent)
-    ? { ...projection.agent, id: "<agent>", agentDir: "<agent-dir>" }
+    ? { ...projection.agent, id: "<agent>" }
     : projection.agent;
   return {
     ...projection,

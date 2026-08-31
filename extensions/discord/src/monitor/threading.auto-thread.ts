@@ -14,7 +14,7 @@ import {
   getChannelMessage,
   type Client,
 } from "../internal/discord.js";
-import { resolveDiscordMessageChannelId } from "./message-utils.js";
+import { resolveDiscordMessageChannelId } from "./message-channel-info.js";
 import { generateThreadTitle } from "./thread-title.js";
 import { resolveDiscordReplyDeliveryPlan, sanitizeDiscordThreadName } from "./threading.starter.js";
 import type {

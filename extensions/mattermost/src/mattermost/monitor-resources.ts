@@ -15,7 +15,9 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   buildMattermostApiUrl,
   fetchMattermostChannel,
@@ -49,7 +51,7 @@ export function formatMattermostPendingMediaText(params: {
 export function formatMattermostInboundMediaText(params: {
   body: string;
   nativeMedia: readonly MediaPlaceholderTextFact[];
-  materializedMedia: readonly MediaPlaceholderTextFact[];
+  materializedMedia: readonly ChannelInboundMediaInput[];
 }): string {
   const materializedCount = params.materializedMedia.filter(
     (media) => Boolean(media.path) || Boolean(media.url),
@@ -58,9 +60,17 @@ export function formatMattermostInboundMediaText(params: {
   if (unavailableCount === 0) {
     return params.body;
   }
+  const unavailableFileNames = params.materializedMedia
+    .filter((media) => !media.path && !media.url && media.fileName)
+    .map((media) => sanitizeUntrustedFileName(media.fileName ?? "", ""))
+    .filter(Boolean)
+    .join(", ");
+  const fileNameNotice = unavailableFileNames
+    ? ` ${JSON.stringify(truncateUtf16Safe(unavailableFileNames, 512))}`
+    : "";
   return formatInboundMediaUnavailableText({
     body: params.body,
-    notice: `[mattermost ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
+    notice: `[mattermost ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]${fileNameNotice}`,
   });
 }
 
@@ -179,17 +189,19 @@ export function createMattermostMonitorResources(params: {
         });
       } catch (err) {
         logger.debug?.(`mattermost: failed to download file ${fileId}: ${String(err)}`);
-        let contentType: string | undefined;
+        let info: { mime_type?: string | null; name?: string | null } | undefined;
         try {
-          const info = await client.request<{ mime_type?: string | null }>(`/files/${fileId}/info`);
-          contentType = info.mime_type?.trim() || undefined;
+          info = await client.request(`/files/${fileId}/info`);
         } catch (infoErr) {
           logger.debug?.(
             `mattermost: failed to resolve metadata for file ${fileId}: ${String(infoErr)}`,
           );
         }
+        const contentType = info?.mime_type?.trim() || undefined;
+        const fileName = info?.name?.trim();
         out.push({
           contentType,
+          ...(fileName ? { fileName } : {}),
           kind: mediaKindFromMime(contentType) ?? "unknown",
         });
       }

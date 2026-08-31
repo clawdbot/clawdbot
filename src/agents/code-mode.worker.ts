@@ -5,13 +5,20 @@ import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { EvalFlags, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
-import { boundCodeModeResult, toCodeModeJsonSafe as toJsonSafe } from "./code-mode-json.js";
+import {
+  boundCodeModeError,
+  captureCodeModeOutput,
+  captureCodeModeValue,
+  EMPTY_CODE_MODE_OUTPUT,
+  toCodeModeJsonSafe as toJsonSafe,
+} from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 import type {
   CodeModeConfig,
   CodeModeNamespaceDescriptor,
   CodeModeWorkerPayload,
-  CodeModeWorkerThreadResult as CodeModeWorkerResult,
+  CodeModeVmResult as CodeModeWorkerResult,
+  CodeModeWorkerThreadResult,
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
@@ -63,6 +70,19 @@ function errorMessage(error: unknown): string {
 
 function buildUserSource(code: string): string {
   return `globalThis.__openclawResult = (async () => {\n${code}\n})()`;
+}
+
+function trackPromiseRejection(
+  promise: JSValueHandle,
+  reason: JSValueHandle,
+  handled: boolean,
+): void {
+  const vm = promise.vm;
+  vm.global
+    .getProp("__openclawTrackRejection")
+    .consume((track) =>
+      vm.callFunction(track, vm.undefined, promise, reason, handled ? vm.true : vm.false).dispose(),
+    );
 }
 
 function createHostRequestHandler(params: {
@@ -152,13 +172,14 @@ async function createVm(params: {
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let timedOut = false;
-  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
+  const deadlineReached = () => performance.now() - startedAt >= params.config.timeoutMs;
   const vm = await QuickJS.create({
     wasm: params.wasmModule,
     memoryLimit: params.config.memoryLimitBytes,
     timezoneOffset: 0,
+    onUnhandledRejection: trackPromiseRejection,
     interruptHandler: () => {
       timedOut = deadlineReached();
       return timedOut;
@@ -200,14 +221,15 @@ async function restoreVm(params: {
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let timedOut = false;
-  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
+  const deadlineReached = () => performance.now() - startedAt >= params.config.timeoutMs;
   const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
   const vm = await QuickJS.restore(snapshot, {
     wasm: params.wasmModule,
     memoryLimit: params.config.memoryLimitBytes,
     timezoneOffset: 0,
+    onUnhandledRejection: trackPromiseRejection,
     interruptHandler: () => {
       timedOut = deadlineReached();
       return timedOut;
@@ -245,19 +267,17 @@ function takeOutputSafely(vm: QuickJS): unknown[] {
   }
 }
 
-function boundWorkerResult(
+function captureWorkerResult(
   result: CodeModeWorkerResult,
   config: CodeModeConfig,
-): CodeModeWorkerResult {
-  const bounded = boundCodeModeResult({
-    output: result.output,
-    ...(result.status === "completed" ? { value: result.value } : {}),
-    maxOutputBytes: config.maxOutputBytes,
-  });
+): CodeModeWorkerThreadResult {
+  const output = captureCodeModeOutput(result.output, config.maxOutputBytes);
   if (result.status === "completed") {
-    return { ...result, output: bounded.output, value: bounded.value };
+    return { ...result, output, value: captureCodeModeValue(result.value, config.maxOutputBytes) };
   }
-  return { ...result, output: bounded.output };
+  return result.status === "failed"
+    ? { ...result, output, error: boundCodeModeError(result.error, config.maxOutputBytes) }
+    : { ...result, output };
 }
 
 function failedWorkerResult(
@@ -393,6 +413,12 @@ async function runVmExecution(params: {
         });
       }
       const value = await readCompletedResult(params.vm, resultHandle);
+      // Check only after all host work and microtasks settle. Catches attached
+      // after an await (including a restored snapshot) still own their errors.
+      using rejection = params.vm.global
+        .getProp("__openclawUnhandledRejection")
+        .consume((read) => params.vm.callFunction(read, params.vm.undefined));
+      await readCompletedResult(params.vm, rejection);
       return { status: "completed", value, output };
     } finally {
       resultHandle.dispose();
@@ -477,15 +503,18 @@ function isQuickJsWasmModule(value: unknown): value is WebAssembly.Module {
   return Object.prototype.toString.call(value) === "[object WebAssembly.Module]";
 }
 
-async function main(): Promise<CodeModeWorkerResult> {
+async function main(): Promise<CodeModeWorkerThreadResult> {
   const input = workerData as unknown;
   if (!isRecord(input) || !isRecord(input.config) || !isQuickJsWasmModule(input.wasmModule)) {
-    return failedWorkerResult("invalid_input", "invalid code mode worker input");
+    return {
+      ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
+      output: EMPTY_CODE_MODE_OUTPUT,
+    };
   }
   const config = input.config as CodeModeConfig;
   try {
     if (input.kind === "exec" && typeof input.source === "string") {
-      return boundWorkerResult(
+      return captureWorkerResult(
         await runExec({
           kind: "exec",
           wasmModule: input.wasmModule,
@@ -504,7 +533,7 @@ async function main(): Promise<CodeModeWorkerResult> {
       );
     }
     if (input.kind === "resume" && input.snapshotBytes instanceof Uint8Array) {
-      return boundWorkerResult(
+      return captureWorkerResult(
         await runResume({
           kind: "resume",
           wasmModule: input.wasmModule,
@@ -520,7 +549,10 @@ async function main(): Promise<CodeModeWorkerResult> {
         config,
       );
     }
-    return failedWorkerResult("invalid_input", "invalid code mode worker input");
+    return {
+      ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
+      output: EMPTY_CODE_MODE_OUTPUT,
+    };
   } catch (error) {
     const timedOut = isQuickJsInterruptedError(error);
     const code = timedOut
@@ -528,7 +560,10 @@ async function main(): Promise<CodeModeWorkerResult> {
       : error instanceof CodeModeWorkerFailure
         ? error.code
         : "internal_error";
-    return failedWorkerResult(code, timedOut ? "code mode timeout exceeded" : errorMessage(error));
+    return captureWorkerResult(
+      failedWorkerResult(code, timedOut ? "code mode timeout exceeded" : errorMessage(error)),
+      config,
+    );
   }
 }
 

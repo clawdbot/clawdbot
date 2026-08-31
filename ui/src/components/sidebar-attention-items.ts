@@ -23,10 +23,14 @@ export function compareSidebarAttentionEntries(
   return SIDEBAR_ATTENTION_PRIORITY[left.kind] - SIDEBAR_ATTENTION_PRIORITY[right.kind];
 }
 
-type SidebarAttentionContent = Omit<SidebarAttentionItem, "category" | "dismissal" | "type">;
+type SidebarAttentionContent = Omit<
+  SidebarAttentionItem,
+  "category" | "dismissal" | "requiresAction" | "type"
+>;
 
 export function buildSidebarAttentionEntries(params: {
   cronJobs: readonly CronJob[];
+  cronSchedulerEnabled: boolean | null;
   cronOwnerByJobId?: ReadonlyMap<string, string>;
   modelAuthStatus: ModelAuthStatusResult | null;
   modelAuthAgentId?: string | null;
@@ -47,6 +51,7 @@ export function buildSidebarAttentionEntries(params: {
     type: "attention",
     category,
     dismissal: { kind: item.kind, signature: item.signature },
+    requiresAction: true,
   });
   const explainedItem = (
     item: Omit<SidebarAttentionContent, "action">,
@@ -90,6 +95,7 @@ export function buildSidebarAttentionEntries(params: {
   const overdueCron = params.cronJobs
     .filter(
       (job) =>
+        params.cronSchedulerEnabled !== false &&
         job.enabled &&
         !isCronJobRunning(job) &&
         job.state?.nextRunAtMs != null &&

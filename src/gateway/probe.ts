@@ -425,7 +425,12 @@ export async function probeGateway(opts: {
       token: opts.auth?.token,
       password: opts.auth?.password,
       edgeAuthHeaders,
-      tlsFingerprint: opts.tlsFingerprint,
+      // Saved pins belong to the exact configured endpoint, not an overridden probe URL.
+      tlsFingerprint:
+        opts.tlsFingerprint ||
+        (opts.url.trim() === opts.config?.gateway?.remote?.url?.trim()
+          ? opts.config?.gateway?.remote?.tlsFingerprint
+          : undefined),
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       env: opts.env,
       scopes: [READ_SCOPE],

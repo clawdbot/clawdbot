@@ -43,7 +43,8 @@ describe("doctorCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.withDoctorSqliteMaintenanceLock.mockImplementation(
-      async (params: { run: () => unknown }) => await params.run(),
+      async (params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
+        await params.run({ assertCurrent() {} }),
     );
   });
 

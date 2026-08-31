@@ -1,4 +1,5 @@
 // Prepared provider-usage discovery and credential ownership for Gateway status RPCs.
+import { resolveAgentDir } from "../../agents/agent-scope-config.js";
 import {
   ensureAuthProfileStore,
   externalCliDiscoveryForConfigStatus,
@@ -11,10 +12,7 @@ import {
   fingerprintAuthProfileOwnerShape,
   fingerprintResolvedProviderAuth,
 } from "../../agents/execution-auth-binding.js";
-import {
-  resolveLegacyInheritedAuthAgentId,
-  resolveLegacyInheritedAuthDir,
-} from "../../agents/legacy-inherited-auth-dir.js";
+import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited-auth-dir.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -113,7 +111,7 @@ export function getProviderUsageRuntimeSnapshot(params: {
   store?: AuthProfileStore;
 }): ProviderUsageRuntimeSnapshot {
   const agentId = params.agentId ?? resolveLegacyInheritedAuthAgentId(params.config);
-  const agentDir = params.agentDir ?? resolveLegacyInheritedAuthDir(params.config);
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
   // Config publication replaces the object, so identity is the exact mutation signal.
   const configRef = params.config;
   // Registry publication owns descriptor lifetime; request paths only compare its O(1) counter.

@@ -16,6 +16,8 @@ Scope:
 
 The lists below are generated from the source target registry and checked against `docs/reference/secretref-user-supplied-credentials-matrix.json` in CI; do not hand-edit entries.
 
+Source generation fails if a present channel secret-contract artifact cannot load, rather than publishing an incomplete list. A plugin without that optional artifact contributes no channel targets. This generation check does not change runtime SecretRef owner-isolation behavior.
+
 ## Supported credentials
 
 ### `openclaw.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
@@ -46,11 +48,13 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.codex.config.appServer.authToken`
 - `plugins.entries.codex.config.appServer.headers.*`
+- `plugins.entries.comfy.config.headers.*`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
 - `plugins.entries.google.config.webSearch.headers.*`
+- `plugins.entries.imap.config.accounts.*.password`
 - `plugins.entries.xai.config.webSearch.apiKey`
 - `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.apiKey`
@@ -86,6 +90,8 @@ The lists below are generated from the source target registry and checked agains
 - `channels.sms.accounts.*.authToken`
 - `channels.buzz.authTag`
 - `channels.buzz.privateKey`
+- `channels.buzz.accounts.*.authTag`
+- `channels.buzz.accounts.*.privateKey`
 - `channels.clickclack.token`
 - `channels.clickclack.accounts.*.token`
 - `channels.discord.token`
@@ -127,7 +133,7 @@ The lists below are generated from the source target registry and checked agains
 - `channels.googlechat.serviceAccount`
 - `channels.googlechat.accounts.*.serviceAccount`
 
-### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
+### SQLite auth-profile targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
 - `profiles.*.keyRef` (`type: "api_key"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
 - `profiles.*.tokenRef` (`type: "token"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
@@ -139,7 +145,8 @@ The lists below are generated from the source target registry and checked agains
 - `gateway.cloudflareAccess.clientId`
 - `gateway.cloudflareAccess.clientSecret`
 
-These fields live in the node host's canonical `node_host_config` SQLite row,
+These fields live in the node host's canonical `nodeHost.config` SQLite
+machine-state value,
 not `openclaw.json`. They accept the same SecretInput forms and resolve through
 the configured SecretRef providers when the node starts. The conventional
 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` fallback persists env refs for

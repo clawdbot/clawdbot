@@ -576,6 +576,56 @@ describe("cron view editor", () => {
     expect(onDetailTabChange).toHaveBeenCalledWith("history");
   });
 
+  it.each(["heartbeat", "skillCollectionReview"] as const)(
+    "renders %s jobs as view-and-run only",
+    (kind) => {
+      const job = createJob(`system-${kind}`, { payload: { kind } });
+      const onRun = vi.fn();
+      const onToggle = vi.fn();
+      const onClone = vi.fn();
+      const onRemove = vi.fn();
+      const list = renderView({ jobs: [job], onRun, onToggle, onClone, onRemove });
+
+      getElement(list, `[data-test-id="cron-row-run-${job.id}"]`, HTMLButtonElement).click();
+      expect(onRun).toHaveBeenCalledWith(job, "force");
+      expect(list.querySelector(`[data-test-id="cron-row-toggle-${job.id}"]`)).toBeNull();
+      const listMenu = getElement(list, "wa-dropdown.cron-job-menu", HTMLElement);
+      expect(listMenu.querySelector('wa-dropdown-item[value="run-if-due"]')).not.toBeNull();
+      expect(listMenu.querySelector('wa-dropdown-item[value="clone"]')).toBeNull();
+      expect(listMenu.querySelector('wa-dropdown-item[value="remove"]')).toBeNull();
+
+      const detail = renderView({
+        editingJob: job,
+        form: {
+          ...DEFAULT_CRON_FORM,
+          payloadKind: kind,
+          payloadLocked: true,
+        },
+        onRun,
+        onToggle,
+        onClone,
+        onRemove,
+      });
+
+      expect(getElement(detail, ".cron-editor", HTMLFieldSetElement).disabled).toBe(true);
+      expect(detail.querySelector('[data-test-id="cron-submit"]')).toBeNull();
+      expect(detail.querySelector('[data-test-id="cron-toggle-enabled"]')).toBeNull();
+      getElement(detail, '[data-test-id="cron-run-now"]', HTMLButtonElement).click();
+      expect(onRun).toHaveBeenLastCalledWith(job, "force");
+      const detailMenu = getElement(detail, "wa-dropdown.cron-job-menu", HTMLElement);
+      const runIfDue = getElement(detailMenu, 'wa-dropdown-item[value="run-if-due"]', HTMLElement);
+      detailMenu.dispatchEvent(
+        new CustomEvent("wa-select", { detail: { item: runIfDue }, bubbles: true }),
+      );
+      expect(onRun).toHaveBeenLastCalledWith(job, "due");
+      expect(detailMenu.querySelector('wa-dropdown-item[value="clone"]')).toBeNull();
+      expect(detailMenu.querySelector('wa-dropdown-item[value="remove"]')).toBeNull();
+      expect(onToggle).not.toHaveBeenCalled();
+      expect(onClone).not.toHaveBeenCalled();
+      expect(onRemove).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([true, false])("preserves task browsing for canManage=%s", (canManage) => {
     const job = createJob("permission-job");
     const onSelectJob = vi.fn();

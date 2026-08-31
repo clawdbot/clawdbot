@@ -1,6 +1,7 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronJob } from "../../cron/types.js";
+import { isSystemOwnedCronPayloadKind } from "../../cron/types.js";
 import {
   parseCronCommandArgv,
   parseCronCommandEnv,
@@ -156,7 +157,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     if (existingKind === "script") {
       throw new Error("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
     }
-    if (existingKind === "systemEvent" || existingKind === "heartbeat") {
+    if (existingKind === "systemEvent" || isSystemOwnedCronPayloadKind(existingKind)) {
       throw new Error(`--timeout-seconds is not supported for ${existingKind} jobs.`);
     }
     timeoutOnlyPayloadKind = existingKind;

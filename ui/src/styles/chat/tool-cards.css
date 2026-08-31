@@ -12,7 +12,6 @@
   width: fit-content;
   max-width: 100%;
   min-width: 0;
-  box-sizing: border-box;
   padding: 4px 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -74,7 +73,6 @@
 .chat-activity-group__summary {
   --chat-tool-activity-color: color-mix(in srgb, var(--muted) 88%, transparent);
 
-  font-family: var(--font-body);
   font-size: calc(var(--control-ui-text-sm) + 1px);
   font-weight: 400;
   line-height: 1.5;
@@ -91,6 +89,8 @@
 }
 
 .chat-tool-msg-summary {
+  display: inline-flex;
+  align-items: center;
   gap: 7px;
   width: fit-content;
   max-width: 100%;
@@ -519,32 +519,6 @@
   color: inherit;
 }
 
-/* ── Command token colors (display-only highlighting) ── */
-.chat-cmd--name {
-  color: inherit;
-  font: inherit;
-}
-
-.chat-cmd--str {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--num {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--flag {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--op {
-  font: inherit;
-  color: inherit;
-}
-
 /* ── Key-value args (generic tools) ── */
 .chat-tool-kv {
   display: flex;
@@ -579,7 +553,6 @@
 
 /* ── Expanded tool row body ── */
 .chat-tool-msg-body {
-  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
   margin-top: 5px;
@@ -621,7 +594,6 @@
 }
 
 .chat-tool-card {
-  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
 }
@@ -719,7 +691,8 @@
   margin-inline-start: auto;
 }
 
-.chat-tool-card__action-btn {
+.chat-tool-card__action-btn,
+.chat-tool-card__actions :where(.chat-copy-btn) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -737,7 +710,8 @@
 }
 
 .chat-tool-card__action-btn:hover,
-.chat-tool-card__action-btn:focus-visible {
+.chat-tool-card__action-btn:focus-visible,
+.chat-tool-card__actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
 }
@@ -822,7 +796,6 @@
 }
 
 .chat-tool-card__block-content {
-  box-sizing: border-box;
   max-width: 100%;
   min-width: 0;
   margin: 0;
@@ -1280,29 +1253,6 @@
 .chat-turn-recap--continuation {
   margin-bottom: 0;
   font-size: var(--control-ui-text-sm);
-}
-
-.chat-turn-terminal-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: fit-content;
-  margin-top: 6px;
-  padding: 3px 8px;
-  color: var(--muted);
-  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
-  border-radius: var(--radius-full);
-  font-size: var(--control-ui-text-xs);
-}
-
-.chat-turn-terminal-status svg {
-  width: 12px;
-  height: 12px;
-}
-
-.chat-turn-terminal-status--interrupted {
-  display: flex;
-  margin-inline: auto;
 }
 
 .chat-reading-indicator svg {
@@ -2080,6 +2030,18 @@
   box-shadow:
     0 1px 2px rgb(0 0 0 / 8%),
     0 6px 18px rgb(0 0 0 / 10%);
+}
+
+/* The recap is a quiet postscript under the reply, not a floating status pill.
+   This follows the shared tasks-status rule so its surface geometry cannot win
+   later in the cascade. */
+.chat-tasks-status.chat-turn-recap {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .chat-tasks-status__claw {

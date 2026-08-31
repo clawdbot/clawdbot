@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";
+import { ExitError } from "../runtime.js";
 import { registerCronCli } from "./cron-cli.js";
 
 const CRON_CLI_TEST_TIMEOUT_MS = 15_000;
@@ -64,7 +65,8 @@ vi.mock("./gateway-rpc.js", async () => {
   };
 });
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.defaultRuntime,
 }));
 
@@ -240,7 +242,7 @@ async function runNamedCronAdd(name: string, ...args: string[]): Promise<void> {
 }
 
 async function expectCronCommandExit(args: string[]): Promise<void> {
-  await expect(runCronCommand(args)).rejects.toThrow("__exit__:1");
+  await expect(runCronCommand(args)).rejects.toMatchObject({ name: "ExitError", code: 1 });
 }
 
 async function runCronEditAndGetPatch(editArgs: string[]): Promise<CronUpdatePatch> {
@@ -305,7 +307,7 @@ async function expectCronEditWithScheduleLookupExit(
   const program = buildProgram();
   await expect(
     program.parseAsync(["cron", "edit", "job-1", ...editArgs], { from: "user" }),
-  ).rejects.toThrow("__exit__:1");
+  ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 }
 
 async function runCronRunAndCaptureExit(params: {
@@ -354,19 +356,20 @@ async function runCronRunAndCaptureExit(params: {
     },
   );
 
-  const runtime = defaultRuntime as { exit: (code: number) => void };
-  const originalExit = runtime.exit;
-  const exitSpy = vi.fn();
-  runtime.exit = exitSpy;
+  let exitCode: number | undefined;
   try {
     const program = buildProgram();
     await program.parseAsync(params.args ?? ["cron", "run", "job-1"], { from: "user" });
-  } finally {
-    runtime.exit = originalExit;
+  } catch (error) {
+    if (!(error instanceof ExitError)) {
+      throw error;
+    }
+    exitCode = error.code;
   }
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
   const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
   return {
-    exitSpy,
+    exitCode,
     runOpts: (runCall?.[1] ?? {}) as { timeout?: string },
     calls: callGatewayFromCli.mock.calls,
   };
@@ -390,14 +393,14 @@ describe("cron cli", () => {
   );
 
   it("uses legacy stored delivery for --wait completion", async () => {
-    const { calls, exitSpy } = await runCronRunAndCaptureExit({
+    const { calls, exitCode } = await runCronRunAndCaptureExit({
       enqueued: true,
       runId: "manual:legacy:123:0",
       runStatus: "ok",
       args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
     });
 
-    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(exitCode).toBe(0);
     expect(calls.some((call) => call[0] === "cron.get")).toBe(false);
   });
 
@@ -472,8 +475,8 @@ describe("cron cli", () => {
       expectedExitCode: 1,
     },
   ])("$name", async ({ ran, enqueued, expectedExitCode }) => {
-    const { exitSpy } = await runCronRunAndCaptureExit({ ran, enqueued });
-    expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
+    const { exitCode } = await runCronRunAndCaptureExit({ ran, enqueued });
+    expect(exitCode).toBe(expectedExitCode);
   });
 
   it.each([
@@ -483,7 +486,7 @@ describe("cron cli", () => {
   ])(
     "waits for execution $status with completion $completionStatus",
     async ({ status, completionStatus, expectedExitCode }) => {
-      const { calls, exitSpy } = await runCronRunAndCaptureExit({
+      const { calls, exitCode } = await runCronRunAndCaptureExit({
         enqueued: true,
         runId: "manual:job-1:123:0",
         runStatus: status,
@@ -491,7 +494,7 @@ describe("cron cli", () => {
         args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
       });
 
-      expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
+      expect(exitCode).toBe(expectedExitCode);
       const runsCall = calls.find((call) => call[0] === "cron.runs");
       expect(runsCall?.[2]).toMatchObject({
         id: "job-1",
@@ -526,7 +529,10 @@ describe("cron cli", () => {
     );
 
     const program = buildProgram();
-    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+    await expect(program.parseAsync(args, { from: "user" })).rejects.toMatchObject({
+      name: "ExitError",
+      code: 1,
+    });
 
     expectRuntimeErrorContaining(
       "Automation not found: missing. Run `openclaw cron list` to see recent automation ids.",
@@ -590,7 +596,7 @@ describe("cron cli", () => {
   ])(
     "$name",
     async ({ waitTimeout, rpcTimeout, expectedEnqueueTimeout, expectedMaxPollTimeoutMs }) => {
-      const { calls, exitSpy, runOpts } = await runCronRunAndCaptureExit({
+      const { calls, exitCode, runOpts } = await runCronRunAndCaptureExit({
         enqueued: true,
         runId: "manual:job-1:123:0",
         runStatus: "ok",
@@ -611,7 +617,7 @@ describe("cron cli", () => {
       const historyOptions = historyCalls[0]?.[1] as { timeout?: string } | undefined;
       const pollTimeoutMs = Number(historyOptions?.timeout);
 
-      expect(exitSpy).toHaveBeenCalledWith(0);
+      expect(exitCode).toBe(0);
       expect(historyCalls).toHaveLength(1);
       expect(runOpts.timeout).toBe(expectedEnqueueTimeout);
       expect(Number.isSafeInteger(pollTimeoutMs)).toBe(true);
@@ -620,9 +626,19 @@ describe("cron cli", () => {
     },
   );
 
-  it("reduces each history RPC timeout as the cron run wait budget elapses", async () => {
+  it.each([
+    { name: "without a system clock jump", clockJumpMs: 0 },
+    { name: "after the system clock jumps forward", clockJumpMs: 3_600_000 },
+    { name: "after the system clock jumps backward", clockJumpMs: -3_600_000 },
+  ])("reduces each history RPC timeout $name", async ({ clockJumpMs }) => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-27T12:00:00.000Z"));
+    const monotonicNow = performance.now.bind(performance);
+    let monotonicSample = 0;
+    vi.spyOn(performance, "now").mockImplementation(
+      () => monotonicNow() + ++monotonicSample / 1_000,
+    );
+    const startedAt = new Date("2026-07-27T12:00:00.000Z");
+    vi.setSystemTime(startedAt);
 
     const pendingRun = runCronRunAndCaptureExit({
       enqueued: true,
@@ -644,16 +660,18 @@ describe("cron cli", () => {
     expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.runs")).toHaveLength(
       1,
     );
+    vi.setSystemTime(new Date(startedAt.getTime() + clockJumpMs));
     await vi.advanceTimersByTimeAsync(25);
 
-    const { calls, exitSpy, runOpts } = await pendingRun;
+    const { calls, exitCode, runOpts } = await pendingRun;
     const pollTimeouts = calls
       .filter(([method]) => method === "cron.runs")
       .map(([, options]) => Number((options as { timeout?: string }).timeout));
 
-    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(exitCode).toBe(0);
     expect(runOpts.timeout).toBe("600000");
     expect(pollTimeouts).toHaveLength(2);
+    expect(pollTimeouts.every(Number.isSafeInteger)).toBe(true);
     expect(pollTimeouts[0]).toBeLessThanOrEqual(100);
     expect(pollTimeouts[1]).toBeLessThanOrEqual(75);
     expect(pollTimeouts[1]).toBeLessThan(pollTimeouts[0] ?? 0);
@@ -711,7 +729,7 @@ describe("cron cli", () => {
       expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.runs")).toBe(true);
     });
 
-    const rejection = expect(run).rejects.toThrow("__exit__:1");
+    const rejection = expect(run).rejects.toMatchObject({ name: "ExitError", code: 1 });
     await vi.advanceTimersByTimeAsync(10);
     await rejection;
     expectRuntimeErrorContaining("timed out waiting for cron run");
@@ -2251,7 +2269,7 @@ describe("cron cli", () => {
         ],
         { from: "user" },
       ),
-    ).rejects.toThrow("__exit__:1");
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
     expectRuntimeErrorContaining("Use either --failure-alert-include-skipped");
     expect(callGatewayFromCli).not.toHaveBeenCalled();
   });

@@ -74,6 +74,69 @@ describe("Code Mode MCP namespace model", () => {
     );
   });
 
+  it.each([
+    {
+      name: "enum",
+      items: { type: "string", enum: ["red", "blue"] },
+      declaration: 'Array<"red" | "blue">',
+    },
+    {
+      name: "anyOf",
+      items: { anyOf: [{ type: "string" }, { type: "number" }] },
+      declaration: "Array<string | number>",
+    },
+    {
+      name: "oneOf",
+      items: { oneOf: [{ type: "boolean" }, { type: "null" }] },
+      declaration: "Array<boolean | null>",
+    },
+    {
+      name: "multiple types",
+      items: { type: ["string", "null"] },
+      declaration: "Array<string | null>",
+    },
+    {
+      name: "nested array",
+      items: { type: "array", items: { type: "string", enum: ["red", "blue"] } },
+      declaration: 'Array<Array<"red" | "blue">>',
+    },
+    {
+      name: "simple array",
+      items: { type: "string" },
+      declaration: "Array<string>",
+    },
+    {
+      name: "object",
+      items: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      declaration: "Array<{ id: string }>",
+    },
+  ])("preserves $name item grouping in MCP API declarations", async ({ items, declaration }) => {
+    const parameters = {
+      type: "object",
+      properties: { values: { type: "array", items } },
+      required: ["values"],
+    };
+    const runtime = createCodeModeNamespaceRuntime([
+      mcpCatalogEntry({ id: "github__read_file", parameters }),
+    ]);
+    const executeTool = vi.fn();
+    const api = await runtime.invoke(
+      "mcp",
+      ["github", "$api"],
+      ["readFile", { schema: true }],
+      executeTool,
+    );
+
+    expect(runtime.apiFiles.find((file) => file.path === "mcp/github.d.ts")?.content).toContain(
+      `values: ${declaration};`,
+    );
+    expect(api).toMatchObject({
+      header: expect.stringContaining(`values: ${declaration};`),
+      schemas: { readFile: parameters },
+    });
+    expect(executeTool).not.toHaveBeenCalled();
+  });
+
   it.each(["constructor", "toString", "__proto__"])(
     "does not satisfy required MCP argument %s from Object.prototype",
     async (key) => {

@@ -4,15 +4,8 @@ import {
   resolvePreparedModelThinkingCompat,
 } from "../model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
+import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
-
-// Self-defense against isolate:false shard composition: sibling test files
-// mock this module with incomplete factories, and a leaked mock strips the
-// real withPluginMetadataSnapshotScope this file needs. A file-local
-// identity mock always wins and restores the actual module.
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
-}));
 
 const STATIC_MODEL_ID = "claude-haiku-4-5";
 const PROVIDER = "anthropic";
@@ -22,6 +15,8 @@ const resolveHookModelSelectionMock = vi.hoisted(() =>
     modelId,
   })),
 );
+const loadManifestMetadataSnapshotMock = vi.hoisted(() => vi.fn());
+const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn(() => undefined));
 
 const emptyModelRegistry = {
   find: vi.fn((_provider: string, _modelId: string) => null),
@@ -77,7 +72,12 @@ vi.mock("./model.js", () => ({
 }));
 
 vi.mock("../provider-model-normalization.runtime.js", () => ({
-  normalizeProviderModelIdWithRuntime: () => undefined,
+  normalizeProviderModelIdWithRuntime: normalizeProviderModelIdWithRuntimeMock,
+}));
+
+vi.mock("../../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/manifest-contract-eligibility.js")>()),
+  loadManifestMetadataSnapshot: loadManifestMetadataSnapshotMock,
 }));
 
 vi.mock("../harness/runtime-plugin.js", () => ({
@@ -192,6 +192,8 @@ describe("embedded model resolution consistency", () => {
       provider,
       modelId,
     }));
+    loadManifestMetadataSnapshotMock.mockReset();
+    normalizeProviderModelIdWithRuntimeMock.mockReset().mockReturnValue(undefined);
   });
 
   it("resolves an explicit alias configured only on the selected agent", () => {
@@ -216,6 +218,72 @@ describe("embedded model resolution consistency", () => {
         model: "worker-haiku",
       }),
     ).toEqual({ provider: "anthropic", modelId: "claude-haiku-4-5" });
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("defers custom-provider normalization until prepared manifest policy is available", () => {
+    const config = {
+      agents: {
+        entries: {
+          worker: {
+            model: { primary: "worker-custom" },
+            models: {
+              "custom-provider/legacy-model": { alias: "worker-custom" },
+            },
+          },
+        },
+      },
+    };
+    const initial = resolveInitialEmbeddedRunModel({
+      config,
+      agentId: "worker",
+    });
+
+    expect(initial).toEqual({
+      provider: "custom-provider",
+      modelId: "legacy-model",
+    });
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+
+    const manifestPlugins = [
+      {
+        modelIdNormalization: {
+          providers: {
+            "custom-provider": {
+              aliases: { "legacy-model": "modern-model" },
+            },
+          },
+        },
+      },
+    ];
+    expect(
+      resolveModelCandidateChain({
+        cfg: config,
+        agentId: "worker",
+        provider: initial.provider,
+        model: initial.modelId,
+        requestedRouteResolution: "resolved",
+        fallbacksOverride: [],
+        manifestPlugins,
+      }),
+    ).toEqual([
+      {
+        provider: "custom-provider",
+        model: "modern-model",
+        routeOrigin: "requested",
+        routeResolution: "resolved",
+      },
+    ]);
+    expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledWith({
+      provider: "custom-provider",
+      plugins: manifestPlugins,
+      context: {
+        provider: "custom-provider",
+        modelId: "modern-model",
+      },
+    });
   });
 
   it("resolves the same undated configured model for chat and manual compaction", async () => {

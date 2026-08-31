@@ -16,6 +16,7 @@ import {
 import {
   clearPaneSessionHandoffs,
   consumePaneSessionHandoff,
+  focusChatComposerFromPrintableKeydown,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
@@ -182,6 +183,36 @@ describe("chat pane retained presentation lifecycle", () => {
       ["presented", false],
       ["active", false],
     ]);
+  });
+
+  it("ignores an open dropdown in an inactive retained pane", () => {
+    const app = document.body.appendChild(document.createElement("openclaw-app"));
+    const activePane = app.appendChild(document.createElement("section"));
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__composer-combobox";
+    const textarea = composer.appendChild(document.createElement("textarea"));
+    activePane.append(composer);
+    const focus = vi.spyOn(textarea, "focus");
+    const target = activePane.appendChild(document.createElement("main"));
+    target.addEventListener("keydown", (event) =>
+      focusChatComposerFromPrintableKeydown(activePane, event),
+    );
+    const retainedPane = app.appendChild(document.createElement("div"));
+    retainedPane.setAttribute("inert", "");
+    const retainedDropdown = retainedPane.appendChild(
+      document.createElement("wa-dropdown"),
+    ) as HTMLElement & { open: boolean };
+    retainedDropdown.open = true;
+
+    try {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true, composed: true }),
+      );
+
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    } finally {
+      app.remove();
+    }
   });
 
   it("retires foreground-only state when a retained pane is hidden", () => {

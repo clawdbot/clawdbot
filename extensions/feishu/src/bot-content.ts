@@ -1,5 +1,6 @@
 // Feishu plugin module implements bot content behavior.
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -178,6 +179,10 @@ export function parseMessageContent(content: string, messageType: string): strin
 const FEISHU_MEDIA_MESSAGE_TYPES = new Set(["image", "file", "audio", "video", "media", "sticker"]);
 
 function formatFeishuMediaContent(parsed: Record<string, unknown>, messageType: string): string {
+  if (messageType === "sticker") {
+    const fileKey = normalizeFeishuExternalKey(parsed?.file_key);
+    return fileKey ? `<sticker key="${escapeHtml(fileKey)}"/>` : "[Sticker]";
+  }
   const speechToText =
     messageType === "audio" && typeof parsed.speech_to_text === "string"
       ? parsed.speech_to_text.trim()
@@ -207,7 +212,7 @@ function formatSubMessageContent(content: string, contentType: string): string {
       case "video":
         return "[Video]";
       case "sticker":
-        return "[Sticker]";
+        return formatFeishuMediaContent(parsed, contentType);
       case "merge_forward":
         return "[Nested Merged Forward]";
       default:
@@ -333,7 +338,6 @@ function parseMediaKeys(
         return { imageKey, fileName: parsed.file_name };
       case "file":
       case "audio":
-      case "sticker":
         return { fileKey, fileName: parsed.file_name };
       case "video":
       case "media":
@@ -383,8 +387,6 @@ function resolveFeishuMediaKind(messageType: string): FeishuMediaInfo["kind"] {
     case "video":
     case "media":
       return "video";
-    case "sticker":
-      return "sticker";
     default:
       return "document";
   }
@@ -400,7 +402,8 @@ export async function resolveFeishuMediaList(params: {
   accountId?: string;
 }): Promise<FeishuMediaInfo[]> {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
-  const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
+  // Sticker keys are reusable, but Feishu does not expose their resource bytes.
+  const mediaTypes = ["image", "file", "audio", "video", "media", "post"];
   if (!mediaTypes.includes(messageType)) {
     return [];
   }

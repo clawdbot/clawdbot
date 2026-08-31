@@ -351,11 +351,12 @@ export class UrbitSSEClient {
     let eventId: number | null = null;
 
     for (const line of lines) {
-      if (line.startsWith("id: ")) {
-        eventId = parseUrbitSseEventId(line.slice(4));
+      // SSE permits both `field:value` and `field: value`; parse them identically.
+      if (line.startsWith("id:")) {
+        eventId = parseUrbitSseEventId(line.slice("id:".length).trim());
       }
-      if (line.startsWith("data: ")) {
-        data = line.slice(6);
+      if (line.startsWith("data:")) {
+        data = line.slice("data:".length).trim();
       }
     }
 

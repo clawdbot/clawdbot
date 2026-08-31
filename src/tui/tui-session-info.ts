@@ -41,11 +41,3 @@ export function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): bool
       JSON.stringify(left.goal ?? null) === JSON.stringify(right.goal ?? null))
   );
 }
-
-/** Clear selection-owned modes so a switch cannot display its predecessor while loading. */
-export function clearTuiSessionModeOverrides(sessionInfo: SessionInfo): void {
-  sessionInfo.fastMode = undefined;
-  sessionInfo.verboseLevel = undefined;
-  sessionInfo.traceLevel = undefined;
-  sessionInfo.reasoningLevel = undefined;
-}

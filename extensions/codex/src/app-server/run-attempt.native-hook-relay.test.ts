@@ -949,8 +949,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "thread/resume") {
-        // Only a structured RPC rejection proves Codex holds no resume
-        // subscription, so the run may fall back to a fresh thread.
+        // Exact unsubscribe after the structured RPC failure proves the resume
+        // subscription is released before falling back to a fresh thread.
         throw new CodexAppServerRpcError({ code: -32_000, message: "resume failed" }, method);
       }
       return undefined;

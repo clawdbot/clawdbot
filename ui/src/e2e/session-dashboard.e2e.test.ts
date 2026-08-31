@@ -4,11 +4,11 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
-import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -321,7 +321,7 @@ suite.define(() => {
     });
     await showDashboard(page);
 
-    await page.goto(`${suite.server.baseUrl}dashboard`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length, { timeout: 30_000 })
       .toBeGreaterThan(0);
@@ -476,7 +476,7 @@ suite.define(() => {
     });
     await showDashboard(page);
 
-    await page.goto(`${suite.server.baseUrl}dashboard`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     const pin = preview.getByRole("button", { name: "Pin to dashboard" });
@@ -488,7 +488,11 @@ suite.define(() => {
     await toast.waitFor();
     expect(await toast.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await pin.isEnabled()).toBe(true);
-    expect(await pin.getAttribute("title")).toBe("Could not pin to dashboard. Try again.");
+    await page.mouse.move(0, 0);
+    await pin.hover();
+    const hint = page.locator("wa-tooltip[open]");
+    await hint.locator('[part="body"]').waitFor({ state: "visible" });
+    expect(await hint.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await page.getByText("internal path detail", { exact: false }).count()).toBe(0);
     if (recordProof) {
       await page.screenshot({ path: path.join(workboardPinFailureProofDir, "pin-failed.png") });
@@ -546,7 +550,7 @@ suite.define(() => {
     });
     await showDashboard(page);
 
-    await page.goto(`${suite.server.baseUrl}dashboard`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     await preview.hover();
@@ -625,7 +629,7 @@ suite.define(() => {
     await showDashboard(page);
 
     try {
-      await page.goto(`${suite.server.baseUrl}dashboard`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
       const miniWidget = page.locator('[data-test-id="workboard-mini-widget"]');
       await cardWidget.waitFor();
@@ -764,27 +768,9 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         controlUiWidgetKinds: widgetKinds,
         featureMethods: methods,
+        operatorScopes: ["operator.read"],
+        sessionKey,
         methodResponses: {
-          connect: {
-            type: "hello-ok",
-            protocol: PROTOCOL_VERSION,
-            server: { connId: "read-only-dashboard-widget", version: "e2e" },
-            auth: {
-              deviceToken: "e2e-read-only-dashboard-device-token",
-              role: "operator",
-              scopes: ["operator.read"],
-            },
-            features: { capabilities: [], events: [], methods },
-            controlUiWidgetKinds: widgetKinds,
-            snapshot: {
-              sessionDefaults: {
-                defaultAgentId: "main",
-                mainKey: "main",
-                mainSessionKey: "main",
-                scope: "agent",
-              },
-            },
-          },
           "board.get": pluginWidgetBoardSnapshot,
           "workboard.cards.list": {
             cards: [card],
@@ -794,7 +780,7 @@ suite.define(() => {
       });
       await showDashboard(page);
 
-      await page.goto(`${suite.server.baseUrl}dashboard`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
       await cardWidget.waitFor();
       await expect.poll(() => cardWidget.textContent()).toContain(card.title);
@@ -854,7 +840,7 @@ suite.define(() => {
     await showDashboard(page);
 
     try {
-      await page.goto(`${suite.server.baseUrl}dashboard`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const chip = page.locator(".board-session-surface__workboard-chip");
       await chip.waitFor();
       await expect.poll(() => chip.textContent()).toContain("Ship dashboard stitch");
@@ -984,7 +970,7 @@ suite.define(() => {
         });
         await showDashboard(page);
 
-        await page.goto(`${suite.server.baseUrl}dashboard`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
         await expect
           .poll(async () => (await gateway.getRequests("board.get")).length)
           .toBeGreaterThan(0);

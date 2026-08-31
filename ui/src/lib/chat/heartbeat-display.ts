@@ -1,60 +1,20 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI chat module implements heartbeat display behavior.
-import { escapeRegExp } from "../../../../src/shared/regexp.js";
-
-const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
-const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
+import {
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  stripHeartbeatToken,
+} from "../../../../src/auto-reply/heartbeat.js";
 
 export function stripHeartbeatTokenForDisplay(
   raw: string,
   maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
 ): { shouldSkip: boolean; text: string } {
-  let text = raw.trim();
-  if (!text) {
-    return { shouldSkip: true, text: "" };
-  }
-  const strippedMarkup = text
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/^[*`~_]+/, "")
-    .replace(/[*`~_]+$/, "");
-  if (!text.includes(HEARTBEAT_TOKEN) && !strippedMarkup.includes(HEARTBEAT_TOKEN)) {
-    // strippedMarkup exists only to DETECT tokens hidden behind markup; without
-    // a token, returning it would corrupt legitimate angle-bracket prose.
-    return { shouldSkip: false, text };
-  }
-
-  const tokenAtEnd = new RegExp(`${escapeRegExp(HEARTBEAT_TOKEN)}[^\\w]{0,4}$`);
-  let changed = true;
-  let didStrip = false;
-  text = strippedMarkup.trim();
-  while (changed) {
-    changed = false;
-    const next = text.trim();
-    if (next.startsWith(HEARTBEAT_TOKEN)) {
-      text = next.slice(HEARTBEAT_TOKEN.length).trimStart();
-      didStrip = true;
-      changed = true;
-      continue;
-    }
-    if (tokenAtEnd.test(next)) {
-      const index = next.lastIndexOf(HEARTBEAT_TOKEN);
-      const before = next.slice(0, index).trimEnd();
-      const after = next.slice(index + HEARTBEAT_TOKEN.length).trimStart();
-      text = before ? `${before}${after}`.trimEnd() : "";
-      didStrip = true;
-      changed = true;
-    }
-  }
-
-  if (!didStrip) {
-    return { shouldSkip: false, text };
-  }
-  return { shouldSkip: !text || text.length <= maxAckChars, text };
-}
-
-function isHiddenDisplayBlockType(type: unknown): boolean {
-  return type === "thinking" || type === "reasoning";
+  const result = stripHeartbeatToken(raw, { mode: "message" });
+  const text = result.didStrip && /^[*`~_]+$/.test(result.text) ? "" : result.text;
+  return {
+    shouldSkip: result.shouldSkip || (result.didStrip && text.length <= maxAckChars),
+    text,
+  };
 }
 
 function resolveDisplayContent(content: unknown): {
@@ -68,34 +28,23 @@ function resolveDisplayContent(content: unknown): {
     return { text: "", hasVisibleNonTextContent: content != null };
   }
   let hasVisibleNonTextContent = false;
-  const text = content
-    .filter((block): block is { type: "text"; text: string } => {
-      if (!block || typeof block !== "object" || !("type" in block)) {
-        hasVisibleNonTextContent = true;
-        return false;
-      }
-      if ((block as { type?: unknown }).type !== "text") {
-        if (!isHiddenDisplayBlockType((block as { type?: unknown }).type)) {
-          hasVisibleNonTextContent = true;
-        }
-        return false;
-      }
-      if (typeof (block as { text?: unknown }).text !== "string") {
-        hasVisibleNonTextContent = true;
-        return false;
-      }
-      return true;
-    })
-    .map((block) => block.text)
-    .join("");
-  return { text, hasVisibleNonTextContent };
+  const text: string[] = [];
+  content.forEach((block) => {
+    const entry = asOptionalObjectRecord(block);
+    if (entry?.type === "text" && typeof entry.text === "string") {
+      text.push(entry.text);
+    } else if (entry?.type !== "thinking" && entry?.type !== "reasoning") {
+      hasVisibleNonTextContent = true;
+    }
+  });
+  return { text: text.join(""), hasVisibleNonTextContent };
 }
 
 export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
+  const entry = asOptionalObjectRecord(message);
+  if (!entry) {
     return false;
   }
-  const entry = message as Record<string, unknown>;
   const role = normalizeLowercaseStringOrEmpty(entry.role);
   if (role !== "assistant") {
     return false;

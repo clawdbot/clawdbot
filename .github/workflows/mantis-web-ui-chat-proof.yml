@@ -123,6 +123,9 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -139,7 +142,7 @@ jobs:
           set -euo pipefail
           worktree_root=".artifacts/qa-e2e/mantis/web-ui-chat-proof-worktrees"
           mkdir -p "$worktree_root"
-          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
           pnpm --dir "$worktree_root/candidate" install --frozen-lockfile --prefer-offline
 
       - name: Run web UI chat proof

@@ -123,14 +123,19 @@ describe("pw-session refLocator", () => {
     expect(mocks.frameLocator).not.toHaveBeenCalled();
   });
 
-  it("uses page getByRole for role refs by default", () => {
+  it.each([
+    { ref: "e1", name: "OK" },
+    { ref: "e1", name: "" },
+    { ref: "ax12", name: "OK" },
+    { ref: "ax12", name: "" },
+  ])("matches the exact name for unmarked $ref with name '$name'", ({ ref, name }) => {
     const { page, mocks } = fakePage();
     const state = ensurePageState(page);
-    state.roleRefs = { e1: { role: "button", name: "OK" } };
+    state.roleRefs = { [ref]: { role: "button", name } };
 
-    refLocator(page, "e1");
+    refLocator(page, ref);
 
-    expect(mocks.getByRole).toHaveBeenCalled();
+    expect(mocks.getByRole).toHaveBeenCalledWith("button", { name, exact: true });
   });
 
   it("uses aria-ref locators when refs mode is aria", () => {
@@ -143,24 +148,14 @@ describe("pw-session refLocator", () => {
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
   });
 
-  it("uses backend-marked DOM locators for ax refs", () => {
+  it.each(["e1", "ax12"])("uses backend-marked DOM locators for %s refs", (ref) => {
     const { page, mocks } = fakePage();
     const state = ensurePageState(page);
-    state.roleRefs = { ax12: { role: "button", name: "OK", domMarker: true } };
+    state.roleRefs = { [ref]: { role: "button", name: "OK", domMarker: true } };
 
-    refLocator(page, "ax12");
+    refLocator(page, ref);
 
-    expect(mocks.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}="ax12"]`);
-  });
-
-  it("falls back to role heuristics for ax refs without backend markers", () => {
-    const { page, mocks } = fakePage();
-    const state = ensurePageState(page);
-    state.roleRefs = { ax12: { role: "button", name: "OK" } };
-
-    refLocator(page, "ax12");
-
-    expect(mocks.getByRole).toHaveBeenCalledWith("button", { name: "OK", exact: true });
+    expect(mocks.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${ref}"]`);
   });
 
   it("rejects unknown ax refs instead of timing out on aria-ref locators", () => {
@@ -662,15 +657,20 @@ describe("pw-session ensurePageState", () => {
     ensurePageState(page);
     const capture = beginActionDownloadCaptureOnPage(page);
     const error = new Error("action download save failed");
+    const cancel = vi.fn(async () => {
+      throw new Error("browser disconnected during cancellation");
+    });
 
     handlers.get("download")?.[0]?.({
       suggestedFilename: () => "failed.txt",
       saveAs: vi.fn(async () => {
         throw error;
       }),
+      cancel,
     });
 
     await expect(capture.drain()).rejects.toBe(error);
+    expect(cancel).toHaveBeenCalledOnce();
     capture.dispose();
   });
 

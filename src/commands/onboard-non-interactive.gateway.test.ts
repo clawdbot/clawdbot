@@ -6,7 +6,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { setTestEnvValue } from "../test-utils/env.js";
+import { setTestEnvValue, withEnv, withEnvAsync } from "../test-utils/env.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   capturedReplaceConfigFileCalls,
   configWritePluginLeaseDepths,
@@ -20,7 +21,6 @@ import {
   gatewayOnboardConfigSnapshotMock as readConfigFileSnapshotMock,
   readLastGatewayErrorLineMock,
   readTestConfig,
-  resolveInstallDaemonGatewayHealthTiming,
   resolveTestConfigPath,
   runNonInteractiveSetup,
   gatewayOnboardRuntime as runtime,
@@ -88,6 +88,103 @@ describe("logNonInteractiveOnboardingFailure", () => {
     expect(parsed.hints).toEqual([
       "Fix: start `openclaw gateway run`, or run `openclaw gateway restart` for a managed gateway.",
     ]);
+  });
+
+  it.each([
+    {
+      name: "active profile",
+      env: { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: undefined },
+      selector: "--profile work",
+    },
+    {
+      name: "container precedence over the active profile",
+      env: { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: "preview" },
+      selector: "--container preview",
+    },
+  ])("keeps $name on every recovery command in human and JSON output", ({ env, selector }) => {
+    const cases = [
+      {
+        detail: "unauthorized: invalid token",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "Cannot find module sqlite-vec",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "Cannot find package 'typebox' imported from /app/plugin.mjs",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "ERR_MODULE_NOT_FOUND",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        diagnostics: {
+          lastGatewayError: "Cannot find package '@openclaw/example' imported from /app/plugin.mjs",
+        },
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        diagnostics: {
+          service: {
+            label: "Gateway",
+            loaded: false,
+            loadState: { status: "not-loaded" as const },
+            loadedText: "not loaded",
+          },
+        },
+        commands: ["gateway install --force"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        diagnostics: {
+          service: {
+            label: "Gateway",
+            loaded: true,
+            loadState: { status: "loaded" as const },
+            loadedText: "loaded",
+            runtimeStatus: "stopped",
+          },
+        },
+        commands: ["gateway restart"],
+      },
+      {
+        detail: "startup timed out",
+        diagnostics: { lastGatewayError: "configuration parse failed" },
+        commands: ["gateway status --deep"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        commands: ["gateway run", "gateway restart"],
+      },
+    ];
+
+    withEnv(env, () => {
+      for (const { detail, diagnostics, commands } of cases) {
+        for (const json of [false, true]) {
+          const output = vi.fn();
+          logNonInteractiveOnboardingFailure({
+            ...failure,
+            hints: undefined,
+            opts: { json },
+            runtime: { ...runtime, log: output, error: output },
+            detail,
+            diagnostics,
+          });
+
+          const emitted = String(output.mock.calls[0]?.[0]);
+          const hint = json
+            ? (JSON.parse(emitted) as { hints: string[] }).hints[0]
+            : emitted.split("\n").find((line) => line.startsWith("Fix:"));
+          for (const command of commands) {
+            expect(hint).toContain(`\`openclaw ${selector} ${command}\``);
+          }
+        }
+      }
+    });
   });
 
   it("leaves hints for a non-gateway-health phase unchanged", () => {
@@ -469,7 +566,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         url: `ws://127.0.0.1:${port}`,
         token,
       });
-      expect(cfg.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
+      expect(cfg.hooks).toBeUndefined();
     });
   }, 60_000);
 
@@ -496,9 +593,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           },
         },
       ];
+      const seededHooks = {
+        internal: {
+          enabled: false,
+          entries: { "session-memory": { enabled: false } },
+        },
+      };
       testConfigStore.set(resolveTestConfigPath(), {
         agents: { list: seededAgents },
         bindings: seededBindings,
+        hooks: seededHooks,
         gateway: {
           mode: "remote",
           remote: {
@@ -524,6 +628,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const cfg = readTestConfig();
       expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
       expect(cfg.bindings).toEqual(seededBindings);
+      expect(cfg.hooks).toEqual(seededHooks);
       expect(cfg.gateway?.remote).toEqual({
         url: `ws://127.0.0.1:${port}`,
         token: tokenRef,
@@ -612,24 +717,37 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("uses a longer health deadline when daemon install was requested", async () => {
-    await withStateDir("state-local-daemon-health-", async (stateDir) => {
-      const captured = createOnboardGatewayTimeoutCapture();
-      gatewayReachableState.mock = captured.mock;
+  it.each([
+    { platform: "linux", deadlineMs: 45_000, probeTimeoutMs: 10_000, healthTimeoutMs: 10_000 },
+    { platform: "win32", deadlineMs: 90_000, probeTimeoutMs: 15_000, healthTimeoutMs: 90_000 },
+  ] as const)(
+    "uses managed daemon health timing on $platform",
+    async ({ platform, deadlineMs, probeTimeoutMs, healthTimeoutMs }) => {
+      await withStateDir("state-local-daemon-health-", async (stateDir) => {
+        const captured = createOnboardGatewayTimeoutCapture();
+        gatewayReachableState.mock = captured.mock;
 
-      await runOnboardLocalDaemonSetup({ runSetup: runNonInteractiveSetup, stateDir, runtime });
+        await withMockedPlatform(platform, () =>
+          runOnboardLocalDaemonSetup({ runSetup: runNonInteractiveSetup, stateDir, runtime }),
+        );
 
-      const cfg = readTestConfig() as {
-        gateway?: { mode?: string; bind?: string };
-      };
+        const cfg = readTestConfig() as {
+          gateway?: { mode?: string; bind?: string };
+        };
 
-      expect(cfg?.gateway?.mode).toBe("local");
-      expect(cfg?.gateway?.bind).toBe("loopback");
-      expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
-      expect(captured.deadlineMs).toBe(45_000);
-      expect(captured.probeTimeoutMs).toBe(10_000);
-    });
-  }, 60_000);
+        expect(cfg?.gateway?.mode).toBe("local");
+        expect(cfg?.gateway?.bind).toBe("loopback");
+        expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
+        expect(captured.deadlineMs).toBe(deadlineMs);
+        expect(captured.probeTimeoutMs).toBe(probeTimeoutMs);
+        expect(healthCommandMock).toHaveBeenCalledWith(
+          expect.objectContaining({ timeoutMs: healthTimeoutMs }),
+          expect.anything(),
+        );
+      });
+    },
+    60_000,
+  );
 
   it("passes pinned gateway auth through non-interactive health checks", async () => {
     await withStateDir("state-local-daemon-health-auth-", async (stateDir) => {
@@ -662,14 +780,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(healthRuntime).toBe(runtime);
     });
   }, 60_000);
-
-  it("uses longer Windows health timings for daemon install probes", () => {
-    expect(resolveInstallDaemonGatewayHealthTiming("win32")).toEqual({
-      deadlineMs: 90_000,
-      probeTimeoutMs: 15_000,
-      healthCommandTimeoutMs: 90_000,
-    });
-  });
 
   it.each([false, true])(
     "emits a daemon-install failure when Linux user systemd is unavailable (skipHealth: %s)",
@@ -869,7 +979,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("classifies daemon health ECONNREFUSED failures with a recovery command", async () => {
+  it("classifies daemon health ECONNREFUSED failures with a profile-scoped recovery command", async () => {
     await withStateDir("state-local-daemon-health-refused-", async (stateDir) => {
       gatewayReachableState.mock = vi.fn(async () => ({
         ok: false,
@@ -883,11 +993,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       readLastGatewayErrorLineMock.mockResolvedValueOnce("");
 
       const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
-      await expectOnboardLocalJsonSetupFailure({
-        runSetup: runNonInteractiveSetup,
-        stateDir,
-        runtime: runtimeWithCapture,
-      });
+      await withEnvAsync(
+        { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: undefined },
+        async () => {
+          await expectOnboardLocalJsonSetupFailure({
+            runSetup: runNonInteractiveSetup,
+            stateDir,
+            runtime: runtimeWithCapture,
+          });
+        },
+      );
 
       const parsed = JSON.parse(readCapturedJson()) as {
         ok: boolean;
@@ -898,7 +1013,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(parsed.ok).toBe(false);
       expect(parsed.phase).toBe("gateway-health");
       expect(parsed.classification).toBe("service-stopped");
-      expect(parsed.hints).toContain("Fix: run `openclaw gateway restart`.");
+      expect(parsed.hints).toContain("Fix: run `openclaw --profile work gateway restart`.");
     });
   }, 60_000);
 });

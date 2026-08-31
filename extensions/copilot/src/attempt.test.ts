@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CopilotClient, Tool as SdkTool } from "@github/copilot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
+import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   abortAgentHarnessRun,
   applyEmbeddedAttemptToolsAllow,
@@ -567,6 +568,20 @@ describe("runCopilotAttempt", () => {
     expect(getSdkSessionId(result)).toBe("sess-1");
   });
 
+  it("hands the foreground prompt context to agent-end side effects", async () => {
+    const runAgentEndSideEffects = vi.spyOn(agentHarnessRuntime, "runAgentEndSideEffects");
+    const params = makeParams({
+      memberRoleIds: ["maintainer-role"],
+      messageChannel: "discord",
+    });
+
+    await runCopilotAttempt(params, { pool: makeFakePool(makeFakeSdk()) });
+
+    const ctx = runAgentEndSideEffects.mock.calls.at(-1)?.[0]?.ctx;
+    expect(ctx?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
+    expect(ctx?.foregroundPromptContext?.agentDir).toBe(params.agentDir);
+  });
+
   it("retains the host terminal error after an unrelated successful tool", async () => {
     const terminalError = {
       error: "delivery failed",
@@ -583,6 +598,9 @@ describe("runCopilotAttempt", () => {
           ...(activeError ? { lastToolError: activeError } : {}),
           executionStarted: true,
           sideEffectEvidence: observation.toolName === "message",
+          effectReceipt: {
+            state: observation.toolName === "message" ? "uncertain" : "read_completed",
+          } as const,
         };
       });
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
@@ -660,6 +678,9 @@ describe("runCopilotAttempt", () => {
           ...(activeError ? { lastToolError: activeError } : {}),
           executionStarted: true,
           sideEffectEvidence: true,
+          effectReceipt: {
+            state: observation.outcome === "success" ? "mutation_committed" : "uncertain",
+          } as const,
         };
       });
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {

@@ -21,7 +21,10 @@ import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveSandboxedSessionCreation,
+} from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -241,7 +244,11 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
         }
         const runtimeConfig = context.getRuntimeConfig();
-        const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider);
+        const realtimeConfig = buildTalkRealtimeConfig(
+          runtimeConfig,
+          params.provider,
+          params.model,
+        );
         const launchOptions = buildRealtimeVoiceLaunchOptions({
           requested: params,
           defaults: realtimeConfig,
@@ -305,6 +312,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         await ensureClientVoiceAgentSessionEntry({
           agentId: realtimeContext.agentId,
           sessionKey,
+          creation: resolveSandboxedSessionCreation(client, runtimeConfig),
         });
         const session = createTalkRealtimeRelaySession({
           context,
@@ -344,11 +352,16 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         const runtimeConfig = context.getRuntimeConfig();
-        const transcriptionConfig = buildTalkTranscriptionConfig(runtimeConfig, params.provider);
+        const transcriptionConfig = buildTalkTranscriptionConfig(
+          runtimeConfig,
+          params.provider,
+          params.model,
+        );
         const resolution = resolveConfiguredRealtimeTranscriptionProvider({
           config: runtimeConfig,
           configuredProviderId: transcriptionConfig.provider,
           providerConfigs: transcriptionConfig.providers,
+          requestedModel: normalizeOptionalString(params.model),
           defaultModel: transcriptionConfig.model,
         });
         const session = createTalkTranscriptionRelaySession({

@@ -1,6 +1,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
   dropPreSessionStartAnnouncePairs,
   isHeartbeatHistoryTurnBoundaryMessage,
@@ -103,24 +104,26 @@ export async function readIncrementalChatHistoryTail(params: {
     readPage.messages,
     overreadContextMessage,
   );
-  const project = () => {
+  const project = (
+    messages = rawMessages,
+    contextMessage = overreadContextMessage,
+    resolveProfileDisplay = true,
+  ) => {
     const filteredRawMessages =
       sessionStartedAt === undefined
-        ? rawMessages
+        ? messages
         : dropChatHistoryOverreadContextMessage(
             dropPreSessionStartAnnouncePairs(
-              overreadContextMessage === undefined
-                ? rawMessages
-                : [overreadContextMessage, ...rawMessages],
+              contextMessage === undefined ? messages : [contextMessage, ...messages],
               sessionStartedAt,
             ),
-            overreadContextMessage,
+            contextMessage,
           );
     const projection = projectChatDisplayMessagesWithState(filteredRawMessages, {
       includeCommentaryFallbacks: true,
       maxChars: params.effectiveMaxChars,
-      resolveCurrentUserProfileDisplay,
-      turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
+      ...(resolveProfileDisplay ? { resolveCurrentUserProfileDisplay } : {}),
+      turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(contextMessage),
     });
     const projected =
       offset === 0
@@ -131,10 +134,17 @@ export async function readIncrementalChatHistoryTail(params: {
     return { filteredRawMessages, projected, projection };
   };
   let result = project();
+  let estimatedVisibleMessages = result.projected.length;
+  let projectionDirty = false;
   let scanLimit = rawHistoryWindowMessages;
   let scannedBytes = 0;
   let nextChunkMessages = SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES;
   while (offset + rawPageMessages < readPage.totalMessages) {
+    if (projectionDirty && estimatedVisibleMessages >= params.max) {
+      result = project();
+      projectionDirty = false;
+      estimatedVisibleMessages = result.projected.length;
+    }
     if (result.projected.length >= params.max) {
       break;
     }
@@ -150,18 +160,24 @@ export async function readIncrementalChatHistoryTail(params: {
       maxMessages: chunkMessages + 1,
       allowResetArchiveFallback: true,
     });
+    // Separate awaits may cross a destructive rewrite, even when a page is empty.
+    // Let the existing retryable history response request one coherent snapshot.
+    if (page.displaySource !== readPage.displaySource) {
+      throw new SessionTranscriptProjectionUnavailableError(params.readScope.sessionId);
+    }
     if (page.messages.length === 0) {
       break;
     }
     // One older context row preserves stale-pair and heartbeat boundaries across chunks.
     const contextMessage = page.messages.length > chunkMessages ? page.messages[0] : undefined;
-    rawPageMessages += page.messages.length - (contextMessage === undefined ? 0 : 1);
-    rawMessages = dropChatHistoryOverreadContextMessage(
-      [...page.messages, ...rawMessages],
-      contextMessage,
-    );
+    const chunkRawMessages = dropChatHistoryOverreadContextMessage(page.messages, contextMessage);
+    rawPageMessages += chunkRawMessages.length;
+    rawMessages = chunkRawMessages.concat(rawMessages);
     overreadContextMessage = contextMessage;
-    result = project();
+    // Count fresh rows once; the authoritative whole-window projection preserves cross-chunk facts.
+    estimatedVisibleMessages += project(chunkRawMessages, contextMessage, false).projection.messages
+      .length;
+    projectionDirty = true;
     scannedBytes += Buffer.byteLength(JSON.stringify(page.messages), "utf8");
     if (rawPageMessages > rawHistoryWindowMessages && scannedBytes >= params.maxBytes) {
       break;
@@ -171,6 +187,9 @@ export async function readIncrementalChatHistoryTail(params: {
       nextChunkMessages * 2,
       SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_CHUNK_MESSAGES,
     );
+  }
+  if (projectionDirty) {
+    result = project();
   }
   return {
     overreadContextMessage,

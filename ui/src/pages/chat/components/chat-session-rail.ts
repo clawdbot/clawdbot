@@ -1,4 +1,3 @@
-import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
@@ -8,7 +7,7 @@ import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/con
 import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
-import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -219,11 +218,10 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) activeRunId: string | null = null;
   @property({ attribute: false }) startedAt?: number;
   @property({ attribute: false }) lastReadAt?: number;
-  @property({ attribute: false }) progressCard: ProgressCard | null = null;
-  @property({ attribute: false }) onDismissProgressCard?: (card: ProgressCard) => void;
   @property({ attribute: false }) pullRequests: ControlUiSessionPullRequest[] = [];
   @property({ attribute: false }) companion: ChatSessionCompanionThread = {
     exchanges: [],
+    loading: false,
     pendingQuestion: null,
     failedQuestion: null,
     hint: null,
@@ -472,7 +470,12 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     };
     return html`
       <div class="chat-session-rail__thread" aria-live="polite" ${ref(syncScroll)}>
-        ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
+        ${this.companion.loading && this.companion.exchanges.length === 0
+          ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+          : nothing}
+        ${!this.companion.loading &&
+        this.companion.exchanges.length === 0 &&
+        !this.companion.pendingQuestion
           ? renderPanelEmptyState({
               icon: icons.bot,
               heading: t("chat.sidePanel.companion"),
@@ -627,7 +630,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         ${digest
           ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
           : nothing}
-        ${renderSessionProgressCard(this.progressCard, "rail", this.onDismissProgressCard)}
         ${this.renderThread()}
         ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
           ? this.renderStarters()

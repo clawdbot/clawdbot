@@ -3,9 +3,10 @@ import {
   buildChannelInboundEventContext,
   type PreparedInboundReply,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { vi, type Mock } from "vitest";
-import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
 import type {
   MatrixConfig,
   MatrixRoomConfig,
@@ -77,7 +78,6 @@ type MatrixHandlerTestHarnessOptions = {
   blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  textLimit?: number;
   mediaMaxBytes?: number;
   startupMs?: number;
   startupGraceMs?: number;
@@ -371,7 +371,6 @@ export function createMatrixHandlerTestHarness(
     blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
     dmPolicy,
-    textLimit: options.textLimit ?? 8_000,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
     startupMs: options.startupMs ?? 0,
     startupGraceMs: options.startupGraceMs ?? 0,

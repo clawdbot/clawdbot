@@ -24,6 +24,7 @@ import {
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 import {
   createTelegramPollExtraToolSchemas,
+  createTelegramReactionEmojiSchema,
   createTelegramRichSendExtraToolSchemas,
 } from "./message-tool-schema.js";
 import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
@@ -202,6 +203,14 @@ function describeTelegramMessageTool({
     schema.push({
       properties: createTelegramPollExtraToolSchemas(),
       visibility: "all-configured",
+    });
+  }
+  if (discovery.isEnabled("reactions")) {
+    schema.push({
+      properties: createTelegramReactionEmojiSchema(),
+      // The shared emoji parameter keeps react valid across channels; this
+      // contribution only adds Telegram-specific guidance for that parameter.
+      actions: [],
     });
   }
   if (discovery.isEnabled("sendMessage")) {

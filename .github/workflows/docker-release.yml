@@ -43,9 +43,9 @@ on:
       include_browser:
         description: Whether the tagged Docker release includes browser images
         value: ${{ jobs.create-manifest.outputs.browser_supported }}
-      vcr_source_refs:
-        description: Newline-delimited attestation-verified immutable GHCR source refs
-        value: ${{ jobs.verify-attestations.outputs.vcr_source_refs }}
+      vcr_source_digests:
+        description: Newline-delimited attestation-verified immutable GHCR source digests
+        value: ${{ jobs.verify-attestations.outputs.vcr_source_digests }}
     secrets:
       DOCKERHUB_USERNAME:
         required: true
@@ -203,6 +203,7 @@ jobs:
       contents: read
     outputs:
       built_at: ${{ steps.build_provenance.outputs.built_at }}
+      release_version: ${{ needs.resolve_release_policy.outputs.version }}
       source_sha: ${{ steps.build_provenance.outputs.source_sha }}
     steps:
       - name: Checkout selected source
@@ -352,7 +353,7 @@ jobs:
           done
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -448,6 +449,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
@@ -470,6 +472,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
             OPENCLAW_INSTALL_BROWSER=1
           tags: ${{ steps.tags.outputs.browser }}
@@ -561,7 +564,7 @@ jobs:
 
       - *buildkit_prepull_step
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -657,6 +660,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
@@ -679,6 +683,7 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve_build_provenance.outputs.release_version }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
             OPENCLAW_INSTALL_BROWSER=1
           tags: ${{ steps.tags.outputs.browser }}
@@ -900,7 +905,7 @@ jobs:
     if: ${{ always() && needs.create-manifest.result == 'success' }}
     runs-on: ubuntu-24.04
     outputs:
-      vcr_source_refs: ${{ steps.vcr_source_refs.outputs.value }}
+      vcr_source_digests: ${{ steps.vcr_source_digests.outputs.value }}
     permissions:
       contents: read
       packages: write
@@ -913,7 +918,7 @@ jobs:
 
       - *buildkit_prepull_step
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1052,11 +1057,11 @@ jobs:
             "${dockerhub_arm64_refs[@]}"
 
       # Resolve the moving release tags once, then verify the exact immutable
-      # indexes that the VCR publisher will consume. Passing those digest refs
-      # across the job boundary prevents a later tag rewrite from changing the
-      # bytes copied after attestation verification.
+      # indexes that the VCR publisher will consume. Pass only their digests
+      # across the secret-scanned job boundary so a later tag rewrite cannot
+      # change the bytes copied after attestation verification.
       - name: Resolve and verify immutable VCR source refs
-        id: vcr_source_refs
+        id: vcr_source_digests
         shell: bash
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -1073,7 +1078,7 @@ jobs:
             tags+=("${image_version}-browser")
           fi
 
-          source_refs=()
+          source_digests=()
           immutable_refs=()
           for index in "${!aliases[@]}"; do
             tagged_ref="${GHCR_IMAGE}:${tags[$index]}"
@@ -1088,7 +1093,7 @@ jobs:
                 <<< "${descriptor}"
             )"
             immutable_ref="${GHCR_IMAGE}@${digest}"
-            source_refs+=("${aliases[$index]}=${immutable_ref}")
+            source_digests+=("${aliases[$index]}=${digest}")
             immutable_refs+=("${immutable_ref}")
           done
 
@@ -1099,7 +1104,7 @@ jobs:
 
           {
             echo "value<<EOF"
-            printf '%s\n' "${source_refs[@]}"
+            printf '%s\n' "${source_digests[@]}"
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
 

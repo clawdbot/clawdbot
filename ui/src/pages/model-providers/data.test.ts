@@ -359,6 +359,16 @@ describe("model provider configuration data", () => {
     ]);
   });
 
+  it.each(["openai/gpt-saved", "saved-model"])(
+    "keeps saved %s available when the catalog is unknown, but not when it is empty",
+    (primary) => {
+      const selection = { primary, fallbacks: [], utilityModel: null };
+
+      expect(buildSelectableDefaultModels(null, selection)[0]).not.toHaveProperty("available");
+      expect(buildSelectableDefaultModels([], selection)[0]).toMatchObject({ available: false });
+    },
+  );
+
   it("preserves alias-valued and bare model defaults as picker options", () => {
     const selectable = buildSelectableDefaultModels(
       [catalogEntry({ provider: "anthropic", id: "claude-opus", alias: "Opus", available: true })],

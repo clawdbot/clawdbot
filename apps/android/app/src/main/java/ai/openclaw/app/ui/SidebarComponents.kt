@@ -1,11 +1,10 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.nativeString
-import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawTheme
-import ai.openclaw.app.ui.design.agentAvatarSource
+import ai.openclaw.app.ui.design.sessionColor
+import ai.openclaw.app.ui.design.sessionColorStripe
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -116,49 +115,6 @@ internal fun SidebarSectionTitle(
 }
 
 @Composable
-internal fun SidebarAgentRow(
-  agent: GatewayAgentSummary,
-  selected: Boolean,
-  palette: SidebarPalette,
-  onClick: () -> Unit,
-) {
-  SidebarRowSurface(
-    selected = selected,
-    stateDescription = if (selected) nativeString("Selected") else null,
-    palette = palette,
-    onClick = onClick,
-  ) {
-    ClawAgentAvatar(source = agentAvatarSource(agent), size = 28.dp) {
-      Box(
-        modifier = Modifier.size(28.dp).clip(CircleShape).background(palette.elevated),
-        contentAlignment = Alignment.Center,
-      ) {
-        Text(
-          text = agent.emoji?.takeIf(String::isNotBlank) ?: sidebarAgentName(agent).take(1).uppercase(),
-          style = ClawTheme.type.caption,
-          color = palette.text,
-        )
-      }
-    }
-    Text(
-      text = sidebarAgentName(agent),
-      style = ClawTheme.type.body,
-      color = palette.text,
-      modifier = Modifier.weight(1f),
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
-    if (selected) {
-      Text(
-        text = nativeString("Selected"),
-        style = ClawTheme.type.caption.copy(fontSize = 11.sp),
-        color = palette.muted,
-      )
-    }
-  }
-}
-
-@Composable
 internal fun SidebarActionRow(
   label: String,
   icon: ImageVector,
@@ -235,6 +191,7 @@ internal fun SidebarSessionRow(
     selected = selected,
     stateDescription = sessionStateDescription,
     palette = palette,
+    stripeColor = ClawTheme.colors.sessionColor(session.color),
     onClick = onClick,
   ) {
     Box(
@@ -282,6 +239,7 @@ private fun SidebarRowSurface(
   selected: Boolean?,
   stateDescription: String? = null,
   palette: SidebarPalette,
+  stripeColor: Color? = null,
   onClick: () -> Unit,
   content: @Composable RowScope.() -> Unit,
 ) {
@@ -292,6 +250,7 @@ private fun SidebarRowSurface(
         .heightIn(min = 48.dp)
         .clip(RoundedCornerShape(10.dp))
         .background(if (selected == true) palette.selection else Color.Transparent)
+        .sessionColorStripe(stripeColor)
         .then(
           if (selected == null) {
             Modifier.clickable(role = Role.Button, onClick = onClick)

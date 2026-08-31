@@ -3,6 +3,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
@@ -92,16 +93,20 @@ vi.mock("../../logging/subsystem.js", async () => {
 
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 
-const cfg = {
+const defaultAgents: AgentConfig[] = [
+  { id: "main", default: true },
+  { id: "work", model: "anthropic/claude-sonnet-4-6" },
+];
+
+const defaultConfig = {
   agents: {
     defaults: { model: "anthropic/claude-opus-4-6" },
-    list: [
-      { id: "main", default: true },
-      { id: "work", model: "anthropic/claude-sonnet-4-6" },
-    ],
+    list: defaultAgents,
   },
 } satisfies OpenClawConfig;
 
+let cfg: OpenClawConfig;
+let persistedConfig: OpenClawConfig | undefined;
 let openClawTestState: OpenClawTestState;
 
 function context(): GatewayRequestContext {
@@ -151,6 +156,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  cfg = structuredClone(defaultConfig);
+  persistedConfig = undefined;
   effects.info.mockReset();
   effects.warn.mockReset();
   effects.mutateConfigFileWithRetry
@@ -159,6 +166,7 @@ beforeEach(() => {
       async (params: { mutate: (draft: OpenClawConfig, context: unknown) => unknown }) => {
         const draft = structuredClone(cfg);
         const result = await params.mutate(draft, {});
+        persistedConfig = draft;
         return { nextConfig: draft, result };
       },
     );
@@ -171,20 +179,76 @@ afterAll(async () => {
 
 describe("sessions.patch sticky model persistence", () => {
   it.each([
-    { agentId: "main", sessionKey: "agent:main:dm:sticky" },
-    { agentId: "work", sessionKey: "agent:work:dm:sticky" },
-  ])(
-    "persists an accepted model for the resolved $agentId agent",
-    async ({ agentId, sessionKey }) => {
+    { scope: undefined, agentId: "main", target: "defaults" },
+    { scope: undefined, agentId: "work", target: "agent" },
+    { scope: "session", agentId: "main", target: undefined },
+    { scope: "session", agentId: "work", target: undefined },
+    { scope: "agent", agentId: "main", target: "agent" },
+    { scope: "agent", agentId: "work", target: "agent" },
+    { scope: "global", agentId: "main", target: "defaults" },
+    { scope: "global", agentId: "work", target: "defaults" },
+  ] as const)(
+    "uses scope=$scope for $agentId without changing another config layer",
+    async ({ scope, agentId, target }) => {
+      cfg.agents!.defaults!.modelSelectionScope = scope;
+      const sessionKey = `agent:${agentId}:dm:sticky-${scope ?? "unset"}`;
+      const model = "openai/gpt-5.6-sol";
       await upsertSessionEntryCore(
         { agentId, sessionKey },
-        { sessionId: `session-${agentId}`, updatedAt: 1 },
+        { sessionId: `session-${agentId}-${scope ?? "unset"}`, updatedAt: 1 },
       );
 
-      const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" });
+      const response = await patchSession({ key: sessionKey, model });
 
       expect(response[0]).toBe(true);
-      await vi.waitFor(() => expect(effects.mutateConfigFileWithRetry).toHaveBeenCalledOnce());
+      expect(loadSessionEntry({ agentId, sessionKey })).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      if (!target) {
+        expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+        return;
+      }
+      await vi.waitFor(() => expect(persistedConfig).toBeDefined());
+      expect(persistedConfig?.agents?.defaults?.model).toBe(
+        target === "defaults" ? model : defaultConfig.agents.defaults.model,
+      );
+      const expectedAgents = structuredClone(defaultConfig.agents.list);
+      for (const agent of expectedAgents) {
+        if (target === "agent" && agent.id === agentId) {
+          agent.model = model;
+        }
+      }
+      expect(persistedConfig?.agents?.list).toEqual(expectedAgents);
+    },
+  );
+
+  it.each([
+    { scope: "agent", agentId: "main", model: "anthropic/claude-opus-4-6" },
+    { scope: "global", agentId: "work", model: "anthropic/claude-sonnet-4-6" },
+  ] as const)(
+    "honors configured $scope scope when selecting the current effective model",
+    async ({ scope, agentId, model }) => {
+      cfg.agents!.defaults!.modelSelectionScope = scope;
+      const sessionKey = `agent:${agentId}:dm:scope-current-${scope}`;
+      await upsertSessionEntryCore(
+        { agentId, sessionKey },
+        { sessionId: `session-scope-current-${scope}`, updatedAt: 1 },
+      );
+
+      expect((await patchSession({ key: sessionKey, model }))[0]).toBe(true);
+      expect(loadSessionEntry({ agentId, sessionKey })?.modelOverride).toBeUndefined();
+      await vi.waitFor(() => expect(persistedConfig).toBeDefined());
+      expect(persistedConfig?.agents?.defaults?.model).toBe(
+        scope === "global" ? model : defaultConfig.agents.defaults.model,
+      );
+      const expectedAgents = structuredClone(defaultConfig.agents.list);
+      for (const agent of expectedAgents) {
+        if (scope === "agent" && agent.id === agentId) {
+          agent.model = model;
+        }
+      }
+      expect(persistedConfig?.agents?.list).toEqual(expectedAgents);
     },
   );
 
@@ -229,24 +293,28 @@ describe("sessions.patch sticky model persistence", () => {
     ).toHaveLength(0);
   });
 
-  it("keeps a write-scoped model switch session-only without persisting the configured default", async () => {
-    const sessionKey = "agent:main:dm:non-admin";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "session-non-admin", updatedAt: 1 },
-    );
+  it.each([undefined, "session", "agent", "global"] as const)(
+    "keeps non-admin model changes session-only with scope=%s",
+    async (scope) => {
+      cfg.agents!.defaults!.modelSelectionScope = scope;
+      const sessionKey = `agent:main:dm:non-admin-${scope ?? "unset"}`;
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        { sessionId: `session-non-admin-${scope ?? "unset"}`, updatedAt: 1 },
+      );
 
-    const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" }, [
-      "operator.write",
-    ]);
+      const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" }, [
+        "operator.write",
+      ]);
 
-    expect(response[0]).toBe(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-    });
-    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-  });
+      expect(response[0]).toBe(true);
+      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns session success and warns when the sticky config write fails", async () => {
     const sessionKey = "agent:main:dm:write-failure";

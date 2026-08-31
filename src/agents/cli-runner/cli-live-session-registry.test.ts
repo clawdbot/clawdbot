@@ -141,6 +141,10 @@ describe("generic plugin-owned live session registry", () => {
     const fresh = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
     const resumed = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
     const changed = buildPreparedCliRunContext({ systemPrompt: "Changed system policy." });
+    const mcpFresh = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
+    const mcpResumed = buildPreparedCliRunContext({ systemPrompt: "Original system policy." });
+    mcpFresh.preparedBackend.mcpConfigHash = "stable-mcp-config";
+    mcpResumed.preparedBackend.mcpConfigHash = "stable-mcp-config";
     const env = { PATH: "/usr/bin:/bin" };
     const freshFingerprint = buildCliLiveSessionFingerprint({
       context: fresh,
@@ -162,6 +166,33 @@ describe("generic plugin-owned live session registry", () => {
         env,
       }),
     ).not.toBe(freshFingerprint);
+    expect(
+      buildCliLiveSessionFingerprint({
+        context: resumed,
+        argv: ["claude", "-p", "--resume", "native-session", "--effort", "max"],
+        env,
+      }),
+    ).not.toBe(freshFingerprint);
+    expect(
+      buildCliLiveSessionFingerprint({
+        context: resumed,
+        argv: ["claude", "-p", "--resume", "native-session"],
+        env: { ...env, CLAUDE_CODE_EFFORT_LEVEL: "max" },
+      }),
+    ).not.toBe(freshFingerprint);
+
+    const mcpFreshFingerprint = buildCliLiveSessionFingerprint({
+      context: mcpFresh,
+      argv: ["claude", "-p", "--session-id", "native-session", "--mcp-config", "/tmp/turn-a.json"],
+      env,
+    });
+    expect(
+      buildCliLiveSessionFingerprint({
+        context: mcpResumed,
+        argv: ["claude", "-p", "--resume", "native-session", "--mcp-config", "/tmp/turn-b.json"],
+        env,
+      }),
+    ).toBe(mcpFreshFingerprint);
   });
 
   it("exposes only an active registered generation and never revives a removed owner", async () => {
@@ -347,20 +378,27 @@ describe("generic plugin-owned live session registry", () => {
 
   it("admits only local plugin-owned structured execution to reusable sessions", () => {
     const eligible = buildPreparedCliRunContext({ backend: { liveSession: "claude-stdio" } });
-    eligible.preparedBackend.execute = async function* () {
-      yield { type: "result" };
+    eligible.executionTarget = {
+      kind: "plugin",
+      async *execute() {
+        yield { type: "result" };
+      },
     };
 
     expect(acceptsCliLiveSession(eligible)).toBe(true);
 
     const node = buildPreparedCliRunContext({
       backend: { liveSession: "claude-stdio" },
-      sessionEntry: { sessionId: "node-session", updatedAt: 1, execHost: "node" },
+      sessionEntry: {
+        sessionId: "node-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-test",
+      },
     });
-    node.preparedBackend.execute = eligible.preparedBackend.execute;
     expect(acceptsCliLiveSession(node)).toBe(false);
 
-    delete eligible.preparedBackend.execute;
+    eligible.executionTarget = { kind: "process" };
     expect(acceptsCliLiveSession(eligible)).toBe(false);
   });
 });

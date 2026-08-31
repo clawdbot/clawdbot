@@ -10,6 +10,7 @@ import {
   failTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { createNextAcpTaskBackingDetail } from "../../tasks/task-backing-authority.js";
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
@@ -71,16 +72,16 @@ export function resolveBackgroundTaskFailureStatus(error: AcpRuntimeError): "fai
   return error.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE ? "timed_out" : "failed";
 }
 
-/** Infers blocked terminal outcomes from final progress text when the child turn reports one. */
-export function resolveBackgroundTaskTerminalResult(progressSummary: string): {
+/** Infers blocked terminal outcomes from final completion text when the child turn reports one. */
+export function resolveBackgroundTaskTerminalResult(completionText: string): {
   terminalOutcome?: "blocked";
   terminalSummary?: string;
 } {
-  const requiredCompletionResult = resolveRequiredCompletionTerminalResult(progressSummary);
+  const requiredCompletionResult = resolveRequiredCompletionTerminalResult(completionText);
   if (requiredCompletionResult.terminalOutcome) {
     return requiredCompletionResult;
   }
-  const normalized = normalizeText(progressSummary)?.replace(/\s+/g, " ").trim();
+  const normalized = normalizeText(completionText)?.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return {};
   }
@@ -142,6 +143,7 @@ export function resolveBackgroundTaskContext(params: {
 export function createBackgroundTaskRecord(
   context: BackgroundTaskContext,
   startedAt: number,
+  instanceId: string,
 ): BackgroundTaskRecord | undefined {
   try {
     const task = createRunningTaskRun({
@@ -155,6 +157,10 @@ export function createBackgroundTaskRecord(
       label: context.label,
       task: context.task,
       startedAt,
+      detail: createNextAcpTaskBackingDetail({
+        childSessionKey: context.childSessionKey,
+        instanceId,
+      }),
     });
     if (!task) {
       logVerbose(

@@ -2,7 +2,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { probeGatewayConfiguredModel, probeGatewayReachable } from "./onboard-helpers.js";
+import {
+  probeGatewayConfiguredModel,
+  probeGatewayReachable,
+  waitForGatewayReachable,
+} from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({ probeGateway: vi.fn() }));
 
@@ -44,7 +48,10 @@ describe("probeGatewayReachable", () => {
     });
   });
 
-  it("forwards configured remote edge auth to the gateway probe", async () => {
+  it.each([
+    ["single probe", probeGatewayReachable],
+    ["polling", waitForGatewayReachable],
+  ] as const)("forwards remote trust through %s", async (_name, probe) => {
     mocks.probeGateway.mockResolvedValueOnce({ ok: true, configSnapshot: null });
     const config: OpenClawConfig = {
       gateway: {
@@ -52,15 +59,20 @@ describe("probeGatewayReachable", () => {
         remote: {
           url: "wss://gateway.example",
           edgeAuth: { "X-Edge-Auth": "test-secret" },
+          tlsFingerprint: "ab".repeat(32),
         },
       },
     };
 
-    await expect(probeGatewayReachable({ url: "wss://gateway.example", config })).resolves.toEqual({
-      ok: true,
-    });
+    await expect(
+      probe({ url: "wss://gateway.example", config, originScopedDeviceAuth: true }),
+    ).resolves.toEqual({ ok: true });
     expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "wss://gateway.example", config }),
+      expect.objectContaining({
+        url: "wss://gateway.example",
+        config,
+        originScopedDeviceAuth: true,
+      }),
     );
   });
 
@@ -169,13 +181,14 @@ describe("probeGatewayReachable", () => {
     await expect(
       probeGatewayConfiguredModel({
         url: "ws://127.0.0.1:18789",
+        originScopedDeviceAuth: true,
       }),
     ).resolves.toEqual({
       kind: "missing-configured-model",
       detail: "Gateway default agent has no configured model",
     });
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ detailLevel: "config" }),
+    expect(mocks.probeGateway).toHaveBeenLastCalledWith(
+      expect.objectContaining({ detailLevel: "config", originScopedDeviceAuth: true }),
     );
   });
 

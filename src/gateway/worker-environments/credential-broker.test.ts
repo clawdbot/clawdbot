@@ -33,6 +33,7 @@ describe("worker environment service", () => {
     const liveEvents = support.createLiveEvents();
     const placementStore = {
       readWorkerTurnClaim: vi.fn(),
+      readWorkerTurnLiveAckCursor: vi.fn(() => 0),
       validateWorkerTurn: vi.fn(() => true),
       isWorkerTurnToolAuthorized: vi.fn(() => true),
       updateAckCursors: vi.fn(),

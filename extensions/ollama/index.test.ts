@@ -30,8 +30,8 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
   })),
 );
 const ensureOllamaModelPulledMock = vi.hoisted(() => vi.fn(async () => {}));
-const checkOllamaCloudAuthMock = vi.hoisted(() => vi.fn());
 const configureOllamaNonInteractiveMock = vi.hoisted(() => vi.fn());
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const fetchOllamaModelsMock = vi.hoisted(() => vi.fn());
 const fetchLoadedOllamaModelNamesMock = vi.hoisted(() => vi.fn());
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
@@ -79,9 +79,13 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 vi.mock("./src/setup.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./src/setup.runtime.js")>()),
-  checkOllamaCloudAuth: checkOllamaCloudAuthMock,
   configureOllamaNonInteractive: configureOllamaNonInteractiveMock,
   ensureOllamaModelPulled: ensureOllamaModelPulledMock,
   promptAndConfigureOllama: promptAndConfigureOllamaMock,
@@ -95,8 +99,11 @@ beforeEach(() => {
   clearLiveCatalogCacheForTests();
   promptAndConfigureOllamaMock.mockClear();
   ensureOllamaModelPulledMock.mockClear();
-  checkOllamaCloudAuthMock.mockReset();
-  checkOllamaCloudAuthMock.mockResolvedValue({ signedIn: true });
+  fetchWithSsrFGuardMock.mockReset();
+  fetchWithSsrFGuardMock.mockResolvedValue({
+    response: new Response(null, { status: 200 }),
+    release: vi.fn(async () => {}),
+  });
   configureOllamaNonInteractiveMock.mockReset();
   fetchOllamaModelsMock.mockReset();
   fetchLoadedOllamaModelNamesMock.mockReset();
@@ -338,10 +345,8 @@ describe("ollama plugin", () => {
       models: ["gemma4:latest"],
     },
     {
-      name: "rejects an unavailable default Ollama model before destructive reset",
+      name: "accepts an installed Ollama model when the suggested default is unavailable",
       models: ["qwen2.5-coder:7b"],
-      error:
-        "Ollama model gemma4 was not found at http://ollama-host:11434.\nAvailable models: qwen2.5-coder:7b",
     },
     {
       name: "refuses to pull an unavailable local model during destructive-reset preflight",
@@ -399,9 +404,11 @@ describe("ollama plugin", () => {
       models: models.map((name) => ({ name })),
     });
     if (cloud === "unauthenticated") {
-      checkOllamaCloudAuthMock.mockResolvedValue({
-        signedIn: false,
-        signinUrl: "https://ollama.com/signin",
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(JSON.stringify({ signin_url: "https://ollama.com/signin" }), {
+          status: 401,
+        }),
+        release: vi.fn(async () => {}),
       });
     }
     if (cloud === "unconfirmed") {
@@ -420,7 +427,9 @@ describe("ollama plugin", () => {
       expect(fetchOllamaModelsMock).toHaveBeenCalledWith("http://ollama-host:11434");
     }
     if (cloud === "confirmed") {
-      expect(checkOllamaCloudAuthMock).toHaveBeenCalledWith("http://ollama-host:11434");
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({ url: "http://ollama-host:11434/api/me" }),
+      );
       expect(queryOllamaModelShowInfoMock).toHaveBeenCalledWith(
         "http://ollama-host:11434",
         "kimi-k2.5:cloud",

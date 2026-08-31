@@ -16,7 +16,6 @@ vi.mock("./session-utils-row.js", () => ({
   buildGatewaySessionRow: () => {
     throw new Error("search selection must not render session rows");
   },
-  projectSessionActor: () => undefined,
 }));
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,

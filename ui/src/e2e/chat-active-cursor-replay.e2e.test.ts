@@ -5,6 +5,7 @@ import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectDefined,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
 } from "./chat-flow.test-support.ts";
@@ -40,7 +41,12 @@ suite.define(() => {
       deltaCursor: `cursor-${label.toLowerCase()}`,
       messages: [{ role: "user", content: `${label} cached prompt`, timestamp: 1 }],
       sessionId: `${label.toLowerCase()}-session`,
-      sessionInfo: { key: sessionKey, kind: "direct", updatedAt: 1 },
+      sessionInfo: {
+        key: sessionKey,
+        sessionId: `${label.toLowerCase()}-session`,
+        kind: "direct",
+        updatedAt: 1,
+      },
     });
     const historyCases = [
       {
@@ -89,6 +95,7 @@ suite.define(() => {
       key === sessionB
         ? {
             key,
+            sessionId: `${String.fromCharCode(97 + index)}-session`,
             kind: "direct" as const,
             label: "Session B",
             updatedAt: sessionKeys.length - index,
@@ -98,6 +105,7 @@ suite.define(() => {
           }
         : {
             key,
+            sessionId: `${String.fromCharCode(97 + index)}-session`,
             kind: "direct" as const,
             label: `Session ${String.fromCharCode(65 + index)}`,
             updatedAt: sessionKeys.length - index,
@@ -113,7 +121,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       const sessionLink = (sessionKey: string) =>
         page.locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,

@@ -6,6 +6,10 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import type {
+  InstalledPluginIndex,
+  InstalledPluginIndexRecord,
+} from "../plugins/installed-plugin-index-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../plugins/package-entry-resolution.js";
 import {
@@ -14,45 +18,11 @@ import {
   type PostUpgradeReport,
 } from "./doctor-post-upgrade.types.js";
 
-type InstalledPluginRecord = {
-  pluginId: string;
-  rootDir: string;
-  enabled: boolean;
-  origin?: string;
-  packageJson?: { path: string };
-  manifestPath?: string;
-  manifestHash?: string;
-};
-
-type InstallsJson = { plugins: InstalledPluginRecord[] };
-
 function buildReport(findings: PostUpgradeFinding[]): PostUpgradeReport {
   return { probesRun: [...POST_UPGRADE_PROBE_CODES], findings };
 }
 
-function isInstallsJson(value: unknown): value is InstallsJson {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    Array.isArray((value as { plugins?: unknown }).plugins) &&
-    (value as { plugins: unknown[] }).plugins.every(isInstalledPluginRecord)
-  );
-}
-
-function isOptionalString(value: unknown): value is string | undefined {
-  return value === undefined || typeof value === "string";
-}
-
-function isPackageJsonRef(value: unknown): value is InstalledPluginRecord["packageJson"] {
-  return (
-    value === undefined ||
-    (typeof value === "object" &&
-      value !== null &&
-      typeof (value as { path?: unknown }).path === "string")
-  );
-}
-
-function isSourceCheckoutPluginRecord(record: InstalledPluginRecord): boolean {
+function isSourceCheckoutPluginRecord(record: InstalledPluginIndexRecord): boolean {
   if (record.origin === "workspace" || record.origin === "config") {
     return true;
   }
@@ -79,43 +49,13 @@ function isBundledSourceCheckoutPluginRoot(pluginRootDir: string): boolean {
   }
 }
 
-function isInstalledPluginRecord(value: unknown): value is InstalledPluginRecord {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const record = value as InstalledPluginRecord;
-  return (
-    typeof record.pluginId === "string" &&
-    typeof record.rootDir === "string" &&
-    typeof record.enabled === "boolean" &&
-    isOptionalString(record.origin) &&
-    isPackageJsonRef(record.packageJson) &&
-    isOptionalString(record.manifestPath) &&
-    isOptionalString(record.manifestHash)
-  );
-}
-
-async function readInstallsJson(installsPath: string): Promise<InstallsJson | null> {
-  try {
-    const installsRaw = await fs.readFile(installsPath, "utf-8");
-    const installs = JSON.parse(installsRaw) as unknown;
-    return isInstallsJson(installs) ? installs : null;
-  } catch {
-    return null;
-  }
-}
-
 async function readInstalledPluginIndex(params: {
-  installsPath?: string;
   stateDir?: string;
-}): Promise<InstallsJson | null> {
-  if (params.installsPath) {
-    return await readInstallsJson(params.installsPath);
-  }
+}): Promise<Pick<InstalledPluginIndex, "plugins"> | null> {
   const index = await readPersistedInstalledPluginIndex(
     params.stateDir ? { stateDir: params.stateDir } : {},
   );
-  return index && isInstallsJson(index) ? { plugins: [...index.plugins] } : null;
+  return index ? { plugins: [...index.plugins] } : null;
 }
 
 async function readInstalledPackageJson(
@@ -132,7 +72,7 @@ async function readInstalledPackageJson(
 }
 
 async function resolvePackageJsonRelPath(
-  record: InstalledPluginRecord,
+  record: InstalledPluginIndexRecord,
 ): Promise<string | undefined> {
   if (record.packageJson) {
     return record.packageJson.path;
@@ -156,7 +96,6 @@ async function sha256OfFile(absPath: string): Promise<string | null> {
 
 /** Runs post-upgrade plugin probes and returns structured findings for the caller to render. */
 export async function runPostUpgradeProbes(params: {
-  installsPath?: string;
   stateDir?: string;
 }): Promise<PostUpgradeReport> {
   const findings: PostUpgradeFinding[] = [];

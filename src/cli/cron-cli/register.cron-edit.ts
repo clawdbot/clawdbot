@@ -27,7 +27,7 @@ import {
   handleCronCliError,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
-import { normalizeCronSessionTargetOption } from "./thread-id-shared.js";
+import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronTriggerScript } from "./trigger-options.js";
 
 type CronJobForEdit = CronJob & { configRevision?: string };
@@ -150,10 +150,10 @@ export function registerCronEditCommand(cron: Command) {
             );
           }
           const hasExplicitChatDelivery =
+            parseCronThreadIdOption(opts.threadId) !== undefined ||
             typeof opts.channel === "string" ||
             typeof opts.to === "string" ||
-            typeof opts.account === "string" ||
-            typeof opts.threadId === "string";
+            typeof opts.account === "string";
           if (
             sessionTarget === "main" &&
             typeof opts.systemEvent === "string" &&

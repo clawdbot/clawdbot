@@ -224,6 +224,21 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(shouldCompact(1, 16_384, { enabled: true, ...result.compaction })).toBe(false);
   });
 
+  it.each([
+    [8_000, 4_000],
+    [16_000, 8_000],
+    [24_000, 16_000],
+    [32_000, 20_000],
+    [128_000, 20_000],
+    [200_000, 20_000],
+  ])("keeps model window %i on its effective %i-token reserve", (contextTokenBudget, reserve) => {
+    const settingsManager = SettingsManager.inMemory();
+    const result = applyAgentCompactionSettingsFromConfig({ settingsManager, contextTokenBudget });
+
+    expect(result.compaction.reserveTokens).toBe(reserve);
+    expect(settingsManager.getCompactionReserveTokens()).toBe(reserve);
+  });
+
   it("applies capped floor when current reserve is below it on small-context models", () => {
     // Simulate an embedded runner default of 4 096 with a 16 384 context window.
     // minPromptBudget = min(8_000, floor(16_384 * 0.5)) = 8_000.
