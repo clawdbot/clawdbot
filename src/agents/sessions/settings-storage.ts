@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import type { Transport } from "../../llm/types.js";
 import { CONFIG_DIR_NAME } from "../config.js";
@@ -159,27 +159,17 @@ export class FileSettingsStorage implements SettingsStorage {
 
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
     const path = this.paths[scope];
-    const dir = dirname(path);
-
-    let release: (() => void) | undefined;
+    // The canonical lock creates its parent before acquisition. First writers must
+    // read and derive their updates only after that shared ownership is established.
+    const release = acquireFileLockSyncWithRetry(path);
     try {
-      const directoryExists = existsSync(dir);
-      if (directoryExists) {
-        release = acquireFileLockSyncWithRetry(path);
-      }
-      // Missing-directory reads stay side-effect free. Concurrent external first creators
-      // remain unsupported because they can derive writes before a lock path exists.
       const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
       const next = fn(current);
       if (next !== undefined) {
-        if (!directoryExists) {
-          mkdirSync(dir, { recursive: true });
-          release = acquireFileLockSyncWithRetry(path);
-        }
         writeFileSync(path, next, "utf-8");
       }
     } finally {
-      release?.();
+      release();
     }
   }
 }

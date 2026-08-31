@@ -682,7 +682,7 @@ export function createDispatchReplyOperationCoordinator(params: {
   };
 
   const failDispatchReplyOperation = (error: unknown, terminalOutcome?: "failed") => {
-    if (terminalOutcome === "failed" && agentRunTerminalOutcome === "completed") {
+    if (terminalOutcome === "failed") {
       agentRunTerminalOutcome = "failed";
     }
     dispatchReplyOperation?.freezeAbort();

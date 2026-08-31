@@ -16,22 +16,15 @@ import {
 } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-progress-live-placement",
-);
-
 async function captureProof(page: Page, fileName: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "session-progress-live-placement"), { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(proofDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "session-progress-live-placement"), fileName),
   });
 }
 

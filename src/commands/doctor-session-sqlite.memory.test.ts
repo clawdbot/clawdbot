@@ -13,8 +13,8 @@ let bundleDir: string;
 let childPath: string;
 
 beforeAll(async () => {
-  fs.mkdirSync(path.join(process.cwd(), "node_modules/.cache"), { recursive: true });
-  bundleDir = fs.mkdtempSync(path.join(process.cwd(), "node_modules/.cache/import-memory-"));
+  fs.mkdirSync(path.join(process.cwd(), ".artifacts"), { recursive: true });
+  bundleDir = fs.mkdtempSync(path.join(process.cwd(), ".artifacts/import-memory-"));
   childPath = path.join(bundleDir, "child.mjs");
   for (const schema of ["openclaw-agent-schema.sql", "openclaw-state-schema.sql"]) {
     fs.copyFileSync(path.join(process.cwd(), "src/state", schema), path.join(bundleDir, schema));
@@ -35,7 +35,7 @@ afterAll(() => {
   }
 });
 
-it.each(["batch", "deep"])(
+it.each(["batch", "deep", "public"])(
   "imports %s transcripts and completes branch projections under a 256 MiB heap",
   async (scenario) => {
     await withOpenClawTestState({ applyEnv: false, label: "import-memory" }, async (state) => {
@@ -51,6 +51,7 @@ it.each(["batch", "deep"])(
         },
       );
       expect(JSON.parse(stdout)).toMatchObject({ scenario });
+      console.info(stdout.trim());
     });
   },
   180_000,

@@ -24,7 +24,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
  */
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDirectory = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/theme-typography");
 
 const suite = createControlUiE2eSuite({
   name: "Control UI theme typography",
@@ -114,9 +113,11 @@ async function captureTypography(
   name: string,
 ) {
   if (captureUiProof) {
-    await mkdir(proofDirectory, { recursive: true });
+    await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
     await page.evaluate(() => document.fonts.ready);
-    await page.screenshot({ path: path.join(proofDirectory, `${name}.png`) });
+    await page.screenshot({
+      path: path.join(path.join(suite.artifactDir, "theme-typography"), `${name}.png`),
+    });
   }
 }
 
@@ -315,8 +316,13 @@ suite.define(() => {
     );
 
     if (captureUiProof) {
-      await mkdir(proofDirectory, { recursive: true });
-      await page.screenshot({ path: path.join(proofDirectory, "phosphor-settings-shortcut.png") });
+      await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
+      await page.screenshot({
+        path: path.join(
+          path.join(suite.artifactDir, "theme-typography"),
+          "phosphor-settings-shortcut.png",
+        ),
+      });
     }
 
     const modelShortcutFont = await page.evaluate(() => {

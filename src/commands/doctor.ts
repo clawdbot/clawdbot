@@ -67,20 +67,27 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
   }
   if (options?.sessionSqlite) {
     const sessionSqliteMode = options.sessionSqlite;
-    const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
-    const runSessionSqlite = async () =>
-      await runDoctorSessionSqlite({
-        mode: sessionSqliteMode,
-        ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
-        ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
-        ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
-      });
+    const { runDoctorSessionSqlite, reconcileDoctorSessionSqlitePublication } =
+      await import("./doctor-session-sqlite.js");
+    const sessionSqliteOptions = {
+      mode: sessionSqliteMode,
+      ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
+      ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
+      ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
+    };
+    const runSessionSqlite = async () => await runDoctorSessionSqlite(sessionSqliteOptions);
     const report = isDestructiveDoctorSessionSqliteMode(sessionSqliteMode)
       ? await withDoctorSqliteMaintenanceLock({
           env: process.env,
           operation: `session SQLite ${sessionSqliteMode}`,
           ...(options.sessionSqliteStore
             ? { protectedPaths: resolveExplicitSessionSqliteMaintenancePaths(options) }
+            : {}),
+          ...(sessionSqliteMode === "import" || sessionSqliteMode === "restore"
+            ? {
+                reconcileHardlink: (filePath: string) =>
+                  reconcileDoctorSessionSqlitePublication(sessionSqliteOptions, filePath),
+              }
             : {}),
           run: runSessionSqlite,
         })

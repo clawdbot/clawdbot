@@ -1,42 +1,11 @@
 /** Collects text-to-speech secret refs from runtime config. */
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import {
   collectRuntimeSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
-
-function collectProviderApiKeyAssignment(params: {
-  providerId: string;
-  providerConfig: Record<string, unknown>;
-  pathPrefix: string;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-  contract: Record<string, unknown>;
-  ownerId: string;
-  active?: boolean;
-  inactiveReason?: string;
-}): void {
-  collectRuntimeSecretInputAssignment({
-    value: params.providerConfig.apiKey,
-    path: `${params.pathPrefix}.providers.${params.providerId}.apiKey`,
-    expected: "string",
-    defaults: params.defaults,
-    context: params.context,
-    active: params.active,
-    inactiveReason: params.inactiveReason,
-    owner: {
-      ownerKind: "capability",
-      ownerId: params.ownerId,
-      requiredForGateway: false,
-      disposition: "isolate",
-      contract: params.contract,
-    },
-    apply: (value) => {
-      params.providerConfig.apiKey = value;
-    },
-  });
-}
 
 type ProviderSecretOwnerId = string | ((providerId: string) => string);
 
@@ -50,26 +19,48 @@ export function collectTtsApiKeyAssignments(params: {
   active?: boolean;
   inactiveReason?: string;
 }): void {
-  const providers = params.tts.providers;
-  if (isRecord(providers)) {
-    for (const [providerId, providerConfig] of Object.entries(providers)) {
+  const collectProviders = (tts: Record<string, unknown>, pathPrefix: string) => {
+    if (!isRecord(tts.providers)) {
+      return;
+    }
+    for (const [providerId, providerConfig] of Object.entries(tts.providers)) {
       if (!isRecord(providerConfig)) {
         continue;
       }
-      collectProviderApiKeyAssignment({
-        providerId,
-        providerConfig,
-        pathPrefix: params.pathPrefix,
+      collectRuntimeSecretInputAssignment({
+        value: providerConfig.apiKey,
+        path: `${appendConfigPathSegment(`${pathPrefix}.providers`, providerId)}.apiKey`,
+        expected: "string",
         defaults: params.defaults,
         context: params.context,
-        contract: params.tts,
-        ownerId:
-          typeof params.ownerId === "function"
-            ? params.ownerId(providerId)
-            : (params.ownerId ?? "tts"),
         active: params.active,
         inactiveReason: params.inactiveReason,
+        owner: {
+          ownerKind: "capability",
+          ownerId:
+            typeof params.ownerId === "function"
+              ? params.ownerId(providerId)
+              : (params.ownerId ?? "tts"),
+          requiredForGateway: false,
+          disposition: "isolate",
+          // Persona selection may change without reload; retain the complete TTS owner contract.
+          contract: params.tts,
+        },
+        apply: (value) => {
+          providerConfig.apiKey = value;
+        },
       });
+    }
+  };
+  collectProviders(params.tts, params.pathPrefix);
+  if (isRecord(params.tts.personas)) {
+    for (const [personaId, persona] of Object.entries(params.tts.personas)) {
+      if (isRecord(persona)) {
+        collectProviders(
+          persona,
+          appendConfigPathSegment(`${params.pathPrefix}.personas`, personaId),
+        );
+      }
     }
   }
 }

@@ -1,9 +1,9 @@
 // Browser proof that model setup reloads after a same-client Gateway reconnect.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { Compile } from "typebox/compile";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { ConnectParamsSchema } from "../../../packages/gateway-protocol/src/schema.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,12 +14,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "model-setup-reconnect",
-);
+let artifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    artifactDir = createControlUiE2eArtifactDir("model-setup-reconnect");
+  }
+});
 
 const validateConnect = Compile(ConnectParamsSchema);
 function connectParams(value: unknown) {
@@ -147,7 +147,6 @@ suite.define(() => {
           expect(new URL(destination.url()).pathname).toBe("/settings/model-setup");
           expect(await reconnectedGateway.getRequests("openclaw.chat")).toHaveLength(0);
           if (captureUiProofEnabled) {
-            await mkdir(artifactDir, { recursive: true });
             await destination.screenshot({
               animations: "disabled",
               path: path.join(artifactDir, `manual-first-run-${restart}-pending.png`),
@@ -177,7 +176,6 @@ suite.define(() => {
           expect(welcomeRequest.params).toMatchObject({ welcomeVariant: "onboarding" });
           if (captureUiProofEnabled) {
             await destination.locator(".custodian__header--minimal").waitFor();
-            await mkdir(artifactDir, { recursive: true });
             await destination.screenshot({
               animations: "disabled",
               path: path.join(artifactDir, `manual-first-run-${restart}-fixed.png`),
@@ -335,7 +333,6 @@ suite.define(() => {
         expect(pageErrors).toEqual([]);
 
         if (captureUiProofEnabled) {
-          await mkdir(artifactDir, { recursive: true });
           await page.locator("openclaw-model-setup-page").screenshot({
             animations: "disabled",
             path: path.join(artifactDir, "00-reconnected-model-visible.png"),

@@ -1,7 +1,7 @@
 // Control UI tests cover guided model setup against a mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,7 +11,13 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("model-setup", artifactRoot)
+    : undefined;
+});
 const localPrepareOptions = [
   {
     id: "ollama",
@@ -239,7 +245,6 @@ suite.define(() => {
         await page.getByText("ABCD-1234").waitFor();
         await page.getByText("Working…").waitFor();
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             path: path.join(artifactDir, "model-setup-refresh-pending.png"),
           });
@@ -431,7 +436,6 @@ suite.define(() => {
         expect(start.params).toMatchObject({ authChoice: "ollama" });
 
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -459,7 +463,6 @@ suite.define(() => {
           .waitFor();
 
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -666,7 +669,6 @@ suite.define(() => {
           .toBe(1);
 
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -885,7 +887,6 @@ suite.define(() => {
           .toBe(0);
         await expect.poll(() => page.locator('[data-candidate-kind="claude-cli"]').count()).toBe(1);
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,

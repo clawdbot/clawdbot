@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   encodeSessionArchiveContent,
   readSessionArchiveContentSync,
@@ -20,7 +20,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { readDatabaseSnapshot } from "./state-migrations.media-persistence.test-support.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const PREVIOUS_VERSION = 16;
 
 type FixtureEvent = Record<string, unknown>;
@@ -134,12 +134,11 @@ function writeArchive(filePath: string, events: FixtureEvent[], compressed: bool
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(tempDirs);
 });
 
 describe("legacy media persistence doctor migration", () => {
   it("rewrites every active shape and trajectory snapshot, migrates mixed archives, and reruns as a no-op", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-migration-");
+    const stateDir = tempDirs.make("media-persistence-migration-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const legacy = createEvent({
       id: "event-legacy",
@@ -355,7 +354,7 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("migrates when valid transcript created_at rows have an unsafe aggregate", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-large-created-at-");
+    const stateDir = tempDirs.make("media-persistence-large-created-at-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const legacyMediaPaths = ["/media/a.png", "/media/b.png"];
     const databasePath = createLegacyDatabaseFixture({
@@ -398,7 +397,7 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("upgrades the existing v14 structural schema before the media cutover", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-v14-");
+    const stateDir = tempDirs.make("media-persistence-v14-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = createLegacyDatabaseFixture({
       env,
@@ -436,6 +435,14 @@ describe("legacy media persistence doctor migration", () => {
           )
           .get(),
       ).toEqual({ name: "session_suggestions" });
+      expect(
+        after
+          .prepare("SELECT tbl, idx FROM sqlite_stat1 WHERE idx = ?")
+          .get("idx_agent_transcript_event_sequence"),
+      ).toEqual({
+        tbl: "transcript_event_identities",
+        idx: "idx_agent_transcript_event_sequence",
+      });
       const row = after
         .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 0")
         .get("legacy") as { event_json: string };
@@ -449,8 +456,50 @@ describe("legacy media persistence doctor migration", () => {
     }
   });
 
+  it("refreshes planner statistics for an already-current agent database", async () => {
+    const stateDir = tempDirs.make("media-persistence-current-stats-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = createLegacyDatabaseFixture({
+      env,
+      schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      eventsBySession: {
+        current: [
+          createEvent({
+            id: "event-1",
+            parentId: null,
+            timestamp: 1000,
+            message: { role: "user", content: "current" },
+          }),
+        ],
+      },
+    });
+    const { DatabaseSync } = requireNodeSqlite();
+    const before = new DatabaseSync(databasePath);
+    before
+      .prepare(
+        "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("suggestion-current", "agent:main:current", "operator", "keep me", 1000, "pending");
+    before.close();
+
+    expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare("SELECT tbl, idx FROM sqlite_stat1 WHERE idx = ?")
+          .get("idx_agent_session_suggestions_session_state_created"),
+      ).toEqual({
+        tbl: "session_suggestions",
+        idx: "idx_agent_session_suggestions_session_state_created",
+      });
+    } finally {
+      after.close();
+    }
+  });
+
   it("upgrades an owned v0 database through the media prerequisite schema", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-v0-");
+    const stateDir = tempDirs.make("media-persistence-v0-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = createLegacyDatabaseFixture({
       env,
@@ -482,7 +531,7 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("migrates complete PR-1 facts beside a compact legacy projection", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-dual-write-");
+    const stateDir = tempDirs.make("media-persistence-dual-write-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = createLegacyDatabaseFixture({
       env,
@@ -532,7 +581,7 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("repairs a missing canonical v15 index before the media cutover", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-v15-index-");
+    const stateDir = tempDirs.make("media-persistence-v15-index-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = createLegacyDatabaseFixture({
       env,
@@ -574,7 +623,7 @@ describe("legacy media persistence doctor migration", () => {
   it.each([PREVIOUS_VERSION, OPENCLAW_AGENT_SCHEMA_VERSION])(
     "canonicalizes retired media carriers on every transcript message role at schema v%s",
     async (schemaVersion) => {
-      const stateDir = makeTempDir(tempDirs, "media-persistence-message-roles-");
+      const stateDir = tempDirs.make("media-persistence-message-roles-");
       const env = { OPENCLAW_STATE_DIR: stateDir };
       const databasePath = createLegacyDatabaseFixture({
         env,
@@ -629,7 +678,7 @@ describe("legacy media persistence doctor migration", () => {
   );
 
   it("canonicalizes legacy trajectory metadata onto existing facts", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-trajectory-metadata-");
+    const stateDir = tempDirs.make("media-persistence-trajectory-metadata-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = createLegacyDatabaseFixture({
       env,
@@ -706,7 +755,7 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("preserves duplicate physical transcript rows during canonicalization", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-duplicates-");
+    const stateDir = tempDirs.make("media-persistence-duplicates-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const event = createEvent({
       id: "duplicate-event",
@@ -742,7 +791,7 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("aborts one database on invalid JSON without advancing its version", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-corrupt-");
+    const stateDir = tempDirs.make("media-persistence-corrupt-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = createLegacyDatabaseFixture({
       env,
@@ -784,7 +833,7 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("aborts one database on invalid trajectory JSON without advancing its version", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-corrupt-trajectory-");
+    const stateDir = tempDirs.make("media-persistence-corrupt-trajectory-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = createLegacyDatabaseFixture({
       env,
@@ -819,7 +868,7 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("aborts on active-row drift and archive source replacement without partial deletion", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-drift-");
+    const stateDir = tempDirs.make("media-persistence-drift-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const { DatabaseSync } = requireNodeSqlite();
     const event = createEvent({
@@ -913,7 +962,7 @@ describe("legacy media persistence doctor migration", () => {
   });
 
   it("rejects ambiguous sparse arrays and ignores stale interrupted temp files", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-sparse-");
+    const stateDir = tempDirs.make("media-persistence-sparse-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     createLegacyDatabaseFixture({ env, eventsBySession: {} });
     const archiveDir = path.join(stateDir, "agents", "main", "sessions");

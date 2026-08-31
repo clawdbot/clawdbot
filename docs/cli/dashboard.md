@@ -30,6 +30,10 @@ The OpenClaw CLI and the background Gateway service are separate. A service-inst
 prompt refers to the background service for the selected profile; it does not mean the
 CLI is missing. The dashboard needs a running Gateway, which can also run in a terminal.
 
+If the configured port is busy but its Gateway handshake cannot be verified, the dashboard
+reports the failed probe and does not offer to start another service. Run
+`openclaw gateway status --deep` to inspect the listener and repair its connection.
+
 A newer database schema warning means this build cannot read the existing state. Use a
 compatible build with that state. To start fresh, point `OPENCLAW_STATE_DIR` at a separate
 directory. Installing the background service does not resolve a database version mismatch. See

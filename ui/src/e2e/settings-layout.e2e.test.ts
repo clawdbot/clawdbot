@@ -13,13 +13,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const proofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "settings-layout-audit",
-  "after",
-);
 
 const introRoutes = [
   "appearance",
@@ -402,11 +395,14 @@ suite.define(() => {
       await expect.poll(() => advanced.getAttribute("open")).toBeNull();
       await expect.poll(() => advancedSummary.textContent()).toContain("Advanced settings");
       if (proofEnabled) {
-        await mkdir(proofDir, { recursive: true });
+        await mkdir(path.join(suite.artifactDir, "settings-layout-audit"), { recursive: true });
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(proofDir, "communications-messages.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "settings-layout-audit"),
+            "communications-messages.png",
+          ),
         });
       }
 
@@ -417,7 +413,10 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(proofDir, "communications-advanced-expanded.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "settings-layout-audit"),
+            "communications-advanced-expanded.png",
+          ),
         });
       }
 
@@ -431,7 +430,10 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(proofDir, "communications-voice.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "settings-layout-audit"),
+            "communications-voice.png",
+          ),
         });
       }
 
@@ -475,7 +477,7 @@ suite.define(() => {
 
     try {
       if (proofEnabled) {
-        await mkdir(proofDir, { recursive: true });
+        await mkdir(path.join(suite.artifactDir, "settings-layout-audit"), { recursive: true });
       }
 
       let auditedPairCount = 0;
@@ -526,7 +528,10 @@ suite.define(() => {
             await page.screenshot({
               animations: "disabled",
               fullPage: true,
-              path: path.join(proofDir, `${route}.png`),
+              path: path.join(
+                path.join(suite.artifactDir, "settings-layout-audit"),
+                `${route}.png`,
+              ),
             });
           }
         }
@@ -652,7 +657,10 @@ suite.define(() => {
           if (proofEnabled && viewport.width === 1440) {
             await section.screenshot({
               animations: "disabled",
-              path: path.join(proofDir, `action-${sectionCase.route}.png`),
+              path: path.join(
+                path.join(suite.artifactDir, "settings-layout-audit"),
+                `action-${sectionCase.route}.png`,
+              ),
             });
           }
         }

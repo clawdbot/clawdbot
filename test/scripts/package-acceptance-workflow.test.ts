@@ -14,8 +14,13 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import {
+  fullReleaseCandidateArtifact,
+  fullReleaseCandidateManifestFixture,
+} from "../helpers/full-release-candidate.js";
 import {
   pluginPrereleaseTimeoutComponents,
   releaseTimeoutForProfile as timeoutForProfile,
@@ -520,6 +525,34 @@ function runReleaseChecksShellStep(
     },
   });
   return { output: readFileSync(outputPath, "utf8"), result };
+}
+
+function runCandidateAcquisitionStep(
+  stepName: string,
+  env: Record<string, string>,
+  workdir = tempDirs.make("candidate-acquisition-step-"),
+) {
+  const step = workflowStep(
+    workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "resolve_candidate"),
+    stepName,
+  );
+  const outputPath = resolve(workdir, "github-output");
+  writeFileSync(outputPath, "", "utf8");
+  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: { ...env, GITHUB_OUTPUT: outputPath, PATH: process.env.PATH, RUNNER_TEMP: workdir },
+  });
+  const output = Object.fromEntries(
+    readFileSync(outputPath, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+  return { output, result };
 }
 
 function createReleaseChecksContextFixture() {
@@ -4121,7 +4154,6 @@ describe("package artifact reuse", () => {
     const discovery = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "discover");
     const prepare = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "prepare");
     const candidateBinding = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "resolve_candidate");
-    const finalize = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "finalize");
     const summary = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
     const producer = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
     const binder = workflowJob(LIVE_E2E_WORKFLOW, "bind_full_release_candidate_evidence");
@@ -4142,6 +4174,7 @@ describe("package artifact reuse", () => {
     );
     const pluginDocker = workflowJob(PLUGIN_PRERELEASE_WORKFLOW, "plugin-prerelease-docker-suite");
 
+    expect(candidateWorkflow.jobs).not.toHaveProperty("finalize");
     expect(candidateWorkflow.concurrency).toEqual({
       group: "full-release-candidate-${{ inputs.request_sha256 }}",
       "cancel-in-progress": false,
@@ -4167,11 +4200,17 @@ describe("package artifact reuse", () => {
     expect(workflowStep(candidateBinding, "Resolve candidate binding").run).toContain(
       "full-release-candidate-reuse.mjs resolve",
     );
-    expect(jobNeeds(finalize)).toEqual(["discover", "prepare", "resolve_candidate"]);
-    expect(workflowStep(finalize, "Record candidate acquisition result").run).toContain(
+    expect(candidateBinding.if).toBe("always()");
+    const resultStep = workflowStep(candidateBinding, "Record candidate acquisition result");
+    expect(resultStep.if).toBe("always()");
+    expect(resultStep.env?.RESOLVE_RESULT).toBe("${{ steps.resolve.outcome }}");
+    expect(resultStep.env?.JOB_STATUS).toBe("${{ job.status }}");
+    expect(candidateBinding.outputs?.state).toBe("${{ steps.result.outputs.state }}");
+    expect(workflowStep(candidateBinding, "Enforce candidate acquisition").if).toBe("always()");
+    expect(workflowStep(candidateBinding, "Record candidate acquisition result").run).toContain(
       "state=unavailable",
     );
-    expect(workflowStep(finalize, "Enforce candidate acquisition").run).toContain(
+    expect(workflowStep(candidateBinding, "Enforce candidate acquisition").run).toContain(
       'if [[ "$STATE" == "ready" ]]',
     );
     expect(upload.with?.overwrite).toBe(false);
@@ -4374,6 +4413,116 @@ describe("package artifact reuse", () => {
     );
     expect(legacyTuple.run).not.toContain("candidate_request");
     expect(legacyTuple.run).not.toContain("expiresAt");
+  });
+
+  it.each(["fresh", "reused"])(
+    "resolves and admits a %s candidate without a second job",
+    (source) => {
+      const manifest = fullReleaseCandidateManifestFixture();
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      for (const artifact of [
+        manifest.package.artifact,
+        manifest.prepublishPluginRegistry.artifact,
+        manifest.sharedImage.artifact,
+      ]) {
+        artifact.expiresAt = expiresAt;
+      }
+      const binding = buildFullReleaseCandidateBinding({
+        manifest,
+        artifact: fullReleaseCandidateArtifact(
+          `full-release-candidate-v2-${manifest.requestSha256}`,
+          { expiresAt },
+        ),
+      });
+      const resolved = runCandidateAcquisitionStep("Resolve candidate binding", {
+        CANDIDATE_REQUEST_JSON: JSON.stringify(manifest.request),
+        DISCOVERY_STATE: source === "fresh" ? "miss" : "hit",
+        FRESH_CANDIDATE_BINDING_JSON: source === "fresh" ? JSON.stringify(binding) : "",
+        REUSED_CANDIDATE_BINDING_JSON: source === "reused" ? JSON.stringify(binding) : "",
+      });
+      expect(resolved.result.status, resolved.result.stderr).toBe(0);
+      const recorded = runCandidateAcquisitionStep("Record candidate acquisition result", {
+        JOB_STATUS: "success",
+        DISCOVERY_RESULT: "success",
+        DISCOVERY_STATE: source === "fresh" ? "miss" : "hit",
+        PREPARE_RESULT: source === "fresh" ? "success" : "skipped",
+        RESOLVE_RESULT: "success",
+        RESOLVED_STATE: resolved.output.state ?? "",
+        RESOLVED_SOURCE: resolved.output.source ?? "",
+        BINDING_JSON: resolved.output.binding_json ?? "",
+        CANDIDATE_ARTIFACT_JSON: resolved.output.candidate_artifact_json ?? "",
+      });
+      expect(recorded.result.status, recorded.result.stderr).toBe(0);
+      expect(recorded.output).toEqual(resolved.output);
+      expect(JSON.parse(recorded.output.binding_json ?? "")).toEqual(binding);
+      expect(recorded.output.source).toBe(source);
+      expect(JSON.parse(recorded.output.candidate_artifact_json ?? "")).toMatchObject({
+        packageArtifactId: binding.package.artifact.id,
+        packageSha256: binding.package.packageSha256,
+        imageArtifactId: binding.sharedImage.artifact.id,
+        prepublishPluginRegistryArtifactId: binding.prepublishPluginRegistry.artifact.id,
+      });
+      expect(
+        runCandidateAcquisitionStep("Enforce candidate acquisition", {
+          STATE: recorded.output.state ?? "",
+        }).result.status,
+      ).toBe(0);
+    },
+  );
+
+  it.each([
+    ["discovery failure", { DISCOVERY_RESULT: "failure" }],
+    ["unavailable discovery", { DISCOVERY_STATE: "unavailable" }],
+    ["prepare failure", { PREPARE_RESULT: "failure" }],
+    ["prepare cancellation", { PREPARE_RESULT: "cancelled" }],
+    ["checkout failure", { JOB_STATUS: "failure", RESOLVE_RESULT: "skipped" }],
+    ["resolution failure", { JOB_STATUS: "failure", RESOLVE_RESULT: "failure" }],
+    ["resolution cancellation", { JOB_STATUS: "cancelled", RESOLVE_RESULT: "cancelled" }],
+    ["cancellation after resolution", { JOB_STATUS: "cancelled" }],
+    ["missing resolution", { RESOLVE_RESULT: "" }],
+  ] satisfies Array<[string, Record<string, string>]>)(
+    "keeps candidate acquisition unavailable after %s",
+    (_label, failure) => {
+      const recorded = runCandidateAcquisitionStep("Record candidate acquisition result", {
+        JOB_STATUS: "success",
+        DISCOVERY_RESULT: "success",
+        DISCOVERY_STATE: "hit",
+        PREPARE_RESULT: "skipped",
+        RESOLVE_RESULT: "success",
+        RESOLVED_STATE: "ready",
+        RESOLVED_SOURCE: "reused",
+        BINDING_JSON: "must-not-forward",
+        CANDIDATE_ARTIFACT_JSON: "must-not-forward",
+        ...failure,
+      });
+      expect(recorded.result.status, recorded.result.stderr).toBe(0);
+      expect(recorded.output).toEqual({
+        state: "unavailable",
+        source: "",
+        binding_json: "",
+        candidate_artifact_json: "",
+      });
+      expect(
+        runCandidateAcquisitionStep("Enforce candidate acquisition", {
+          STATE: recorded.output.state ?? "",
+        }).result.status,
+      ).toBe(1);
+    },
+  );
+
+  it("rejects malformed candidate resolution and missing terminal output", () => {
+    const resolved = runCandidateAcquisitionStep("Resolve candidate binding", {
+      CANDIDATE_REQUEST_JSON: "{}",
+      DISCOVERY_STATE: "miss",
+      FRESH_CANDIDATE_BINDING_JSON: "",
+      REUSED_CANDIDATE_BINDING_JSON: "",
+    });
+    expect(resolved.result.status).toBe(1);
+    expect(resolved.result.stderr).toContain("exactly one fresh or reused");
+    expect(resolved.output).toEqual({});
+    expect(
+      runCandidateAcquisitionStep("Enforce candidate acquisition", { STATE: "" }).result.status,
+    ).toBe(1);
   });
 
   it("enables prerelease plugin companions for scheduled ref validation", () => {
@@ -6457,10 +6606,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
     for (const [workflowPath, jobName, count] of cases) {
       const job = workflowJob(workflowPath, jobName);
+      const initialSteps = [
+        "Checkout harness ref",
+        ...(jobName === "run_web_ui_chat" ? ["Allocate invocation evidence directory"] : []),
+        "Prepare Git owner",
+        "Setup Node environment",
+      ];
       expect(
-        job.steps?.slice(0, 3).map(({ name }) => name),
+        job.steps?.slice(0, initialSteps.length).map(({ name }) => name),
         workflowPath,
-      ).toEqual(["Checkout harness ref", "Prepare Git owner", "Setup Node environment"]);
+      ).toEqual(initialSteps);
       expect(job.steps?.filter(({ name }) => name === "Prepare Git owner")).toEqual([
         {
           name: "Prepare Git owner",
@@ -9153,7 +9308,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     );
     const candidatePrepare = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "prepare");
     const candidateBinding = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "resolve_candidate");
-    const candidateFinalize = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "finalize");
     expect(jobNeeds(workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "evidence_reuse"))).toEqual([
       "resolve_target",
     ]);
@@ -9161,7 +9315,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(jobNeeds(candidatePrepare)).toEqual(["discover"]);
     expect(candidatePrepare.with?.prepare_only).toBe(true);
     expect(jobNeeds(candidateBinding)).toEqual(["discover", "prepare"]);
-    expect(jobNeeds(candidateFinalize)).toEqual(["discover", "prepare", "resolve_candidate"]);
     expect(jobNeeds(releaseChecksParent)).toEqual([
       "resolve_target",
       "evidence_reuse",
@@ -9181,12 +9334,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         "full",
       ),
       timeoutForProfile(candidateBinding["timeout-minutes"], "full"),
-      timeoutForProfile(candidateFinalize["timeout-minutes"], "full"),
       timeoutForProfile(releaseChecksParent["timeout-minutes"], "full"),
     ];
-    expect(fullParentPath).toEqual([10, 10, 10, 30, 90, 15, 5, 5, 15]);
+    expect(fullParentPath).toEqual([10, 10, 10, 30, 90, 15, 5, 15]);
     const fullParentTimeoutFloor = fullParentPath.reduce((total, timeout) => total + timeout, 0);
-    expect(fullParentTimeoutFloor).toBe(190);
+    expect(fullParentTimeoutFloor).toBe(185);
     expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES).toBe(diagnosticDrainTimeout);
   });
 

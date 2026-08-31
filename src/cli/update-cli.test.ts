@@ -7,6 +7,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -90,6 +91,7 @@ const legacyConfigRepairMocks = vi.hoisted(() => ({
 const launchdUpdateCleanupMocks = vi.hoisted(() => ({
   disableCurrentOpenClawUpdateLaunchdJob: vi.fn(async () => false),
 }));
+const windowsOfflineProbe = vi.hoisted(() => vi.fn(async () => null));
 const databasePreflightMocks = vi.hoisted(() => ({
   preflightOpenClawDatabaseSchemas: vi.fn(),
 }));
@@ -430,6 +432,11 @@ vi.mock("../daemon/schtasks.js", () => ({
     resumeScheduledTaskAutoStartAfterUpdate(...args),
 }));
 
+vi.mock("../daemon/schtasks-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/schtasks-runtime.js")>()),
+  readWindowsStartupFallbackRuntimeForUpdate: windowsOfflineProbe,
+}));
+
 vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
 }));
@@ -487,6 +494,9 @@ vi.mock("./completion-runtime.js", async (importOriginal) => {
 vi.mock("./daemon-cli.js", () => ({
   runDaemonInstall: mockedRunDaemonInstall,
   runDaemonRestart: vi.fn(),
+}));
+vi.mock("./daemon-cli/install.runtime.js", () => ({
+  runDaemonInstall: mockedRunDaemonInstall,
 }));
 
 // Mock the runtime
@@ -1710,6 +1720,26 @@ describe("update-cli", () => {
     tempDirsToCleanup.clear();
   });
 
+  it("refuses to stop a service whose effective launcher changed during inspection", async () => {
+    mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
+    const original = await serviceReadCommand(process.env);
+    serviceReadCommand.mockResolvedValueOnce(original).mockResolvedValue({
+      ...original,
+      programArguments: ["/foreign/openclaw", "gateway"],
+    });
+    const { maybeStopManagedServiceBeforeMutableUpdate } =
+      await import("./update-cli/update-command-service.js");
+    await expect(
+      maybeStopManagedServiceBeforeMutableUpdate({
+        updateInstallKind: "package",
+        root: process.cwd(),
+        shouldRestart: true,
+        jsonMode: true,
+      }),
+    ).rejects.toThrow("ownership or manager identity changed");
+    expect(serviceStop).not.toHaveBeenCalled();
+  });
+
   it("recovers a stopped sealed service after a restart-safe failure", async () => {
     const entrypoint = path.join(process.cwd(), "dist", "index.js");
     const nodeRunner = path.join(fixtureRoot, "managed", "node");
@@ -2284,7 +2314,7 @@ describe("update-cli", () => {
     );
 
     expect(serviceStop).not.toHaveBeenCalled();
-    expect(serviceEnabled).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
     expect(spawnCall()?.[2]?.env).toMatchObject({
       OPENCLAW_PROFILE: "personal",
       OPENCLAW_STATE_DIR: personalState,
@@ -3514,6 +3544,44 @@ describe("update-cli", () => {
     expect(getLogOutput()).toContain("Plugin update aborted");
   });
 
+  it("blocks restart when a plugin update awaits capability consent", async () => {
+    mockOwnedGitService();
+    mockGitUpdateAfterMutation();
+    serviceLoaded.mockResolvedValue(true);
+    mockNpmPluginOutcomes([
+      {
+        pluginId: "consent-fixture",
+        status: "error",
+        code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+        message: "Operator review token changed.",
+      },
+    ]);
+
+    await updateCommand({ yes: true, json: true });
+
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(jsonOutput?.status).toBe("error");
+    expect(jsonOutput?.reason).toBe("post-update-plugins");
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("error");
+    expect(lastWriteJsonCall()).toMatchObject({
+      postUpdate: {
+        plugins: {
+          npm: {
+            outcomes: [
+              {
+                pluginId: "consent-fixture",
+                status: "error",
+                code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expectNoSideEffects(serviceRestart, runRestartScript, runDaemonRestart);
+  });
+
   it("keeps json update output successful when post-core plugin updates warn", async () => {
     updateNpmInstalledPlugins.mockImplementationOnce(
       async (params: {
@@ -4131,6 +4199,22 @@ describe("update-cli", () => {
 
     expect(lastWriteJsonCall()).toMatchObject({ mode: "npm" });
     expect(resolveGlobalManager).toHaveBeenCalledOnce();
+    expect(packageInstallCommandCall()).toBeUndefined();
+  });
+
+  it("does not clean handoffs before rejecting an unknown package owner", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-unknown-owner"));
+    resolveGlobalManager.mockRejectedValueOnce(
+      new Error(
+        "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.",
+      ),
+    );
+
+    await expect(updateCommand({ yes: true, restart: false })).rejects.toThrow(
+      "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.",
+    );
+
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
   });
 
@@ -4851,9 +4935,8 @@ describe("update-cli", () => {
     await updateCommand({ yes: true });
 
     const errors = getErrorOutput();
-    expect(errors).toContain(
-      "openclaw update detected it is running inside the gateway process tree.",
-    );
+    expect(errors).toContain("This command is running inside the gateway process tree.");
+    expect(errors).toContain("Run this command from a shell outside the gateway service");
     expect(errors).toContain(`Gateway PID ${gatewayFixturePid} is an ancestor`);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
@@ -4876,9 +4959,8 @@ describe("update-cli", () => {
     );
 
     const errors = getErrorOutput();
-    expect(errors).toContain(
-      "openclaw update detected it is running inside the gateway process tree.",
-    );
+    expect(errors).toContain("This command is running inside the gateway process tree.");
+    expect(errors).toContain("Run this command from a shell outside the gateway service");
     expect(errors).toContain(`Gateway PID ${gatewayFixturePid} is an ancestor`);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
@@ -5702,6 +5784,42 @@ describe("update-cli", () => {
     }
   });
 
+  it("does not restore autostart on a pinned Windows task replaced during service stop", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
+    const { maybeStopManagedServiceBeforeMutableUpdate } =
+      await import("./update-cli/update-command-service.js");
+    const params = {
+      root: process.cwd(),
+      updateInstallKind: "package" as const,
+      shouldRestart: true,
+      jsonMode: true,
+    };
+    const expectedService = await maybeStopManagedServiceBeforeMutableUpdate({
+      ...params,
+      phase: "inspect",
+    });
+    if (expectedService.serviceUpdateVerdict?.kind !== "owned") {
+      throw new Error("expected owned fixture launcher");
+    }
+    expectedService.serviceUpdateVerdict.refreshDefinition = false;
+    suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
+    serviceStop.mockImplementationOnce(async () => {
+      primeServiceCommand(["node", "/another-install/openclaw.mjs", "gateway", "run"]);
+      throw new Error("stop failed after task replacement");
+    });
+    try {
+      await expect(
+        maybeStopManagedServiceBeforeMutableUpdate({ ...params, expectedService }),
+      ).rejects.toThrow("restore Windows Scheduled Task autostart");
+    } finally {
+      platformSpy.mockRestore();
+    }
+    expect(serviceStop).toHaveBeenCalledOnce();
+    expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+  });
+
   it.each(["SIGINT", "SIGBREAK"] as const)(
     "restores Windows Scheduled Task autostart on %s during suspension",
     async (signal) => {
@@ -5794,45 +5912,51 @@ describe("update-cli", () => {
     },
   );
 
-  it("does not suspend a foreign Windows Scheduled Task during a no-restart package update", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const updateRoot = tempDirs.make("openclaw-update-foreign-task-");
-    const foreignRoot = tempDirs.make("openclaw-update-foreign-task-owner-");
-    const foreignEntrypoint = await writeOpenClawPackageFixture(foreignRoot, "2026.4.21", {
-      entrySource: "export {};\n",
-    });
-    primeServiceCommand(["node", foreignEntrypoint, "gateway", "run"]);
-    serviceLoaded.mockResolvedValue(true);
-    serviceReadRuntime.mockResolvedValue({
-      status: "running",
-      state: "running",
-      pid: gatewayFixturePid,
-    });
-    suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
-
-    try {
-      const { maybeStopManagedServiceBeforeMutableUpdate } =
-        await import("./update-cli/update-command-service.js");
-      await expect(
-        maybeStopManagedServiceBeforeMutableUpdate({
-          root: updateRoot,
-          updateInstallKind: "package",
-          shouldRestart: false,
-          jsonMode: false,
-        }),
-      ).resolves.toMatchObject({
-        inspected: true,
-        running: true,
-        serviceUpdateVerdict: { kind: "foreign" },
+  it.each(["running", "stopped"])(
+    "does not suspend a %s foreign Windows task when offline inspection is unavailable",
+    async (runtimeStatus) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const updateRoot = tempDirs.make("openclaw-update-foreign-task-");
+      const foreignRoot = tempDirs.make("openclaw-update-foreign-task-owner-");
+      const foreignEntrypoint = await writeOpenClawPackageFixture(foreignRoot, "2026.4.21", {
+        entrySource: "export {};\n",
       });
-    } finally {
-      platformSpy.mockRestore();
-    }
+      primeServiceCommand(["node", foreignEntrypoint, "gateway", "run"]);
+      serviceLoaded.mockResolvedValue(true);
+      serviceReadRuntime.mockResolvedValue({
+        status: runtimeStatus,
+        state: runtimeStatus,
+        ...(runtimeStatus === "running" ? { pid: gatewayFixturePid } : {}),
+      });
+      windowsOfflineProbe.mockRejectedValue(new Error("synthetic task inspection unavailable"));
+      suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
 
-    expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
-    expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
-    expect(serviceStop).not.toHaveBeenCalled();
-  });
+      try {
+        const { maybeStopManagedServiceBeforeMutableUpdate } =
+          await import("./update-cli/update-command-service.js");
+        await expect(
+          maybeStopManagedServiceBeforeMutableUpdate({
+            root: updateRoot,
+            updateInstallKind: "package",
+            shouldRestart: false,
+            jsonMode: false,
+          }),
+        ).resolves.toMatchObject({
+          inspected: true,
+          running: runtimeStatus === "running",
+          offline: false,
+          serviceUpdateVerdict: { kind: "foreign" },
+        });
+      } finally {
+        windowsOfflineProbe.mockReset().mockResolvedValue(null);
+        platformSpy.mockRestore();
+      }
+
+      expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
+      expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
+      expect(serviceStop).not.toHaveBeenCalled();
+    },
+  );
 
   it("stops a running managed gateway when git checkout rebuild starts", async () => {
     const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");

@@ -1781,6 +1781,8 @@ describe("gateway run option collisions", () => {
   });
 
   it("re-inspects crash-loop breaker state for each boot iteration", async () => {
+    let firstBootRecovery: (() => boolean) | undefined;
+    bootLifecycle.record.mockReturnValueOnce("boot-1").mockReturnValueOnce("boot-2");
     runGatewayLoop.mockImplementationOnce(
       async ({
         beginBoot,
@@ -1791,6 +1793,7 @@ describe("gateway run option collisions", () => {
       }) => {
         await beginBoot?.(1000);
         await start({ startupStartedAt: 1000 });
+        firstBootRecovery = gatewayStartOptions(0).tryRecoverChannelAutostartSuppression;
         await beginBoot?.(2000);
         await start({ startupStartedAt: 2000 });
       },
@@ -1828,6 +1831,16 @@ describe("gateway run option collisions", () => {
       bootLifecycle.manualChannelStartHint,
     );
     expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
+    bootLifecycle.decisions.push({
+      tripped: false,
+      uncleanBoots: 0,
+      windowMs: 300_000,
+      shouldWriteStabilityBundle: false,
+      recovered: true,
+    });
+    expect(firstBootRecovery?.()).toBe(false);
+    expect(bootLifecycle.inspect).toHaveBeenCalledTimes(2);
+    expect(bootLifecycle.recover).not.toHaveBeenCalled();
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
   });
 

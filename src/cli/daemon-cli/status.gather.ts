@@ -312,6 +312,7 @@ export type DaemonStatus = {
   lastError?: string;
   rpc?: {
     ok: boolean;
+    gatewayReached?: true;
     kind?: "connect" | "read";
     capability?: string;
     auth?: {

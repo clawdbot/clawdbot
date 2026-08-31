@@ -345,6 +345,28 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it("blocks sudo-to-root systemd installs before persistent mutation", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "geteuid").mockReturnValue(0);
+    process.env.HOME = "/root";
+    process.env.USER = "root";
+    process.env.LOGNAME = "root";
+    process.env.SUDO_USER = "operator";
+    delete process.env.XDG_RUNTIME_DIR;
+    delete process.env.DBUS_SESSION_BUS_ADDRESS;
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed[0]?.message).toContain("Rerun the same command without sudo");
+    expect(actionState.failed[0]?.message).toContain("chmod go-w <path>");
+    expect(actionState.failed[0]?.message).toContain(
+      "https://docs.openclaw.ai/cli/gateway#install-identity",
+    );
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(randomTokenMock).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
   it("blocks inaccessible definitions before config reads or credential generation", async () => {
     service.readDefinitionMutationCapability.mockRejectedValueOnce(new Error("secret-canary"));
     await runDaemonInstall({ json: true, force: true });

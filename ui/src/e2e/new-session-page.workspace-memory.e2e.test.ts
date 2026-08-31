@@ -1,3 +1,4 @@
+import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -15,7 +16,6 @@ import {
   installMockGateway,
   navigateInApp,
   pollLocatorText,
-  projectProofArtifactDir,
   waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
@@ -501,7 +501,7 @@ suite.define(() => {
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
-      await captureUiProof(page, "new-session-preferences-restored.png");
+      await captureUiProof(suite, page, "new-session-preferences-restored.png");
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
       expect(branchRequests.at(-1)?.params).toMatchObject({ repoRoot: PICKED });
@@ -538,7 +538,7 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: projectProofArtifactDir,
+              dir: path.join(suite.artifactDir, "project-registry"),
               size: { height: 900, width: 1280 },
             },
             viewport: { height: 900, width: 1280 },
@@ -595,7 +595,7 @@ suite.define(() => {
       const recentFolder = page.locator(`[data-value="recent:${WORKSPACE}/scratch"]`);
       await project.waitFor();
       await recentFolder.waitFor();
-      await captureProjectUiProof(page, "identity-project-recents-after.png");
+      await captureProjectUiProof(suite, page, "identity-project-recents-after.png");
       await project.click();
       await page.locator(".new-session-page__message").fill("continue registered work");
       await page.getByRole("button", { name: "Start session" }).click();
@@ -616,7 +616,7 @@ suite.define(() => {
         ...(captureUiProofEnabled
           ? {
               recordVideo: {
-                dir: projectProofArtifactDir,
+                dir: path.join(suite.artifactDir, "project-registry"),
                 size: { height: 900, width: 1280 },
               },
             }
@@ -699,7 +699,7 @@ suite.define(() => {
         const detailTrigger = page.locator("#new-session-detail-trigger");
         await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("packages");
         await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("true");
-        await captureProjectUiProof(page, "identity-preferences-migrated.png");
+        await captureProjectUiProof(suite, page, "identity-preferences-migrated.png");
 
         await navigateInApp(page, "chat");
         await waitForCommittedChatRoute(page);

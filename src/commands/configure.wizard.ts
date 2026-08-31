@@ -3,6 +3,11 @@ import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
+import {
+  listAgentIds,
+  tryResolveAmbientOwnerAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
@@ -47,7 +52,6 @@ import { healthCommandNonExiting } from "./health.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
-  resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
@@ -606,13 +610,29 @@ export async function runConfigureWizard(
         },
       };
     }
-    // Configure keeps legacy default-owner semantics; only explicit fleets opt into
-    // the System Agent target used unconditionally by setup and recovery callers.
-    const resolveSetupTarget = () =>
-      nextConfig.agents?.ownership === "explicit"
-        ? resolveSystemAgentOnboardingTarget(nextConfig)
-        : resolveOnboardingAgentTarget(inheritLegacyDefaultAgentId(baseConfig, nextConfig));
-    let workspaceDir = resolveSetupTarget().workspaceDir;
+    let setupAgentId: string | undefined;
+    const resolveSetupTarget = async () => {
+      // Only agent-scoped steps choose an owner; keep that choice across sections.
+      if (nextConfig.agents?.ownership !== "explicit") {
+        inheritLegacyDefaultAgentId(baseConfig, nextConfig);
+      }
+      setupAgentId ??=
+        nextConfig.agents?.ownership === "explicit"
+          ? tryResolveAmbientOwnerAgentId(nextConfig)
+          : tryResolveLegacyCompatibilityAgentId(nextConfig);
+      const agentIds = listAgentIds(nextConfig);
+      if (!setupAgentId && agentIds.length > 1) {
+        setupAgentId = guardCancel(
+          await select({
+            message: "Which agent do you want to configure?",
+            options: agentIds.map((id) => ({ value: id, label: id })),
+          }),
+          runtime,
+          1,
+        );
+      }
+      return resolveOnboardingAgentTarget(nextConfig, setupAgentId);
+    };
     let gatewayPort = resolveGatewayPort(baseConfig);
     let didPersistConfig = false;
     let daemonSetupOutcome: DaemonSetupOutcome | undefined;
@@ -642,15 +662,16 @@ export async function runConfigureWizard(
     };
 
     const configureWorkspace = async () => {
+      const target = await resolveSetupTarget();
       const workspaceInput = guardCancel(
         await text({
           message: "Workspace directory",
-          initialValue: workspaceDir,
+          initialValue: target.workspaceDir,
         }),
         runtime,
         1,
       );
-      workspaceDir = resolveUserPath(
+      const workspaceDir = resolveUserPath(
         normalizeOptionalString(workspaceInput ?? "") || DEFAULT_WORKSPACE,
       );
       if (!snapshot.exists) {
@@ -679,7 +700,6 @@ export async function runConfigureWizard(
           );
         }
       }
-      const target = resolveSetupTarget();
       const authoredEntryKey = Object.keys(nextConfig.agents?.entries ?? {}).find(
         (key) => normalizeAgentId(key) === target.agentId,
       );
@@ -711,10 +731,7 @@ export async function runConfigureWizard(
                 },
               },
             };
-    };
-
-    const provisionWorkspace = async () => {
-      await ensureOnboardingAgentWorkspace(resolveSetupTarget(), runtime, {
+      await ensureOnboardingAgentWorkspace(await resolveSetupTarget(), runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
@@ -723,7 +740,9 @@ export async function runConfigureWizard(
     const configureChannelsSection = async () => {
       const channelMode = await promptChannelMode(runtime);
       if (channelMode === "configure") {
+        const target = await resolveSetupTarget();
         nextConfig = await setupChannels(nextConfig, runtime, prompter, {
+          workspaceDir: target.workspaceDir,
           allowDisable: true,
           allowIMessageInstall: true,
           allowSignalInstall: true,
@@ -752,12 +771,14 @@ export async function runConfigureWizard(
 
     let didConfigureGateway = false;
     const sectionActions = {
-      workspace: async () => {
-        await configureWorkspace();
-        await provisionWorkspace();
-      },
+      workspace: configureWorkspace,
       model: async () => {
-        nextConfig = await promptAuthConfig(nextConfig, runtime, prompter, resolveSetupTarget());
+        nextConfig = await promptAuthConfig(
+          nextConfig,
+          runtime,
+          prompter,
+          await resolveSetupTarget(),
+        );
       },
       web: async () => {
         nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
@@ -774,13 +795,13 @@ export async function runConfigureWizard(
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,
-          workspaceDir: resolveSetupTarget().workspaceDir,
+          workspaceDir: (await resolveSetupTarget()).workspaceDir,
         });
       },
       skills: async () => {
         nextConfig = await setupSkills(
           nextConfig,
-          resolveSetupTarget().workspaceDir,
+          (await resolveSetupTarget()).workspaceDir,
           runtime,
           prompter,
         );
