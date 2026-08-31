@@ -4508,7 +4508,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
       writeFileSync(join(state, "logs", "gateway-restart.log"), `restart: token=${secret}\n`);
       writeFileSync(
         join(unitDir, "openclaw-gateway.service"),
-        `ExecStart=node gateway --token ${secret}\nWorkingDirectory=/safe/service\nEnvironment="API_KEY=${secret}"\n`,
+        `[Service]\nExecStart=${process.execPath} gateway --token ${secret}\nWorkingDirectory=/safe/service\nEnvironment="API_KEY=${secret}"\n`,
       );
       writeFileSync(join(artifacts, "doctor.log"), `doctor: token=${secret}\n`);
       writeFileSync(join(artifacts, "update.err"), `post-core failure: token=${secret}\n`);
@@ -4544,10 +4544,15 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
           readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
         ),
       );
+      writeFileSync(
+        join(workDir, "systemd-fixture.mjs"),
+        readFileSync("scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs"),
+      );
       const shown = spawnSync("bash", [shimPath, ...SURVIVOR_SERVICE_SHOW_ARGS], {
         encoding: "utf8",
         env: {
           ...process.env,
+          HOME: join(workDir, "home"),
           OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
           OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(artifacts, "systemctl-shim.log"),
           OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(workDir, "missing.pid"),
