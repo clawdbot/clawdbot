@@ -15,6 +15,7 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
+import type { SessionManager } from "../sessions/session-manager.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
@@ -778,7 +779,8 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       AuthStorage: function AuthStorage() {},
       ModelRegistry: function ModelRegistry() {},
       SessionManager: {
-        open: vi.fn(() => ({
+        open: vi.fn((target: Parameters<typeof SessionManager.open>[0]) => ({
+          getSessionTarget: () => ({ ...target }),
           buildSessionContext: vi.fn(() => ({ messages: sessionMessages })),
         })),
       },

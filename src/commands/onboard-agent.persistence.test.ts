@@ -90,6 +90,12 @@ describe("onboarding authored config persistence", () => {
     { entries: { existing: { name: "Existing" } } },
     { entries: { main: {} } },
     { list: [{ id: "main", default: true }] },
+    {
+      list: [
+        { id: "alpha", default: true, model: "fixture/alpha" },
+        { id: "beta", model: "fixture/beta" },
+      ],
+    },
   ])("leaves an existing roster config byte-identical: %j", async (agents) => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
@@ -100,12 +106,16 @@ describe("onboarding authored config persistence", () => {
       resetConfigRuntimeState();
       const snapshot = await readConfigFileSnapshot();
 
-      await ensureOnboardingAgent({
+      const result = await ensureOnboardingAgent({
         config: snapshot.config,
         workspace: path.join(home, "workspace"),
         firstAgent: { name: "ignored" },
       });
 
+      expect(result.createdAgent).toBe(false);
+      expect(result.config.agents?.entries).toEqual(snapshot.config.agents?.entries);
+      expect(snapshot.sourceConfigBeforeMigrations?.agents).toEqual(agents);
+      expect(snapshot.sourceConfig.agents?.list).toBeUndefined();
       expect(await fs.readFile(configPath, "utf8")).toBe(raw);
     });
   });

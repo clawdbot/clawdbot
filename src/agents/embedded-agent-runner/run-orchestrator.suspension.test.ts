@@ -528,10 +528,13 @@ describe("embedded run detached session metadata", () => {
           expect(manager.getEntries()).toContainEqual(
             expect.objectContaining({
               type: "compaction",
-              summary: "The memory-only project is Blue Heron.",
+              summary: expect.stringContaining("The memory-only project is Blue Heron."),
             }),
           );
           expect(JSON.stringify(manager.buildSessionContext().messages)).toContain("Blue Heron");
+          expect(manager.buildSessionContext().messages).toContainEqual(
+            expect.objectContaining({ role: "user", content: "What is the project called?" }),
+          );
           return makeEmbeddedRunnerAttempt({
             sessionIdUsed: params.sessionId,
             assistantTexts: ["Blue Heron."],
