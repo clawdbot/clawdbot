@@ -166,7 +166,7 @@ export async function resolveAgentRunSessionTarget(params: {
           sessionId,
           agentId,
         })
-      : resolveExistingSessionKeyForRequest({ cfg: config, sessionId, clone: false })
+      : resolveExistingSessionKeyForRequest({ cfg: config, sessionId })
     : undefined;
   const lookupAgentId =
     (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??

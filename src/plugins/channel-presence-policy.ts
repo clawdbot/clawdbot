@@ -19,6 +19,7 @@ import {
   resolveEffectivePluginActivationState,
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import type { PluginDiscoveryResult } from "./discovery.js";
 import {
   hasExplicitManifestOwnerTrust,
   isActivatedManifestOwner,
@@ -382,6 +383,7 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   includePersistedAuthState?: boolean;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   manifestRecords?: readonly PluginManifestRecord[];
+  discovery?: PluginDiscoveryResult;
 }): ConfiguredChannelPresencePolicyEntry[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir;
@@ -398,6 +400,7 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   const potentialSignals = listPotentialConfiguredChannelPresenceSignals(params.config, env, {
     includePersistedAuthState: params.includePersistedAuthState,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    discovery: params.discovery,
   });
   const manifestEnv =
     params.ambientEnvTriggers === "suppress"
@@ -539,6 +542,7 @@ export function listChannelIdsForOwnershipMigration(
     {
       includePersistedAuthState: true,
       ambientEnvTriggers: params.ambientEnvTriggers,
+      discovery: params.discovery,
     },
   )
     .filter((signal) => signal.source === "persisted-auth")
@@ -600,6 +604,7 @@ export function listConfiguredAnnounceChannelIdsForConfig(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   manifestRecords?: readonly PluginManifestRecord[];
+  discovery?: PluginDiscoveryResult;
 }): string[] {
   const disabledChannelIds = new Set(listExplicitlyDisabledChannelIdsForConfig(params.config));
   const trustConfig = params.activationSourceConfig ?? params.config;
@@ -611,6 +616,7 @@ export function listConfiguredAnnounceChannelIdsForConfig(params: {
     env: params.env,
     includePersistedAuthState: false,
     manifestRecords: params.manifestRecords,
+    discovery: params.discovery,
   });
   const policyDisabledChannelIds = new Set(
     policy
@@ -714,6 +720,7 @@ export function resolveConfiguredChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   manifestRecords?: readonly PluginManifestRecord[];
+  discovery?: PluginDiscoveryResult;
 }): string[] {
   const configuredChannelIds = normalizeChannelIds([
     ...listConfiguredChannelIdsForReadOnlyScope({
@@ -722,6 +729,7 @@ export function resolveConfiguredChannelPluginIds(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
       manifestRecords: params.manifestRecords,
+      discovery: params.discovery,
     }),
     ...listExplicitConfiguredChannelIdsForConfig(params.activationSourceConfig ?? params.config),
   ]);

@@ -2,9 +2,10 @@
 // inside the accessor's write transactions (session-transcript-index.ts);
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
+import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -55,16 +56,8 @@ export function searchSessionTranscripts(params: {
   if (query.length > SEARCH_QUERY_MAX_CHARS) {
     throw new Error(`query must not exceed ${SEARCH_QUERY_MAX_CHARS} characters`);
   }
-  const databasePath = params.storePath
-    ? resolveSqliteTargetFromSessionStorePath(params.storePath, {
-        agentId: params.agentId,
-      }).path
-    : undefined;
-  const databaseOptions = {
-    agentId: params.agentId,
-    ...(params.env ? { env: params.env } : {}),
-    ...(databasePath ? { path: databasePath } : {}),
-  };
+  const scope = resolveSqliteReadScope(params);
+  const databaseOptions = toDatabaseOptions(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => {
       const dirtySessions = listSessionsNeedingTranscriptIndexReconcile(database.db);
@@ -74,11 +67,17 @@ export function searchSessionTranscripts(params: {
       const indexing =
         dirtySessions.length > 0 || isSessionTranscriptIndexReconcileRunning(databaseOptions);
       const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
-      const sessionKeys = params.sessionKeys ?? [];
+      // Shared databases hold multiple logical agents. Filter before LIMIT;
+      // reserved global/unknown sentinels retain their store-wide scope.
+      const sessionFilterValues = params.sessionKeys ?? [
+        toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" }),
+      ];
       const whereSession =
-        sessionKeys.length > 0
-          ? ` AND session_windows.session_key IN (${sessionKeys.map(() => "?").join(", ")})`
-          : "";
+        params.sessionKeys === undefined
+          ? " AND (session_windows.session_key GLOB ? OR session_windows.session_key IN ('global', 'unknown'))"
+          : sessionFilterValues.length > 0
+            ? ` AND session_windows.session_key IN (${sessionFilterValues.map(() => "?").join(", ")})`
+            : "";
       // MATCH, snippet(), and bm25() are FTS5 primitives without a Kysely
       // representation. session_key lives on the window row so key renames
       // never leave stale keys inside the index. Sessions flagged needs_rebuild
@@ -99,7 +98,7 @@ export function searchSessionTranscripts(params: {
     ORDER BY rank ASC, timestamp DESC, message_id ASC
     LIMIT ?
     `);
-      const values = [toFtsQuery(query), ...sessionKeys, limit + 1];
+      const values = [toFtsQuery(query), ...sessionFilterValues, limit + 1];
       const rows = statement.all(...values) as Array<{
         message_id: unknown;
         rank: unknown;

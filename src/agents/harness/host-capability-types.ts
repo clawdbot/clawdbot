@@ -33,6 +33,8 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Reports one completed model call's output tokens to this admitted run's live total. */
+  reportOutputTokens?: (outputTokens: number) => void;
   /** Closure-bound event sink backed by the host-owned trajectory recorder. */
   trajectory?: Readonly<{
     recordEvent: (type: string, data?: Record<string, unknown>) => void;
@@ -69,6 +71,7 @@ export type AgentHarnessHostCapabilities = Readonly<{
     },
   ) => ReturnType<(typeof import("../agent-tools.before-tool-call.js"))["runBeforeToolCallHook"]>;
   requestApproval: (request: {
+    signal?: AbortSignal;
     title: string;
     description: string;
     severity: "info" | "warning";

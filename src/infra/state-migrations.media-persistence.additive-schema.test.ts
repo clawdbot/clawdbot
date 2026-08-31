@@ -18,7 +18,7 @@ describe("legacy media persistence additive schema repair", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  it("repairs same-version additive session schema before media validation", () => {
+  it("repairs same-version additive session schema before media validation", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-current-additive-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -49,7 +49,7 @@ describe("legacy media persistence additive schema repair", () => {
     `);
     database.close();
 
-    const result = migrateLegacyMediaPersistence({ env });
+    const result = await migrateLegacyMediaPersistence({ env });
     expect(result.warnings).toEqual([]);
     const repaired = new DatabaseSync(databasePath, { readOnly: true });
     try {

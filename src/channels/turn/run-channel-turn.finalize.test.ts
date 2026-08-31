@@ -1,6 +1,8 @@
 // Channel turn finalize tests cover orchestration, dispatch, and completion behavior.
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
@@ -91,6 +93,8 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 }));
 
 const cfg = {} as OpenClawConfig;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let storePath: string;
 
 function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -149,7 +153,7 @@ function dispatchTestAssembledTurn(
   return dispatchAssembledChannelTurn({
     cfg,
     agentId: "main",
-    storePath: "/tmp/sessions.json",
+    storePath,
     ...overrides,
   });
 }
@@ -200,6 +204,7 @@ function loggedEvents(log: ReturnType<typeof vi.fn>): TurnLogEvent[] {
 
 describe("channel turn finalize", () => {
   beforeEach(() => {
+    storePath = path.join(tempDirs.make("openclaw-channel-turn-finalize-"), "sessions.json");
     vi.clearAllMocks();
     recordInboundSessionCore.mockResolvedValue(undefined);
     dispatchReplyWithBufferedBlockDispatcherCore.mockImplementation(createDispatch());
@@ -300,7 +305,7 @@ describe("channel turn finalize", () => {
     const first = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
+      storePath,
       ctxPayload: createCtx(),
       recordInboundSession,
       runDispatch,
@@ -313,7 +318,7 @@ describe("channel turn finalize", () => {
     const second = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
+      storePath,
       ctxPayload: createCtx(),
       recordInboundSession,
       runDispatch,
@@ -425,7 +430,7 @@ describe("channel turn finalize", () => {
     const result = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:observer:test:peer",
-      storePath: "/tmp/sessions.json",
+      storePath,
       ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
       recordInboundSession,
       runDispatch,
@@ -458,7 +463,7 @@ describe("channel turn finalize", () => {
       channel: "test",
       agentId: "observer",
       routeSessionKey: "agent:observer:test:peer",
-      storePath: "/tmp/sessions.json",
+      storePath,
       ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
       recordInboundSession: createRecordInboundSession(events),
       dispatchReplyWithBufferedBlockDispatcher: createDispatch(events),
@@ -486,7 +491,7 @@ describe("channel turn finalize", () => {
     await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:group:room-1",
-      storePath: "/tmp/sessions.json",
+      storePath,
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(),
       runDispatch: vi.fn(async () => ({
@@ -507,7 +512,7 @@ describe("channel turn finalize", () => {
       runPreparedChannelTurn({
         channel: "test",
         routeSessionKey: "agent:main:test:peer",
-        storePath: "/tmp/sessions.json",
+        storePath,
         ctxPayload: createCtx(),
         recordInboundSession: createRecordInboundSession(),
         runDispatch,
@@ -530,7 +535,7 @@ describe("channel turn finalize", () => {
       runPreparedChannelTurn({
         channel: "test",
         routeSessionKey: "agent:main:test:peer",
-        storePath: "/tmp/sessions.json",
+        storePath,
         ctxPayload: createCtx({
           AgentId: "main",
           SessionTranscriptContext: { historyLimit: 1 },
@@ -563,7 +568,7 @@ describe("channel turn finalize", () => {
       runPreparedChannelTurn({
         channel: "test",
         routeSessionKey: "agent:main:test:peer",
-        storePath: "/tmp/sessions.json",
+        storePath,
         ctxPayload: createCtx(),
         recordInboundSession,
         onPreDispatchFailure,
@@ -595,7 +600,7 @@ describe("channel turn finalize", () => {
       runPreparedChannelTurn({
         channel: "test",
         routeSessionKey: "agent:main:test:peer",
-        storePath: "/tmp/sessions.json",
+        storePath,
         ctxPayload: createCtx(),
         recordInboundSession,
         runDispatch: vi.fn(async () => {
@@ -614,7 +619,7 @@ describe("channel turn finalize", () => {
     await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
+      storePath,
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(events),
       afterRecord: vi.fn(async () => {
@@ -679,7 +684,7 @@ describe("channel turn finalize", () => {
       runPreparedChannelTurn({
         channel: "test",
         routeSessionKey: "agent:main:test:peer",
-        storePath: "/tmp/sessions.json",
+        storePath,
         ctxPayload: createCtx(),
         recordInboundSession: vi.fn(async () => {
           throw recordError;

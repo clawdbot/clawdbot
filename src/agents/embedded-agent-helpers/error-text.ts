@@ -3,11 +3,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { renderAssistantRequestFailureCopy } from "../failover/assistant-request-failure-copy.js";
 import {
   classifyFailoverReason,
   isBilling429MessageForProvider,
@@ -18,6 +20,7 @@ import {
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
+import type { FailoverReason } from "../failover/signal.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
   formatBillingErrorMessage,
@@ -27,6 +30,8 @@ import {
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
   isStreamingJsonParseError,
+  PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+  renderFormatErrorCopy,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
@@ -36,8 +41,6 @@ const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
-const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
-  "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =
   "The selected model was not found by the provider. Check the model id or choose a different model.";
 const TOOL_CALL_INPUT_MISSING_RE =
@@ -47,11 +50,16 @@ const TOOL_CALL_INPUT_PATH_RE =
 type AssistantErrorTextOptions = {
   cfg?: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   provider?: string;
   providerOwner?: PreparedProviderFailoverOwner;
   model?: string;
   /** Credential auth mode; OAuth/token billing copy omits API-key language (#80877). */
   authMode?: string;
+};
+type ClassifiedAssistantErrorFacts = {
+  reason: FailoverReason | null;
+  status?: number;
 };
 function isMissingToolCallInputError(raw: string): boolean {
   return (
@@ -61,6 +69,7 @@ function isMissingToolCallInputError(raw: string): boolean {
 export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
+  facts?: ClassifiedAssistantErrorFacts,
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -70,11 +79,21 @@ export function formatAssistantErrorText(
   if (!raw) {
     return "LLM request failed with an unknown error.";
   }
+  const formatCopy = renderFormatErrorCopy(raw);
+  const formatStatus = facts ? facts.status : extractErrorHttpStatus(raw)?.code;
+  if (
+    (formatStatus === 400 || formatStatus === 422) &&
+    formatCopy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT
+  ) {
+    return formatCopy;
+  }
   const providerOwner = opts?.providerOwner?.id ?? opts?.provider;
-  const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind({
-    ...buildAssistantFailoverSignal(msg, { provider: providerOwner }),
-    message: raw,
-  });
+  // Rendering can reuse a prepared owner, but must not discover runtime plugins.
+  const providerPlugin = opts?.providerOwner ?? null;
+  const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind(
+    { ...buildAssistantFailoverSignal(msg, { provider: providerOwner }), message: raw },
+    { providerPlugin },
+  );
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
@@ -83,6 +102,7 @@ export function formatAssistantErrorText(
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
+      agentId: opts?.agentId,
       toolName: unknownTool[1],
       audit,
     });
@@ -158,7 +178,7 @@ export function formatAssistantErrorText(
   if (providerRuntimeFailureKind === "model_not_found") {
     return MODEL_NOT_FOUND_USER_TEXT;
   }
-  if (isContextOverflowError(raw)) {
+  if (isContextOverflowError(raw, { providerPlugin })) {
     return (
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
@@ -211,10 +231,12 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
-  const failoverReason = classifyFailoverReason(raw, {
-    provider: providerOwner,
-    providerPlugin: opts?.providerOwner,
-  });
+  const failoverReason = facts
+    ? facts.reason
+    : classifyFailoverReason(raw, {
+        provider: providerOwner,
+        providerPlugin,
+      });
   if (failoverReason === "billing") {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
@@ -250,7 +272,7 @@ export function formatAssistantErrorText(
   }
 
   if (providerRuntimeFailureKind === "schema") {
-    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+    return formatCopy;
   }
 
   if (isRawApiErrorPayload(raw) || isLikelyHttpErrorText(raw)) {
@@ -295,17 +317,45 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
-  const friendlyError = formatAssistantErrorText(msg, opts);
   const rawError = msg.errorMessage?.trim();
+  const providerOwner = opts?.providerOwner?.id ?? opts?.provider ?? msg.provider;
+  const provider = opts?.provider ?? msg.provider ?? providerOwner;
+  const facts: ClassifiedAssistantErrorFacts = {
+    reason: rawError
+      ? classifyFailoverReason(rawError, {
+          provider: providerOwner,
+          // Rendering can reuse a prepared owner, but must not discover runtime plugins.
+          providerPlugin: opts?.providerOwner ?? null,
+        })
+      : null,
+    status: extractErrorHttpStatus(rawError ?? "")?.code,
+  };
+  const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
-  const parsedErrorType = parseApiErrorInfo(rawError ?? "")?.type?.toLowerCase() ?? "";
-  const rawProviderSchemaError =
-    friendlyError?.startsWith("LLM request rejected:") ||
-    parsedErrorType.includes("invalid_request");
-  const safeFriendlyError = rawPassthrough
-    ? rawProviderSchemaError
-      ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
-      : undefined
-    : friendlyError;
-  return (safeFriendlyError || GENERIC_ASSISTANT_ERROR_TEXT).trim();
+  const structuredSchemaDetail = [
+    parseApiErrorInfo(rawError ?? ""),
+    parseApiErrorInfo(typeof msg.errorBody === "string" ? msg.errorBody.trim() : ""),
+  ].find((error) => error?.type?.toLowerCase().includes("invalid_request"))?.message;
+  const schemaFriendlyError =
+    friendlyError === PROVIDER_SCHEMA_REJECTION_USER_TEXT ||
+    friendlyError?.startsWith("LLM request rejected:");
+  const safeFriendlyError =
+    structuredSchemaDetail && schemaFriendlyError
+      ? renderFormatErrorCopy(structuredSchemaDetail)
+      : rawPassthrough
+        ? schemaFriendlyError
+          ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
+          : undefined
+        : friendlyError;
+  if (safeFriendlyError) {
+    return safeFriendlyError.trim();
+  }
+  return (
+    renderAssistantRequestFailureCopy({
+      provider,
+      model: opts?.model ?? msg.model,
+      reason: facts.reason,
+      status: facts.status,
+    }) ?? GENERIC_ASSISTANT_ERROR_TEXT
+  );
 }

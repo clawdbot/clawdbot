@@ -6,7 +6,10 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
-import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
+import {
+  resolveOwnedAppReadOnlyToolConfigKeys,
+  resolveRecoverableCodexPluginConfigKeys,
+} from "./plugin-inventory.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
 import {
@@ -23,6 +26,34 @@ import type { CodexAppServerRequestParams, JsonObject, v2 } from "./protocol.js"
 describe("Codex plugin thread config", () => {
   beforeEach(() => {
     defaultCodexAppInventoryCache.clear();
+  });
+
+  it("does not classify keys shared with writable tools as read-only", () => {
+    const app: v2.AppInfo = {
+      ...appInfo("linear", true),
+      toolSummaries: [
+        {
+          name: "fetch",
+          title: "Fetch",
+          description: "Fetch a Linear issue.",
+          isEnabled: true,
+          disabledReason: null,
+          isReadOnly: true,
+        },
+        {
+          name: "linear_fetch",
+          title: "Save issue",
+          description: "Create or update a Linear issue.",
+          isEnabled: true,
+          disabledReason: null,
+          isReadOnly: false,
+        },
+      ],
+    };
+
+    expect(resolveOwnedAppReadOnlyToolConfigKeys(app)).toStrictEqual({
+      readOnlyToolConfigKeys: ["Fetch", "fetch"],
+    });
   });
 
   it("defaults destructive app access on for accessible migrated plugin apps", async () => {
@@ -669,13 +700,120 @@ describe("Codex plugin thread config", () => {
     expect(configPatch).not.toHaveProperty("approvals_reviewer");
   });
 
-  it("omits ask policy apps when cwd effective approval overrides remain after cleanup", async () => {
+  it("keeps ask policy apps when managed approval overrides cover only read-only tools", async () => {
     const appCache = new CodexAppInventoryCache();
+    const linearApp: v2.AppInfo = {
+      ...appInfo("linear", true),
+      toolSummaries: [
+        {
+          name: "fetch",
+          title: "Fetch",
+          description: "Fetch a Linear issue.",
+          isEnabled: true,
+          disabledReason: null,
+          isReadOnly: true,
+        },
+        {
+          name: "save_issue",
+          title: "linear/save_issue",
+          description: "Create or update a Linear issue.",
+          isEnabled: true,
+          disabledReason: null,
+          isReadOnly: false,
+        },
+      ],
+    };
     await appCache.refreshNow({
       key: "runtime",
       nowMs: 0,
-      request: async (method, params) =>
-        codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)], params),
+      request: async (method, params) => codexAppInventoryResponse(method, [linearApp], params),
+    });
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "plugin/installed" || method === "plugin/list") {
+        return pluginList([pluginSummary("linear", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail("linear", [appSummary("linear")], ["linear"]);
+      }
+      if (method === "config/read") {
+        expect(params).toEqual({ includeLayers: true, cwd: "/repo/project" });
+        return {
+          config: {
+            apps: {
+              linear: {
+                tools: {
+                  linear_fetch: { approval_mode: "approve" },
+                },
+              },
+            },
+          },
+          layers: [],
+        };
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "ask",
+          plugins: {
+            linear: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "linear",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      configCwd: "/repo/project",
+      nowMs: 1,
+      request,
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+        linear: {
+          enabled: true,
+          approvals_reviewer: "user",
+          destructive_enabled: true,
+          open_world_enabled: true,
+          default_tools_approval_mode: "auto",
+        },
+      },
+    });
+    expect(config.provisionalAppIds).toEqual(["linear"]);
+    expect(config.diagnostics).toStrictEqual([]);
+    expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(1);
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("config/batchWrite");
+  });
+
+  it("omits ask policy apps when cwd effective approval overrides remain after cleanup", async () => {
+    const appCache = new CodexAppInventoryCache();
+    const calendarApp: v2.AppInfo = {
+      ...appInfo("google-calendar-app", true),
+      toolSummaries: [
+        {
+          name: "calendar/create",
+          title: null,
+          description: "Create a calendar event.",
+          isEnabled: true,
+          disabledReason: null,
+          isReadOnly: false,
+        },
+      ],
+    };
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async (method, params) => codexAppInventoryResponse(method, [calendarApp], params),
     });
     let configReadCount = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
@@ -2544,7 +2682,7 @@ describe("Codex plugin thread config", () => {
       ["app/installed", { forceRefresh: true }],
     ]);
     expect(request.mock.calls.filter(([method]) => method === "app/read")).toEqual([
-      ["app/read", { appIds: ["calendar-app", "meetings-app"] }],
+      ["app/read", { appIds: ["calendar-app", "meetings-app"], includeTools: true }],
     ]);
     expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(1);
   });
@@ -3149,6 +3287,7 @@ describe("Codex plugin thread config", () => {
     });
     expect(request.mock.calls.find(([method]) => method === "app/read")?.[1]).toEqual({
       appIds: ["google-calendar-app"],
+      includeTools: true,
       threadId: "thread-149",
     });
     expect(request.mock.calls.find(([method]) => method === "config/read")?.[1]).toEqual({

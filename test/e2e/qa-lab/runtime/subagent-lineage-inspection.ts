@@ -6,17 +6,18 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import type {
   AuditRunInspectResult,
   ExecutionIdentityContextV1,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { MODEL_REF } from "./cloud-worker-midturn-loss-fixture.js";
 import {
   closeWireServer,
@@ -32,7 +33,7 @@ const SCENARIO_ID = "subagent-lineage-inspection";
 const SUMMARY_FILE = `${SCENARIO_ID}-summary.json`;
 const PROOF_TIMEOUT_MS = 15 * 60_000;
 
-type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type Gateway = QaGatewayChild;
 
 type ProducerOptions = {
   artifactBase: string;
@@ -411,12 +412,14 @@ async function assertModelIssuedSpawnCalls(mockBaseUrl: string, labels: readonly
 }
 
 async function startWorkerGateway(params: {
+  owner: ReturnType<typeof createQaGatewayChild>;
   executionIdentity: boolean;
   mockBaseUrl: string;
   options: ProducerOptions;
   workspaceDir: string;
 }) {
   return await startPairedNodeWorkerGateway({
+    owner: params.owner,
     providerBaseUrl: params.mockBaseUrl,
     executionIdentity: params.executionIdentity,
     repoRoot: params.options.repoRoot,
@@ -783,6 +786,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-i3-worker-lineage-"));
   let mock = await startQaMockOpenAiServer();
   const published = await createPublishedWireWorkspace(fixtureRoot);
+  let gatewayOwner = createQaGatewayChild();
   let gateway: Gateway | undefined;
   let operator: GatewayClient | undefined;
   let workerNode: PairedNodeWorkerHost | undefined;
@@ -791,6 +795,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
   let reclaimedPlacements = 0;
   try {
     gateway = await startWorkerGateway({
+      owner: gatewayOwner,
       executionIdentity: false,
       mockBaseUrl: mock.baseUrl,
       options,
@@ -832,8 +837,10 @@ async function runProof(options: ProducerOptions): Promise<string> {
     gateway = undefined;
     await mock.stop();
     mock = await startQaMockOpenAiServer();
+    gatewayOwner = createQaGatewayChild();
 
     gateway = await startWorkerGateway({
+      owner: gatewayOwner,
       executionIdentity: true,
       mockBaseUrl: mock.baseUrl,
       options,
@@ -888,9 +895,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
       .stopAndWait({ timeoutMs: 2_000 })
       .catch((error: unknown) => cleanupErrors.push(error));
   }
-  if (gateway) {
-    await gateway.stop().catch((error: unknown) => cleanupErrors.push(error));
-  }
+  await stopQaGatewayFixture(gatewayOwner).catch((error: unknown) => cleanupErrors.push(error));
   await mock.stop().catch((error: unknown) => cleanupErrors.push(error));
   await closeWireServer(published.server).catch((error: unknown) => cleanupErrors.push(error));
   await fs

@@ -59,11 +59,7 @@ flow:
                     const now = Date.now();
                     const old = now - 2 * 60 * 60 * 1000;
                     const recent = now - 5000;
-                    const qaSessionsDir = path.join(ctx.stateDir, "agents", "qa", "sessions");
-                    const claudeSessionsDir = path.join(ctx.stateDir, "agents", "claude", "sessions");
                     const subagentDir = path.join(ctx.stateDir, "subagents");
-                    await fs.mkdir(qaSessionsDir, { recursive: true });
-                    await fs.mkdir(claudeSessionsDir, { recursive: true });
                     await fs.mkdir(subagentDir, { recursive: true });
                     await fs.writeFile(path.join(subagentDir, "runs.json"), `${JSON.stringify({
                       version: 2,
@@ -94,48 +90,88 @@ flow:
                         },
                       },
                     }, null, 2)}\n`, "utf8");
-                    await fs.writeFile(path.join(qaSessionsDir, "sessions.json"), `${JSON.stringify({
-                      [mainKey]: {
-                        sessionId: "sess-main",
-                        updatedAt: now,
+                    await seedQaSessionEntries(env, [
+                      {
+                        agentId: "qa",
+                        sessionKey: mainKey,
+                        entry: {
+                          sessionId: "sess-main",
+                          updatedAt: now,
+                        },
                       },
-                      [staleRunKey]: {
-                        sessionId: "sess-stale-run",
-                        updatedAt: old,
-                        spawnedBy: mainKey,
-                        status: "done",
-                        endedAt: old,
+                      {
+                        agentId: "qa",
+                        sessionKey: staleRunKey,
+                        entry: {
+                          sessionId: "sess-stale-run",
+                          updatedAt: old,
+                          spawnedBy: mainKey,
+                          status: "done",
+                          endedAt: old,
+                        },
                       },
-                      [staleOrphanKey]: {
-                        sessionId: "sess-orphan",
-                        updatedAt: old,
-                        parentSessionKey: mainKey,
+                      {
+                        agentId: "qa",
+                        sessionKey: staleOrphanKey,
+                        entry: {
+                          sessionId: "sess-orphan",
+                          updatedAt: old,
+                          parentSessionKey: mainKey,
+                        },
                       },
-                      [freshDashboardKey]: {
-                        sessionId: "sess-fresh-dashboard",
-                        updatedAt: now,
-                        parentSessionKey: mainKey,
+                      {
+                        agentId: "qa",
+                        sessionKey: freshDashboardKey,
+                        entry: {
+                          sessionId: "sess-fresh-dashboard",
+                          updatedAt: now,
+                          parentSessionKey: mainKey,
+                        },
                       },
-                      [liveRunKey]: {
-                        sessionId: "sess-live-child",
-                        updatedAt: recent,
-                        spawnedBy: mainKey,
+                      {
+                        agentId: "qa",
+                        sessionKey: liveRunKey,
+                        entry: {
+                          sessionId: "sess-live-child",
+                          updatedAt: recent,
+                          spawnedBy: mainKey,
+                        },
                       },
-                    }, null, 2)}\n`, "utf8");
-                    await fs.writeFile(path.join(claudeSessionsDir, "sessions.json"), `${JSON.stringify({
-                      [staleAcpKey]: {
-                        sessionId: "sess-acp-stale",
-                        updatedAt: old,
-                        spawnedBy: mainKey,
-                        status: "done",
-                        endedAt: old,
+                      {
+                        agentId: "claude",
+                        sessionKey: staleAcpKey,
+                        entry: {
+                          sessionId: "sess-acp-stale",
+                          updatedAt: old,
+                          spawnedBy: mainKey,
+                          status: "done",
+                          endedAt: old,
+                        },
                       },
-                    }, null, 2)}\n`, "utf8");
+                    ]);
                   })()
         - call: waitForGatewayHealthy
           args:
             - ref: env
             - 60000
+        - call: readRawQaSessionStore
+          saveAs: qaSessionStore
+          args:
+            - ref: env
+            - agentId: qa
+        - call: readRawQaSessionStore
+          saveAs: claudeSessionStore
+          args:
+            - ref: env
+            - agentId: claude
+        - assert:
+            expr: "[mainKey, staleRunKey, staleOrphanKey, freshDashboardKey, liveRunKey].every((key) => qaSessionStore[key]?.sessionId)"
+            message:
+              expr: "`canonical QA session entries missing: ${JSON.stringify(Object.keys(qaSessionStore))}`"
+        - assert:
+            expr: "claudeSessionStore[staleAcpKey]?.sessionId === 'sess-acp-stale'"
+            message:
+              expr: "`canonical Claude session entry missing: ${JSON.stringify(Object.keys(claudeSessionStore))}`"
         - call: env.gateway.call
           saveAs: listed
           args:
@@ -171,4 +207,4 @@ flow:
             expr: "![staleRunKey, staleOrphanKey, staleAcpKey].some((key) => mainChildren.includes(key) || filteredKeys.includes(key))"
             message:
               expr: "`stale child leaked through sessions.list (main=${JSON.stringify(mainChildren)} filtered=${JSON.stringify(filteredKeys)})`"
-      detailsExpr: "({ mainChildren, filteredKeys })"
+      detailsExpr: "({ persistedQaKeys: Object.keys(qaSessionStore), persistedClaudeKeys: Object.keys(claudeSessionStore), mainChildren, filteredKeys })"

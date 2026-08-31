@@ -148,7 +148,7 @@ def create_fixture_repo(repo: Path, fixture: str) -> None:
 
 def validate_prompt_policy(repo: Path, autoreview: Path) -> None:
     namespace = runpy.run_path(str(autoreview))
-    prompt = namespace["build_prompt"](repo, "local", None, "fixture diff", "", "")
+    prompt, = namespace["build_review_prompts"](repo, "local", None, "fixture diff", "", [])
     required = (
         "This helper is a closeout gate.",
         "Do not turn a narrow patch into a broad",

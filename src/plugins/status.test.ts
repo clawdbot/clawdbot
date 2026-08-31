@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   createCompatibilityNotice,
   createCustomHook,
@@ -19,9 +20,6 @@ const loadPluginMetadataRegistrySnapshotMock = vi.fn();
 const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
 const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
 const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
-const isPluginMetadataSnapshotCompatibleMock = vi.fn<
-  typeof import("./plugin-metadata-snapshot.js").isPluginMetadataSnapshotCompatible
->(() => true);
 const loadPluginMetadataSnapshotMock = vi.fn((rawParams: unknown = {}) => {
   const params = rawParams as { index?: unknown };
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndexMock(params) ?? {
@@ -58,7 +56,8 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginManifestRegistry: () => ({ plugins: [], diagnostics: [] }),
+  resolveConfigWidePluginMetadataSnapshot: (params: unknown) =>
+    loadPluginMetadataSnapshotMock(params),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -91,13 +90,15 @@ vi.mock("./manifest-registry-installed.js", () => ({
   resolveInstalledManifestRegistryIndexFingerprint: () => "test-installed-index",
 }));
 
-vi.mock("./plugin-metadata-snapshot.js", () => ({
-  isPluginMetadataSnapshotCompatible: isPluginMetadataSnapshotCompatibleMock,
-  loadPluginMetadataSnapshot: (params?: unknown) => loadPluginMetadataSnapshotMock(params),
-  rebasePluginMetadataSnapshotManifestRegistry: <T>(snapshot: T) => snapshot,
-  resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
-    params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
-}));
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-metadata-snapshot.js")>();
+  return {
+    loadPluginMetadataSnapshot: (params?: unknown) => loadPluginMetadataSnapshotMock(params),
+    projectPluginMetadataSnapshot: actual.projectPluginMetadataSnapshot,
+    resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
+      params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
+  };
+});
 
 vi.mock("./providers.js", () => ({
   resolveBundledProviderCompatPluginIds: (...args: unknown[]) =>
@@ -253,6 +254,7 @@ function expectBundledCompatChainApplied(params: {
   expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
     config: params.config,
     pluginIds: params.pluginIds,
+    activation: "defaults",
   });
   if (params.loadModules) {
     expectPluginLoaderCall({ config: params.enabledConfig, loadModules: true });
@@ -265,10 +267,7 @@ function createAutoEnabledStatusConfig(
   entries: Record<string, unknown>,
   rawConfigOverrides?: Record<string, unknown>,
 ) {
-  const rawConfig = {
-    plugins: {},
-    ...rawConfigOverrides,
-  };
+  const rawConfig = { plugins: {}, ...rawConfigOverrides };
   const autoEnabledConfig = {
     ...rawConfig,
     plugins: {
@@ -395,6 +394,7 @@ describe("plugin status reports", () => {
   });
 
   beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     resolveCompatibleRuntimePluginRegistryMock.mockReset();
@@ -402,8 +402,6 @@ describe("plugin status reports", () => {
     loadPluginManifestRegistryForPluginRegistryMock.mockReset();
     loadPluginRegistrySnapshotWithMetadataMock.mockReset();
     loadPluginManifestRegistryForInstalledIndexMock.mockReset();
-    isPluginMetadataSnapshotCompatibleMock.mockReset();
-    isPluginMetadataSnapshotCompatibleMock.mockReturnValue(true);
     loadPluginMetadataSnapshotMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
@@ -1098,7 +1096,6 @@ describe("plugin status reports", () => {
 
   it("formats and summarizes compatibility notices", () => {
     const notice = createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" });
-
     expect(formatPluginCompatibilityNotice(notice)).toBe(`legacy-plugin ${HOOK_ONLY_MESSAGE}`);
     expect(summarizePluginCompatibility([notice])).toEqual({
       noticeCount: 1,

@@ -202,7 +202,11 @@ function createHarness(params?: {
     directTracker: {
       invalidateRoom,
       rememberInvite,
+      isDirectMessage: vi.fn(async () => false),
     },
+    groupPolicy: "allowlist",
+    needsRoomAliasesForConfig: false,
+    getRoomInfo: vi.fn(async () => ({ altAliases: [], nameResolved: true, aliasesResolved: true })),
     invalidateMemberDisplayName,
     logVerboseMessage,
     warnedEncryptedRooms: new Set<string>(),

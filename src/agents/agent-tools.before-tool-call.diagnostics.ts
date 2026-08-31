@@ -29,13 +29,13 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
   resolveSkillTelemetrySource,
   resolveSkillTelemetrySourceValue,
 } from "../skills/loading/source.js";
-import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
+import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
 import type {
@@ -46,7 +46,7 @@ import type {
 } from "./agent-tools.before-tool-call.types.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
-import { getChannelAgentToolMeta } from "./channel-tools.js";
+import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
@@ -334,51 +334,31 @@ function resolveRelativeToolPath(candidate: string, ctx?: HookContext): string |
   return base ? path.resolve(base, trimmed) : undefined;
 }
 
-function readToolPathCandidates(params: unknown, ctx?: HookContext): string[] {
-  if (!isPlainObject(params)) {
-    return [];
-  }
-  const candidates = typeof params.path === "string" ? [params.path] : [];
-  return candidates
-    .map((candidate) => resolveRelativeToolPath(normalizeFileToolPathParam(candidate), ctx))
-    .filter((candidate): candidate is string => Boolean(candidate));
+function readToolPathCandidate(params: unknown, ctx?: HookContext): string | undefined {
+  return isPlainObject(params) && typeof params.path === "string"
+    ? resolveRelativeToolPath(normalizeFileToolPathParam(params.path), ctx)
+    : undefined;
 }
 
-function skillInstructionPaths(snapshot: SkillSnapshot | undefined): Map<string, SkillUsageMatch> {
-  const matches = new Map<string, SkillUsageMatch>();
-  for (const skill of snapshot?.resolvedSkills ?? []) {
-    const skillName = typeof skill.name === "string" ? skill.name.trim() : "";
-    if (!skillName) {
-      continue;
+function findSkillInstructionMatch(
+  snapshot: SkillSnapshot,
+  candidate: string,
+): SkillUsageMatch | undefined {
+  const skill = snapshot.resolvedSkills?.findLast((entry) => {
+    if (typeof entry.name !== "string" || !entry.name.trim()) {
+      return false;
     }
-    const match = resolvedSkillUsageMatch({ activation: "read", skill });
-    const filePath = typeof skill.filePath === "string" ? skill.filePath.trim() : "";
-    if (filePath) {
-      if (filePath.startsWith("node://")) {
-        matches.set(filePath, match);
-      } else if (path.isAbsolute(filePath)) {
-        matches.set(path.resolve(filePath), match);
-      }
-    }
-    const baseDir = typeof skill.baseDir === "string" ? skill.baseDir.trim() : "";
-    if (baseDir && path.isAbsolute(baseDir)) {
-      matches.set(path.resolve(baseDir, "SKILL.md"), match);
-    }
-  }
-  return matches;
-}
-
-function materializedSkillInstructionPaths(paths: SkillUsagePath[] | undefined) {
-  const matches = new Map<string, SkillUsageMatch>();
-  for (const entry of paths ?? []) {
-    matches.set(path.resolve(entry.readPath), {
-      skillFile: entry.skillFile,
-      skillName: entry.skillName,
-      skillSource: entry.skillSource,
-      activation: "read",
-    });
-  }
-  return matches;
+    const filePath = typeof entry.filePath === "string" ? entry.filePath.trim() : "";
+    const baseDir = typeof entry.baseDir === "string" ? entry.baseDir.trim() : "";
+    return (
+      (filePath &&
+        (filePath.startsWith("node://")
+          ? filePath === candidate
+          : path.isAbsolute(filePath) && path.resolve(filePath) === candidate)) ||
+      (baseDir && path.isAbsolute(baseDir) && path.resolve(baseDir, "SKILL.md") === candidate)
+    );
+  });
+  return skill ? resolvedSkillUsageMatch({ activation: "read", skill }) : undefined;
 }
 
 export function findSkillUsageMatch(params: {
@@ -410,16 +390,24 @@ export function findSkillUsageMatch(params: {
   if (params.toolName !== "read") {
     return undefined;
   }
-  const skillPaths = params.ctx?.skillsSnapshot?.resolvedSkills?.length
-    ? skillInstructionPaths(params.ctx.skillsSnapshot)
-    : materializedSkillInstructionPaths(params.ctx?.skillUsagePaths);
-  for (const candidate of readToolPathCandidates(params.toolParams, params.ctx)) {
-    const match = skillPaths.get(candidate);
-    if (match) {
-      return match;
-    }
+  const candidate = readToolPathCandidate(params.toolParams, params.ctx);
+  if (!candidate) {
+    return undefined;
   }
-  return undefined;
+  if (params.ctx?.skillsSnapshot?.resolvedSkills?.length) {
+    return findSkillInstructionMatch(params.ctx.skillsSnapshot, candidate);
+  }
+  const match = params.ctx?.skillUsagePaths?.findLast(
+    (entry) => path.resolve(entry.readPath) === candidate,
+  );
+  return match
+    ? {
+        skillFile: match.skillFile,
+        skillName: match.skillName,
+        skillSource: match.skillSource,
+        activation: "read",
+      }
+    : undefined;
 }
 
 export function emitSkillUsedDiagnostic(params: {

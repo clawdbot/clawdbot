@@ -1,4 +1,3 @@
-// QR image tests cover QR image generation and file output.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,16 +12,9 @@ const { MOCK_PNG_BASE64, MOCK_PNG_BUFFER, toBuffer } = vi.hoisted(() => {
   };
 });
 
-vi.mock("qrcode", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("qrcode")>();
-  return {
-    ...actual,
-    default: {
-      ...(actual.default ?? actual),
-      toBuffer,
-    },
-  };
-});
+vi.mock("./qr-runtime.ts", () => ({
+  loadQrCodeRuntime: async () => ({ toBuffer }),
+}));
 
 let renderQrPngBase64: typeof import("./qr-image.ts").renderQrPngBase64;
 let renderQrPngDataUrl: typeof import("./qr-image.ts").renderQrPngDataUrl;
@@ -120,6 +112,6 @@ describe("renderQrPngBase64", () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("qrcode");
+  vi.doUnmock("./qr-runtime.ts");
   vi.resetModules();
 });

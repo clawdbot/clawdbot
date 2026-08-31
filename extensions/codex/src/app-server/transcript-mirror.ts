@@ -156,6 +156,7 @@ async function mirrorBestEffort(params: {
         mirrorIdentity: `${params.turnId}:assistant`,
         runId: params.params.runId,
       },
+      prepareAssistantTranscriptMessage: params.params.prepareAssistantTranscriptMessage,
       config: params.params.config,
     });
     for (const receipt of mirrorResult.userMessageReceipts) {
@@ -352,6 +353,7 @@ async function mirror(params: {
   runId?: string;
   runMirrorIdentityPrefix?: string;
   terminalAssistantOwner?: { mirrorIdentity: string; runId: string };
+  prepareAssistantTranscriptMessage?: EmbeddedRunAttemptParams["prepareAssistantTranscriptMessage"];
   config?: SessionTranscriptWriteLockParams["config"];
   skipBeforeMessageWriteHooks?: boolean;
 }): Promise<CodexAppServerTranscriptMirrorResult> {
@@ -444,13 +446,16 @@ async function mirror(params: {
           }
           continue;
         }
-        const nextMessage = params.skipBeforeMessageWriteHooks
-          ? transcriptMessage
-          : runAgentHarnessBeforeMessageWriteHook({
-              message: transcriptMessage,
-              agentId: params.agentId,
-              sessionKey: params.sessionKey,
-            });
+        const nextMessage = runAgentHarnessBeforeMessageWriteHook({
+          message: transcriptMessage,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          skipBeforeMessageWriteHooks: params.skipBeforeMessageWriteHooks,
+          // Only this turn's terminal row belongs to the outer attachment dispatcher.
+          prepareAssistantTranscriptMessage: ownsTerminal
+            ? params.prepareAssistantTranscriptMessage
+            : undefined,
+        });
         if (!nextMessage) {
           if (message.role === "assistant") {
             // A transcript hook deliberately blocked this logical assistant row.

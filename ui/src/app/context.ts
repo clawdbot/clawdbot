@@ -82,6 +82,7 @@ export type ApplicationChatAttachmentHandoff = {
     fallbacks: Record<string, ChatComposerMemoryFallback>;
     message?: string;
   } | null;
+  retireScope(scopeKey: string, beforeRevision: number): void;
   clearPane(paneId: string): void;
   dispose(): void;
 };

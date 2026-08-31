@@ -43,6 +43,8 @@ export type ModelCatalogCompatConfig = {
   supportsReasoningEffort?: boolean;
   /** Whether the model accepts the temperature parameter (GPT-5.6 family rejects it). */
   supportsTemperature?: boolean;
+  /** Whether the provider honors top-level `instructions` on Responses requests. */
+  supportsInstructions?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
   supportsJsonSchemaResponseFormat?: boolean;

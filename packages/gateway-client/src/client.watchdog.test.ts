@@ -203,8 +203,9 @@ describe("GatewayClient", () => {
   let httpsServer: ReturnType<typeof createHttpsServer> | null = null;
 
   afterEach(async () => {
-    vi.useRealTimers();
+    // Timer spies must restore their fake functions before the clock uninstalls them.
     vi.restoreAllMocks();
+    vi.useRealTimers();
     if (wss) {
       for (const client of wss.clients) {
         client.terminate();

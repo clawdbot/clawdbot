@@ -102,6 +102,8 @@ const runtime = {
 describe("runConfigureWizard default-agent ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.select.mockReset();
+    mocks.text.mockReset();
     const baseConfig = {
       agents: {
         defaults: { workspace: "/tmp/global-workspace" },
@@ -234,6 +236,67 @@ describe("runConfigureWizard default-agent ownership", () => {
       runtime,
       expect.objectContaining({ agentId: "main" }),
     );
+  });
+
+  it("selects one explicit owner for workspace, plugins, skills, and channel setup", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          alpha: { workspace: "/tmp/alpha-workspace" },
+          beta: { workspace: "/tmp/beta-workspace" },
+        },
+      },
+    };
+    mocks.state.snapshot = {
+      exists: true,
+      valid: true,
+      hash: "config-hash",
+      config,
+      sourceConfig: config,
+      issues: [],
+    };
+    mocks.select.mockResolvedValueOnce("beta").mockResolvedValueOnce("configure");
+    mocks.text.mockResolvedValueOnce("/tmp/new-beta-workspace");
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["workspace", "plugins", "skills", "channels"] },
+      runtime,
+    );
+
+    const committed = mocks.commitConfig.mock.calls[0]?.[0].nextConfig as OpenClawConfig;
+    expect(committed.agents).toEqual({
+      ownership: "explicit",
+      entries: {
+        alpha: { workspace: "/tmp/alpha-workspace" },
+        beta: { workspace: "/tmp/new-beta-workspace" },
+      },
+    });
+    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      "/tmp/new-beta-workspace",
+      runtime,
+      expect.objectContaining({ agentId: "beta" }),
+    );
+    expect(mocks.setupPluginConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/new-beta-workspace" }),
+    );
+    expect(mocks.setupSkills).toHaveBeenCalledWith(
+      expect.any(Object),
+      "/tmp/new-beta-workspace",
+      runtime,
+      expect.any(Object),
+    );
+    expect(mocks.setupChannels).toHaveBeenCalledWith(
+      expect.any(Object),
+      runtime,
+      expect.any(Object),
+      expect.objectContaining({ workspaceDir: "/tmp/new-beta-workspace" }),
+    );
+    expect(
+      mocks.select.mock.calls.filter(
+        ([params]) => params.message === "Which agent do you want to configure?",
+      ),
+    ).toHaveLength(1);
   });
 
   it("preserves the legacy default owner when system-agent ownership is not explicit", async () => {
@@ -384,6 +447,29 @@ describe("runConfigureWizard default-agent ownership", () => {
     expect(hook).toHaveBeenCalledOnce();
     expect(mocks.commitConfig.mock.invocationCallOrder[0]!).toBeLessThan(
       hook.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("can remove channel configuration without selecting an agent", async () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+    };
+    mocks.state.snapshot = {
+      exists: true,
+      valid: true,
+      hash: "config-hash",
+      config,
+      sourceConfig: config,
+      issues: [],
+    };
+    mocks.select.mockResolvedValueOnce("remove");
+
+    await runConfigureWizard({ command: "configure", sections: ["channels"] }, runtime);
+
+    expect(mocks.setupChannels).not.toHaveBeenCalled();
+    expect(mocks.select).toHaveBeenCalledOnce();
+    expect(mocks.commitConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: config }),
     );
   });
 });

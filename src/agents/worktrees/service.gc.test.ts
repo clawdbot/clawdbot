@@ -7,14 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
+import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
-  IDLE_GC_MS,
-  ManagedWorktreeService,
-  resolveWorktreeCleanupLimits,
-  SNAPSHOT_RETENTION_MS,
-} from "./service.js";
-import {
-  initializeManagedWorktreeTestRepository,
+  useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixture,
 } from "./service.test-support.js";
 
@@ -33,6 +28,7 @@ async function initializeNestedRepository(root: string, name: string): Promise<s
 }
 
 describe("ManagedWorktreeService garbage collection", () => {
+  const initializeRepository = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
   let stateDir: string;
@@ -67,7 +63,7 @@ describe("ManagedWorktreeService garbage collection", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-gc-"));
-    repo = await initializeManagedWorktreeTestRepository(root);
+    repo = await initializeRepository(root);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     now = 1_700_000_000_000;
@@ -239,7 +235,7 @@ describe("ManagedWorktreeService garbage collection", () => {
   });
 
   it("continues garbage collection when one repository control path is missing", async () => {
-    const otherRepo = await initializeManagedWorktreeTestRepository(path.join(root, "other"));
+    const otherRepo = await initializeRepository(path.join(root, "other"));
     const removable = await materializeDownstreamFixture("other-removable", {
       repoRoot: otherRepo,
       ownerKind: "session",
@@ -413,8 +409,40 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
-  it("uses the fixed no-limit cleanup policy", () => {
-    expect(resolveWorktreeCleanupLimits()).toEqual({});
+  it("enforces thirty live checkouts by default without evicting manual work", async () => {
+    for (let index = 0; index < 29; index += 1) {
+      await materializeDownstreamFixture(`manual-${index}`);
+    }
+    const oldest = await materializeRunOwnedFixture("default-oldest", "session");
+    now += 1;
+    const newest = await materializeRunOwnedFixture("default-newest", "session");
+    expect((await service.gc()).removed).toEqual([oldest.id]);
+    expect(
+      service.listRegistryRecords().filter((record) => record.removedAt === undefined),
+    ).toHaveLength(30);
+    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
+  });
+
+  it("cleans recent retired owners while preserving a live lock and manual checkout", async () => {
+    const retired = await materializeRunOwnedFixture(
+      "archived-recent",
+      "session",
+      "agent:main:archived",
+    );
+    const busy = await materializeRunOwnedFixture("archived-busy", "session", "agent:main:busy");
+    const manual = await materializeDownstreamFixture("archived-manual", {
+      ownerId: "agent:main:archived",
+    });
+    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.pid}`, busy.path);
+    await fs.writeFile(path.join(retired.path, "uncommitted.txt"), "archived work\n");
+    const result = await service.gc({ shouldRemoveOwner: () => true });
+    expect(result.removed).toEqual([retired.id]);
+    expect(getRegistryWorktree(env, busy.id)?.removedAt).toBeUndefined();
+    expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
+    const restored = await service.restore({ id: retired.id });
+    expect(await fs.readFile(path.join(restored.path, "uncommitted.txt"), "utf8")).toBe(
+      "archived work\n",
+    );
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {

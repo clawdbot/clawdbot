@@ -11,6 +11,7 @@ import {
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
 import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
@@ -40,6 +41,7 @@ import type { PluginLoadOptions } from "./loader-types.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type { OpenClawPluginModule } from "./types.js";
@@ -48,6 +50,19 @@ export async function loadOpenClawPluginCliRegistry(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
   const context = resolvePluginLoadCacheContext({ ...options, activate: false });
+  // One CLI invocation resolves descriptors from several bootstrap stages; without reuse each
+  // stage re-executes every legacy external plugin's register and re-emits its diagnostics.
+  // The namespace is required: a runtime load with activate:false shares this cacheKey but
+  // produces a completely different registry. Diagnostics ride the cached registry, so only
+  // the duplicate log emission is dropped.
+  const cacheKey = `cli-metadata::${context.cacheKey}`;
+  const cacheEnabled = isPluginRegistryCacheEnabled(options);
+  if (cacheEnabled) {
+    const cached = pluginLoaderCacheState.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
   const logger = options.logger ?? createPluginLoaderLogger();
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
   const loadPluginModule = createPluginModuleLoader({
@@ -181,9 +196,13 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
     const validatedConfig = validatePluginConfig({
+      origin: candidate.origin,
       schema: manifestRecord.configSchema,
       cacheKey: manifestRecord.schemaCacheKey,
       value: entry?.config,
+      sourceValue: manifestRecord.configContracts?.secretInputs
+        ? context.activationSource.plugins.entries[policyId]?.config
+        : undefined,
     });
     if (!validatedConfig.ok) {
       logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`);
@@ -342,6 +361,9 @@ export async function loadOpenClawPluginCliRegistry(
         diagnosticMessagePrefix: "plugin failed during register: ",
       });
     }
+  }
+  if (cacheEnabled) {
+    pluginLoaderCacheState.set(cacheKey, registry);
   }
   return registry;
 }
