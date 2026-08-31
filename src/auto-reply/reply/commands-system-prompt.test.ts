@@ -263,6 +263,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
     expect(vi.mocked(listChannelSupportedActions)).toHaveBeenCalledWith({
       cfg: params.cfg,
       channel: "telegram",
+      chatType: "group",
       currentChannelId: "telegram:-1003841603622:topic:928",
       currentThreadTs: "928",
       currentMessageId: "message-1",

@@ -4,6 +4,7 @@ read_when:
   - You want to inspect, audit, or cancel background task records
   - You are documenting Task Flow commands under `openclaw tasks flow`
 title: "`openclaw tasks`"
+doc-schema-version: 1
 ---
 
 Inspect durable background tasks and Task Flow state. With no subcommand,
@@ -155,9 +156,13 @@ openclaw tasks flow show <lookup> [--json]
 openclaw tasks flow cancel <lookup>
 ```
 
-Inspects or cancels durable Task Flow state under the task ledger.
+Inspects or cancels durable Task Flow state under the task ledger. There is no
+top-level `openclaw flows` command. Both `flow show` and `flow cancel` accept a
+flow ID or its stable owner key as `<lookup>`.
+
 `flow list --status` accepts `queued`, `running`, `waiting`, `blocked`,
-`succeeded`, `failed`, `cancelled`, or `lost`.
+`succeeded`, `failed`, `cancelled`, or `lost`. See [Task Flow](/automation/taskflow)
+for ownership and lifecycle details.
 
 ## Related
 

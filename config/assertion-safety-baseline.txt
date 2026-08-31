@@ -1865,7 +1865,7 @@ src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
-src/agents/failover-error.ts	22
+src/agents/failover-error.ts	15
 src/agents/failover/retry-evidence.ts	1
 src/agents/failover/signal-details.ts	1
 src/agents/fallback-skip-cache.ts	1
@@ -3293,7 +3293,6 @@ src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
 src/logging/logger.ts	14
-src/logging/node-require.ts	2
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	3

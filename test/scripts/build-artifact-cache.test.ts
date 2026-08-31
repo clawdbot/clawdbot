@@ -391,12 +391,14 @@ describe("native owner content records", () => {
     "extends",
     "lockfile",
     "generator",
+    "compiler policy",
     "missing output",
     "tampered output",
     "orphan output",
   ])("rejects %s against a real native record", (mutation) => {
     const f = fixture();
     f.write("scripts/run-tsgo.mts", "export {};");
+    f.write("scripts/lib/local-check-runtime.mts", "export const policy = 1;");
     const record = f.seal(f.prepare());
     switch (mutation) {
       case "addition":
@@ -428,6 +430,9 @@ describe("native owner content records", () => {
         break;
       case "generator":
         f.write("scripts/run-tsgo.mts", "export const changed = true;");
+        break;
+      case "compiler policy":
+        f.write("scripts/lib/local-check-runtime.mts", "export const policy = 2;");
         break;
       case "missing output":
         fs.rmSync(path.join(f.root, "dist/nested/value.d.ts"));
