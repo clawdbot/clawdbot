@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
@@ -112,8 +113,8 @@ describe("plugin lifecycle lease", () => {
     ["an explicit database path across different state directories", true],
   ])("serializes lifecycle work sharing %s", async (_label, explicitPath) => {
     await withOpenClawTestState({ label: "plugin-lifecycle-lease" }, async (state) => {
-      const firstEntered = Promise.withResolvers<void>();
-      const releaseFirst = Promise.withResolvers<void>();
+      const firstEntered = createDeferred<void>();
+      const releaseFirst = createDeferred<void>();
       const events: string[] = [];
       const leaseOptions = (caller: string) => ({
         env: explicitPath ? { ...state.env, OPENCLAW_STATE_DIR: state.path(caller) } : state.env,
