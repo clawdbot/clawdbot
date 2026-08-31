@@ -98,7 +98,7 @@ describe("detectChangedScope Windows routing", () => {
     for (const identityPath of [
       "src/shared/pid-alive.ts",
       "test/e2e/windows-cron-process-identity.e2e.test.ts",
-      "src/infra/windows-port-pids.ts",
+      "src/infra/windows-process-start.ts",
       "src/infra/gateway-lock.ts",
       "src/node-host/node-worker-process-identity.ts",
       "src/cron/store/run-receipt-store.ts",

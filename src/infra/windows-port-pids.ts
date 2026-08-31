@@ -10,9 +10,9 @@ import {
   getWindowsSystem32ExePath,
   getWindowsWmicExePath,
 } from "./windows-install-roots.js";
+import { decodeWindowsProcessOutput } from "./windows-process-start.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
-const DEFAULT_PROCESS_START_TIMEOUT_MS = 10_000;
 
 export type WindowsListeningPidsResult =
   | { ok: true; pids: number[] }
@@ -85,15 +85,6 @@ export function readWindowsListeningPidsResultSync(
 // Windows process identity reading (PowerShell → WMIC fallback)
 // ---------------------------------------------------------------------------
 
-function decodeWindowsProcessOutput(output: Buffer | string): string {
-  if (!Buffer.isBuffer(output)) {
-    return output;
-  }
-  return output.length >= 2 && output[0] === 0xff && output[1] === 0xfe
-    ? output.toString("utf16le")
-    : output.toString("utf8");
-}
-
 function extractWindowsCommandLine(raw: Buffer | string): string | null {
   const lines = normalizeStringEntries(decodeWindowsProcessOutput(raw).split(/\r?\n/));
   for (const line of lines) {
@@ -104,85 +95,6 @@ function extractWindowsCommandLine(raw: Buffer | string): string | null {
     return value || null;
   }
   return lines.find((line) => normalizeLowercaseStringOrEmpty(line) !== "commandline") ?? null;
-}
-
-function parseWindowsProcessStartTime(raw: Buffer | string): number | null {
-  const lines = normalizeStringEntries(decodeWindowsProcessOutput(raw).split(/\r?\n/));
-  const value =
-    lines
-      .find((line) => normalizeLowercaseStringOrEmpty(line).startsWith("creationdate="))
-      ?.slice("creationdate=".length)
-      .trim() ??
-    lines.find((line) => normalizeLowercaseStringOrEmpty(line) !== "creationdate") ??
-    "";
-  const parsedIso = Date.parse(value);
-  if (Number.isFinite(parsedIso)) {
-    return parsedIso;
-  }
-  const dmtf = value.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})$/);
-  if (!dmtf) {
-    return null;
-  }
-  const [, year, month, day, hour, minute, second, microseconds, offsetSign, offset] = dmtf;
-  const localTimeMs = Date.UTC(
-    Number(year),
-    Number(month) - 1,
-    Number(day),
-    Number(hour),
-    Number(minute),
-    Number(second),
-    Math.floor(Number(microseconds) / 1000),
-  );
-  const offsetMs = Number(offset) * 60_000 * (offsetSign === "+" ? 1 : -1);
-  return localTimeMs - offsetMs;
-}
-
-/** Read a stable Windows process creation time for lock-owner identity checks. */
-export function readWindowsProcessStartTimeSync(
-  pid: number,
-  timeoutMs = DEFAULT_PROCESS_START_TIMEOUT_MS,
-): number | null {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return null;
-  }
-  // Keep the former default availability: PowerShell and WMIC each had 5s.
-  // Explicit callers still get one end-to-end budget, while the default 10s
-  // deadline preserves enough time for WMIC after a stalled primary probe.
-  const deadline = Date.now() + timeoutMs;
-  const powershell = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `$process = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop; [Console]::Out.Write($process.CreationDate.ToUniversalTime().ToString("o"))`,
-    ],
-    {
-      encoding: "utf8",
-      timeout: Math.min(timeoutMs, DEFAULT_TIMEOUT_MS),
-      windowsHide: true,
-    },
-  );
-  if (!powershell.error && powershell.status === 0) {
-    const startTime = parseWindowsProcessStartTime(powershell.stdout);
-    if (startTime !== null) {
-      return startTime;
-    }
-  }
-  const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) {
-    return null;
-  }
-  const wmic = spawnSync(
-    getWindowsWmicExePath(),
-    ["process", "where", `ProcessId=${pid}`, "get", "CreationDate", "/value"],
-    {
-      timeout: remainingMs,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  return !wmic.error && wmic.status === 0 ? parseWindowsProcessStartTime(wmic.stdout) : null;
 }
 
 export function readWindowsProcessArgsSync(

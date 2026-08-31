@@ -14,8 +14,8 @@ const readWindowsProcessStartTimeSyncMock = vi.hoisted(() =>
   vi.fn<(pid: number) => number | null>(() => null),
 );
 
-vi.mock("../infra/windows-port-pids.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/windows-port-pids.js")>()),
+vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
   readWindowsProcessStartTimeSync: readWindowsProcessStartTimeSyncMock,
 }));
 

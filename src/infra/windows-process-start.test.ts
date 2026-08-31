@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getWindowsPowerShellExePath, getWindowsWmicExePath } from "./windows-install-roots.js";
-import { readWindowsProcessStartTimeSync } from "./windows-port-pids.js";
+import { readWindowsProcessStartTimeSync } from "./windows-process-start.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
