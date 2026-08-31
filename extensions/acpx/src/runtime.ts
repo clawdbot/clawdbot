@@ -1813,7 +1813,11 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
     const key = input.key.trim().toLowerCase();
     const isCodexAcp = isCodexAcpCommand(command);
-    if (key === "model" && this.pluginToolsMcpBridgeEnabled) {
+    if (
+      key === "model" &&
+      this.pluginToolsMcpBridgeEnabled &&
+      !shouldUseBridgeSafeDelegateForCommand(command)
+    ) {
       throw new AcpRuntimeError(
         "ACP_BACKEND_UNSUPPORTED_CONTROL",
         "Changing the model would leave the managed plugin-tool policy stale. Start a fresh ACP session with the desired model instead.",

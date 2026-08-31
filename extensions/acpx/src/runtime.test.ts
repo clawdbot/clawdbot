@@ -1713,6 +1713,42 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
+  it("keeps model changes for bridge-safe sessions when plugin tools are enabled", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:openclaw:acp:test",
+        agentCommand: DOCUMENTED_OPENCLAW_BRIDGE_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      pluginToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-plugin-tools",
+          command: "node",
+          args: ["dist/mcp/plugin-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const accepted = { configOptions: [{ id: "model", currentValue: "openai/gpt-5.6" }] };
+    const setConfigOption = vi
+      .spyOn(bridgeSafeDelegate, "setConfigOption")
+      .mockResolvedValue(accepted);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:openclaw:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:openclaw:acp:test",
+      acpxRecordId: "agent:openclaw:acp:test",
+    };
+
+    await expect(
+      runtime.setConfigOption({ handle, key: "model", value: "openai/gpt-5.6" }),
+    ).resolves.toBe(accepted);
+    expect(setConfigOption).toHaveBeenCalledOnce();
+  });
+
   it.each([
     "google/gemini-3.1-flash-lite",
     "gpt-5.4/ultra",
