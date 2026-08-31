@@ -16,8 +16,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
-import type { SessionAcpMeta, SessionEntry } from "./manager.types.js";
-import { type AcpSessionTarget, hasLegacyAcpIdentityProjection } from "./manager.utils.js";
+import type { AcpSessionTarget, SessionAcpMeta, SessionEntry } from "./manager.types.js";
+import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
 /** Reconciles runtime-reported session identifiers into persisted ACP session metadata. */
 export async function reconcileManagerRuntimeSessionIdentifiers(params: {

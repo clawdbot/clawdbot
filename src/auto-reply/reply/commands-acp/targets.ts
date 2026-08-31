@@ -1,9 +1,7 @@
 // Resolves ACP command target sessions from user text and active state.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveAcpSessionTarget,
-  type AcpSessionTarget,
-} from "../../../acp/control-plane/manager.utils.js";
+import type { AcpSessionTarget } from "../../../acp/control-plane/manager.types.js";
+import { resolveAcpSessionTarget } from "../../../acp/control-plane/manager.utils.js";
 import { callGateway } from "../../../gateway/call.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";

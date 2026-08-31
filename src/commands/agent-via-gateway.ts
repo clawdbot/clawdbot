@@ -681,9 +681,9 @@ async function normalizeSessionKeyOptsForDispatch(
     cfg && rawSessionKey && isLegacySessionKey && !isUnscopedSessionKeySentinel(rawSessionKey)
       ? resolvePersistedSessionStoreOwnerForKey(cfg, rawSessionKey)
       : undefined;
-  if (persistedBareOwner?.kind === "configured") {
-    // Fixed-store rows keep their durable bare key. The selected owner travels separately so
-    // request-time resolution can validate it without changing the storage identity.
+  if (persistedBareOwner?.kind === "configured" || isUnscopedSessionKeySentinel(rawSessionKey)) {
+    // Fixed-store rows and sentinels keep their logical key. Request-time resolution validates
+    // the selected owner separately without changing storage or placement identity.
     return normalizedOpts;
   }
   const sessionKey = scopeLegacySessionKeyToAgent({

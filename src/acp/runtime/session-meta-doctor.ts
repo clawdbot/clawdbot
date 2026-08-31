@@ -8,7 +8,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import type { PluginDoctorRepairAuthority } from "../../infra/state-migrations.plugin-doctor-context.js";
+import type { PluginDoctorRepairAuthority } from "../../infra/state-migrations.types.js";
 import type {
   PluginDoctorAcpSessionClaim,
   PluginDoctorStateMigrationContext,

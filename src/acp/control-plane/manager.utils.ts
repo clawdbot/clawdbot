@@ -7,7 +7,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
 import { resolveSessionStorePathForAcp } from "../runtime/session-meta-store.js";
-import type { AcpSessionResolution } from "./manager.types.js";
+import type { AcpSessionResolution, AcpSessionTarget } from "./manager.types.js";
 
 /** Resolves the agent id encoded in an ACP session key. */
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
@@ -46,8 +46,6 @@ export function requireReadySessionMeta(resolution: AcpSessionResolution): Sessi
   }
   throw toErrorObject(resolveAcpSessionResolutionError(resolution), "Non-Error thrown");
 }
-
-export type AcpSessionTarget = { agentId: string; sessionKey: string };
 
 /** Resolve ownership before main aliases can erase the encoded agent namespace. */
 export function resolveAcpSessionTarget(params: {

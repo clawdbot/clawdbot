@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   inspectAcpSessionClaimsForDoctor,
   updateAcpSessionIdentityForDoctor,
@@ -31,16 +30,12 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { PluginDoctorRepairAuthority } from "./state-migrations.types.js";
 
 type SessionEvidenceResult = Awaited<
   ReturnType<NonNullable<PluginDoctorStateMigrationContext["readSessionIdentityEvidenceBatch"]>>
 >[number];
 type DoctorSessionStoreTarget = { agentId: string; storePath: string };
-
-export type PluginDoctorRepairAuthority = {
-  assertCurrent(): void;
-  assertOwnedInTransaction(database: DatabaseSync): void;
-};
 
 function resolveDoctorSessionIdentityEvidence(params: {
   cache: SessionStoreTargetsReadCache;

@@ -6,7 +6,7 @@ import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/ty
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
-import type { AcpSessionTarget } from "./manager.utils.js";
+import type { AcpSessionTarget } from "./manager.types.js";
 
 /** Old backends can isolate qualified keys, but silently ignore an added owner field. */
 export function assertAcpRuntimeOwnerSupport(runtime: AcpRuntime, target: AcpSessionTarget): void {

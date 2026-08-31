@@ -3,7 +3,7 @@ import { resolveAcpSessionIdentifierLinesFromIdentity } from "@openclaw/acp-core
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
-import type { AcpSessionTarget } from "../../../acp/control-plane/manager.utils.js";
+import type { AcpSessionTarget } from "../../../acp/control-plane/manager.types.js";
 import {
   parseRuntimeTimeoutSecondsInput,
   validateRuntimeConfigOptionInput,

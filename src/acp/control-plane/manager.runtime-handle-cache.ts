@@ -12,8 +12,8 @@ import type {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { logVerbose } from "../../globals.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
-import type { SessionAcpMeta } from "./manager.types.js";
-import { acpSessionActorKey, type AcpSessionTarget } from "./manager.utils.js";
+import type { AcpSessionTarget, SessionAcpMeta } from "./manager.types.js";
+import { acpSessionActorKey } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 import type { SessionActorQueue } from "./session-actor-queue.js";
 

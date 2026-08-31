@@ -771,6 +771,9 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
       "unrelated-acp-child": sessionStoreEntry("sess-unrelated-acp-child", {
         spawnedBy: "agent:main:other",
       }),
+      "acp-grandchild": sessionStoreEntry("sess-grandchild", {
+        parentSessionKey: "agent:main:acp-child-1",
+      }),
     },
   });
   writeAcpSessionMetaForMigration({
@@ -789,18 +792,16 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
       mode: "oneshot",
     }),
   });
-  writeAcpSessionMetaForMigration({
-    sessionKey: "agent:main:unrelated-acp-child",
-    meta: {
-      backend: "acpx",
-      agent: "codex",
-      runtimeSessionName: "runtime:unrelated",
-      mode: "oneshot",
-      cwd: "/tmp/acp-session",
-      state: "idle",
-      lastActivityAt: Date.now(),
-    },
-  });
+  for (const child of ["acp-grandchild", "unrelated-acp-child"]) {
+    writeAcpSessionMetaForMigration({
+      sessionKey: `agent:main:${child}`,
+      meta: resolvedAcpMeta({
+        recordId: `agent:main:${child}`,
+        backendSessionId: `backend-session-${child}`,
+        mode: "oneshot",
+      }),
+    });
+  }
 
   const reset = await directSessionReq<{ ok: true }>("sessions.reset", {
     key: "main",
@@ -816,6 +817,7 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
   expect(closedKeys).toContain("agent:main:acp-child-1");
   expect(closedKeys).not.toContain("agent:main:not-acp-child");
   expect(closedKeys).not.toContain("agent:main:unrelated-acp-child");
+  expect(closedKeys).not.toContain("agent:main:acp-grandchild");
 });
 
 test("sessions.reset closes a spawned ACP child that lives in a different agent store", async () => {

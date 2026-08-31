@@ -39,6 +39,7 @@ import {
   type AcpSessionResolution,
   type AcpSessionRuntimeOptions,
   type AcpSessionStatus,
+  type AcpSessionTarget,
   type AcpStartupIdentityReconcileResult,
   type ActiveTurnState,
   DEFAULT_DEPS,
@@ -48,7 +49,6 @@ import {
 } from "./manager.types.js";
 import {
   resolveAcpSessionTarget,
-  type AcpSessionTarget,
   normalizeAcpErrorCode,
   acpSessionActorKey,
   resolveMissingMetaError,

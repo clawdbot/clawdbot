@@ -1,6 +1,7 @@
 /** Process-local active-turn registry for ACP maintenance and recovery decisions. */
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { acpSessionActorKey, type AcpSessionTarget } from "./manager.utils.js";
+import type { AcpSessionTarget } from "./manager.types.js";
+import { acpSessionActorKey } from "./manager.utils.js";
 
 // Process-local liveness signal for in-flight ACP prompt turns, kept off the
 // SDK-exported AcpSessionManager so plugins cannot read this maintenance-only

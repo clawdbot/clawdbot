@@ -12,16 +12,14 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
 import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import {
-  createPluginDoctorStateMigrationContext,
-  type PluginDoctorRepairAuthority,
-} from "./state-migrations.plugin-doctor-context.js";
+import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import { autoMigrateLegacyStateDir } from "./state-migrations.state-dir.js";
 import type {
   DetectedPluginDoctorStateMigrationPlan,
   LegacyStateDetection,
   MigrationLogger,
   MigrationMessages,
+  PluginDoctorRepairAuthority,
 } from "./state-migrations.types.js";
 
 type PluginDoctorInput = Omit<

@@ -24,7 +24,8 @@ import {
   readAcpSessionEntry,
   upsertAcpSessionMeta,
 } from "../runtime/session-meta.js";
-import type { AcpSessionTarget } from "./manager.utils.js";
+
+export type AcpSessionTarget = { agentId: string; sessionKey: string };
 
 /** Result of resolving persisted ACP metadata for a session key. */
 export type AcpSessionResolution =

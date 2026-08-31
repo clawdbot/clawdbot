@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +21,8 @@ type GatewayChatMessage = {
 };
 
 type GatewayChatHistory = {
+  sessionKey?: string;
+  sessionId?: string;
   messages?: GatewayChatMessage[];
 };
 
@@ -353,15 +357,18 @@ describe("Gateway chat RPCs", () => {
     },
   );
 
-  it.each(
-    [
+  it.each([
+    ...[
       { first: "main", second: "work" },
       { first: "work", second: "main" },
-    ].flatMap((owners) => [false, true].map((withAttachment) => ({ ...owners, withAttachment }))),
-  )(
-    "keeps explicit $first then $second ownership through global chat dispatch and history (attachment=$withAttachment)",
+    ].flatMap((owners) =>
+      [false, true].map((withAttachment) => ({ ...owners, withAttachment, seedChat: true })),
+    ),
+    { first: "main", second: "work", withAttachment: false, seedChat: false },
+  ])(
+    "keeps explicit $first then $second ownership through global chat and native agent dispatch and history (chatAttachment=$withAttachment, seedChat=$seedChat)",
     { timeout: 120_000 },
-    async ({ first, second, withAttachment }) => {
+    async ({ first, second, withAttachment, seedChat }) => {
       const { gateway, mock: provider } = await startChatGateway({
         mockAuthAgentIds: ["main", "work"],
         mutateConfig: (config) => ({
@@ -389,23 +396,28 @@ describe("Gateway chat RPCs", () => {
       const replies = new Map(
         [first, second].map((owner) => [owner, `GLOBAL_OWNER_${owner}_${randomUUID()}`]),
       );
+      const sessionIds = new Map<string, string>();
       let cursor = 0;
-      for (const agentId of [first, second]) {
-        const reply = expectDefined(replies.get(agentId), "owner reply marker");
+      const turns = (seedChat ? ["chat.send", "agent"] : ["agent"]).flatMap((method) =>
+        [first, second].map((agentId) => ({ method, agentId })),
+      );
+      for (const { method, agentId } of turns) {
+        const reply = `${expectDefined(replies.get(agentId), "owner reply marker")}_${method}`;
         const otherAgentId = agentId === "main" ? "work" : "main";
         const otherReply = expectDefined(replies.get(otherAgentId), "other owner reply marker");
-        const prompt = `Gateway chat ownership QA for ${agentId}. Reply exactly \`${reply}\`.`;
-        const attachments = withAttachment
-          ? [
-              {
-                fileName: `${agentId}-notes.txt`,
-                mimeType: "text/plain",
-                content: Buffer.from(`${agentId} attachment ${reply}`).toString("base64"),
-              },
-            ]
-          : undefined;
+        const prompt = `Gateway ${method} ownership QA for ${agentId}. Reply exactly \`${reply}\`.`;
+        const attachments =
+          withAttachment && method === "chat.send"
+            ? [
+                {
+                  fileName: `${agentId}-notes.txt`,
+                  mimeType: "text/plain",
+                  content: Buffer.from(`${agentId} attachment ${reply}`).toString("base64"),
+                },
+              ]
+            : undefined;
         const started = (await gateway.call(
-          "chat.send",
+          method,
           {
             sessionKey,
             agentId,
@@ -416,7 +428,7 @@ describe("Gateway chat RPCs", () => {
           },
           { timeoutMs: 30_000 },
         )) as GatewayChatRun;
-        expect(started.status).toBe("started");
+        expect(started.status).toBe(method === "agent" ? "accepted" : "started");
         expect(typeof started.runId).toBe("string");
         const terminal = (await gateway.call(
           "agent.wait",
@@ -430,10 +442,10 @@ describe("Gateway chat RPCs", () => {
         expect
           .soft(
             requests.some((request) => request.raw.includes(prompt)),
-            `${agentId} chat.send must reach the provider`,
+            `${agentId} ${method} must reach the provider`,
           )
           .toBe(true);
-        if (withAttachment) {
+        if (attachments) {
           expect
             .soft(
               requests.some((request) => request.raw.includes(`${agentId} attachment ${reply}`)),
@@ -464,6 +476,18 @@ describe("Gateway chat RPCs", () => {
           expectedAssistant: reply,
         });
         expect(historyContainsExpectedTurns(history, prompt, reply)).toBe(true);
+        expect(history.sessionKey).toBe(sessionKey);
+        const sessionId = expectDefined(history.sessionId, "canonical history session id");
+        if (sessionIds.has(agentId)) {
+          expect(sessionId).toBe(sessionIds.get(agentId));
+        }
+        sessionIds.set(agentId, sessionId);
+        expect(new Set(sessionIds.values()).size).toBe(sessionIds.size);
+        if (method === "agent" && seedChat) {
+          const seedReply = `${expectDefined(replies.get(agentId), "owner reply marker")}_chat.send`;
+          expect(historyContainsExpectedTurns(history, seedReply, seedReply)).toBe(true);
+          expect(requests.some((request) => request.raw.includes(seedReply))).toBe(true);
+        }
         expect(
           (history.messages ?? []).some((message) => messageContains(message, otherReply)),
         ).toBe(false);
@@ -475,6 +499,29 @@ describe("Gateway chat RPCs", () => {
         expect(
           (otherHistory.messages ?? []).some((message) => messageContains(message, reply)),
         ).toBe(false);
+      }
+      const database = new DatabaseSync(
+        path.join(gateway.tempRoot, "state", "state", "openclaw.sqlite"),
+        { readOnly: true },
+      );
+      try {
+        const placements = database.prepare(
+          "SELECT agent_id, session_key, session_id, state, turn_claim_id FROM worker_session_placements WHERE agent_id IN (?, ?) ORDER BY agent_id",
+        );
+        // The terminal event can precede the placement owner's final claim release.
+        await expect
+          .poll(() => placements.all(first, second))
+          .toEqual(
+            [first, second].toSorted().map((agentId) => ({
+              agent_id: agentId,
+              session_key: sessionKey,
+              session_id: expectDefined(sessionIds.get(agentId), "owner session id"),
+              state: "local",
+              turn_claim_id: null,
+            })),
+          );
+      } finally {
+        database.close();
       }
     },
   );
