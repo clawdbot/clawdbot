@@ -288,14 +288,14 @@ export function createTeamsReplyStreamController(params: {
       if (entry.kind === "payload") {
         return [entry.payload];
       }
-      // Same subtraction as a suppressed final: the stream carried this entry's text,
-      // so only what it could not carry is still owed to the user.
+      // Same subtraction as a suppressed final: the stream carried this entry's text, so
+      // only what it could not carry is still owed - plus the text it never delivered.
       const text = replacementFallback?.text;
       if (!text) {
         const remainder = suppressedFinalRemainder(entry.payload);
         return remainder ? [remainder] : [];
       }
-      return [{ ...entry.payload, text }];
+      return [{ ...withoutStreamedContent(entry.payload), text }];
     });
     deferredReplacementEntries = [];
     return payloads;
@@ -561,9 +561,9 @@ export function createTeamsReplyStreamController(params: {
           return undefined;
         }
       }
-      // Partial mode with tokens already streamed: stream carries the text;
-      // strip text from the payload (keep media if any) so block delivery
-      // doesn't duplicate. Exception: if a non-cancel stream failure was
+      // Partial mode with tokens already streamed: the stream carries the text, so hand
+      // block delivery only what it did not (media, native controls) and let it drop the
+      // payload when nothing is left. Exception: if a non-cancel stream failure was
       // latched mid-flight, deliver only a provider-acknowledged remainder;
       // preserve the full reply when delivery was not acknowledged.
       if (tokensEmitted && !streamFailed) {

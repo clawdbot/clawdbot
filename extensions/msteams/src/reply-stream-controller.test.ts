@@ -284,6 +284,34 @@ describe("createTeamsReplyStreamController", () => {
     });
   });
 
+  it("does not repeat the replaced prose when a replacement leaves text undelivered", async () => {
+    const stream = makeAcknowledgedStream();
+    const ctrl = makeController({ stream });
+    const buttons = {
+      type: "buttons" as const,
+      buttons: [{ label: "Open run", value: "open" }],
+    };
+
+    ctrl.onPartialReply({ text: "Deploy summary" });
+    stream.acknowledge("Deploy summary");
+    ctrl.onPartialReply({ text: "Deploy XYZ" });
+    expect(
+      ctrl.preparePayload({
+        text: "Deploy summary and more",
+        presentationTextMode: "fallback",
+        presentation: { blocks: [{ type: "text" as const, text: "Deploy summary" }, buttons] },
+      }),
+    ).toBeUndefined();
+    stream.close.mockResolvedValueOnce(undefined);
+
+    // Re-attaching the undelivered text to the whole payload would build a card out of
+    // the prose the stream just showed - and the card would swallow that text, because a
+    // card message carries its text as a delivery record, not as activity text.
+    await expect(ctrl.finalize()).resolves.toMatchObject({
+      postNativePayloads: [{ text: " and more", presentation: { blocks: [buttons] } }],
+    });
+  });
+
   it("suppresses a replacement when emit synchronously discovers Stop", async () => {
     const stream = makeAcknowledgedStream();
     const ctrl = makeController({ stream });

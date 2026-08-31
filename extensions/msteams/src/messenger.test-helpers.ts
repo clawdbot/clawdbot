@@ -31,6 +31,7 @@ export function installMSTeamsRenderTestRuntime(): void {
   setMSTeamsRuntime({
     config: {
       loadConfig: () => ({}),
+      current: () => ({}),
     },
     channel: {
       text: {
