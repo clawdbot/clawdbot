@@ -231,7 +231,7 @@ describe("createGatewayInstanceRuntime", () => {
 
     await expect(outcome).resolves.toMatchObject({
       status: "rejected",
-      error: { message: "Gateway instance dispatch unavailable for agent" },
+      error: { message: "Gateway instance dispatch unavailable for agent turn" },
     });
   });
 
