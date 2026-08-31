@@ -44,6 +44,8 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerRunnerUnavailableError",
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
+  // Session already holds an active turn claim — retrying other models cannot help.
+  "ActiveTurnClaimError",
 ]);
 
 function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
