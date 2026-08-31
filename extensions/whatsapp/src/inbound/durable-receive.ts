@@ -8,6 +8,7 @@ import {
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { getWhatsAppRuntime } from "../runtime.js";
+import { resolveWhatsAppDurableAccountKey } from "./durable-account-key.js";
 import {
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
@@ -45,9 +46,7 @@ type WhatsAppIngressFacts = {
   laneKey: string;
 };
 
-function hashNamespacePart(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 24);
-}
+const hashNamespacePart = resolveWhatsAppDurableAccountKey;
 
 function createWhatsAppDurableInboundMessageId(params: { remoteJid: string; id: string }): string {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");

@@ -726,4 +726,60 @@ describe("channelsRemoveCommand", () => {
       'Deleted external-chat account "default". Discarded 1 stored ingress event.',
     );
   });
+
+  it("discards the rows under the account key the plugin stores them beneath", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    // A plugin that transforms the account id before opening its queue - WhatsApp
+    // hashes it - so the configured id selects nothing.
+    const deletePlugin = createExternalChatDeletePlugin();
+    const scopedPlugin: ChannelPlugin = {
+      ...deletePlugin,
+      config: {
+        ...deletePlugin.config,
+        resolveDurableAccountKey: (accountId) => `stored-${accountId}`,
+      },
+    };
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: scopedPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "@vendor/external-chat-plugin",
+      accountId: "stored-default",
+    });
+    await queue.enqueue("inbound-1", { text: "never answered" });
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "default", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Deleted external-chat account "default". Discarded 1 stored ingress event, 1 of which had not been answered yet.',
+    );
+    expect(
+      purgeChannelIngressQueueAccount({
+        channelId: "@vendor/external-chat-plugin",
+        accountId: "stored-default",
+      }),
+    ).toEqual({ discarded: 0, undelivered: 0 });
+  });
 });

@@ -29,6 +29,7 @@ import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
 import { resolveWhatsAppConfigPath } from "./group-config-path.js";
 import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
+import { resolveWhatsAppDurableAccountKey } from "./inbound/durable-account-key.js";
 import {
   collectUnsupportedSecretRefConfigCandidates,
   unsupportedSecretRefSurfacePatterns,
@@ -50,7 +51,7 @@ export const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(
   async () => (await loadWhatsAppSetupSurface()).whatsappSetupWizard,
 );
 
-const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppAccount>({
+const whatsappScopedConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppAccount>({
   sectionKey: WHATSAPP_CHANNEL,
   listAccountIds: listWhatsAppAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveWhatsAppAccount),
@@ -61,6 +62,14 @@ const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppA
   formatAllowFrom: (allowFrom) => formatWhatsAppConfigAllowFromEntries(allowFrom),
   resolveDefaultTo: (account) => account.defaultTo,
 });
+
+// The ingress queue is opened under a hash of the account id, so the host cannot
+// address those rows by the configured id. Declare the transform rather than leaving
+// `channels remove --delete` to report zero discarded rows while they all survive.
+const whatsappConfigAdapter = {
+  ...whatsappScopedConfigAdapter,
+  resolveDurableAccountKey: resolveWhatsAppDurableAccountKey,
+};
 
 const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppAccount>({
   channelKey: WHATSAPP_CHANNEL,

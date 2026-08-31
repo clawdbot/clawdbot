@@ -89,6 +89,17 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     enabled: boolean;
   }) => OpenClawConfig;
   deleteAccount?: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
+  /**
+   * The account id this channel's durable per-account state is stored under, when that
+   * is not the configured id.
+   *
+   * Only a plugin that transforms the id before opening its own store needs this:
+   * WhatsApp opens its ingress queue with a hash of the account id, so a host that
+   * addresses those rows by the configured id selects nothing. The host cannot derive
+   * the transform, and the plugin cannot be asked at removal time because the removal
+   * runs after its runtime is stopped — so the plugin declares it.
+   */
+  resolveDurableAccountKey?: (accountId: string) => string;
   isEnabled?: ChannelAdapterCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => boolean>;
   disabledReason?: ChannelAdapterCallback<
     (account: ResolvedAccount, cfg: OpenClawConfig) => string

@@ -1,5 +1,7 @@
 // Resolves which plugin owns a channel's durable ingress rows, for operator commands.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { getRegisteredChannelOwnerPluginId } from "../../channels/registry.js";
 
 /**
@@ -45,4 +47,24 @@ export function resolveChannelIngressQueueOwnerId(params: {
     normalizeOptionalString(params.catalogPluginId) ??
     params.channelId
   );
+}
+
+/**
+ * Resolves the account id a channel's durable ingress rows are stored under.
+ *
+ * The queue name has two halves and both are composed by the plugin, not by the
+ * operator. The owner id above is the first; this is the second. WhatsApp opens its
+ * queue with `hashNamespacePart(accountId)`, so addressing its rows by the configured
+ * account id selects nothing at all - the same defect as the channel half, one field
+ * over. Only a plugin that transforms the id declares `resolveDurableAccountKey`;
+ * for every other channel this returns the account id unchanged.
+ */
+export function resolveChannelIngressQueueAccountKey(params: {
+  channelId: string;
+  accountId: string;
+  plugin?: Pick<ChannelPlugin, "config"> | undefined;
+}): string {
+  const plugin = params.plugin ?? getChannelPlugin(params.channelId);
+  const stored = plugin?.config?.resolveDurableAccountKey?.(params.accountId);
+  return normalizeOptionalString(stored) ?? params.accountId;
 }

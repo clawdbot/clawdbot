@@ -5,7 +5,10 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { resolveChannelIngressQueueOwnerId } from "./ingress-queue-owner.js";
+import {
+  resolveChannelIngressQueueAccountKey,
+  resolveChannelIngressQueueOwnerId,
+} from "./ingress-queue-owner.js";
 
 type ChannelsDeadLettersOptions = {
   channel?: string;
@@ -26,6 +29,11 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
     // that owns it, so resolve the owner before opening the queue. Opening it under
     // the channel id would also create an empty queue nothing ever writes to.
     queueOwnerId: resolveChannelIngressQueueOwnerId({ channelId }),
+    // The account half of the key is the plugin's too — WhatsApp stores a hash of it.
+    queueAccountId: resolveChannelIngressQueueAccountKey({
+      channelId,
+      accountId: options.account?.trim() || "default",
+    }),
   };
 }
 
@@ -42,8 +50,8 @@ export async function channelsDeadLettersListCommand(
   options: ChannelsDeadLettersOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  const { channelId, accountId, queueOwnerId } = resolveScope(options);
-  const queue = createChannelIngressQueue({ channelId: queueOwnerId, accountId });
+  const { channelId, accountId, queueOwnerId, queueAccountId } = resolveScope(options);
+  const queue = createChannelIngressQueue({ channelId: queueOwnerId, accountId: queueAccountId });
   if (!queue.listFailed) {
     throw new Error("This runtime does not support channel ingress dead-letter inspection.");
   }
@@ -72,8 +80,8 @@ export async function channelsDeadLettersResubmitCommand(
   options: ChannelsDeadLettersOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  const { channelId, accountId, queueOwnerId } = resolveScope(options);
-  const queue = createChannelIngressQueue({ channelId: queueOwnerId, accountId });
+  const { channelId, accountId, queueOwnerId, queueAccountId } = resolveScope(options);
+  const queue = createChannelIngressQueue({ channelId: queueOwnerId, accountId: queueAccountId });
   if (!queue.resubmit) {
     throw new Error("This runtime does not support channel ingress dead-letter resubmission.");
   }
