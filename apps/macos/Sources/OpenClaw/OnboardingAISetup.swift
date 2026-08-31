@@ -12,12 +12,6 @@ import OpenClawProtocol
 @MainActor
 @Observable
 final class OnboardingAISetupModel {
-    static let setupDetectionRequestTimeoutMs = 40000
-
-    /// Device-code providers advertise windows up to 15 minutes. Keep transport
-    /// alive long enough for approval plus the post-login inference probe.
-    static let providerAuthRequestTimeoutMs: Double = 1_200_000
-
     private(set) var phase: Phase = .idle {
         didSet { self.updateBusyReason() }
     }
@@ -83,6 +77,7 @@ final class OnboardingAISetupModel {
     @ObservationIgnored private var authSessionID: String?
     @ObservationIgnored private var authAttemptID = UUID()
     @ObservationIgnored private var authRequestID: UUID?
+    @ObservationIgnored private var providerAuthCancellationRequested = false
     /// Only a just-completed provider flow may trust setupComplete without re-probing.
     @ObservationIgnored private var providerAuthReconciliationPending = false
 
@@ -1180,11 +1175,9 @@ extension OnboardingAISetupModel {
         params: [String: AnyCodable],
         serverLease: GatewayConnection.ServerLease)
     {
+        self.clearProviderAuth()
         self.activeAuthOption = option
         self.providerWizardKind = kind
-        self.authStep = nil
-        self.authError = nil
-        self.authText = ""
         self.authBusy = true
         self.providerAuthReconciliationPending = false
         let token = self.attemptToken
@@ -1209,6 +1202,13 @@ extension OnboardingAISetupModel {
                     // A route reset can race the start response. Cancel the
                     // decoded server session so the discarded flow cannot commit.
                     await self.gateway.cancelWizardSession(result.sessionid, on: serverLease)
+                    return
+                }
+                if self.providerAuthCancellationRequested {
+                    // Cancel can race admission before the Gateway registers the requested id.
+                    // Redeem the late response only to release its exact admitted session.
+                    self.authSessionID = result.sessionid
+                    self.cancelProviderAuth()
                     return
                 }
                 if let cancellationSessionID = Self.providerAuthCancellationSessionID(
@@ -1292,6 +1292,7 @@ extension OnboardingAISetupModel {
         let authAttemptID = self.authAttemptID
         let token = self.attemptToken
         let activationState = self.lastDetectedActivationState
+        self.providerAuthCancellationRequested = true
         self.authBusy = true
         Task {
             let cancellation = await self.gateway.cancelWizardSession(
@@ -1348,10 +1349,10 @@ extension OnboardingAISetupModel {
         let requestID = UUID()
         self.authRequestID = requestID
         Task {
+            var requestLease = serverLease
             defer {
                 if self.authRequestID == requestID { self.authRequestID = nil }
             }
-            var requestLease = serverLease
             do {
                 let data: Data
                 do {
@@ -1559,6 +1560,7 @@ extension OnboardingAISetupModel {
         self.providerWizardKind = nil
         self.authSessionID = nil
         self.authRequestID = nil
+        self.providerAuthCancellationRequested = false
         self.authStep = nil
         self.authError = nil
         self.authBusy = false

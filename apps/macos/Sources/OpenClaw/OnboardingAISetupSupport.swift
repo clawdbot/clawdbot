@@ -4,6 +4,12 @@ import OpenClawKit
 import OpenClawProtocol
 
 extension OnboardingAISetupModel {
+    static let setupDetectionRequestTimeoutMs = 40000
+
+    /// Device-code providers advertise windows up to 15 minutes. Keep transport
+    /// alive long enough for approval plus the post-login inference probe.
+    static let providerAuthRequestTimeoutMs: Double = 1_200_000
+
     enum ActivationRequest {
         case candidate(kind: String, modelRef: String, label: String, tryNextOnFailure: Bool)
         case manual(key: String, provider: ManualProvider)

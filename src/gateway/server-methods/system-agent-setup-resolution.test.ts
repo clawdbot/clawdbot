@@ -224,6 +224,62 @@ describe("openclaw.setup provider resolution", () => {
     },
   );
 
+  it("locks cancellation before an accepted runtime install can start", async () => {
+    const { wizardSessions, context } = makeContext();
+    const sessionId = "runtime-install-lock";
+    let reportLocked = () => {};
+    const locked = new Promise<void>((resolve) => {
+      reportLocked = resolve;
+    });
+    let releaseInstall = () => {};
+    const installReleased = new Promise<void>((resolve) => {
+      releaseInstall = resolve;
+    });
+    setupInferenceMocks.activateSetupInference.mockImplementationOnce(async (params) => {
+      const accepted = await params.prompter.confirm({
+        message: "Install the reviewed runtime?",
+        initialValue: false,
+      });
+      expect(accepted).toBe(true);
+      await params.beforePersistentEffect?.();
+      reportLocked();
+      await installReleased;
+      return { ok: true, modelRef: "example/model", latencyMs: 1, lines: [] };
+    });
+    await systemAgentHandler("openclaw.setup.activate.start")({
+      params: { sessionId, kind: "codex-cli", modelRef: "example/model" },
+      respond: () => undefined,
+      context,
+    } as never);
+    const confirmation = await callWizardNext(context, { sessionId });
+    const terminal = callWizardNext(context, {
+      sessionId,
+      answer: {
+        stepId: expectDefined(confirmation.step, "runtime install confirmation").id,
+        value: true,
+      },
+    });
+    await locked;
+
+    const { calls, respond } = makeRespond();
+    await expectDefined(
+      wizardHandlers["wizard.cancel"],
+      "wizard cancel",
+    )({
+      params: { sessionId },
+      respond,
+      context,
+    } as never);
+    expect(calls).toEqual([
+      { ok: true, payload: { status: "running", error: undefined }, error: undefined },
+    ]);
+    expect(wizardSessions.has(sessionId)).toBe(true);
+
+    releaseInstall();
+    await expect(terminal).resolves.toMatchObject({ done: true, status: "done" });
+    expect(wizardSessions.has(sessionId)).toBe(false);
+  });
+
   it.each([
     ["missing", null],
     ["retryable", { config, retrySelection: true }],
