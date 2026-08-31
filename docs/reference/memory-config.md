@@ -155,7 +155,7 @@ provider/auth configuration, switch to a reachable provider, or set
 ```
 
 <Note>
-When `memory.search.provider` resolves a configured alias through the core OpenAI-compatible adapter (`api: "openai-completions"`, `api: "openai-responses"`, or a `baseUrl`-only entry), memory embeddings use that provider's `request.allowPrivateNetwork` policy. For custom or local endpoints, omitting the flag trusts only the exact configured `baseUrl` origin (`scheme://host:port`); `true` allows broader private-network requests, while `false` disables exact-origin trust. A `memory.search.remote.baseUrl` override on another origin requires explicit `true`. Other embedding adapters keep their own network policy.
+When `memory.search.provider` resolves a configured alias through the core OpenAI-compatible adapter (`api: "openai-completions"`, `api: "openai-responses"`, or a `baseUrl`-only entry), memory embeddings use that provider's `request.allowPrivateNetwork` policy. For custom or local endpoints, omitting the flag trusts only the exact configured `baseUrl` origin (`scheme://host:port`); `true` allows broader private-network requests, while `false` disables exact-origin trust. A `memory.search.remote.baseUrl` override is treated as an explicitly configured endpoint and follows the same exact-origin/default and explicit opt-in rules. Other embedding adapters keep their own network policy.
 </Note>
 
 ### API key resolution

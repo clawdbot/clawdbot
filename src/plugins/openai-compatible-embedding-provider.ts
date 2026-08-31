@@ -361,6 +361,7 @@ async function createOpenAICompatibleEmbeddingClient(
     baseUrl,
     url: baseUrl,
     allowPrivateNetwork: requestPolicy.allowPrivateNetwork,
+    privateNetworkExplicitlyDenied,
     // Keep explicitly configured custom/local origins reachable by default;
     // an explicit false still removes that trust and blocks private egress.
     trustConfiguredBaseUrlOrigin: requestPolicy.trustConfiguredBaseUrlOrigin,

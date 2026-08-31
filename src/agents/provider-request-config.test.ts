@@ -744,6 +744,17 @@ describe("provider request config", () => {
     expect(resolved.trustConfiguredBaseUrlOrigin).toBe(true);
   });
 
+  it("suppresses fake-IP private exemptions when embedding access is explicitly denied", () => {
+    expect(
+      resolveProviderTransportSsrFPolicy({
+        baseUrl: "https://embed.internal/v1",
+        url: "https://embed.internal/v1/embeddings",
+        allowPrivateNetwork: false,
+        privateNetworkExplicitlyDenied: true,
+      }),
+    ).toBeUndefined();
+  });
+
   it("keeps explicit private-network denial for loopback model requests", () => {
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "local-agent-proxy",

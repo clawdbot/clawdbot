@@ -81,6 +81,7 @@ export function resolveProviderTransportSsrFPolicy(params: {
   baseUrl?: string;
   url: string;
   allowPrivateNetwork?: boolean;
+  privateNetworkExplicitlyDenied?: boolean;
   trustConfiguredBaseUrlOrigin?: boolean;
 }): SsrFPolicy | undefined {
   const baseUrl = params.baseUrl;
@@ -97,7 +98,9 @@ export function resolveProviderTransportSsrFPolicy(params: {
   // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.
   // It is for DNS hostnames only and does not allow literal private IPs by itself.
   const fakeIpPolicy =
-    requestMatchesBaseOrigin && canApplyFakeIpHostnamePolicy(baseUrl)
+    requestMatchesBaseOrigin &&
+    params.privateNetworkExplicitlyDenied !== true &&
+    canApplyFakeIpHostnamePolicy(baseUrl)
       ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
       : undefined;
   return mergeSsrFPolicies(
