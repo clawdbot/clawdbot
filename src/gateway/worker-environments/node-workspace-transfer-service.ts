@@ -641,6 +641,24 @@ export function createNodeWorkspaceTransferService(options: {
           entries: current.manifest.entries.filter((entry) => transferPathSet.has(entry.path)),
         });
         assertCurrent();
+        const context = authorization.context;
+        if (!context.snapshots.has(base.ref)) {
+          if (context.baseCommit !== base.manifest.baseCommit) {
+            await context.pack?.catch(() => undefined);
+            assertCurrent();
+            context.pack = undefined;
+            context.baseCommit = base.manifest.baseCommit;
+          }
+          // Reconnect may snapshot newer local files. Retain the authenticated original
+          // base before upload-token revocation; accepted publication needs its exact pack.
+          context.snapshots.set(base.ref, {
+            manifest: base.manifest,
+            manifestRef: base.ref,
+            rawManifest: base.raw,
+            root: context.localPath,
+          });
+          context.currentManifestRef = base.ref;
+        }
         operation.uploaded = {
           base: base.manifest,
           baseManifestRef: operation.baseManifestRef,

@@ -164,6 +164,8 @@ export function createWorkerPlacementDispatchStartup(options: {
       environments,
     );
     const admittedNode = await requireNodePlacementEligibility(request, params.environment);
+    // Provisioning and transport setup yield; revoked callers must not attach or upload.
+    params.authorize?.();
     let placement = placements.transition({
       sessionId: request.sessionId,
       from: "provisioning",
@@ -180,11 +182,13 @@ export function createWorkerPlacementDispatchStartup(options: {
       ownerEpoch: provisioned.ownerEpoch,
       sessionId: request.sessionId,
     });
+    params.authorize?.();
     const ownerEpoch = credential.ownerEpoch;
     const tunnel = await environments.startTunnel({
       environmentId: provisioned.environmentId,
       ownerEpoch,
     });
+    params.authorize?.();
     const gitAuthor = options.resolveGitAuthor?.(request.agentId);
     const project = readWorkerProjectSnapshot(params.environment.profileSnapshot.project);
     const synced = await tunnel.syncWorkspace({
@@ -194,6 +198,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       ...(gitAuthor ? { gitAuthor } : {}),
       ...(project ? { projectKey: project.key } : {}),
     });
+    params.authorize?.();
     placement = placements.transition({
       sessionId: request.sessionId,
       from: "syncing",
