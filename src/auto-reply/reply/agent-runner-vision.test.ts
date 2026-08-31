@@ -11,6 +11,7 @@ import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker
 import type { Model } from "../../llm/types.js";
 import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
 import type { FollowupRun } from "./queue.js";
+import { createMockFollowupRun } from "./test-helpers.js";
 
 const { loadScopedCatalog } = vi.hoisted(() => ({
   loadScopedCatalog: vi.fn<() => Promise<ModelCatalogEntry[]>>(),
@@ -201,6 +202,23 @@ describe("ordinary reply model capability at cloud media admission", () => {
         },
       ]);
       expect(loadScopedCatalog).toHaveBeenCalledTimes(testCase.discover ? 1 : 0);
+    },
+  );
+
+  it.each([{}, { provider: "fixture-provider", model: "fixture-model" }])(
+    "uses prepared follow-up input metadata for %j without catalog discovery",
+    async (overrides) => {
+      const { run } = createMockFollowupRun({ run: overrides });
+      loadScopedCatalog.mockResolvedValue([]);
+      const prepared = await buildEmbeddedRunBaseParams({
+        run,
+        provider: run.provider,
+        model: run.model,
+        runId: "prepared-fixture",
+        authProfile: {},
+      });
+      expect(prepared.modelHasVision).toBe(false);
+      expect(loadScopedCatalog).not.toHaveBeenCalled();
     },
   );
 });

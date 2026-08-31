@@ -1,21 +1,18 @@
 #!/usr/bin/env node
-// Runs after install to keep packaged dist safe and compatible.
-// Keep packaged dist safe and compatible. Plugin package dependencies are
-// installed only by explicit plugin install/update flows, never postinstall.
+// Package lifecycle cleanup and completion touch only this installed package.
+// Operator state migration and legacy dependency cleanup belong to Doctor:
+// another installed Gateway may still depend on the old state and files.
 import {
   existsSync,
   lstatSync,
   opendirSync,
-  readdirSync,
   readFileSync,
-  readlinkSync,
   realpathSync,
   rmdirSync,
   rmSync,
   unlinkSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -28,35 +25,10 @@ const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 // headroom so dist growth cannot fail `npm install -g` while still refusing
 // pathological/unbounded trees.
 export const MAX_INSTALLED_DIST_SCAN_ENTRIES = 100_000;
-const LEGACY_PLUGIN_RUNTIME_DEPS_DIR = "plugin-runtime-deps";
 class InstalledDistScanLimitError extends Error {}
 
 function normalizeRelativePath(filePath) {
   return filePath.replace(/\\/g, "/");
-}
-
-function resolvePostinstallOsHomeDir(env, getHomedir = homedir) {
-  return env?.HOME?.trim() || env?.USERPROFILE?.trim() || getHomedir();
-}
-
-function resolvePostinstallTildePath(input, homeDir) {
-  if (input === "~") {
-    return homeDir;
-  }
-  if (input.startsWith("~/") || input.startsWith("~\\")) {
-    return join(homeDir, input.slice(2));
-  }
-  return input;
-}
-
-function resolvePostinstallOpenClawHomeDir(env, getHomedir = homedir) {
-  const osHome = resolvePostinstallOsHomeDir(env, getHomedir);
-  const override = env?.OPENCLAW_HOME?.trim();
-  return override ? pathResolve(resolvePostinstallTildePath(override, osHome)) : osHome;
-}
-
-function resolvePostinstallUserPath(input, openClawHome) {
-  return pathResolve(resolvePostinstallTildePath(input, openClawHome));
 }
 
 function readInstalledDistInventory(params = {}) {
@@ -312,169 +284,6 @@ function pruneLegacyInstalledPluginDependencyDirs(params) {
   return removed;
 }
 
-function splitPostinstallPathList(value) {
-  return value
-    ? value
-        .split(pathDelimiter)
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-    : [];
-}
-
-const pathDelimiter = process.platform === "win32" ? ";" : ":";
-
-export function collectLegacyPluginRuntimeDepsStateRoots(params = {}) {
-  const env = params.env ?? process.env;
-  const getHomedir = params.homedir ?? homedir;
-  const openClawHome = resolvePostinstallOpenClawHomeDir(env, getHomedir);
-  const stateRoots = [];
-  const addStateRoot = (root) => {
-    if (root) {
-      stateRoots.push(join(root, LEGACY_PLUGIN_RUNTIME_DEPS_DIR));
-    }
-  };
-
-  const stateOverride = env?.OPENCLAW_STATE_DIR?.trim();
-  if (stateOverride) {
-    addStateRoot(resolvePostinstallUserPath(stateOverride, openClawHome));
-  }
-  const configPath = env?.OPENCLAW_CONFIG_PATH?.trim();
-  if (configPath) {
-    addStateRoot(dirname(resolvePostinstallUserPath(configPath, openClawHome)));
-  }
-  addStateRoot(join(openClawHome, ".openclaw"));
-  addStateRoot(join(openClawHome, ".clawdbot"));
-
-  for (const entry of splitPostinstallPathList(env?.STATE_DIRECTORY)) {
-    addStateRoot(resolvePostinstallUserPath(entry, openClawHome));
-  }
-
-  return [...new Set(stateRoots.map((root) => pathResolve(root)))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
-function isPathInsideRoot(candidate, root) {
-  const relativePath = relative(root, candidate);
-  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
-}
-
-function collectLegacyPluginRuntimeDepsSymlinkPaths(roots, params = {}) {
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const readDir = params.readdirSync ?? readdirSync;
-  const pathLstat = params.lstatSync ?? lstatSync;
-  const readLink = params.readlinkSync ?? readlinkSync;
-  const pathExists = params.existsSync ?? existsSync;
-  const containingNodeModules = dirname(packageRoot);
-  if (basename(containingNodeModules) !== "node_modules") {
-    return [];
-  }
-
-  const normalizedRoots = roots.map((root) => pathResolve(root));
-  const candidates = [];
-  function addCandidate(linkPath) {
-    let linkStat;
-    try {
-      linkStat = pathLstat(linkPath);
-    } catch {
-      return;
-    }
-    if (!linkStat.isSymbolicLink()) {
-      return;
-    }
-    let target;
-    try {
-      target = readLink(linkPath);
-    } catch {
-      return;
-    }
-    if (!target.includes(LEGACY_PLUGIN_RUNTIME_DEPS_DIR)) {
-      return;
-    }
-    const resolvedTarget = pathResolve(dirname(linkPath), target);
-    const pointsIntoPrunedRoot = normalizedRoots.some((root) =>
-      isPathInsideRoot(resolvedTarget, root),
-    );
-    if (pointsIntoPrunedRoot || !pathExists(resolvedTarget)) {
-      candidates.push(linkPath);
-    }
-  }
-
-  let entries;
-  try {
-    entries = readDir(containingNodeModules, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.startsWith("@")) {
-      const scopeDir = join(containingNodeModules, entry.name);
-      let scopeEntries;
-      try {
-        scopeEntries = readDir(scopeDir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const scopeEntry of scopeEntries) {
-        addCandidate(join(scopeDir, scopeEntry.name));
-      }
-      continue;
-    }
-    if (entry.isSymbolicLink()) {
-      addCandidate(join(containingNodeModules, entry.name));
-    }
-  }
-  return [...new Set(candidates.map((entry) => pathResolve(entry)))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
-export function pruneLegacyPluginRuntimeDepsState(params = {}) {
-  const pathExists = params.existsSync ?? existsSync;
-  const removePath = params.rmSync ?? rmSync;
-  const unlinkPath = params.unlinkSync ?? unlinkSync;
-  const log = params.log ?? console;
-  const removed = [];
-  const removedSymlinks = [];
-  const roots = collectLegacyPluginRuntimeDepsStateRoots(params);
-
-  for (const linkPath of collectLegacyPluginRuntimeDepsSymlinkPaths(roots, params)) {
-    try {
-      unlinkPath(linkPath);
-      removedSymlinks.push(linkPath);
-    } catch (error) {
-      log.warn?.(
-        `[postinstall] could not prune legacy plugin runtime deps symlink ${linkPath}: ${String(error)}`,
-      );
-    }
-  }
-
-  for (const root of roots) {
-    if (!pathExists(root)) {
-      continue;
-    }
-    try {
-      removePath(root, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
-      removed.push(root);
-    } catch (error) {
-      log.warn?.(
-        `[postinstall] could not prune legacy plugin runtime deps ${root}: ${String(error)}`,
-      );
-    }
-  }
-
-  if (removed.length > 0) {
-    log.log?.(`[postinstall] pruned legacy plugin runtime deps: ${removed.join(", ")}`);
-  }
-  if (removedSymlinks.length > 0) {
-    log.log?.(
-      `[postinstall] pruned legacy plugin runtime deps symlinks: ${removedSymlinks.join(", ")}`,
-    );
-  }
-
-  return removed;
-}
-
 export function pruneInstalledPackageDist(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const removeFile = params.unlinkSync ?? unlinkSync;
@@ -558,17 +367,6 @@ export function runBundledPluginPostinstall(params = {}) {
     // must not alter that install or the operator state from a development checkout.
     return;
   }
-  pruneLegacyPluginRuntimeDepsState({
-    env,
-    packageRoot,
-    existsSync: pathExists,
-    lstatSync: params.lstatSync,
-    readlinkSync: params.readlinkSync,
-    rmSync: params.rmSync,
-    unlinkSync: params.unlinkSync,
-    log,
-    homedir: params.homedir,
-  });
   pruneInstalledPackageDist({
     packageRoot,
     existsSync: pathExists,
