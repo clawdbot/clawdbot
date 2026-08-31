@@ -32,9 +32,9 @@ enum GatewayDiscoveryPreferences {
         case .match, .unverifiable:
             // An unresolved discovery receipt must continue fencing ambient
             // credentials until a verified mismatch or explicit manual edit.
-            return true
+            true
         case .noPreference, .mismatch:
-            return false
+            false
         }
     }
 
