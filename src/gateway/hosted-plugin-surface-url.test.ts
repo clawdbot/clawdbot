@@ -46,4 +46,25 @@ describe("resolveHostedPluginSurfaceUrl", () => {
       }),
     ).toBe("https://gateway.example.com:18900");
   });
+
+  it("does not double-bracket IPv6 hosts from the Host header", () => {
+    expect(
+      resolveHostedPluginSurfaceUrl({
+        port: 18789,
+        requestHost: "[2606:4700::1111]:18789",
+        scheme: "http",
+      }),
+    ).toBe("http://[2606:4700::1111]:18789");
+  });
+
+  it("does not double-bracket IPv6 hosts from forwarded headers", () => {
+    expect(
+      resolveHostedPluginSurfaceUrl({
+        port: 18789,
+        requestHost: "10.0.0.2:18789",
+        forwardedHost: "[2606:4700::1111]:8443",
+        forwardedProto: "https",
+      }),
+    ).toBe("https://[2606:4700::1111]:8443");
+  });
 });
