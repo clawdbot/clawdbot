@@ -1151,12 +1151,18 @@ jobs:
               echo "Protected release-publish tag moved after npm-release approval." >&2
               exit 1
             }
-            if [[ "$preflight_head_branch" == "$workflow_tag" && "$preflight_head_sha" == "$WORKFLOW_SHA" ]]; then
-              protected_release_publish_preflight=true
-            fi
+          fi
+          if [[ "$preflight_head_branch" == release-publish/* ]]; then
+            node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
+              --repository "$GITHUB_REPOSITORY" \
+              --workflow-ref "$preflight_head_branch" \
+              --workflow-full-ref "refs/tags/${preflight_head_branch}" \
+              --workflow-sha "$preflight_head_sha" \
+              --publisher-sha "$WORKFLOW_SHA"
+            protected_release_publish_preflight=true
           fi
           if [[ "$preflight_head_branch" != "main" && "$active_branch_preflight" != "true" && "$extended_stable_preflight" != "true" && "$protected_release_publish_preflight" != "true" ]]; then
-            echo "OpenClaw npm preflight run must come from main, the active protected release branch, or the exact protected release-publish tag." >&2
+            echo "OpenClaw npm preflight run must come from main, the active protected release branch, or a verified protected release-publish tag." >&2
             exit 1
           fi
           if ! git -C trusted-workflow cat-file -e "${preflight_head_sha}^{commit}" 2>/dev/null; then

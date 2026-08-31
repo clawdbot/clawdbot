@@ -27,8 +27,8 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { validateReleasePreflightTagIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
-import { validateReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import {
   dedicatedSectionVersionForTag,
   extractChangelogReleaseSections,
@@ -898,18 +898,8 @@ export async function validateNpmPreflightRunSource(
       githubApi(`repos/${repository}/git/ref/tags/${ref}`, apiOptions),
       githubApi(`repos/${repository}/git/matching-refs/heads/${ref}`, apiOptions),
     ]);
-    // Actions reports a short headBranch for tags too. A same-name branch cannot
-    // establish tag provenance, even when its commit happens to match.
-    if (
-      !Array.isArray(branches) ||
-      branches.some(
-        (branch) =>
-          !isRecord(branch) || typeof branch.ref !== "string" || branch.ref === `refs/heads/${ref}`,
-      )
-    ) {
-      throw new Error(`npm preflight run ${runId} has ambiguous protected tag provenance`);
-    }
-    validateReleaseToolingIdentity({
+    validateReleasePreflightTagIdentity({
+      branches,
       workflowRef: ref,
       workflowFullRef: expectedFullRef,
       workflowSha: workflowRun.headSha,
