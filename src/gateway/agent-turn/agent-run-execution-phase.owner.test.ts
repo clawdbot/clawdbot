@@ -13,13 +13,7 @@ vi.mock("./agent-run-dispatch.js", () => ({
   resolveAbortedAgentStopReason: () => "rpc",
 }));
 
-function createExecution(
-  options: {
-    aborted?: boolean;
-    assertContextCurrent?: () => void;
-    contextPublishesRuntime?: boolean;
-  } = {},
-) {
+function createExecution(options: { aborted?: boolean; assertContextCurrent?: () => void } = {}) {
   const abortCleanup = vi.fn();
   const gatewayRelease = vi.fn();
   const replyDispatchRuntime = {
@@ -90,9 +84,7 @@ function createExecution(
       context: {
         dedupe: new Map(),
         deps: {},
-        ...(options.contextPublishesRuntime === false
-          ? {}
-          : { loadPublishedGatewayReplyDispatchRuntime: vi.fn(async () => replyDispatchRuntime) }),
+        loadPublishedGatewayReplyDispatchRuntime: vi.fn(async () => replyDispatchRuntime),
         logGateway: { error: vi.fn(), warn: vi.fn() },
       },
       io: {
@@ -151,18 +143,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
     resolveCleanupObserved();
     await expect(borrowedAfterCleanup).resolves.toBeUndefined();
     expect(execution.runtimeRelease).toHaveBeenCalledOnce();
-  });
-
-  it("uses the admitted runtime when the request context has no publication loader", async () => {
-    const execution = createExecution({ contextPublishesRuntime: false });
-
-    startAgentRunExecution(execution.params);
-
-    await vi.waitFor(() => expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce());
-    expect(dispatchAgentRunFromGateway.mock.calls[0]?.[0]?.commandRuntimeContext).toEqual({
-      config: { runtime: "A" },
-      pluginGeneration: "generation-A",
-    });
   });
 
   it("releases the admitted runtime once when aborted before dispatch", async () => {

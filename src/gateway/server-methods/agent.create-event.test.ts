@@ -45,6 +45,7 @@ vi.mock("../../agents/prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
     release: vi.fn(),
     snapshot: {},
+    pluginGeneration: { pluginMetadataSnapshot: {} },
   })),
   loadPublishedGatewayReplyDispatchRuntime: vi.fn(async ({ agentId }: { agentId: string }) => ({
     agentId,
@@ -115,6 +116,13 @@ describe("agent handler session create events", () => {
           getRuntimeConfig: configMocks.getRuntimeConfig,
           getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
           broadcastToConnIds,
+          loadPublishedGatewayReplyDispatchRuntime: vi.fn(async () => ({
+            agentId: "main",
+            agentDir: configMocks.workspaceDir,
+            config: configMocks.getRuntimeConfig(),
+            pluginGeneration: { pluginMetadataSnapshot: {} },
+            workspaceDir: configMocks.workspaceDir,
+          })),
         } as never,
         client: null,
         isWebchatConnect: () => false,
