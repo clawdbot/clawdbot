@@ -556,7 +556,8 @@ describeLive("google plugin live", () => {
     expect(result.images.length).toBeGreaterThan(0);
     expect(result.model).toBe("gemini-3.1-flash-lite-image");
     const image = result.images[0];
-    expect(image.buffer.length).toBeGreaterThan(0);
-    expect(image.mimeType).toMatch(/^image\//u);
+    expect(image).toBeDefined();
+    expect(image!.buffer.length).toBeGreaterThan(0);
+    expect(image!.mimeType).toMatch(/^image\//u);
   }, 120_000);
 });
