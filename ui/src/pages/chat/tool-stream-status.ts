@@ -10,9 +10,7 @@ import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import type {
   AgentEventPayload,
   CompactionStatus,
-  FallbackStatus,
   ToolStreamHost,
-  WaitingApprovalStatus,
 } from "./tool-stream-contract.ts";
 
 type SessionOperationEventPayload = {

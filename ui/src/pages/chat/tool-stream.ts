@@ -1,10 +1,6 @@
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  ChatGuardianNotice,
-  ChatStreamSegment,
-  ToolApprovalReview,
-} from "../../lib/chat/chat-types.ts";
+import type { ChatGuardianNotice, ToolApprovalReview } from "../../lib/chat/chat-types.ts";
 import {
   MAX_TOOL_APPROVAL_REVIEWS,
   normalizeToolApprovalReview,
@@ -15,12 +11,8 @@ import {
 } from "../../lib/chat/tool-approval-reviews.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import {
-  uiSessionEventMatches,
-  type UiSessionDefaultsHost,
-} from "../../lib/sessions/session-key.ts";
-import { reconcileChatRunStartup, type ChatRunStartupState } from "./chat-run-startup.ts";
+import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
