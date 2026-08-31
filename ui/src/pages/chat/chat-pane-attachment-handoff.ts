@@ -88,7 +88,9 @@ export class ChatPaneComposerHandoff {
           owner,
           gatewayOwner: storageTargetForGateway(state.settings.gatewayUrl).gatewayOwner,
           recoveryScope,
-          scopeKey: storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
+          scopeKey: storedChatOutboxScopeKey(
+            resolveUiConversationIdentity(state, state.sessionKey),
+          ),
         }
       : null;
   }
