@@ -2193,6 +2193,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
     ],
   ],
+  ["scripts/build-stamp.mts", ["src/infra/build-stamp.test.ts"]],
   ["scripts/run-vitest.mjs", ["run-vitest", "test-projects", "vitest-local-scheduling"]],
   ["scripts/run-vitest.mts", ["run-vitest", "test-projects", "vitest-local-scheduling"]],
   ["scripts/run-oxlint-shards.mts", ["run-oxlint"]],
