@@ -13,16 +13,22 @@ openclaw status
 openclaw status --all
 openclaw status --deep
 openclaw status --usage
+openclaw status --usage --agent work
 ```
 
 | Flag                    | Description                                                                                                     |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `--all`                 | Full diagnosis (read-only, pasteable). Includes security audit, plugin compatibility, and memory-vector probes. |
-| `--deep`                | Runs live probes (WhatsApp Web + Telegram + Discord + Slack + Signal). Also enables the security audit.         |
+| `--deep`                | Requests channel health (live probes where supported). Also enables the security audit.                         |
 | `--usage`               | Prints normalized provider usage windows as `X% left`.                                                          |
+| `--agent <id>`          | Selects the agent auth/profile scope for `--usage`. Required when an explicit multi-agent fleet has no default. |
 | `--json`                | Machine-readable output.                                                                                        |
 | `--timeout <ms>`        | Probe timeout in milliseconds (default: `10000`).                                                               |
 | `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
+
+Channels without a probe, such as WhatsApp, report lifecycle health instead.
+In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
+probes remain `WARN`. A lifecycle `OK` does not mean a live probe ran.
 
 Plain `openclaw status` stays on the fast read-only path and marks memory as
 `not checked` instead of unavailable when it skips memory inspection. Heavy
@@ -59,6 +65,10 @@ and `openclaw memory status --deep`.
 ## Usage and quota
 
 - `--usage` prints normalized provider usage windows as `X% left`.
+- In an explicit multi-agent setup, `--usage` reads the auth profiles owned by
+  `agents.defaults.systemAgent.agentId` by default. Pass `--agent <id>` to
+  inspect another agent; without either owner, OpenClaw does not guess one
+  agent's credentials from an ambiguous roster.
 - MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota,
   so OpenClaw inverts them before display; count-based fields win when
   present. `model_remains` responses prefer the chat-model entry, derive the

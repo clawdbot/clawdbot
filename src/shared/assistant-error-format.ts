@@ -1,5 +1,6 @@
 // Assistant error formatting helpers normalize assistant-visible error payloads.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const HTTP_STATUS_DELIMITER_RE = /(?:\s*:\s*|\s+)/;
@@ -160,7 +161,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
     return true;
   }
 
-  const status = extractLeadingHttpStatus(trimmed);
+  const status = extractHttpResponseBody(extractLeadingHttpStatus(trimmed));
   if (!status || status.code < 500) {
     return false;
   }
@@ -170,7 +171,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   }
 
   return (
-    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.rest) && HTML_CLOSE_RE.test(status.rest)
+    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.body) && HTML_CLOSE_RE.test(status.body)
   );
 }
 

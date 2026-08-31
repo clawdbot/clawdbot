@@ -71,6 +71,29 @@ describe("msteams polls", () => {
     }
     expect(stored.votes["user-1"]).toEqual(["0"]);
   });
+
+  it("deduplicates selections before enforcing maxSelections", async () => {
+    const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
+    const store = createMSTeamsPollStoreState({ homedir: () => home });
+    await store.createPoll({
+      id: "poll-dedupe",
+      question: "Pick two",
+      options: ["A", "B", "C"],
+      maxSelections: 2,
+      createdAt: new Date().toISOString(),
+      votes: {},
+    });
+    await store.recordVote({
+      pollId: "poll-dedupe",
+      voterId: "user-1",
+      selections: ["0", "0", "1"],
+    });
+    const stored = await store.getPoll("poll-dedupe");
+    if (!stored) {
+      throw new Error("expected stored poll after recordVote");
+    }
+    expect(stored.votes["user-1"]).toEqual(["0", "1"]);
+  });
 });
 
 describe("state poll store", () => {

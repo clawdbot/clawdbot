@@ -187,7 +187,7 @@ describe("exec foreground failures", () => {
 
     expect(result.details.status).toBe("completed");
     expect(requireTextContent(result)).toContain(
-      "Warning: background execution is disabled; running synchronously.",
+      "Warning: continuation options are unavailable; running synchronously.",
     );
   });
 
@@ -220,6 +220,7 @@ describe("exec foreground failures", () => {
     expect(text).toContain("Verify the resulting state before retrying");
     expect(text).toContain("Do not automatically rerun non-idempotent commands");
     expect(text).toContain("known to be safe to retry");
+    expect(text).not.toMatch(/process|background|yieldMs|poll|trailing &/i);
     expect(text).not.toContain("OOM-score wrapper");
     expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
     const details = requireFailedDetails(result.details);
@@ -453,6 +454,11 @@ describe("exec foreground failures", () => {
         containerName: "sandbox-workdir-test",
         workspaceDir,
         containerWorkdir: "/workspace",
+        buildExecSpec: async ({ command, workdir }) => ({
+          argv: ["docker", "exec", "-w", workdir ?? "/workspace", "sandbox-workdir-test", command],
+          env: {},
+          stdinMode: "pipe-closed",
+        }),
       },
     });
 

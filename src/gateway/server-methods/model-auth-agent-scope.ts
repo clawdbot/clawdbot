@@ -7,7 +7,7 @@ import {
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 
 type ModelAuthAgentScopeResult =
   | { ok: true; agentId: string; agentDir: string }
@@ -53,13 +53,11 @@ export function resolveModelAuthAgentScope(
   if (!rawAgentId) {
     return { ok: false, agentId: requestedAgentId };
   }
-  const agentId = normalizeAgentId(rawAgentId);
-  // normalizeAgentId falls back to "main" when sanitization erases the entire
-  // input; explicit garbage must not inherit the default agent's credentials.
-  const collapsedToFallback = !/[A-Za-z0-9_]/u.test(rawAgentId);
-  if (collapsedToFallback || !listAgentIds(cfg).includes(agentId)) {
+  const normalized = normalizeAgentIdStrict(rawAgentId);
+  if (!normalized.ok || !listAgentIds(cfg).includes(normalized.value)) {
     return { ok: false, agentId: rawAgentId };
   }
+  const agentId = normalized.value;
   return { ok: true, agentId, agentDir: resolveAgentDir(cfg, agentId) };
 }
 

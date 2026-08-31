@@ -4,31 +4,46 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   assertDirectPluginRegistrationReplacement,
+  getPluginRegistryForContext,
   requireActivePluginRegistry,
   resolveDirectPluginRegistrationOwner,
 } from "../../plugins/runtime.js";
-import type { AgentHarness, AgentHarnessResetParams, RegisteredAgentHarness } from "./types.js";
+import type {
+  AgentHarness,
+  AgentHarnessNativeCompaction,
+  AgentHarnessRegistrationOptions,
+  AgentHarnessResetParams,
+  RegisteredAgentHarness,
+} from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
+const CODEX_NATIVE_COMPACTION_OWNER_ID = "codex";
 
 function getAgentHarnesses() {
-  return requireActivePluginRegistry().agentHarnesses;
+  return getPluginRegistryForContext()?.agentHarnesses ?? [];
 }
 
 /** Registers or replaces an agent harness under its trimmed id. */
 export function registerAgentHarness(
   harness: AgentHarness,
-  options?: { ownerPluginId?: string },
+  options?: AgentHarnessRegistrationOptions & { ownerPluginId?: string },
 ): void {
   const id = harness.id.trim();
-  const harnesses = getAgentHarnesses();
+  const harnesses = requireActivePluginRegistry().agentHarnesses;
   const pluginId = resolveDirectPluginRegistrationOwner(options?.ownerPluginId) ?? "core";
   if (id === "openclaw") {
     throw new Error('agent harness id "openclaw" is reserved for the built-in runtime');
   }
+  if (
+    options?.nativeCompaction &&
+    (id !== CODEX_NATIVE_COMPACTION_OWNER_ID || pluginId !== CODEX_NATIVE_COMPACTION_OWNER_ID)
+  ) {
+    throw new Error("native compaction requires the registry-owned Codex harness");
+  }
   const entry = {
     pluginId,
     source: "runtime",
+    ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
     harness: {
       ...harness,
       id,
@@ -67,6 +82,24 @@ export function resolveAgentHarnessOwnerPluginId(harness: AgentHarness): string 
     throw new Error(`Agent harness ${harness.id} changed during owner resolution.`);
   }
   return registration.ownerPluginId ?? "core";
+}
+
+/** Resolves the private Codex compaction bridge from exact registry-owned capability state. */
+export function resolveCodexAgentHarnessNativeCompaction(
+  harness: AgentHarness,
+): AgentHarnessNativeCompaction | undefined {
+  if (harness.id !== CODEX_NATIVE_COMPACTION_OWNER_ID) {
+    return undefined;
+  }
+  const registration = getAgentHarnesses().find(
+    (entry) => entry.harness.id === CODEX_NATIVE_COMPACTION_OWNER_ID,
+  );
+  if (registration?.harness !== harness) {
+    throw new Error(`Agent harness ${harness.id} changed during native compaction resolution.`);
+  }
+  return registration.pluginId === CODEX_NATIVE_COMPACTION_OWNER_ID
+    ? registration.nativeCompaction
+    : undefined;
 }
 
 /** Lists registered harness records for selection and lifecycle fan-out. */

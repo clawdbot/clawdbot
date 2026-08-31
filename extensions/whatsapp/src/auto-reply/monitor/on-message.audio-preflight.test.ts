@@ -95,70 +95,50 @@ vi.mock("openclaw/plugin-sdk/routing", () => ({
   }),
 }));
 
-import { normalizeAdmittedWebInboundMessage } from "../../inbound/message-aliases.js";
-import {
-  createTestLegacyFlatWebInboundMessage,
-  createTestWebAudioInboundMessage,
-} from "../../inbound/test-message.test-helper.js";
-import type { AdmittedWebInboundMessage, WebInboundMessageInput } from "../../inbound/types.js";
+import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
-function admitTestMessage(msg: WebInboundMessageInput): AdmittedWebInboundMessage {
-  return normalizeAdmittedWebInboundMessage(msg);
-}
-
 function makeAudioMsg(): AdmittedWebInboundMessage {
-  return admitTestMessage(createTestWebAudioInboundMessage());
-}
-
-function makeLegacyAudioMsg() {
-  return createTestLegacyFlatWebInboundMessage({
-    body: "",
-    mediaPath: "/tmp/voice.ogg",
-    mediaType: "audio/ogg; codecs=opus",
-  });
+  return createTestWebAudioInboundMessage();
 }
 
 function makeGroupAudioMsg(): AdmittedWebInboundMessage {
-  return admitTestMessage(
-    createTestWebAudioInboundMessage({
-      platform: { chatJid: "1203630@g.us" },
-      admission: {
-        conversation: {
-          kind: "group",
-          id: "1203630@g.us",
-        },
-        senderAccess: {
-          reasonCode: "group_policy_allowed",
-        },
+  return createTestWebAudioInboundMessage({
+    platform: { chatJid: "1203630@g.us" },
+    admission: {
+      conversation: {
+        kind: "group",
+        id: "1203630@g.us",
       },
-      wasMentioned: false,
-    }),
-  );
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
+    wasMentioned: false,
+  });
 }
 
 function makeBlockedDirectAudioMsg(): AdmittedWebInboundMessage {
-  return admitTestMessage(
-    createTestWebAudioInboundMessage({
-      admission: {
-        ingress: {
-          admission: "drop",
-          decision: "block",
-          reasonCode: "dm_policy_not_allowlisted",
-        },
-        senderAccess: {
-          allowed: false,
-          decision: "block",
-          reasonCode: "dm_policy_not_allowlisted",
-        },
-        activationAccess: {
-          allowed: false,
-          shouldSkip: true,
-          reasonCode: "dm_policy_not_allowlisted",
-        },
+  return createTestWebAudioInboundMessage({
+    admission: {
+      ingress: {
+        admission: "drop",
+        decision: "block",
+        reasonCode: "dm_policy_not_allowlisted",
       },
-    }),
-  );
+      senderAccess: {
+        allowed: false,
+        decision: "block",
+        reasonCode: "dm_policy_not_allowlisted",
+      },
+      activationAccess: {
+        allowed: false,
+        shouldSkip: true,
+        reasonCode: "dm_policy_not_allowlisted",
+      },
+    },
+  });
 }
 
 function mockObjectArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0) {
@@ -274,49 +254,6 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(updateLastRouteInBackgroundMock).not.toHaveBeenCalled();
-    expect(processMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("skips early DM ack/preflight for legacy audio without explicit access proof", async () => {
-    const handler = makeHandler();
-
-    await handler(admitTestMessage(makeLegacyAudioMsg()));
-
-    expect(events).toStrictEqual([]);
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
-    expect(processMessageMock).toHaveBeenCalledTimes(1);
-    const processParams = mockObjectArg(processMessageMock, "processMessage");
-    expect(processParams).not.toHaveProperty("preflightAudioTranscript");
-    expect(processParams).not.toHaveProperty("ackAlreadySent");
-    expect(processParams).not.toHaveProperty("ackReaction");
-  });
-
-  it("shares one transcript for legacy direct broadcasts without explicit access proof", async () => {
-    maybeBroadcastMessageMock.mockImplementation(
-      async (params: { preflightAudioTranscript?: string | null }) => {
-        expect(params.preflightAudioTranscript).toBe("transcribed voice note");
-        return true;
-      },
-    );
-    const handler = makeHandler({
-      cfg: {
-        channels: {
-          whatsapp: {
-            ackReaction: { enabled: true },
-          },
-        },
-        broadcast: {
-          "+15551234567": ["main", "backup"],
-        },
-      } as never,
-    });
-
-    await handler(admitTestMessage(makeLegacyAudioMsg()));
-
-    expect(events).toStrictEqual(["stt"]);
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(processMessageMock).not.toHaveBeenCalled();
   });
 

@@ -7,10 +7,12 @@ import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
+  startControlUiE2eServer,
   waitForConfirmModal,
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForConfirmModal };
@@ -24,9 +26,10 @@ export const uiProofArtifactDir = path.join(
   "thread-management",
 );
 
-export function createSessionManagementE2eSuite() {
+export function createSessionManagementE2eSuite(source = false) {
   return createControlUiE2eSuite({
     name: "Control UI session management mocked Gateway E2E",
+    ...(source ? { startServer: () => startControlUiE2eServer(undefined, { source: true }) } : {}),
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
   });
@@ -38,12 +41,14 @@ export function sessionRow(
   updatedAt: number,
   options: {
     archived?: boolean;
+    archivedAt?: number;
     sessionId?: string;
     category?: string;
     pinned?: boolean;
     pinnedAt?: number;
     hasActiveRun?: boolean;
     unread?: boolean;
+    markedUnreadAt?: number;
     status?: string;
     spawnedBy?: string;
     startedAt?: number;
@@ -54,21 +59,7 @@ export function sessionRow(
     worktree?: { id?: string; branch?: string; repoRoot?: string };
   } = {},
 ) {
-  return {
-    contextTokens: null,
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    sessionId: `session:${key}`,
-    kind: "direct",
-    label,
-    model: "gpt-5.5",
-    modelProvider: "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
-    ...options,
-  };
+  return createControlUiSessionRow(key, label, updatedAt, options);
 }
 
 export function sessionsListResponse(
@@ -183,7 +174,11 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
   expect(index).toBeGreaterThanOrEqual(0);
   await expect
     .poll(() =>
-      page.locator("openclaw-session-menu > wa-dropdown > wa-dropdown-item:focus").count(),
+      page
+        .locator(
+          ":is(openclaw-session-menu, openclaw-chat-header-session-menu) > wa-dropdown > wa-dropdown-item:focus",
+        )
+        .count(),
     )
     .toBe(1);
   await page.keyboard.press("Home");

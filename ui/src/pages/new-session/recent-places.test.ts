@@ -4,7 +4,7 @@ import { isKnownWorkspacePath } from "./path.ts";
 import { recentPlaces } from "./recent-places.ts";
 
 describe("recentPlaces", () => {
-  it("deduplicates locations, caps newest-first, and keeps matching basenames on distinct runners", () => {
+  it("deduplicates Gateway locations, caps newest-first, and ignores historical node folders", () => {
     expect(
       recentPlaces(
         [
@@ -23,15 +23,14 @@ describe("recentPlaces", () => {
         ],
         {
           workspace: "/workspace",
-          execNodes: [{ nodeId: "macbook" }],
           allowGatewayFolder: () => true,
         },
       ),
     ).toEqual([
-      { folder: "/node/repo", execNode: "macbook" },
-      { folder: "/gateway/repo", execNode: "" },
-      { folder: "/preferred/selected", execNode: "" },
-      { folder: "/worktree/one", execNode: "" },
+      { folder: "/gateway/repo" },
+      { folder: "/preferred/selected" },
+      { folder: "/worktree/one" },
+      { folder: "/cwd/two" },
     ]);
   });
 
@@ -45,10 +44,9 @@ describe("recentPlaces", () => {
         ],
         {
           workspace: "/workspace",
-          execNodes: [],
           allowGatewayFolder: (folder) => isKnownWorkspacePath(["/workspace"], folder),
         },
       ),
-    ).toEqual([{ folder: "/workspace/packages/app", execNode: "" }]);
+    ).toEqual([{ folder: "/workspace/packages/app" }]);
   });
 });

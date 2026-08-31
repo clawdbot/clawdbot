@@ -9,8 +9,8 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
   type ManagedImageRecord,
+  type ManagedImageRecordDatabase,
 } from "../gateway/managed-image-record-store.js";
-import type { ManagedImageRecordDatabase } from "../gateway/managed-image-record-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,

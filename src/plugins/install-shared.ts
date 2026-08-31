@@ -16,14 +16,14 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
   type PackageManifest,
+  type PluginInstallArtifactConsentHandler,
   type PluginInstallErrorCode,
   type PluginInstallFailureResult,
   type PluginInstallLogger,
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { resolvePackageExtensionEntries, type OpenClawPackageManifest } from "./manifest.js";
-import { satisfiesPluginApiRange } from "./package-compat.js";
-import { resolvePackagePluginApiRange } from "./package-compat.js";
+import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   emitPluginAuditSecurityEvent,
   emitPluginInstallSecurityEvent,
@@ -226,6 +226,9 @@ function buildBlockedInstallResult(params: {
   return {
     ok: false,
     error: params.blocked.reason,
+    ...(params.blocked.installPolicyWarning
+      ? { installPolicyWarning: params.blocked.installPolicyWarning }
+      : {}),
     ...(params.blocked.code === "security_scan_failed"
       ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED }
       : params.blocked.code === "security_scan_blocked"
@@ -386,6 +389,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     installedDir: string,
   ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
   nameEncoder?: (pluginId: string) => string;
+  onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   let targetDir = params.targetDir;
@@ -421,6 +425,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     });
   }
 
+  let artifactConsentFailure: { error: unknown } | undefined;
   const packageInstallParams = {
     sourceDir: params.sourceDir,
     targetDir,
@@ -434,14 +439,23 @@ export async function installPluginDirectoryIntoExtensions(params: {
     afterCopy: params.afterCopy,
     afterInstall: async (installedDir: string) => {
       const postInstallResult = await params.afterInstall?.(installedDir);
-      if (!postInstallResult) {
-        return { ok: true as const };
+      if (postInstallResult) {
+        return postInstallResult;
       }
-      return {
-        ok: false as const,
-        error: postInstallResult.error,
-        ...(postInstallResult.code ? { code: postInstallResult.code } : {}),
-      };
+      try {
+        // Consent must bind to the final staged bytes, never their mutable source tree.
+        await params.onBeforePluginArtifactCommit?.({
+          pluginId: params.pluginId,
+          ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
+          stagedArtifactDir: installedDir,
+          mode: params.mode,
+        });
+      } catch (error) {
+        // installPackageDir converts hook failures into results; retain the typed rejection.
+        artifactConsentFailure = { error };
+        throw error;
+      }
+      return { ok: true as const };
     },
   };
   const installRes = await runtime.installPackageDir(
@@ -450,11 +464,10 @@ export async function installPluginDirectoryIntoExtensions(params: {
       : packageInstallParams,
   );
   if (!installRes.ok) {
-    return {
-      ok: false,
-      error: installRes.error,
-      ...(installRes.code ? { code: installRes.code as PluginInstallErrorCode } : {}),
-    };
+    if (artifactConsentFailure) {
+      throw artifactConsentFailure.error;
+    }
+    return installRes;
   }
 
   const result = {

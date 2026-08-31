@@ -155,15 +155,15 @@ Out-of-scope reports and false-positive patterns (public internet exposure, prom
 
 #### T-ACCESS-002: AllowFrom spoofing
 
-| Attribute               | Value                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------ |
-| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                                      |
-| **Description**         | Attacker spoofs an allowed sender identity on a channel                        |
-| **Attack vector**       | Channel-dependent - phone number spoofing, username impersonation              |
-| **Affected components** | Per-channel AllowFrom validation                                               |
-| **Current mitigations** | Channel-specific identity verification                                         |
-| **Residual risk**       | Medium - some channels remain vulnerable to spoofing                           |
-| **Recommendations**     | Document channel-specific risks, add cryptographic verification where possible |
+| Attribute               | Value                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                                                                                                                                                                                                                                                                                                   |
+| **Description**         | Attacker spoofs an allowed sender identity on a channel                                                                                                                                                                                                                                                                                     |
+| **Attack vector**       | Channel-dependent - phone number spoofing, username impersonation                                                                                                                                                                                                                                                                           |
+| **Affected components** | Per-channel AllowFrom validation                                                                                                                                                                                                                                                                                                            |
+| **Current mitigations** | Channel-specific identity verification; graded identifier-authentication gate uses `min(entry, subject)` over `verified > asserted > unverified > mutable` with exact match provenance and default minimum `asserted` (#123782/#123793). Channels declare per-identifier strength; security audit warns on inert mutable entries (#131129). |
+| **Residual risk**       | Medium - some channels remain vulnerable to spoofing                                                                                                                                                                                                                                                                                        |
+| **Recommendations**     | Continue per-channel `verified` adoption and downstream strength mappers; document channel-specific risks                                                                                                                                                                                                                                   |
 
 #### T-ACCESS-003: Token theft
 
@@ -183,27 +183,27 @@ Out-of-scope reports and false-positive patterns (public internet exposure, prom
 
 #### T-EXEC-001: Direct prompt injection
 
-| Attribute               | Value                                                                                                                                        |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0051.000 - LLM Prompt Injection: Direct                                                                                                 |
-| **Description**         | Attacker sends crafted prompts to manipulate agent behavior                                                                                  |
-| **Attack vector**       | Channel messages containing adversarial instructions                                                                                         |
-| **Affected components** | Agent LLM, all input surfaces                                                                                                                |
-| **Current mitigations** | Pattern detection, external content wrapping; treated as out-of-scope for vulnerability reports absent a boundary bypass (see `SECURITY.md`) |
-| **Residual risk**       | Critical - detection only, no blocking; sophisticated attacks bypass                                                                         |
-| **Recommendations**     | Output validation and user confirmation for sensitive actions, layered on top of existing detection                                          |
+| Attribute               | Value                                                                                                                                                                                                                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **ATLAS ID**            | AML.T0051.000 - LLM Prompt Injection: Direct                                                                                                                                                                                                                                                     |
+| **Description**         | Attacker sends crafted prompts to manipulate agent behavior                                                                                                                                                                                                                                      |
+| **Attack vector**       | Channel messages containing adversarial instructions                                                                                                                                                                                                                                             |
+| **Affected components** | Agent LLM, all input surfaces                                                                                                                                                                                                                                                                    |
+| **Current mitigations** | Pattern detection, external content wrapping, and frontier-model robustness (2026 crowdsourced arena: 0.5% ASR on Claude Opus 4.5, 8.5% on Gemini 2.5 Pro, scored on execution plus concealment); treated as out-of-scope for vulnerability reports absent a boundary bypass (see `SECURITY.md`) |
+| **Residual risk**       | Model-tier dependent - low single-digit ASR against organic attacks on recommended frontier models, but adaptive attackers still exceed 80% against state-of-the-art defenses, and smaller/older models remain markedly easier to steer                                                          |
+| **Recommendations**     | Output validation and user confirmation for sensitive actions, layered on top of existing detection                                                                                                                                                                                              |
 
 #### T-EXEC-002: Indirect prompt injection
 
-| Attribute               | Value                                                                                                                 |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0051.001 - LLM Prompt Injection: Indirect                                                                        |
-| **Description**         | Attacker embeds malicious instructions in fetched content                                                             |
-| **Attack vector**       | Malicious URLs, poisoned emails, compromised webhooks                                                                 |
-| **Affected components** | `web_fetch`, email ingestion, external data sources                                                                   |
-| **Current mitigations** | Content wrapping with random-boundary XML-style markers, homoglyph/special-token normalization, and a security notice |
-| **Residual risk**       | High - LLM may still ignore wrapper instructions                                                                      |
-| **Recommendations**     | Separate execution contexts for wrapped content                                                                       |
+| Attribute               | Value                                                                                                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **ATLAS ID**            | AML.T0051.001 - LLM Prompt Injection: Indirect                                                                                                                                                                     |
+| **Description**         | Attacker embeds malicious instructions in fetched content                                                                                                                                                          |
+| **Attack vector**       | Malicious URLs, poisoned emails, compromised webhooks                                                                                                                                                              |
+| **Affected components** | `web_fetch`, email ingestion, external data sources                                                                                                                                                                |
+| **Current mitigations** | Content wrapping with random-boundary XML-style markers, homoglyph/special-token normalization, a security notice, and frontier-model robustness (see T-EXEC-001)                                                  |
+| **Residual risk**       | Model-tier dependent - recommended frontier models largely hold the wrapper boundary, but it remains soft guidance an adaptive attacker can erode; scope tool policy and sandboxing to the blast radius you accept |
+| **Recommendations**     | Separate execution contexts for wrapped content                                                                                                                                                                    |
 
 #### T-EXEC-003: Tool argument injection
 
@@ -502,11 +502,11 @@ T-EXEC-002 → T-EXFIL-001 → External exfiltration
 
 ### 6.3 Medium-term (P2)
 
-| ID    | Recommendation                                        | Addresses     |
-| ----- | ----------------------------------------------------- | ------------- |
-| R-008 | Add cryptographic channel verification where possible | T-ACCESS-002  |
-| R-009 | Implement config integrity verification               | T-PERSIST-003 |
-| R-010 | Add update signing and version pinning                | T-PERSIST-002 |
+| ID    | Recommendation                                                                                                                                                        | Addresses     |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| R-008 | Implemented in core: graded identifier-authentication primitive and audit findings; remaining work is per-channel `verified` adoption and downstream strength mappers | T-ACCESS-002  |
+| R-009 | Implement config integrity verification                                                                                                                               | T-PERSIST-003 |
+| R-010 | Add update signing and version pinning                                                                                                                                | T-PERSIST-002 |
 
 ---
 

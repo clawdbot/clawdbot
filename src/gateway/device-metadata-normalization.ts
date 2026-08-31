@@ -1,4 +1,5 @@
 // Device metadata normalization for auth payloads and policy matching.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 function normalizeTrimmedMetadata(value?: string | null): string {
   if (typeof value !== "string") {
     return "";
@@ -17,4 +18,3 @@ export function normalizeDeviceMetadataForPolicy(value?: string | null): string 
   // tokens where possible before matching platform/family rules.
   return normalizeLowercaseStringOrEmpty(trimmed.normalize("NFKD").replace(/\p{M}/gu, ""));
 }
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

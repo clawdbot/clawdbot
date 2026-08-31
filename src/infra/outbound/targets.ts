@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Outbound target helpers resolve direct send targets, heartbeat destinations,
 // sender context, and session-route aware heartbeat refinements.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -35,11 +36,13 @@ import {
   resolveOutboundTargetWithPlugin,
   type OutboundTargetResolution,
 } from "./targets-resolve-shared.js";
+import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 /** Resolved outbound delivery destination and routing hints. */
 type OutboundTarget = {
   channel: string;
   to?: string;
+  targetSessionKey?: string;
   chatType?: ChatType;
   reason?: string;
   accountId?: string;
@@ -58,8 +61,6 @@ type HeartbeatSenderContext = {
 
 export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
-import { expectDefined } from "@openclaw/normalization-core";
-import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 /** Resolves a user-supplied outbound destination through the channel plugin. */
 export function resolveOutboundTarget(params: {
@@ -181,6 +182,7 @@ function resolveHeartbeatOwnerRoute(params: {
 /** Read-only owner-route probe for status/doctor surfaces. Unproven targets fail closed. */
 export function hasResolvableHeartbeatOwnerRoute(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
 }): boolean {
@@ -196,6 +198,7 @@ export function hasResolvableHeartbeatOwnerRoute(params: {
  */
 export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
@@ -219,6 +222,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
         preparedExplicitPlugin = resolveOutboundChannelPlugin({
           channel: rawTarget,
           cfg,
+          agentId: params.agentId,
           allowBootstrap: true,
         });
         if (preparedExplicitPlugin) {
@@ -307,14 +311,14 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   // Bootstrap once after a concrete route exists, then carry the prepared plugin
   // through account validation, target policy, and allow-from comparison.
+  const preparedPlugin = preparedExplicitPlugin ?? ownerRoute?.plugin;
   const plugin =
-    preparedExplicitPlugin ??
-    ownerRoute?.plugin ??
     resolveOutboundChannelPlugin({
       channel: resolvedTarget.channel,
       cfg,
+      agentId: params.agentId,
       allowBootstrap: true,
-    });
+    }) ?? preparedPlugin;
 
   if (heartbeatAccountId) {
     const listAccountIds = plugin?.config.listAccountIds;
@@ -493,10 +497,18 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   if (delivery.channel === "none" || !delivery.to) {
     return delivery;
   }
+  const rejectDelivery = (reason: string) =>
+    buildNoHeartbeatDeliveryTarget({
+      reason,
+      accountId: delivery.accountId,
+      lastChannel: delivery.lastChannel,
+      lastAccountId: delivery.lastAccountId,
+    });
   const deliveryTo = delivery.to;
   const plugin = resolveOutboundChannelPlugin({
     channel: delivery.channel,
     cfg: params.cfg,
+    agentId: params.agentId,
     allowBootstrap: true,
   });
   const resolveSessionRoute = plugin?.messaging?.resolveOutboundSessionRoute;
@@ -508,12 +520,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       chatType: delivery.chatType,
     })
   ) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-route",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery("no-route");
   }
   if (!resolveSessionRoute && !plugin?.messaging?.targetResolver) {
     return delivery;
@@ -537,20 +544,10 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   if (targetResolution?.ok) {
     routeResolvedTarget = targetResolution.target;
   } else if (targetResolution && isReservedTargetLiteralError(targetResolution.error)) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: ownerRouteMustBeDirect ? "no-route" : "no-target",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery(ownerRouteMustBeDirect ? "no-route" : "no-target");
   }
   if (routeResolvedTarget?.kind === "user" && heartbeat?.directPolicy === "block") {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "dm-blocked",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery("dm-blocked");
   }
   if (
     ownerRouteMustBeDirect &&
@@ -559,12 +556,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       to: routeResolvedTarget?.to ?? deliveryTo,
     })
   ) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-route",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery("no-route");
   }
   if (!resolveSessionRoute) {
     return delivery;
@@ -590,12 +582,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
     return delivery;
   }
   if (route.chatType === "direct" && heartbeat?.directPolicy === "block") {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "dm-blocked",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery("dm-blocked");
   }
   if (
     ownerRouteMustBeDirect &&
@@ -605,18 +592,14 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
       chatType: normalizeChatType(route.chatType),
     })
   ) {
-    return buildNoHeartbeatDeliveryTarget({
-      reason: "no-route",
-      accountId: delivery.accountId,
-      lastChannel: delivery.lastChannel,
-      lastAccountId: delivery.lastAccountId,
-    });
+    return rejectDelivery("no-route");
   }
   return {
     ...delivery,
     to: route.to,
     chatType: route.chatType,
     threadId: route.threadId ?? delivery.threadId,
+    ...(route.recipientSessionExact === true ? { targetSessionKey: route.sessionKey } : {}),
   };
 }
 

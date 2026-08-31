@@ -2,12 +2,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
 } from "./package-update-steps.js";
+import {
+  createNpmTarget,
+  createRootRunner,
+  writePackageRoot,
+} from "./package-update-steps.test-support.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -22,32 +26,10 @@ type PackageUpdateStepResult = Awaited<
   ReturnType<typeof runGlobalPackageUpdateSteps>
 >["steps"][number];
 
-async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
-  await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-  await Promise.all([
-    fs.writeFile(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-      "utf8",
-    ),
-    fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n", "utf8"),
-  ]);
-  await writePackageDistInventory(packageRoot);
-}
-
 async function addHardlinkedPackageFile(packageRoot: string, linkRoot: string): Promise<void> {
   const packageFile = path.join(packageRoot, "dist", "index.js");
   await fs.mkdir(linkRoot, { recursive: true });
   await fs.link(packageFile, path.join(linkRoot, `${path.basename(packageRoot)}-index.js`));
-}
-
-function createNpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
-  return {
-    manager: "npm",
-    command: "npm",
-    globalRoot,
-    packageRoot: path.join(globalRoot, "openclaw"),
-  };
 }
 
 function createFsError(code: string, message = code): NodeJS.ErrnoException {
@@ -71,15 +53,6 @@ async function expectPathMissing(filePath: string): Promise<void> {
     return;
   }
   throw new Error(`Expected missing path: ${filePath}`);
-}
-
-function createRootRunner(globalRoot: string): CommandRunner {
-  return async (argv) => {
-    if (argv.join(" ") === "npm root -g") {
-      return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
-    }
-    throw new Error(`unexpected command: ${argv.join(" ")}`);
-  };
 }
 
 describe("markPackagePostInstallDoctorAdvisory", () => {
@@ -155,83 +128,33 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
   });
 });
 
-describe("runGlobalPackageUpdateSteps", () => {
-  it("installs npm updates into a clean staged prefix before swapping the global package", async () => {
-    await withTestDir({ prefix: "openclaw-package-update-staged-" }, async (base) => {
-      const prefix = path.join(base, "prefix");
-      const globalRoot = path.join(prefix, "lib", "node_modules");
-      const packageRoot = path.join(globalRoot, "openclaw");
-      await writePackageRoot(packageRoot, "1.0.0");
-      await fs.mkdir(path.join(packageRoot, "dist", "extensions", "qa-channel"), {
-        recursive: true,
-      });
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
-        "export {};\n",
-        "utf8",
-      );
+describe("npm lifecycle policy preflight", () => {
+  it("stops before mutation when the owning npm version is unknown", async () => {
+    const runStep = vi.fn();
+    const runCommand = vi.fn<CommandRunner>();
+    const installTarget = createNpmTarget("/tmp/npm-policy-test/lib/node_modules");
+    installTarget.npmOwner = {
+      version: null,
+      lifecyclePolicy: null,
+      probeError: "version probe failed",
+    };
 
-      const runStep = vi.fn(
-        async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
-          expect(timeoutMs).toBe(1000);
-          if (name !== "global update") {
-            throw new Error(`unexpected step ${name}`);
-          }
-          const prefixIndex = argv.indexOf("--prefix");
-          expect(prefixIndex).toBeGreaterThan(0);
-          const stagePrefix = argv[prefixIndex + 1];
-          if (!stagePrefix) {
-            throw new Error("missing staged prefix");
-          }
-          expect(path.dirname(stagePrefix)).toBe(globalRoot);
-          await writePackageRoot(
-            path.join(stagePrefix, "lib", "node_modules", "openclaw"),
-            "2.0.0",
-          );
-          await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
-          await fs.symlink(
-            "../lib/node_modules/openclaw/dist/index.js",
-            path.join(stagePrefix, "bin", "openclaw"),
-          );
-          return {
-            name,
-            command: argv.join(" "),
-            cwd: cwd ?? process.cwd(),
-            durationMs: 1,
-            exitCode: 0,
-          };
-        },
-      );
-
-      const result = await runGlobalPackageUpdateSteps({
-        installTarget: createNpmTarget(globalRoot),
-        installSpec: "openclaw@2.0.0",
-        packageName: "openclaw",
-        packageRoot,
-        runCommand: createRootRunner(globalRoot),
-        runStep,
-        timeoutMs: 1000,
-      });
-
-      expect(result.failedStep).toBeNull();
-      expect(result.verifiedPackageRoot).toBe(packageRoot);
-      expect(result.afterVersion).toBe("2.0.0");
-      expect(result.steps.map((step) => step.name)).toEqual([
-        "global update",
-        "global install swap",
-      ]);
-      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"2.0.0"',
-      );
-      await expectPathMissing(
-        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
-      );
-      await expect(fs.readlink(path.join(prefix, "bin", "openclaw"))).resolves.toBe(
-        "../lib/node_modules/openclaw/dist/index.js",
-      );
+    const result = await runGlobalPackageUpdateSteps({
+      installTarget,
+      installSpec: "openclaw@2.0.0",
+      packageName: "openclaw",
+      runCommand,
+      runStep,
+      timeoutMs: 1000,
     });
-  });
 
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(result.failedStep?.stderrTail).toContain("Unable to determine the owning npm version");
+    expect(runStep).not.toHaveBeenCalled();
+  });
+});
+
+describe("runGlobalPackageUpdateSteps", () => {
   it.runIf(process.platform !== "win32")(
     "swaps npm package roots that contain package-manager hardlinks",
     async () => {
@@ -759,28 +682,26 @@ describe("runGlobalPackageUpdateSteps", () => {
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
 
-        const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
-          if (name !== "global update") {
-            throw new Error(`unexpected step ${name}`);
-          }
-          expect(argv).toEqual([
-            "pnpm",
-            "add",
-            "-g",
-            "--global-dir",
-            globalDir,
-            "--allow-build=openclaw",
-            "openclaw@2.0.0",
-          ]);
-          await writePackageRoot(packageRoot, "2.0.0");
-          return {
-            name,
-            command: argv.join(" "),
-            cwd: cwd ?? process.cwd(),
-            durationMs: 1,
-            exitCode: 0,
-          };
-        });
+        const runStep = vi.fn(
+          async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            expect(argv).toEqual(["pnpm", "add", "-g", "--allow-build=openclaw", "openclaw@2.0.0"]);
+            expect(env).toMatchObject({
+              pnpm_config_global_dir: globalDir,
+              PNPM_CONFIG_GLOBAL_DIR: globalDir,
+            });
+            await writePackageRoot(packageRoot, "2.0.0");
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+        );
 
         const result = await runGlobalPackageUpdateSteps({
           installTarget: createPnpmTarget(globalRoot),

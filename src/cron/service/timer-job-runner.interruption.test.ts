@@ -50,8 +50,13 @@ describe("resolveInterruptedRunProgress", () => {
       job: webhookJob,
       error: "cron webhook delivery cancelled: operator",
     });
-    expect(resolved?.delivered).toBe(false);
-    expect(resolved?.deliveryError).toBe("cron webhook delivery cancelled: operator");
+    expect(resolved).toMatchObject({
+      status: "ok",
+      summary: "payload",
+      delivered: false,
+      deliveryError: "cron webhook delivery cancelled: operator",
+    });
+    expect(resolved?.error).toBeUndefined();
   });
 
   it("returns undefined when no core result completed", () => {

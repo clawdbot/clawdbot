@@ -89,10 +89,36 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
   // overstates its real wall-clock cost during CI shard planning.
   "test/vitest/vitest.extensions.config.ts": 1.1,
 };
+// A 34-file changed shard starved real-time watches and the no-output watchdog.
+// Keep serial, non-isolated Codex processes small enough for prompt output (#125768, #125839).
+const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 12;
+const MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
+const TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT = 1;
+const TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT = 10;
 const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
+  [
+    "test/vitest/vitest.extension-codex.config.ts",
+    // This non-isolated fileParallelism:false lane accumulates every mocked module graph.
+    // At ~166 files, one worker exhausted its heap during teardown (#124413).
+    CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT,
+  ],
   // The non-isolated Matrix suite intentionally shares module state within a process.
   // Bound its lifetime so Vite's transformed module graph cannot grow across the whole suite.
-  ["test/vitest/vitest.extension-matrix.config.ts", 40],
+  ["test/vitest/vitest.extension-matrix.config.ts", MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT],
+  [
+    "test/vitest/vitest.extension-telegram.config.ts",
+    // isolate:true re-evaluates the Telegram graph per file. A second file in
+    // the same process stayed silent past the 300s CI watchdog (observed 2026-08,
+    // changed-extensions-config-14/15 on #123528).
+    TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT,
+  ],
+]);
+const EXTENSION_TEST_JOB_FILE_LIMITS = new Map<string, number>([
+  // Bound Telegram CI jobs so isolate recycling stays inside one job instead
+  // of minting one runner per test file. Ten files keeps the worst job near
+  // 3 minutes (observed 2026-08: ~45s runner setup + ~7-24s per file) while
+  // halving the ~42-job fanout a Telegram-touching diff produced at five.
+  ["test/vitest/vitest.extension-telegram.config.ts", TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT],
 ]);
 const EXTENSION_TEST_CONFIG_ROUTES: Array<[(root: string) => boolean, string]> = [
   [isActiveMemoryExtensionRoot, "test/vitest/vitest.extension-active-memory.config.ts"],
@@ -135,37 +161,37 @@ function isSkippedTrackedTestFile(relativePath: string) {
 let trackedRepoTestFiles: string[] | null | undefined;
 // Large checkouts exceed Node's 1 MiB spawnSync default. Preserve the Git inventory path;
 // ENOBUFS would otherwise trigger expensive extension-directory walks.
-const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
-function loadTrackedRepoTestFiles() {
-  if (trackedRepoTestFiles !== undefined) {
-    return trackedRepoTestFiles;
-  }
-
+export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
-  const result = spawnSync("git", ["ls-files", "--", ...TRACKED_EXTENSION_TEST_PATHSPECS], {
-    cwd: repoRoot,
+  const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
+    cwd,
     encoding: "utf8",
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0 || result.error) {
-    trackedRepoTestFiles = null;
-    return trackedRepoTestFiles;
+    return null;
   }
-
-  // Tracked repository metadata is immutable during one planner invocation.
-  // Reuse one inventory so broad extension plans do not fork Git per plugin.
-  trackedRepoTestFiles = result.stdout
+  return result.stdout
     .split("\n")
     .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter(
-      (line) =>
-        line.length > 0 &&
-        !isSkippedTrackedTestFile(line) &&
-        (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
-    );
+    .filter(Boolean);
+}
+
+function loadTrackedRepoTestFiles() {
+  // Tracked repository metadata is immutable during one planner invocation.
+  // Reuse one inventory so broad extension plans do not fork Git per plugin.
+  if (trackedRepoTestFiles === undefined) {
+    trackedRepoTestFiles =
+      listTrackedTestPlanFiles(repoRoot, TRACKED_EXTENSION_TEST_PATHSPECS)?.filter(
+        (line) =>
+          !isSkippedTrackedTestFile(line) &&
+          (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
+      ) ?? null;
+  }
   return trackedRepoTestFiles;
 }
 
@@ -214,32 +240,23 @@ function listFilesystemTestFiles(rootPath: string) {
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
-/** List tracked or filesystem-discovered test files for extension roots. */
-export function listTrackedTestFilesForRoots(roots: string[]) {
-  const files = [];
-  for (const root of roots) {
-    const rootPath = path.join(repoRoot, root);
-    const trackedFiles = listTrackedTestFiles(rootPath) ?? listFilesystemTestFiles(rootPath);
-    files.push(...trackedFiles);
-  }
-  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
-}
-
 /** List working-tree test files for extension roots, including new untracked tests. */
 export function listExtensionTestFilesForRoots(roots: string[]) {
   const files = roots.flatMap((root) => listFilesystemTestFiles(path.join(repoRoot, root)));
   return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
 }
 
-/** Split an extension config's test files across bounded process lifetimes when required. */
-export function splitExtensionTestProcessTargets(config: string, targets: string[]) {
-  const maxFilesPerProcess = EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config);
-  const orderedTargets = [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
-  if (!maxFilesPerProcess || orderedTargets.length <= maxFilesPerProcess) {
+function uniqueSortedTargets(targets: string[]) {
+  return [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function splitTargetsByFileLimit(targets: string[], maxFilesPerChunk: number) {
+  const orderedTargets = uniqueSortedTargets(targets);
+  if (orderedTargets.length <= maxFilesPerChunk) {
     return [orderedTargets];
   }
 
-  const chunkCount = Math.ceil(orderedTargets.length / maxFilesPerProcess);
+  const chunkCount = Math.ceil(orderedTargets.length / maxFilesPerChunk);
   const baseSize = Math.floor(orderedTargets.length / chunkCount);
   const remainder = orderedTargets.length % chunkCount;
   const chunks = [];
@@ -250,6 +267,28 @@ export function splitExtensionTestProcessTargets(config: string, targets: string
     offset += chunkSize;
   }
   return chunks;
+}
+
+function resolveExtensionTestJobFileLimit(config: string) {
+  return (
+    EXTENSION_TEST_JOB_FILE_LIMITS.get(config) ?? EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config)
+  );
+}
+
+/** Split an extension config's test files across bounded process lifetimes when required. */
+export function splitExtensionTestProcessTargets(config: string, targets: string[]) {
+  const maxFilesPerProcess = EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config);
+  return maxFilesPerProcess
+    ? splitTargetsByFileLimit(targets, maxFilesPerProcess)
+    : [uniqueSortedTargets(targets)];
+}
+
+/** Split an extension config's test files across CI jobs without changing process lifetime. */
+export function splitExtensionTestJobTargets(config: string, targets: string[]) {
+  const maxFilesPerJob = resolveExtensionTestJobFileLimit(config);
+  return maxFilesPerJob
+    ? splitTargetsByFileLimit(targets, maxFilesPerJob)
+    : [uniqueSortedTargets(targets)];
 }
 
 /** Whether a Vitest invocation can safely be split into independent one-shot processes. */
@@ -367,7 +406,7 @@ export function resolveExtensionTestPlan(params: { cwd?: string; targetArg?: str
 
 type ResolvedExtensionTestPlan = ReturnType<typeof resolveExtensionTestPlan>;
 
-function mergeTestPlans(plans: ResolvedExtensionTestPlan[]): ExtensionBatchPlan {
+export function mergeExtensionTestPlans(plans: ResolvedExtensionTestPlan[]): ExtensionBatchPlan {
   const groupsByConfig = new Map<string, ExtensionTestPlanGroup>();
 
   const testPlans = plans.filter((plan) => plan.hasTests);
@@ -423,7 +462,9 @@ export function resolveExtensionBatchPlan(params: { cwd?: string; extensionIds?:
     resolveExtensionTestPlan({ cwd, targetArg: extensionId }),
   );
 
-  return mergeTestPlans(hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests));
+  return mergeExtensionTestPlans(
+    hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests),
+  );
 }
 
 type PendingExtensionTestShard = {
@@ -484,7 +525,7 @@ export function createExtensionTestShards(
       Object.assign(
         {},
         { index, checkName: `checks-node-extensions-shard-${index + 1}` },
-        mergeTestPlans(shard.plans),
+        mergeExtensionTestPlans(shard.plans),
       ),
     )
     .filter((shard) => shard.hasTests);

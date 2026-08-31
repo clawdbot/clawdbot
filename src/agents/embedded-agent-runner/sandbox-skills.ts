@@ -5,8 +5,12 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
-import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
-import type { SkillEntry } from "../../skills/types.js";
+import type {
+  SkillEligibilityContext,
+  SkillSnapshot,
+  SkillUsagePath,
+  SkillEntry,
+} from "../../skills/types.js";
 import type { SandboxContext } from "../sandbox/types.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -104,6 +108,19 @@ export function mapSandboxSkillEntriesForPrompt(params: {
   });
 }
 
+export function createSandboxPromptEntryLoader(params: {
+  loadEntries: () => SkillEntry[];
+  skillsWorkspaceDir: string;
+  skillsPromptWorkspaceDir: string;
+}): () => SkillEntry[] {
+  return () =>
+    mapSandboxSkillEntriesForPrompt({
+      entries: params.loadEntries(),
+      skillsWorkspaceDir: params.skillsWorkspaceDir,
+      skillsPromptWorkspaceDir: params.skillsPromptWorkspaceDir,
+    }) ?? [];
+}
+
 export function mapSandboxSkillUsagePaths(params: {
   paths?: SkillUsagePath[];
   skillsWorkspaceDir: string;
@@ -125,7 +142,9 @@ export function mapSandboxSkillUsagePaths(params: {
 
 export function resolveSandboxSkillRuntimeInputs(params: {
   sandbox?: SandboxSkillRuntimeContext | null;
-  effectiveWorkspace: string;
+  // Fallback skill discovery anchors to the configured agent workspace so
+  // snapshot and fallback paths agree.
+  skillsAnchorWorkspace: string;
   skillsSnapshot?: SkillSnapshot;
 }): {
   skillsEligibility?: SkillEligibilityContext;
@@ -135,7 +154,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
   workspaceOnly: boolean;
 } {
   if (params.sandbox?.enabled === true) {
-    const skillsWorkspaceDir = params.sandbox.skillsWorkspaceDir ?? params.effectiveWorkspace;
+    const skillsWorkspaceDir = params.sandbox.skillsWorkspaceDir ?? params.skillsAnchorWorkspace;
     const skillsPromptWorkspaceDir =
       params.sandbox.workspaceAccess === "rw" &&
       params.sandbox.skillsWorkspaceDir &&
@@ -156,9 +175,9 @@ export function resolveSandboxSkillRuntimeInputs(params: {
     };
   }
   return {
-    skillsPromptWorkspaceDir: params.effectiveWorkspace,
+    skillsPromptWorkspaceDir: params.skillsAnchorWorkspace,
     skillsSnapshot: params.skillsSnapshot,
-    skillsWorkspaceDir: params.effectiveWorkspace,
+    skillsWorkspaceDir: params.skillsAnchorWorkspace,
     workspaceOnly: false,
   };
 }

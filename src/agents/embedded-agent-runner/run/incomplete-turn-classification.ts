@@ -58,9 +58,14 @@ export function isIncompleteTerminalAssistantTurn(params: {
   lastAssistant?: { stopReason?: string } | null;
 }): boolean {
   const stopReason = params.lastAssistant?.stopReason;
-  // Tool-use expects a post-tool continuation; length means the output budget
-  // ended before a complete final answer. Partial visible text completes neither.
-  return stopReason === "toolUse" || (stopReason === "length" && !params.hasTerminalOutput);
+  // Tool-use expects a post-tool continuation, so partial visible text completes
+  // nothing. Length is different: the output budget ended, no continuation is
+  // pending, and any visible text the model did emit is the answer so far. Only
+  // a length stop with nothing to show is an incomplete turn.
+  return (
+    stopReason === "toolUse" ||
+    (stopReason === "length" && !params.hasTerminalOutput && !params.hasAssistantVisibleText)
+  );
 }
 
 const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([

@@ -1,4 +1,4 @@
-import type { ChatSplitEdge } from "./split-layout.ts";
+import type { ChatSplitEdge } from "./split-layout-types.ts";
 
 export type SplitDropZone = { kind: "edge"; edge: ChatSplitEdge } | { kind: "center" };
 export type SplitDropRect = { left: number; top: number; width: number; height: number };

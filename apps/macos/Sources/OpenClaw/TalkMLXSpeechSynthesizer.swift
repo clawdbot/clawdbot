@@ -3,6 +3,7 @@ import Foundation
 import OpenClawKit
 import OpenClawMLXTTSProtocol
 import OSLog
+import Subprocess
 
 protocol MLXTTSTransport: AnyObject, Sendable {
     func send(_ request: MLXTTSRequest) async throws
@@ -44,7 +45,7 @@ actor TalkMLXSpeechSynthesizer {
 
     private init() {
         self.transportFactory = {
-            try ProcessMLXTTSTransport.launch(invocation: TalkMLXSpeechSynthesizer.helperInvocation())
+            try await ProcessMLXTTSTransport.launch(invocation: TalkMLXSpeechSynthesizer.helperInvocation())
         }
         self.idleDuration = .seconds(300)
         self.cancelGraceDuration = .seconds(1)
@@ -99,7 +100,7 @@ actor TalkMLXSpeechSynthesizer {
             do {
                 let transport = try await ensureTransport()
                 guard self.activeID == id, self.cancelRequestedID != id else {
-                    await self.discardTransport()
+                    await self.discardTransport(forRequest: id)
                     throw SynthesizeError.canceled
                 }
                 try await transport.send(request)
@@ -114,8 +115,10 @@ actor TalkMLXSpeechSynthesizer {
                 }
                 throw error
             } catch is CancellationError {
-                try? await self.transport?.send(.cancel(id: id))
-                await self.discardTransport()
+                if self.activeID == id {
+                    try? await self.transport?.send(.cancel(id: id))
+                }
+                await self.discardTransport(forRequest: id)
                 self.finishRequest(id: id)
                 throw SynthesizeError.canceled
             } catch {
@@ -124,7 +127,7 @@ actor TalkMLXSpeechSynthesizer {
                     talk mlx helper transport failed attempt=\(attempt + 1, privacy: .public): \
                     \(error.localizedDescription, privacy: .public)
                     """)
-                await self.discardTransport()
+                await self.discardTransport(forRequest: id)
                 if self.fallbackRequiredID == id {
                     self.finishRequest(id: id)
                     throw SynthesizeError.audioGenerationFailed
@@ -191,7 +194,7 @@ actor TalkMLXSpeechSynthesizer {
             do {
                 let transport = try await ensureTransport()
                 guard self.activeID == id, self.cancelRequestedID != id else {
-                    await self.discardTransport()
+                    await self.discardTransport(forRequest: id)
                     throw SynthesizeError.canceled
                 }
                 try await transport.send(request)
@@ -221,15 +224,17 @@ actor TalkMLXSpeechSynthesizer {
                 }
                 throw error
             } catch is CancellationError {
-                try? await self.transport?.send(.cancel(id: id))
-                await self.discardTransport()
+                if self.activeID == id {
+                    try? await self.transport?.send(.cancel(id: id))
+                }
+                await self.discardTransport(forRequest: id)
                 self.finishRequest(id: id)
                 throw SynthesizeError.canceled
             } catch {
                 self.logger.error(
                     "talk mlx helper stream failed attempt=\(attempt + 1, privacy: .public): " +
                         "\(error.localizedDescription, privacy: .public)")
-                await self.discardTransport()
+                await self.discardTransport(forRequest: id)
                 if self.fallbackRequiredID == id {
                     self.finishRequest(id: id)
                     throw SynthesizeError.audioGenerationFailed
@@ -260,7 +265,7 @@ actor TalkMLXSpeechSynthesizer {
         do {
             try await self.transport?.send(.cancel(id: activeID))
         } catch {
-            await self.discardTransport()
+            await self.discardTransport(forRequest: activeID)
         }
         self.scheduleCancelEscalation(id: activeID)
     }
@@ -295,7 +300,11 @@ actor TalkMLXSpeechSynthesizer {
             self.logger.info("talk mlx helper ready")
             return transport
         } catch {
-            self.transport = nil
+            // Shutdown can admit a replacement while this startup is unwinding.
+            // Only the exact failed transport may surrender current ownership.
+            if self.transport === transport {
+                self.transport = nil
+            }
             await transport.close()
             throw error
         }
@@ -385,7 +394,7 @@ actor TalkMLXSpeechSynthesizer {
         do {
             try await transport.send(.cancel(id: id))
         } catch {
-            await self.discardTransport()
+            await self.discardTransport(forRequest: id)
             return
         }
         self.scheduleCancelEscalation(id: id)
@@ -428,7 +437,7 @@ actor TalkMLXSpeechSynthesizer {
                 }
             }
         } catch SynthesizeError.timedOut {
-            await self.discardTransport()
+            await self.discardTransport(forRequest: id)
             self.finishRequest(id: id)
             continuation.finish(throwing: SynthesizeError.timedOut)
         } catch {
@@ -479,7 +488,7 @@ actor TalkMLXSpeechSynthesizer {
         // Soprano checks cancellation while producing tokens, but its final
         // decoder has no cancellation contract. Bound that phase with a kill.
         self.logger.info("talk mlx cancel grace expired; terminating helper")
-        await self.discardTransport()
+        await self.discardTransport(forRequest: id)
     }
 
     private func scheduleIdleShutdown() {
@@ -512,6 +521,12 @@ actor TalkMLXSpeechSynthesizer {
         self.logger.info("talk mlx helper memory-pressure shutdown")
         self.fallbackRequiredID = self.activeID
         await self.shutdown()
+    }
+
+    private func discardTransport(forRequest id: String) async {
+        // A stale request may finish after shutdown admitted a replacement.
+        guard self.activeID == id else { return }
+        await self.discardTransport()
     }
 
     private func discardTransport() async {
@@ -599,7 +614,7 @@ private enum MLXTTSTransportError: Error {
 }
 
 private actor ProcessMLXTTSTransport: MLXTTSTransport {
-    private let process: Process
+    private let process: ManagedProcess
     private let input: FileHandle
     private let output: FileHandle
     private let chunkContinuation: AsyncStream<Data>.Continuation
@@ -609,7 +624,7 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
     private var isClosed = false
 
     private init(
-        process: Process,
+        process: ManagedProcess,
         input: FileHandle,
         output: FileHandle,
         chunks: AsyncStream<Data>,
@@ -622,15 +637,14 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
         self.chunkContinuation = chunkContinuation
     }
 
-    static func launch(invocation: TalkMLXSpeechSynthesizer.HelperInvocation) throws -> ProcessMLXTTSTransport {
-        let process = Process()
+    static func launch(invocation: TalkMLXSpeechSynthesizer.HelperInvocation) async throws
+        -> ProcessMLXTTSTransport
+    {
         let inputPipe = Pipe()
         let outputPipe = Pipe()
-        process.executableURL = invocation.executableURL
-        process.arguments = invocation.argumentPrefix
-        process.standardInput = inputPipe
-        process.standardOutput = outputPipe
-        process.standardError = FileHandle.standardError
+        // The helper child can exit at any time; without this a racing
+        // send() to its stdin raises SIGPIPE and kills the app.
+        inputPipe.fileHandleForWriting.disableSIGPIPE()
 
         let output = outputPipe.fileHandleForReading
         let (stream, continuation) = AsyncStream<Data>.makeStream()
@@ -646,15 +660,31 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
             }
         }
 
+        let configuration = Subprocess.Configuration(
+            executable: .path(.init(invocation.executableURL.path)),
+            arguments: Arguments(invocation.argumentPrefix))
+        let process = ManagedProcess.launch(
+            configuration: configuration,
+            input: .fileDescriptor(
+                .init(rawValue: inputPipe.fileHandleForReading.fileDescriptor),
+                closeAfterSpawningProcess: false),
+            output: .fileDescriptor(
+                .init(rawValue: outputPipe.fileHandleForWriting.fileDescriptor),
+                closeAfterSpawningProcess: false),
+            error: .currentStandardError,
+            closeAfterSpawn: [
+                inputPipe.fileHandleForReading,
+                outputPipe.fileHandleForWriting,
+            ])
         do {
-            try process.run()
+            _ = try await process.waitUntilStarted()
         } catch {
+            // The detached launch can still spawn; reap it before closing inherited pipes.
+            await process.terminate(gracefully: false)
             output.readabilityHandler = nil
             continuation.finish()
             throw error
         }
-        inputPipe.fileHandleForReading.closeFile()
-        outputPipe.fileHandleForWriting.closeFile()
 
         return ProcessMLXTTSTransport(
             process: process,
@@ -688,9 +718,7 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
         self.chunkContinuation.finish()
         self.input.closeFile()
         self.output.closeFile()
-        if self.process.isRunning {
-            self.process.terminate()
-        }
+        await self.process.terminate()
     }
 }
 

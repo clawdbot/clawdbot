@@ -44,11 +44,11 @@ function makeDistinctImageRef(index: number): string {
 
 async function executeNativeImageTool(imageCount: number): Promise<AgentMessage> {
   const result = await createRequiredImageTool().execute("native-image-context", {
-    images: Array.from({ length: imageCount }, (_, index) => makeDistinctImageRef(index)),
+    paths: Array.from({ length: imageCount }, (_, index) => makeDistinctImageRef(index)),
   });
   const content = result.content as ContentBlock[];
   expect(content[0]?.text).toBe(
-    `Loaded ${imageCount} image${imageCount === 1 ? "" : "s"} for direct visual inspection.`,
+    `Loaded ${imageCount} image${imageCount === 1 ? "" : "s"} into private model context for inspection; not displayed, attached, or sent to the user.`,
   );
   expect(content.filter((block) => block.type === "image")).toHaveLength(imageCount);
   expect(content.filter((block) => block.type === "image")).toEqual(
@@ -58,7 +58,7 @@ async function executeNativeImageTool(imageCount: number): Promise<AgentMessage>
   return castAgentMessage({
     role: "toolResult",
     toolCallId: "native-image-context",
-    toolName: "image",
+    toolName: "view_image",
     isError: false,
     timestamp: 0,
     ...result,
@@ -199,10 +199,13 @@ describe("native image tool result context projection", () => {
     },
   );
 
-  it("keeps a fitting image without letting oversized text starve a later text block", async () => {
+  it.each([
+    ["short", "retain the image description"],
+    ["2,000-character", "d".repeat(2_000)],
+  ])("keeps a fitting image without starving a later %s text block", async (_name, description) => {
     const native = await executeNativeImageTool(2);
     const nativeBlocks = blocksOf(native);
-    const trailingText = { type: "text", text: "retain the image description" };
+    const trailingText = { type: "text", text: description };
     const source = castAgentMessage({
       ...native,
       content: [

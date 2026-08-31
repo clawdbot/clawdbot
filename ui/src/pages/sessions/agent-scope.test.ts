@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { searchVisibleSessionTranscripts } from "./agent-scope.ts";
+import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 
 describe("searchVisibleSessionTranscripts", () => {
   it("batches every visible session within the protocol key limit", async () => {
@@ -82,6 +82,68 @@ describe("searchVisibleSessionTranscripts", () => {
     expect(request.mock.calls[2]?.[1]).toEqual(
       expect.objectContaining({ sessionKeys: [lastSession.key] }),
     );
+  });
+
+  it("bounds palette-style roster enumeration and transcript requests", async () => {
+    const request = vi.fn(async (_method: string, _params: unknown) => ({ results: [] }));
+    const firstPage = Array.from(
+      { length: 200 },
+      (_, index) => ({ key: `agent:main:session-${index}` }) as GatewaySessionRow,
+    );
+    const listSessions = vi.fn(async () => ({
+      count: firstPage.length,
+      totalCount: 10_000,
+      sessions: firstPage,
+      hasMore: true,
+      nextOffset: 200,
+    })) as unknown as (options: unknown) => Promise<SessionsListResult>;
+
+    const result = await searchVisibleSessionTranscripts({
+      client: { request } as unknown as GatewayBrowserClient,
+      query: "needle",
+      listSessions,
+      listOptions: {},
+      resolveAgentId: () => "main",
+      maxListPages: 4,
+      maxSearchRequests: 1,
+      maxSessionKeys: 200,
+    });
+
+    expect(listSessions).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ sessionKeys: firstPage.map((row) => row.key) }),
+    );
+    expect(result.sessions).toHaveLength(200);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("does not truncate a terminal roster at the exact key cap", async () => {
+    const request = vi.fn(async (_method: string, _params: unknown) => ({ results: [] }));
+    const sessions = Array.from(
+      { length: 200 },
+      (_, index) => ({ key: `agent:main:session-${index}` }) as GatewaySessionRow,
+    );
+    const listSessions = vi.fn(async () => ({
+      count: sessions.length,
+      totalCount: sessions.length,
+      sessions,
+      hasMore: false,
+    })) as unknown as (options: unknown) => Promise<SessionsListResult>;
+
+    const result = await searchVisibleSessionTranscripts({
+      client: { request } as unknown as GatewayBrowserClient,
+      query: "needle",
+      listSessions,
+      listOptions: {},
+      resolveAgentId: () => "main",
+      maxListPages: 4,
+      maxSearchRequests: 4,
+      maxSessionKeys: 200,
+    });
+
+    expect(result.sessions).toHaveLength(200);
+    expect(result.truncated).toBe(false);
   });
 
   it("recovers a moving thread when a later page omits the authoritative total", async () => {

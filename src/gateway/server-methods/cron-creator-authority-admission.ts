@@ -3,7 +3,10 @@ import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
 
-export type GatewayCronCreatorAuthorityAdmission = Readonly<{ runId: string }>;
+export type GatewayCronCreatorAuthorityAdmission = Readonly<{
+  runId: string;
+  callerOrigin: { kind: "local" };
+}>;
 
 type DirectLocalOperatorAuthorityParams = {
   runId: string;
@@ -37,7 +40,9 @@ function resolveDirectLocalOperatorAuthority(
     internal.pluginSubagentRequester === undefined &&
     internal.runtimePluginToolGrant === undefined &&
     internal.delegatedToolPolicyHandoffId === undefined;
-  return isDirectLocalOperator ? Object.freeze({ runId }) : undefined;
+  return isDirectLocalOperator
+    ? Object.freeze({ runId, callerOrigin: { kind: "local" as const } })
+    : undefined;
 }
 
 /** Mints fresh cron authority only for an admitted direct local agent RPC turn. */

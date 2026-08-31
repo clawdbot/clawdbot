@@ -5,6 +5,8 @@
   "categories": { "correctness": "off" },
   "rules": {
     "openclaw-boundaries/no-raw-window-open-call": "error",
-    "openclaw-boundaries/no-register-http-handler-call": "error"
+    "openclaw-boundaries/no-register-http-handler-call": "error",
+    "openclaw-boundaries/no-widen-then-assert": "error",
+    "openclaw-boundaries/no-chained-type-assertions": "error"
   }
 }

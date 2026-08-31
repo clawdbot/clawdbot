@@ -42,7 +42,10 @@ describe("clawhub skills", () => {
                 {
                   score: 1,
                   slug: "playwright-interactive",
+                  ownerHandle: "acme",
                   displayName: "Playwright Interactive",
+                  source: "clawhub",
+                  install: { kind: "clawhub", reference: "acme/playwright-interactive" },
                   icon: `/api/v1/skill-icons/${"a".repeat(64)}`,
                 },
               ],
@@ -65,13 +68,19 @@ describe("clawhub skills", () => {
             {
               score: 1,
               slug: "external",
+              ownerHandle: "acme",
               displayName: "External",
+              source: "clawhub",
+              install: { kind: "clawhub", reference: "acme/external" },
               icon: `https://tracker.example/api/v1/skill-icons/${"a".repeat(64)}`,
             },
             {
               score: 1,
               slug: "wrong-path",
+              ownerHandle: "acme",
               displayName: "Wrong Path",
+              source: "clawhub",
+              install: { kind: "clawhub", reference: "acme/wrong-path" },
               icon: "https://registry.example/icon.png",
             },
           ],
@@ -84,20 +93,44 @@ describe("clawhub skills", () => {
     ).resolves.toMatchObject([{ icon: undefined }, { icon: undefined }]);
   });
 
-  it("gives every search result the reference detail and install must send back", async () => {
+  it("keeps each search result on its own source and marks which ones are install-only", async () => {
+    // Shape copied from a live https://clawhub.ai/api/v1/search response: the origin of a result
+    // arrives under `install`, never as a flat `installRef`.
     const fetchImpl: typeof fetch = async () =>
       new Response(
         JSON.stringify({
           results: [
-            { score: 2, slug: "email", ownerHandle: "alice", displayName: "Email" },
-            { score: 1, slug: "email", ownerHandle: "bob", displayName: "Email" },
-            { score: 1, slug: "orphan", displayName: "Orphan" },
+            {
+              score: 2,
+              slug: "email",
+              ownerHandle: "alice",
+              displayName: "Email",
+              source: "clawhub",
+              install: { kind: "clawhub", reference: "alice/email" },
+            },
+            {
+              score: 1,
+              slug: "email",
+              ownerHandle: "bob",
+              displayName: "Email",
+              source: "clawhub",
+              install: { kind: "clawhub", reference: "bob/email" },
+            },
             {
               score: 1,
               slug: "weather",
-              installRef: "skills-sh:openclaw/skills/weather",
-              trustState: "not-scanned-by-clawhub",
+              ownerHandle: "openclaw",
               displayName: "Weather",
+              source: "skills-sh",
+              install: { kind: "skills-sh", reference: "skills-sh:openclaw/skills/weather" },
+            },
+            {
+              score: 1,
+              slug: "github-backed",
+              ownerHandle: "openclaw",
+              displayName: "GitHub backed",
+              source: "clawhub",
+              install: { kind: "github", reference: "openclaw/github-backed" },
             },
           ],
         }),
@@ -106,14 +139,88 @@ describe("clawhub skills", () => {
 
     await expect(
       searchClawHubSkills({ query: "email", baseUrl: "https://registry.example", fetchImpl }).then(
-        (results) => results.map((entry) => entry.installRef),
+        (results) =>
+          results.map((entry) => ({
+            installRef: entry.installRef,
+            installOnly: entry.installOnly,
+            trustState: entry.trustState,
+          })),
       ),
     ).resolves.toEqual([
-      "@alice/email",
-      "@bob/email",
-      undefined,
-      "skills-sh:openclaw/skills/weather",
+      { installRef: "@alice/email", installOnly: undefined, trustState: undefined },
+      { installRef: "@bob/email", installOnly: undefined, trustState: undefined },
+      // The external row keeps its own reference and stays out of detail; rewriting it to
+      // `@openclaw/weather` would install a different publisher's skill.
+      {
+        installRef: "skills-sh:openclaw/skills/weather",
+        installOnly: true,
+        trustState: "not-scanned-by-clawhub",
+      },
+      { installRef: "@openclaw/github-backed", installOnly: undefined, trustState: undefined },
     ]);
+  });
+
+  it("drops rows whose source or reference cannot be identified", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          results: [
+            // External row without its own reference: publishing it under `@acme/weather` would
+            // install a different publisher's skill, and there is no other identity to install.
+            {
+              score: 1,
+              slug: "weather",
+              ownerHandle: "acme",
+              displayName: "Weather",
+              source: "skills-sh",
+              install: { kind: "skills-sh", reference: null },
+            },
+            // Native row without a publisher: every action on the bare slug answers 409.
+            {
+              score: 1,
+              slug: "orphan",
+              displayName: "Orphan",
+              source: "clawhub",
+              install: { kind: "clawhub", reference: "orphan" },
+            },
+            // Unknown source: nothing here says which artifact an install would resolve.
+            {
+              score: 1,
+              slug: "mystery",
+              ownerHandle: "acme",
+              displayName: "Mystery",
+              source: "future-registry",
+              install: { kind: "future-registry", reference: "acme/mystery" },
+            },
+            // A known source still needs a supported delivery mechanism.
+            {
+              score: 1,
+              slug: "future-install",
+              ownerHandle: "acme",
+              displayName: "Future install",
+              source: "clawhub",
+              install: { kind: "future-transport", reference: "acme/future-install" },
+            },
+            {
+              score: 1,
+              slug: "keep",
+              ownerHandle: "acme",
+              displayName: "Keep",
+              source: "clawhub",
+              install: { kind: "clawhub", reference: "acme/keep" },
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+
+    await expect(
+      searchClawHubSkills({
+        query: "weather",
+        baseUrl: "https://registry.example",
+        fetchImpl,
+      }).then((results) => results.map((entry) => entry.installRef)),
+    ).resolves.toEqual(["@acme/keep"]);
   });
 
   it("preserves the legacy telemetry opt-out when the primary env is blank", async () => {

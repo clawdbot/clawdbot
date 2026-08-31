@@ -62,6 +62,8 @@ export function resolveQaGatewayStartupRetry(params: {
 }
 
 function isRetryableGatewayCallError(details: string): boolean {
+  // The persistent QA client exposes preformatted close errors plus child logs,
+  // not the typed transport errors produced by one-shot gateway calls.
   return (
     details.includes("handshake timeout") ||
     details.includes("gateway closed (1000") ||
@@ -256,6 +258,8 @@ export async function waitForGatewayListening(params: {
 }
 
 export function isRetryableRpcStartupError(error: unknown) {
+  // Startup errors cross the same low-level client/log boundary; timeout and
+  // token-mismatch retry facts exist only in the formatted diagnostic.
   const details = formatErrorMessage(error);
   return (
     details.includes("gateway timeout after") ||

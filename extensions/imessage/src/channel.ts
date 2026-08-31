@@ -1,13 +1,16 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 // Imessage plugin module implements channel behavior.
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { formatTrimmedAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
+  sanitizeForPlainText,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -15,6 +18,7 @@ import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-run
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
+  collectStatusIssuesFromLastError,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
@@ -24,13 +28,7 @@ import {
   imessageApprovalCapability,
   shouldSuppressLocalIMessageExecApprovalPrompt,
 } from "./approval-native.js";
-import {
-  collectStatusIssuesFromLastError,
-  DEFAULT_ACCOUNT_ID,
-  formatTrimmedAllowFromEntries,
-  normalizeIMessageMessagingTarget,
-  type ChannelPlugin,
-} from "./channel-api.js";
+import { resolveIMessageDirectChatService } from "./chat-context.js";
 import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
 import {
   matchIMessageAcpConversation,
@@ -46,6 +44,7 @@ import {
   sanitizeIMessageFinalOutboundText,
   sanitizeOutboundText,
 } from "./monitor/sanitize-outbound.js";
+import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import type { IMessageProbe } from "./probe.js";
 import { imessageSetupContract } from "./setup-core.js";
 import {
@@ -54,6 +53,7 @@ import {
   imessageSetupWizard,
 } from "./shared.js";
 import { probeIMessageStatusAccount } from "./status-core.js";
+import { isIMessagePhoneLikeHandle } from "./target-identifiers.js";
 import {
   inferIMessageTargetChatType,
   looksLikeIMessageExplicitTargetId,
@@ -100,7 +100,7 @@ const loadIMessageQuestionReactionsModule = createLazyRuntimeModule(
 
 async function prepareForwardedIMessageApprovalPayload(params: {
   payload: Parameters<NonNullable<ChannelOutboundAdapter["beforeDeliverPayload"]>>[0]["payload"];
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
 }): Promise<void> {
   const prepared = (
     await loadIMessageApprovalReactionsModule()
@@ -218,7 +218,7 @@ function isCanonicalIMessageDirectHandle(raw: string, normalized: string): boole
   // Inbound DMs key sessions by normalized phone number or email. Names and
   // other bridge aliases can deliver, but cannot prove the reply identity.
   if (normalized.startsWith("+")) {
-    return /^[+\d\s().-]+$/.test(trimmed);
+    return isIMessagePhoneLikeHandle(trimmed);
   }
   return /^[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+$/.test(trimmed);
 }
@@ -237,11 +237,9 @@ function resolveIMessageOutboundSessionRoute(params: {
     }
     const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
     const service =
-      parsed.serviceExplicit || parsed.service !== "auto"
-        ? parsed.service
-        : account.config.service === "sms"
-          ? "sms"
-          : "imessage";
+      resolveIMessageDirectChatService(
+        parsed.serviceExplicit ? parsed.service : account.config.service,
+      ) ?? "auto";
     const directTarget = `${service}:${handle}`;
     const peer: RoutePeer = { kind: "direct", id: handle };
     const baseSessionKey = buildIMessageBaseSessionKey({
@@ -317,6 +315,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       doctor: imessageDoctor,
       conversationBindings: {
         supportsCurrentConversationBinding: true,
+        bindingStore: "adapter",
         createManager: ({ cfg, accountId }) =>
           createIMessageConversationBindingManager({
             cfg,
@@ -345,9 +344,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveOutboundSessionRoute: (params) => resolveIMessageOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeIMessageExplicitTargetId,
-          hint: "<handle|chat_id:ID>",
-          resolveTarget: async ({ normalized }) => {
-            const to = normalized?.trim();
+          hint: "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
+          resolveTarget: async ({ input }) => {
+            const to = normalizeIMessageMessagingTarget(input);
             if (!to) {
               return null;
             }

@@ -65,6 +65,7 @@ function createProbe(
     },
     server: {
       version: "2026.4.24",
+      buildId: "build-test",
       connId: "conn-test",
     },
     health: null,
@@ -448,6 +449,11 @@ describe("gateway status output", () => {
             role: "operator",
             scopes: ["operator.read"],
             capability: "read_only",
+          },
+          server: {
+            version: "2026.4.24",
+            buildId: "build-test",
+            connId: "conn-test",
           },
           self: null,
           config: null,

@@ -1,0 +1,221 @@
+.sidebar-update-card {
+  position: relative;
+  margin: 0 8px 10px;
+}
+
+.sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - 32px));
+  margin: 12px 16px 0;
+}
+
+.sidebar-update-card__actions {
+  display: flex;
+  gap: 5px;
+}
+
+/* Clear the collapsed three-button chrome cluster plus an 8px breathing gap. */
+.shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - var(--shell-chrome-safe-area-left) - 16px));
+  margin-left: var(--shell-chrome-safe-area-left);
+}
+
+/* Native hosts hide the web cluster; onboarding never mounts it. */
+html.openclaw-native-nav
+  .shell:not(.shell--mobile-nav)
+  .sidebar-update-card--floating
+  .sidebar-update-card,
+html.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav)
+  .sidebar-update-card--floating
+  .sidebar-update-card,
+.shell--onboarding:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - 32px));
+  margin-left: 16px;
+}
+
+/* Native dashboard actions must also clear AppKit's drag strip. */
+html.openclaw-native-macos
+  .shell:not(.shell--mobile-nav)
+  .sidebar-update-card--floating
+  .sidebar-update-card {
+  margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
+}
+
+.sidebar-update-card__action {
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
+  color: var(--text);
+  cursor: var(--cursor-action);
+  text-align: left;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.sidebar-update-card__action:hover:not(:disabled):not([aria-disabled="true"]),
+.sidebar-update-card__action:focus-visible:not([aria-disabled="true"]) {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-elevated));
+}
+
+.sidebar-update-card__action:focus-visible,
+.sidebar-update-card__hold:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-update-card__hold {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--muted);
+  cursor: var(--cursor-action);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sidebar-update-card__hold:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-update-card__hold:disabled {
+  cursor: wait;
+  opacity: 0.66;
+}
+
+.sidebar-update-card__action:is(:disabled, [aria-disabled="true"]) {
+  cursor: not-allowed;
+  opacity: 0.66;
+}
+
+.sidebar-update-card__action--busy:disabled {
+  cursor: wait;
+}
+
+/* Keep the card moving while its install outlives the initiating request. */
+.sidebar-update-card__action--busy .sidebar-update-card__icon svg {
+  animation: sidebar-update-card-spin 1s linear infinite;
+}
+
+@keyframes sidebar-update-card-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-update-card__action--busy .sidebar-update-card__icon svg {
+    animation: none;
+  }
+}
+
+/* Keep the outcome beside its control, except while the dialog owns the report. */
+body.update-dialog-open .sidebar-update-card__status {
+  display: none;
+}
+
+.sidebar-update-card__status {
+  padding: 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sidebar-update-card__status + .sidebar-update-card__actions {
+  margin-top: 6px;
+}
+
+.sidebar-update-card__review {
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.sidebar-update-card__review:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-update-card__status--danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.sidebar-update-card__status--warn {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
+.sidebar-update-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.sidebar-update-card__text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-update-card__text--stacked {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-update-card__title {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.sidebar-update-card__subtitle {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-update-card__icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

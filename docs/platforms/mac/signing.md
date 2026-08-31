@@ -7,15 +7,25 @@ title: "macOS signing"
 
 # mac signing (debug builds)
 
-[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) builds and packages the app to a fixed path (`dist/OpenClaw.app`), then calls [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh) to sign it. TCC permissions are tied to the bundle ID and code signature; keeping both stable (and the app at a fixed path) across rebuilds keeps macOS from forgetting TCC grants (notifications, accessibility, screen recording, mic, speech).
+[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) builds a staged app, calls [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh), and verifies the signed worker before replacing `dist/OpenClaw.app`. TCC permissions are tied to the bundle ID and code signature; keeping both stable (and the app at a fixed path) across rebuilds keeps macOS from forgetting TCC grants (notifications, accessibility, screen recording, mic, speech).
 
 - Debug bundle identifier defaults to `ai.openclaw.mac.debug` (override with `BUNDLE_ID=...`).
 - Node: `>=22.22.3 <23`, `>=24.15.0 <25`, or `>=25.9.0` (repo `package.json` `engines`). The packager also builds the Control UI (`pnpm ui:build`).
 - Requires a real signing identity by default; the codesign script exits with an error if none is found and `ALLOW_ADHOC_SIGNING` is not set. Ad-hoc signing (`SIGN_IDENTITY="-"`) is explicit opt-in and does not persist TCC permissions across rebuilds. See [macOS permissions](/platforms/mac/permissions).
 - Reads `SIGN_IDENTITY` from the environment (e.g. `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"`, or a Developer ID Application cert). Without it, `codesign-mac-app.sh` auto-selects an identity in this order: Developer ID Application, Apple Distribution, Apple Development, then the first valid codesigning identity found.
-- `CODESIGN_TIMESTAMP=auto` (default) enables trusted timestamps only for Developer ID Application signatures. Set `on`/`off` to force either way.
-- Stamps Info.plist with `OpenClawBuildTimestamp` (ISO8601 UTC) and `OpenClawGitCommit` (short hash, `unknown` if unavailable) so the About tab can show build, git, and debug/release channel.
-- Runs a Team ID audit after signing and fails if any Mach-O inside the bundle has a different Team ID. Set `SKIP_TEAM_ID_CHECK=1` to bypass.
+- `SIGN_IDENTITY` also accepts a certificate SHA-1 hash to distinguish certificates with the same common name.
+- `CODESIGN_TIMESTAMP=auto` (default) enables trusted timestamps for Developer ID Application signatures selected by name or certificate hash. Set `on`/`off` to force either way.
+- Stamps Info.plist with `OpenClawBuildTimestamp` (ISO8601 UTC) and `OpenClawGitCommit` (full 40-character hexadecimal commit, or `unknown` for local builds when unavailable) so the About tab can show build, git, and debug/release channel.
+- Audits native-signature format and Team IDs after signing. Metadata failures, non-native signatures, missing Team IDs, and mismatched Team IDs fail by default. `SKIP_TEAM_ID_CHECK=1` skips only the Team ID comparison; native-signature format checks still run.
+- Signs the private worker's native code before sealing the app. Only the worker's `bin/node` and the Claude Agent SDK's packaged `claude` runtime executables receive JIT memory entitlements; other native helpers and libraries are plain-signed, with library validation retained and the app's signing identity required. Packaging verifies each requested architecture's native capabilities and worker readiness in temporary state before and after signing.
+
+Signing uses `/usr/bin/python3` to scan file headers and batches candidates through `/usr/bin/file`. Apple's `/usr/bin/otool` then checks native headers for every architecture, including fat64 containers that `file` reports as data. Mixed signing categories and malformed native headers stop signing. Java classes, static archives, and Mach-O linker, debug, and core artifacts are resource-sealed rather than directly signed. Discovery opens directories without following symlinks and classifies opened file descriptors rather than redirectable paths. It does not run the bundled Node to sign itself. Before publishing, the scan validates every observed input, including directory namespaces and resources omitted from the native list. It rejects incomplete traversal and observed changes; this is not an atomic filesystem snapshot.
+
+The signature audit also requires a native Mach-O signature. Some Apple toolchains return success while signing raw fat64 as generic data, without native entitlements; that result is rejected. The signer does not thin or convert input containers. Rebuild unsupported native payloads as codesign-compatible code before packaging rather than relying on generic-signature verification.
+
+App and Sparkle bundle owners are sealed once, after their nested code; signing a bundle's main executable separately would also reseal that bundle's resources. A fresh inventory after the app is sealed feeds the Team ID and elevation audits; scanner or classifier failures stop signing. Worker portability checks keep each architecture's loader paths separate and reject nonportable dependencies and broken or escaping symlinks.
+
+Sign a private staged copy that no other process modifies. Hardlinked files and special files such as FIFOs are rejected before attribute cleanup; copy or rebuild the bundle if this validation fails. Attribute cleanup and signing use macOS `/usr/bin/sandbox-exec` to restrict filesystem writes to the fixed app and temporary signing directories, with extra inherited file descriptors closed. Signing fails if this mutation boundary cannot be started; there is no unrestricted fallback.
 
 ## Usage
 

@@ -16,6 +16,7 @@ import {
   resolveOxlintShardConcurrency,
   resolveWindowsExtensionChunkSize,
   runShard,
+  selectCoreOxlintStripe,
   shouldPrepareExtensionPackageBoundaryArtifactsForShards,
   shouldRunOxlintShardsSerial,
 } from "../../scripts/run-oxlint-shards.mts";
@@ -23,6 +24,8 @@ import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mts";
+import { waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -62,11 +65,15 @@ function writeModule(target: string, lines: string[]): void {
 function createSignalRunner(mode: SignalScenario, target: string): void {
   if (mode === "group") {
     const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+    // An empty PID read becomes 0, so failure cleanup would kill its own process
+    // group. Publish complete PID bytes before the harness can observe the file.
     writeModule(target, [
       "import { spawn } from 'node:child_process';",
-      "import { writeFileSync } from 'node:fs';",
+      "import { renameSync, writeFileSync } from 'node:fs';",
       `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-      "writeFileSync(process.env.CHILD_PID_PATH, String(child.pid)); writeFileSync(process.env.READY_FILE, String(process.pid));",
+      "writeFileSync(process.env.CHILD_PID_PATH + '.tmp', String(child.pid));",
+      "renameSync(process.env.CHILD_PID_PATH + '.tmp', process.env.CHILD_PID_PATH);",
+      "writeFileSync(process.env.READY_FILE, String(process.pid));",
       "process.on('SIGTERM', () => process.exit(0));",
       "setInterval(() => {}, 1000);",
     ]);
@@ -238,13 +245,13 @@ describe("run-oxlint", () => {
     };
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
 
-    expect(packageJson.scripts.check).toBe("node --import tsx scripts/check.mts");
-    expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
+    expect(packageJson.scripts.check).toBe("node --import ./scripts/tsx.mjs scripts/check.mts");
+    expect(packageJson.scripts.lint).toBe("node --import ./scripts/tsx.mjs scripts/run-lint.mts");
     expect(packageJson.scripts["lint:core"]).toBe(
-      "node --import tsx scripts/run-oxlint-shards.mts --only=core --split-core",
+      "node --import ./scripts/tsx.mjs scripts/run-oxlint-shards.mts --only=core",
     );
     expect(packageJson.scripts.check).not.toContain(
-      "node --import tsx scripts/prepare-extension-package-boundary-artifacts.mts",
+      "node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts",
     );
     expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mts");
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
@@ -256,7 +263,7 @@ describe("run-oxlint", () => {
     };
     const lintRunner = readFileSync("scripts/run-lint.mts", "utf8");
 
-    expect(packageJson.scripts.lint).toBe("node --import tsx scripts/run-lint.mts");
+    expect(packageJson.scripts.lint).toBe("node --import ./scripts/tsx.mjs scripts/run-lint.mts");
     expect(lintRunner.indexOf("ensureRepoToolNodeModulesLink(")).toBeGreaterThan(-1);
     expect(
       lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
@@ -264,20 +271,6 @@ describe("run-oxlint", () => {
     expect(lintRunner.indexOf('path.resolve("scripts", "run-oxlint-shards.mts")')).toBeGreaterThan(
       lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
     );
-  });
-
-  it("holds one parent heavy-check lock for sharded lint runs", () => {
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
-    const skipLockIndex = shardedLintRunner.indexOf('env.OPENCLAW_OXLINT_SKIP_LOCK === "1"');
-    const lockIndex = shardedLintRunner.indexOf("acquireLocalHeavyCheckLockSync({");
-    const childSkipIndex = shardedLintRunner.indexOf('OPENCLAW_OXLINT_SKIP_LOCK: "1"');
-
-    expect(shardedLintRunner).toContain("resolveLocalHeavyCheckEnv");
-    expect(shardedLintRunner).toContain("shouldAcquireLocalHeavyCheckLockForOxlint");
-    expect(skipLockIndex).toBeGreaterThan(-1);
-    expect(lockIndex).toBeGreaterThan(-1);
-    expect(lockIndex).toBeGreaterThan(skipLockIndex);
-    expect(childSkipIndex).toBeGreaterThan(lockIndex);
   });
 
   it("serializes broad oxlint shards on constrained local hosts", () => {
@@ -400,39 +393,51 @@ describe("run-oxlint", () => {
       const runner = join(tempDir, "timeout-runner.mjs");
       const childPidPath = join(tempDir, "child.pid");
       let childPid = 0;
-      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+      const childScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+        "fs.writeFileSync(process.env.CHILD_PID_PATH + '.tmp', String(process.pid));",
+        "fs.renameSync(process.env.CHILD_PID_PATH + '.tmp', process.env.CHILD_PID_PATH);",
+      ].join("\n");
+      writeModule(runner, [
+        "import { spawn } from 'node:child_process';",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ]);
+
+      // The watchdog must test teardown, not win a race against child startup.
+      const releaseAndWait = startProcessWatchdogFixture(() =>
+        expect(
+          runShard({
+            env: {
+              ...process.env,
+              CHILD_PID_PATH: childPidPath,
+              OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
+              OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
+              OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "250",
+            },
+            extraArgs: [],
+            runner,
+            shard: { name: "timeout-group-test", args: [] },
+          }),
+        ).resolves.toBe(124),
+      );
       try {
-        writeModule(runner, [
-          "import { spawn } from 'node:child_process';",
-          "import { writeFileSync } from 'node:fs';",
-          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-          "writeFileSync(process.env.CHILD_PID_PATH, String(child.pid));",
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-        ]);
-
-        const command = runShard({
-          env: {
-            ...process.env,
-            CHILD_PID_PATH: childPidPath,
-            OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
-            OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
-            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "250",
-          },
-          extraArgs: [],
-          runner,
-          shard: { name: "timeout-group-test", args: [] },
-        });
-
-        await waitFor(() => existsSync(childPidPath), 15_000);
-        childPid = Number(readFileSync(childPidPath, "utf8"));
+        childPid = await waitForPidFile(childPidPath, 15_000);
         expect(isProcessAlive(childPid)).toBe(true);
-
-        await expect(command).resolves.toBe(124);
+        await releaseAndWait();
         await waitFor(() => !isProcessAlive(childPid), 15_000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        try {
+          await releaseAndWait();
+        } finally {
+          if (!childPid && existsSync(childPidPath))
+            childPid = Number(readFileSync(childPidPath, "utf8"));
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+            await waitForDead(childPid, 2_000);
+          }
         }
       }
     },
@@ -521,11 +526,56 @@ describe("run-oxlint", () => {
   });
 
   it("parses shard runner flags without forwarding them to oxlint", () => {
-    const parsed = parseShardRunnerArgs(["--only=core", "--split-core", "--max-warnings", "0"]);
+    const parsed = parseShardRunnerArgs([
+      "--only=core",
+      "--split-core",
+      "--core-stripe=2/3",
+      "--max-warnings",
+      "0",
+    ]);
 
     expect([...parsed.only]).toEqual(["core"]);
+    expect(parsed.coreStripe).toEqual({ index: 2, total: 3 });
     expect(parsed.splitCore).toBe(true);
     expect(parsed.oxlintArgs).toEqual(["--max-warnings", "0"]);
+  });
+
+  it("aggregates split core targets into deterministic disjoint Programs", () => {
+    const shards = createOxlintShards({
+      cwd: "/repo",
+      splitCore: true,
+      readDir: () =>
+        [
+          { name: "alpha", isDirectory: () => true, isFile: () => false },
+          { name: "beta", isDirectory: () => true, isFile: () => false },
+          { name: "gamma", isDirectory: () => true, isFile: () => false },
+        ] as never,
+    }).filter((shard) => shard.name.startsWith("core:"));
+    const stripes = [1, 2, 3].map((index) => selectCoreOxlintStripe(shards, { index, total: 3 }));
+
+    expect(stripes.map((stripe) => stripe.map((shard) => shard.name))).toEqual([
+      ["core:stripe:1"],
+      ["core:stripe:2"],
+      ["core:stripe:3"],
+    ]);
+    const stripeTargets = stripes.flatMap(([stripe]) => stripe?.args.slice(2) ?? []);
+    const sourceTargets = shards.flatMap((shard) => shard.args.slice(2));
+    expect(stripeTargets.toSorted()).toEqual(sourceTargets.toSorted());
+    expect(new Set(stripeTargets)).toHaveProperty("size", sourceTargets.length);
+    expect(selectCoreOxlintStripe(shards, { index: 6, total: 6 })).toEqual([]);
+    expect(() =>
+      selectCoreOxlintStripe(createOxlintShards({ cwd: "/repo" }), { index: 1, total: 2 }),
+    ).toThrow("--core-stripe requires a non-empty core-only shard selection");
+  });
+
+  it.each([
+    ["--core-stripe=0/3"],
+    ["--core-stripe=4/3"],
+    ["--core-stripe=1/0"],
+    ["--core-stripe=wat"],
+    ["--core-stripe", "1/3"],
+  ])("rejects invalid core stripe arguments: %s", (...args) => {
+    expect(() => parseShardRunnerArgs(args)).toThrow(/--core-stripe/u);
   });
 
   it.each([["--only"], ["--only", "--split-core"], ["--only="], ["--only=-h"]])(
@@ -578,16 +628,12 @@ describe("run-oxlint", () => {
       encoding: "utf8",
       env: {
         ...process.env,
-        OPENCLAW_HEAVY_CHECK_LOCK_SCOPE: "worktree",
         OPENCLAW_LOCAL_CHECK: "1",
       },
     });
 
     expect(result.status).toBe(1);
     expect(result.stderr).not.toContain("[oxlint:");
-    expect(existsSync(join(tempDir, ".artifacts/openclaw-local-checks/heavy-check.lock"))).toBe(
-      false,
-    );
   });
 
   it("falls back to the full extension shard when Windows extension dirs are unavailable", () => {

@@ -1,9 +1,13 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { releaseChatAttachmentPayload } from "./attachment-payload-store.ts";
+import {
+  releaseChatAttachmentPayloads,
+  releaseDisplacedChatAttachmentPayloads,
+} from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
-import { panesOf, type ChatSplitLayout, visiblePanesOf } from "./split-layout.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
+import { panesOf, visiblePanesOf } from "./split-layout.ts";
 
 export type ChatAttachmentGatewayOwner = ApplicationContext["gateway"]["snapshot"]["client"];
 
@@ -13,20 +17,6 @@ function handoffKey(paneId: string, state: ChatPageHost, owner: ChatAttachmentGa
     paneId,
     scopeKey: storedChatOutboxScopeKey(resolveStoredChatOutboxScope(state, state.sessionKey)),
   };
-}
-
-function releaseAttachments(
-  attachments: readonly ChatAttachment[],
-  retainedIds = new Set<string>(),
-  releasedIds = new Set<string>(),
-): void {
-  for (const attachment of attachments) {
-    if (retainedIds.has(attachment.id) || releasedIds.has(attachment.id)) {
-      continue;
-    }
-    releasedIds.add(attachment.id);
-    releaseChatAttachmentPayload(attachment.id);
-  }
 }
 
 export function restorePaneStagedAttachments(
@@ -51,13 +41,10 @@ export function restorePaneStagedAttachments(
     ...restored.fallbacks,
     ...state.chatComposerFallbackByScope,
   };
-  const retainedIds = new Set(state.chatAttachments.map((attachment) => attachment.id));
-  for (const fallback of Object.values(state.chatComposerFallbackByScope)) {
-    for (const attachment of fallback.attachments) {
-      retainedIds.add(attachment.id);
-    }
-  }
-  releaseAttachments(displaced, retainedIds);
+  releaseDisplacedChatAttachmentPayloads(displaced, [
+    state.chatAttachments,
+    ...Object.values(state.chatComposerFallbackByScope).map((fallback) => fallback.attachments),
+  ]);
 }
 
 export function preparePaneStagedAttachments(
@@ -78,10 +65,9 @@ export function discardStateStagedAttachments(state: ChatPageHost | undefined): 
   if (!state) {
     return;
   }
-  const releasedIds = new Set<string>();
-  releaseAttachments(state.chatAttachments, new Set(), releasedIds);
+  releaseChatAttachmentPayloads(state.chatAttachments);
   for (const fallback of Object.values(state.chatComposerFallbackByScope)) {
-    releaseAttachments(fallback.attachments, new Set(), releasedIds);
+    releaseChatAttachmentPayloads(fallback.attachments);
     fallback.attachments = [];
   }
   state.chatAttachments = [];
@@ -97,10 +83,23 @@ export function replacePaneStagedAttachmentGatewayOwner(
   if (!nextOwner || previousOwner === nextOwner) {
     return previousOwner;
   }
-  discardStateStagedAttachments(state);
-  state?.requestUpdate?.();
+  // Rotating the client invalidates annotation Undo context owned by the old
+  // client, but plain file/image payloads are client-local data URLs — a gap
+  // reconnect or plugin-install rotation must not silently discard them.
+  if (state) {
+    const dropAnnotations = (attachments: readonly ChatAttachment[]) => {
+      releaseChatAttachmentPayloads(
+        attachments.filter((attachment) => attachment.browserAnnotation),
+      );
+      return attachments.filter((attachment) => !attachment.browserAnnotation);
+    };
+    state.chatAttachments = dropAnnotations(state.chatAttachments);
+    for (const fallback of Object.values(state.chatComposerFallbackByScope)) {
+      fallback.attachments = dropAnnotations(fallback.attachments);
+    }
+    state.requestUpdate?.();
+  }
   context.chatAttachmentHandoff.clearPane(paneId);
-  // Rotating the token also invalidates any pending annotation Undo owned by the old client.
   return nextOwner;
 }
 

@@ -1,50 +1,59 @@
 import type { EnvironmentSummary, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
-import { html, nothing, svg } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import { desktopAppIcon, desktopAppLabel } from "./desktop-app-presentation.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
-const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
-
 export function renderDesktopPanelHeader(options: {
   dock: "bottom" | "right";
+  fullscreenControl: TemplateResult;
   onClose: () => void;
   onDock: (dock: "bottom" | "right") => void;
+  onOpenWindow: () => void;
 }) {
   return html`
-    <header class="bp-header">
-      <div class="bp-title">${t("desktop.title")}</div>
-      <div class="bp-actions">
+    <header class="rail-header bp-header">
+      <div class="rail-header__title bp-title">${t("desktop.title")}</div>
+      <div class="rail-header__actions bp-actions">
         <button
-          class="bp-icon ${options.dock === "bottom" ? "is-active" : ""}"
+          class="rail-header__action bp-icon ${options.dock === "bottom" ? "is-active" : ""}"
           type="button"
           title=${t("desktop.dockBottom")}
           aria-label=${t("desktop.dockBottom")}
           @click=${() => options.onDock("bottom")}
         >
-          ${DOCK_BOTTOM_GLYPH}
+          ${icons.panelBottomOpen}
         </button>
         <button
-          class="bp-icon ${options.dock === "right" ? "is-active" : ""}"
+          class="rail-header__action bp-icon ${options.dock === "right" ? "is-active" : ""}"
           type="button"
           title=${t("desktop.dockRight")}
           aria-label=${t("desktop.dockRight")}
           @click=${() => options.onDock("right")}
         >
-          ${DOCK_RIGHT_GLYPH}
+          ${icons.panelRightOpen}
         </button>
         <button
-          class="bp-icon"
+          class="rail-header__action bp-icon bp-open-window"
+          type="button"
+          title=${t("desktop.openWindow")}
+          aria-label=${t("desktop.openWindow")}
+          @click=${options.onOpenWindow}
+        >
+          ${icons.externalLink}
+        </button>
+        ${options.fullscreenControl}
+        <button
+          class="rail-header__action bp-icon"
           type="button"
           title=${t("desktop.hide")}
           aria-label=${t("desktop.hide")}
           @click=${options.onClose}
         >
-          ${CLOSE_GLYPH}
+          ${icons.x}
         </button>
       </div>
     </header>
@@ -72,7 +81,7 @@ export function renderDesktopPicker(options: {
     </div>
     <div class="desktop-picker">
       ${options.loading && options.environments.length === 0
-        ? html`<div class="desktop-status">${t("desktop.loading")}</div>`
+        ? renderPanelLoadingSkeleton("desktop", t("desktop.loading"))
         : options.environments.length === 0
           ? html`<div class="desktop-status">${t("desktop.empty")}</div>`
           : options.environments.map((environment) =>
@@ -219,17 +228,7 @@ export function renderDesktopConnection(options: {
           ></button>`
         : nothing}
       ${options.state === "connecting"
-        ? html`<div class="desktop-connecting" role="status" aria-live="polite">
-            <span class="desktop-connecting__monitor" aria-hidden="true">${icons.monitor}</span>
-            <span class="desktop-connecting__copy">
-              ${t("desktop.connecting")}
-              <span class="desktop-connecting__dots" aria-hidden="true">
-                <span class="desktop-connecting__dot"></span>
-                <span class="desktop-connecting__dot"></span>
-                <span class="desktop-connecting__dot"></span>
-              </span>
-            </span>
-          </div>`
+        ? renderPanelLoadingSkeleton("desktop", t("desktop.connecting"), false, true)
         : nothing}
     </div>
   `;

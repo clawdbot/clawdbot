@@ -13,11 +13,16 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
-import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
+import {
+  emitCoreModelRequestEndedDiagnosticEvent,
+  emitCoreModelRequestStartedDiagnosticEvent,
+} from "../infra/diagnostic-model-request.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   clearDiagnosticEmbeddedRunActivityForSession,
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunEnded,
@@ -38,6 +43,119 @@ afterEach(() => {
   vi.useRealTimers();
   resetDiagnosticRunActivityForTest();
   resetDiagnosticEventsForTest();
+});
+
+describe("core model owner generations", () => {
+  it("keeps exact-call recovery policy intact across forged terminals and run completion", async () => {
+    const ref = { sessionId: "core-owner-session", sessionKey: "agent:main:core-owner" };
+    const runId = "core-owner-run";
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    startDiagnosticRunActivityTracking();
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-1",
+        provider: "core",
+        model: "slow-model",
+      },
+      owner.generation,
+      300_000,
+    );
+    await waitForDiagnosticEventsDrained();
+
+    emitPluginTrustedDiagnosticEvent({
+      type: "model.call.completed",
+      ...ref,
+      runId,
+      callId: "call-1",
+      provider: "core",
+      model: "slow-model",
+      durationMs: 1,
+    });
+    emitDiagnosticEvent({
+      type: "run.completed",
+      ...ref,
+      runId,
+      durationMs: 1,
+      outcome: "completed",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: "model_call",
+      hasActiveEmbeddedRun: true,
+      activeModelCallRequestTimeoutMs: 300_000,
+      lastProgressReason: "model_call:started",
+    });
+  });
+
+  it("fences queued old starts and delayed terminals without erasing a same-run replacement", async () => {
+    const ref = { sessionId: "generation-session", sessionKey: "agent:main:generation" };
+    const runId = "reused-run";
+    const ownerA = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    startDiagnosticRunActivityTracking();
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerA });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "old-call",
+        provider: "core",
+        model: "slow-model",
+      },
+      ownerA.generation,
+      300_000,
+    );
+    closeDiagnosticEmbeddedRunOwner(ownerA);
+
+    const ownerB = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerB });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "new-call",
+        provider: "core",
+        model: "replacement-model",
+      },
+      ownerB.generation,
+      420_000,
+    );
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerA });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "resurrected-old-call",
+        provider: "core",
+        model: "stale-model",
+      },
+      ownerA.generation,
+      600_000,
+    );
+    await waitForDiagnosticEventsDrained();
+    emitCoreModelRequestEndedDiagnosticEvent(
+      {
+        type: "model.call.completed",
+        ...ref,
+        runId,
+        callId: "old-call",
+        provider: "core",
+        model: "slow-model",
+        durationMs: 1,
+      },
+      ownerA.generation,
+    );
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: "model_call",
+      hasActiveEmbeddedRun: true,
+      activeModelCallRequestTimeoutMs: 420_000,
+    });
+  });
 });
 
 describe("diagnostic run activity listener lifecycle", () => {
@@ -399,7 +517,8 @@ describe("repeated request liveness", () => {
       }) as Parameters<typeof emitPluginDiagnosticEvent>[0];
 
     startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
     emitPluginDiagnosticEvent(forgedRequest("normal-1"));
     emitPluginDiagnosticEvent(forgedRequest("normal-2"));
     emitPluginTrustedDiagnosticEvent(forgedRequest("trusted-1"));
@@ -415,25 +534,31 @@ describe("repeated request liveness", () => {
     await waitForDiagnosticEventsDrained();
 
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: "model_call",
-      lastProgressReason: "model_call:started",
+      activeWorkKind: "embedded_run",
+      lastProgressReason: "embedded_run:started",
       repeatedRequestNoProgressAgeMs: undefined,
     });
 
-    emitCoreModelRequestStartedDiagnosticEvent({
-      ...ref,
-      runId,
-      callId: "core-1",
-      provider: "core",
-      model: "request-model",
-    });
-    emitCoreModelRequestStartedDiagnosticEvent({
-      ...ref,
-      runId,
-      callId: "core-2",
-      provider: "core",
-      model: "request-model",
-    });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "core-1",
+        provider: "core",
+        model: "request-model",
+      },
+      owner.generation,
+    );
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "core-2",
+        provider: "core",
+        model: "request-model",
+      },
+      owner.generation,
+    );
     await waitForDiagnosticEventsDrained();
 
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({

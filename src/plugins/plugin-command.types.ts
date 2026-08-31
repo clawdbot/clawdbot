@@ -106,6 +106,12 @@ export type PluginCommandContext = {
   /** Host-bound runtime capabilities scoped to this command invocation. */
   runtimeContext?: {
     llm?: Pick<import("./runtime/types-core.js").PluginRuntimeCore["llm"], "complete">;
+    compactCurrent?: () => Promise<{
+      compacted: boolean;
+      reason?: string;
+      tokensBefore?: number;
+      tokensAfter?: number;
+    }>;
   };
   /** Internal diagnostics-only marker that exec approval already authorized upload. */
   diagnosticsUploadApproved?: boolean;

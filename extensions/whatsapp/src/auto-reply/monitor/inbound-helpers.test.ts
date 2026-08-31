@@ -1,3 +1,4 @@
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 // Whatsapp tests cover inbound context plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
@@ -247,6 +248,7 @@ describe("WhatsApp prepared inbound", () => {
     const projected = projectPreparedChannelInbound({
       inbound,
       control: { messageReceivedHooks: "core" },
+      buildContext: buildChannelInboundEventContext,
     });
 
     expect(projected.input).toEqual({

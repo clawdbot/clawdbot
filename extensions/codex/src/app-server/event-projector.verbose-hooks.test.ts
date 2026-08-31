@@ -337,7 +337,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       { step: "step two", status: "pending" },
     ]);
     expect(result.assistantTexts).toEqual(["final answer"]);
-    expect(JSON.stringify(result.messagesSnapshot)).toContain("Codex plan");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Codex plan:");
   });
 
   it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {

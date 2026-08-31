@@ -35,19 +35,21 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     indexPluginCount: 0,
     manifestPluginCount: 0,
   };
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "policy",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash: "policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: pluginManifestRegistry,
     plugins: [],
@@ -481,6 +483,32 @@ describe("gateway startup config validation", () => {
 
     await expectStartupRejects(
       `Invalid config at ${configPath}:\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.\nIf startup is still blocked, inspect the adjacent .bak backup before restoring it manually.`,
+    );
+  });
+
+  it("renders actionable diagnostics for invalid config written by a newer version", async () => {
+    const rawConfig = {
+      meta: { lastTouchedVersion: "9999.1.1" },
+      gateway: { mode: "nope" },
+    };
+    const invalidSnapshot = buildInvalidConfigSnapshot({
+      rawConfig,
+      config: rawConfig as OpenClawConfig,
+      issues: [
+        {
+          path: "gateway.mode",
+          pathSegments: ["gateway", "mode"],
+          message: 'Invalid input (allowed: "local", "remote")',
+        },
+      ],
+    });
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
+
+    await expectStartupRejects(
+      new RegExp(
+        'openclaw-startup-recovery\\.json:1 — gateway\\.mode: Invalid input \\(allowed: "local", "remote"\\), got: "nope".*Config was last written by OpenClaw 9999\\.1\\.1, but you are running',
+        "s",
+      ),
     );
   });
 

@@ -16,8 +16,9 @@ const gatewayClientState = vi.hoisted(() => ({
   } as { role?: string; scopes?: string[] } | undefined,
   helloServer: {
     version: "2026.4.24",
+    buildId: "build-test",
     connId: "conn-test",
-  },
+  } as { version: string; buildId?: string; connId: string },
   connectError: "scope upgrade pending approval (requestId: req-123)",
   connectErrorDetails: {
     code: "PAIRING_REQUIRED",
@@ -189,11 +190,11 @@ vi.mock("../infra/device-identity.js", () => ({
 }));
 
 vi.mock("../infra/device-auth-store.js", () => ({
-  loadDeviceAuthToken: (params: unknown) => {
+  loadDeviceAuthTokenReadOnly: (params: unknown) => {
     deviceIdentityState.tokenParams.push(params);
     return deviceIdentityState.cachedToken;
   },
-  loadOriginDeviceToken: (params: unknown) => {
+  loadOriginDeviceTokenReadOnly: (params: unknown) => {
     deviceIdentityState.originTokenParams.push(params);
     return deviceIdentityState.cachedOriginToken;
   },
@@ -325,6 +326,11 @@ describe("probeGateway", () => {
       role: "operator",
       scopes: ["operator.read"],
     };
+    gatewayClientState.helloServer = {
+      version: "2026.4.24",
+      buildId: "build-test",
+      connId: "conn-test",
+    };
     gatewayClientState.connectError = "scope upgrade pending approval (requestId: req-123)";
     gatewayClientState.connectErrorDetails = {
       code: "PAIRING_REQUIRED",
@@ -414,8 +420,24 @@ describe("probeGateway", () => {
     });
     expect(result.server).toEqual({
       version: "2026.4.24",
+      buildId: "build-test",
       connId: "conn-test",
     });
+  });
+
+  it("keeps legacy server metadata compatible when build identity is absent", async () => {
+    gatewayClientState.helloServer = {
+      version: "2026.4.24",
+      connId: "conn-test",
+    };
+
+    const result = await runTokenLightweightProbe();
+
+    expect(result.server).toEqual({
+      version: "2026.4.24",
+      connId: "conn-test",
+    });
+    expect(result.server).not.toHaveProperty("buildId");
   });
 
   it("preserves structured missing-scope details from a post-connect request", async () => {
@@ -482,14 +504,18 @@ describe("probeGateway", () => {
     expect(deviceIdentityState.tokenParams).toEqual([]);
   });
 
-  it("does not create or attach a device identity for first-time authenticated probes", async () => {
-    deviceIdentityState.cachedToken = null;
+  it.each([false, true])(
+    "does not attach a first-time authenticated probe identity (origin-scoped=%s)",
+    async (originScopedDeviceAuth) => {
+      deviceIdentityState.cachedToken = null;
+      deviceIdentityState.cachedOriginToken = null;
 
-    await runTokenProbe();
+      await runTokenProbe({ originScopedDeviceAuth });
 
-    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
-    expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
-  });
+      expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+      expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
+    },
+  );
 
   it("reuses cached device identity for unauthenticated loopback probes", async () => {
     await probeGateway({
@@ -500,16 +526,21 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
-  it("keeps device identity disabled for first-time unauthenticated loopback probes", async () => {
-    deviceIdentityState.cachedToken = null;
+  it.each([false, true])(
+    "does not attach a first-time unauthenticated probe identity (origin-scoped=%s)",
+    async (originScopedDeviceAuth) => {
+      deviceIdentityState.cachedToken = null;
+      deviceIdentityState.cachedOriginToken = null;
 
-    await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      timeoutMs: 1_000,
-    });
+      await probeGateway({
+        url: "ws://127.0.0.1:18789",
+        timeoutMs: 1_000,
+        originScopedDeviceAuth,
+      });
 
-    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
-  });
+      expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    },
+  );
 
   it("skips detail RPCs for lightweight reachability probes", async () => {
     const result = await probeGateway({
@@ -839,6 +870,7 @@ describe("probeGateway", () => {
     expect(success.ok).toBe(true);
     expect(lastGatewayClientOptions()?.url).toBe(url);
     expect(lastGatewayClientOptions()?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(lastGatewayClientOptions()?.sharedStateMode).toBe("read-only");
 
     setDeviceRequiredProbeMode();
     gatewayClientState.options = null;

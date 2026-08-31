@@ -24,21 +24,40 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
-import { channelEnabled, resolveChannelDisplayState } from "./view.shared.ts";
+import {
+  channelEnabled,
+  renderChannelRefreshAction,
+  resolveChannelDisplayState,
+} from "./view.shared.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
 type ChannelCardState = "running" | "configured" | "attention";
+
+const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
+  "whatsapp",
+  "telegram",
+  "discord",
+  "googlechat",
+  "slack",
+  "signal",
+  "imessage",
+  "nostr",
+];
 
 export function renderChannels(props: ChannelsProps) {
   const channelOrder = resolveChannelOrder(props.snapshot);
   const connected = channelOrder.filter((key) => channelEnabled(key, props));
   const available = channelOrder.filter((key) => !channelEnabled(key, props));
   const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
-  const partialWarnings = props.snapshot?.warnings?.filter((warning) => warning.trim()) ?? [];
+  const partialWarnings =
+    props.snapshot?.warnings
+      ?.filter((warning) => warning.trim())
+      .map((warning) => formatUiExternalText(warning)) ?? [];
   const data = buildChannelData(props);
   const selected = props.selectedChannel;
 
@@ -59,28 +78,15 @@ export function renderChannels(props: ChannelsProps) {
       ${props.setupBlockedByDirtyConfig && props.configFormDirty
         ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
         : nothing}
-      ${renderChannelPairingQueue(props)}
       ${renderSettingsSection(
         {
           title: t("channels.hub.connectedTitle"),
           ...(connected.length > 0 ? { count: connected.length } : {}),
-          actions: html`
-            <span class="settings-row__value">
-              ${props.lastSuccessAt
-                ? t("channels.hub.updatedAgo", {
-                    ago: formatRelativeTimestamp(props.lastSuccessAt),
-                  })
-                : t("common.na")}
-            </span>
-            <button
-              type="button"
-              class="btn btn--sm"
-              ?disabled=${props.loading}
-              @click=${() => props.onRefresh(true)}
-            >
-              ${t("common.refresh")}
-            </button>
-          `,
+          actions: renderChannelRefreshAction({
+            updatedAt: props.lastSuccessAt,
+            disabled: props.loading,
+            onRefresh: () => props.onRefresh(true),
+          }),
         },
         connected.length === 0
           ? html`
@@ -98,9 +104,13 @@ export function renderChannels(props: ChannelsProps) {
           description: t("channels.hub.addSubtitle"),
         },
         html`
-          ${available.map((key) => renderAvailableRow(key, props))} ${renderBrowseAllRow(props)}
+          ${!props.canAdmin
+            ? html`<div class="callout info" role="note">${t("channels.hub.adminRequired")}</div>`
+            : html`${available.map((key) => renderAvailableRow(key, props))}
+              ${renderBrowseAllRow(props)}`}
         `,
       )}
+      ${renderChannelPairingQueue(props)}
     `)}
     ${selected
       ? renderChannelDetail({
@@ -112,24 +122,26 @@ export function renderChannels(props: ChannelsProps) {
           onSetup: () => props.onStartSetup(selected),
         })
       : nothing}
-    ${renderChannelWizard({
-      wizard: props.wizard,
-      channelLabel: (channelId) => resolveChannelLabel(props.snapshot, channelId),
-      multiselectValues: props.wizardMultiselect,
-      onToggleMultiselect: props.onWizardToggleMultiselect,
-      textValue: props.wizardTextValue,
-      secretVisible: props.wizardSecretVisible,
-      onTextInput: props.onWizardTextInput,
-      onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
-      onAnswer: props.onWizardAnswer,
-      onClose: props.onWizardClose,
-      whatsappQrDataUrl: props.whatsappQrDataUrl,
-      whatsappMessage: props.whatsappMessage,
-      whatsappConnected: props.whatsappConnected,
-      whatsappBusy: props.whatsappBusy,
-      onWhatsAppStart: props.onWhatsAppStart,
-      onWhatsAppWait: props.onWhatsAppWait,
-    })}
+    ${props.canAdmin
+      ? renderChannelWizard({
+          wizard: props.wizard,
+          channelLabel: (channelId) => resolveChannelLabel(props.snapshot, channelId),
+          multiselectValues: props.wizardMultiselect,
+          onToggleMultiselect: props.onWizardToggleMultiselect,
+          textValue: props.wizardTextValue,
+          secretVisible: props.wizardSecretVisible,
+          onTextInput: props.onWizardTextInput,
+          onToggleSecretVisibility: props.onWizardToggleSecretVisibility,
+          onAnswer: props.onWizardAnswer,
+          onClose: props.onWizardClose,
+          whatsappQrDataUrl: props.whatsappQrDataUrl,
+          whatsappMessage: props.whatsappMessage,
+          whatsappConnected: props.whatsappConnected,
+          whatsappBusy: props.whatsappBusy,
+          onWhatsAppStart: props.onWhatsAppStart,
+          onWhatsAppWait: props.onWhatsAppWait,
+        })
+      : nothing}
     ${renderChannelPairingPrompt(props)}
   `;
 }
@@ -150,13 +162,10 @@ function buildChannelData(props: ChannelsProps): ChannelsChannelData {
 }
 
 function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
-  if (snapshot?.channelMeta?.length) {
-    return snapshot.channelMeta.map((entry) => entry.id);
-  }
-  if (snapshot?.channelOrder?.length) {
-    return snapshot.channelOrder;
-  }
-  return ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr"];
+  const statusOrder = snapshot?.channelMeta?.length
+    ? snapshot.channelMeta.map((entry) => entry.id)
+    : (snapshot?.channelOrder ?? []);
+  return [...new Set([...statusOrder, ...RECOMMENDED_CHANNEL_ORDER])];
 }
 
 function resolveChannelLabel(snapshot: ChannelsStatusSnapshot | null, key: string): string {

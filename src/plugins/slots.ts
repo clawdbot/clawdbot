@@ -94,7 +94,7 @@ export function resolveSlotSelection(slotKey: PluginSlotKey, value: unknown): Sl
   return normalized === null ? { kind: "off" } : { kind: "pinned", pluginId: normalized };
 }
 
-/** Resets every slot currently owned by a plugin to that slot's implicit default. */
+/** Resets every slot currently owned by a plugin to its implicit default. */
 export function resetPluginSlotsToDefaults(
   slots: PluginSlotsConfig | undefined,
   pluginId: string,
@@ -108,10 +108,10 @@ export function resetPluginSlotsToDefaults(
     if (slots[slotKey] !== pluginId) {
       continue;
     }
-    next[slotKey] = defaultSlotIdForKey(slotKey);
+    delete next[slotKey];
     changed = true;
   }
-  return changed ? next : slots;
+  return changed ? (Object.keys(next).length === 0 ? undefined : next) : slots;
 }
 
 type SlotSelectionResult = {
@@ -140,7 +140,13 @@ export function applyExclusiveSlotSelection(params: {
 
   for (const slotKey of slotKeys) {
     const prevSlot = slots[slotKey];
-    slots[slotKey] = params.selectedId;
+    const nextSlot =
+      params.selectedId === defaultSlotIdForKey(slotKey) ? undefined : params.selectedId;
+    if (nextSlot === undefined) {
+      delete slots[slotKey];
+    } else {
+      slots[slotKey] = nextSlot;
+    }
 
     const inferredPrevSlot = prevSlot ?? defaultSlotIdForKey(slotKey);
     if (inferredPrevSlot && inferredPrevSlot !== params.selectedId) {
@@ -183,7 +189,7 @@ export function applyExclusiveSlotSelection(params: {
       );
     }
 
-    if (prevSlot !== params.selectedId || disabledIds.length > 0) {
+    if (prevSlot !== nextSlot || disabledIds.length > 0) {
       anyChanged = true;
     }
   }
@@ -192,12 +198,14 @@ export function applyExclusiveSlotSelection(params: {
     return { config: params.config, warnings: [], changed: false };
   }
 
+  const { slots: _previousSlots, ...pluginsWithoutSlots } = pluginsConfig;
+
   return {
     config: {
       ...params.config,
       plugins: {
-        ...pluginsConfig,
-        slots,
+        ...pluginsWithoutSlots,
+        ...(Object.keys(slots).length > 0 ? { slots } : {}),
         entries,
       },
     },

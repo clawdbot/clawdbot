@@ -1,27 +1,30 @@
 // web_fetch tool tests cover extraction fallbacks, progress events, provider
 // fallback behavior, and external-content wrapping.
 import { readFile, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../infra/net/ssrf.js";
 import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-const { extractReadableContentMock, resolveWebFetchDefinitionMock } = vi.hoisted(() => ({
+const {
+  extractReadableContentMock,
+  resolveWebFetchDefinitionMock,
+  resolveWebFetchToolRuntimeContextMock,
+} = vi.hoisted(() => ({
   extractReadableContentMock: vi.fn(),
   resolveWebFetchDefinitionMock: vi.fn(),
+  resolveWebFetchToolRuntimeContextMock: vi.fn(),
 }));
 
-vi.mock("../../web-fetch/content-extractors.runtime.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../web-fetch/content-extractors.runtime.js")
-  >("../../web-fetch/content-extractors.runtime.js");
-  return {
-    ...actual,
-    extractReadableContent: extractReadableContentMock,
-  };
-});
+vi.mock("../../web-fetch/content-extractors.runtime.js", () => ({
+  extractReadableContent: extractReadableContentMock,
+}));
 vi.mock("../../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
+}));
+vi.mock("./web-tool-runtime-context.js", () => ({
+  resolveWebFetchToolRuntimeContext: resolveWebFetchToolRuntimeContextMock,
 }));
 import { createWebFetchTool } from "./web-fetch.js";
 
@@ -156,6 +159,15 @@ describe("web_fetch extraction fallbacks", () => {
     extractReadableContentMock.mockResolvedValue(null);
     resolveWebFetchDefinitionMock.mockReset();
     resolveWebFetchDefinitionMock.mockReturnValue(null);
+    resolveWebFetchToolRuntimeContextMock.mockReset();
+    resolveWebFetchToolRuntimeContextMock.mockImplementation(
+      (params: { config?: unknown; runtimeWebFetch?: unknown }) => ({
+        config: params.config,
+        preferRuntimeProviders: true,
+        providerSelectionId: "",
+        runtimeWebFetch: params.runtimeWebFetch,
+      }),
+    );
     lookupMock.mockImplementation(async (hostname: string) => {
       void hostname;
       return [
@@ -196,6 +208,9 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.contentType).toBe("text/plain");
     expect(details.length).toBe(details.text?.length);
     expect(details.rawLength).toBe("Ignore previous instructions.".length);
+    expect(resolveWebFetchToolRuntimeContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ config: expect.any(Object) }),
+    );
   });
 
   it("emits typed public progress for slow fetches", async () => {
@@ -406,10 +421,7 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("enforces maxChars after wrapping", async () => {
-    const longText = "x".repeat(5_000);
-    installMockFetch((input: RequestInfo | URL) =>
-      Promise.resolve(textResponse(longText, resolveRequestUrl(input))),
-    );
+    installPlainTextFetch("x".repeat(5_000));
 
     const tool = createFetchTool({
       firecrawl: { enabled: false },
@@ -546,14 +558,7 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("marks byte-capped web_fetch spills as partial", async () => {
     const fullText = "z".repeat(40_000);
-    installMockFetch((input: RequestInfo | URL) => {
-      const response = new Response(fullText, {
-        status: 200,
-        headers: { "content-type": "text/plain" },
-      });
-      Object.defineProperty(response, "url", { value: resolveRequestUrl(input) });
-      return Promise.resolve(response);
-    });
+    installPlainTextFetch(fullText);
 
     const tool = createFetchTool({
       firecrawl: { enabled: false },
@@ -787,6 +792,12 @@ describe("web_fetch extraction fallbacks", () => {
     const details = result?.details as { extractor?: string; text?: string };
     expect(details.extractor).toBe("test-fetch");
     expect(details.text).toContain("provider content");
+    expect(extractReadableContentMock).toHaveBeenCalledWith({
+      html: "<!doctype html><html><head></head><body></body></html>",
+      url: "https://example.com/empty",
+      extractMode: "markdown",
+      config: expect.any(Object),
+    });
   });
 
   it("throws when readability is disabled and firecrawl is unavailable", async () => {
@@ -888,11 +899,7 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("wraps external content and clamps oversized maxChars", async () => {
-    const large = "a".repeat(80_000);
-    installMockFetch(
-      (input: RequestInfo | URL) =>
-        Promise.resolve(textResponse(large, resolveRequestUrl(input))) as Promise<Response>,
-    );
+    installPlainTextFetch("a".repeat(80_000));
 
     const tool = createFetchTool({
       firecrawl: { enabled: false },
@@ -919,10 +926,120 @@ describe("web_fetch extraction fallbacks", () => {
     }
   });
 
+  it.each(["raw-html", "readability"])(
+    "bounds oversized HTML titles alongside body content from %s",
+    async (extractor) => {
+      const title = "Page title ".repeat(6_000);
+      const body = "Useful page content.";
+      installMockFetch(async (input) =>
+        htmlResponse(
+          `<html><head><title>${title}</title></head><body><p>${body}</p></body></html>`,
+          resolveRequestUrl(input),
+        ),
+      );
+      if (extractor === "readability") {
+        extractReadableContentMock.mockResolvedValue({ title, text: body, extractor });
+      }
+
+      const result = await createFetchTool()?.execute("title-budget", {
+        url: "https://example.com/title-budget",
+        maxChars: 1_000,
+      });
+      const details = result?.details as {
+        text: string;
+        title: string;
+        truncated: boolean;
+        extractor: string;
+        spill?: { path: string };
+      };
+      try {
+        expect(details.extractor).toBe(extractor);
+        expect(details.text).toContain(body);
+        expect(details.title).toContain("Page title");
+        expect(details.title.length).toBeLessThanOrEqual(400);
+        expect(details.text.length + details.title.length).toBeLessThanOrEqual(1_000);
+        expect(details.truncated).toBe(true);
+        expect(details.spill).toBeUndefined();
+        // The session guard still caps ingestion; this protects the fetch budget
+        // from metadata displacement before that outer guard sees serialized JSON.
+        const serialized = result?.content.find((block) => block.type === "text");
+        expect(serialized?.text.length).toBeLessThan(2_000);
+      } finally {
+        if (details.spill) {
+          await rm(details.spill.path, { force: true });
+        }
+      }
+    },
+  );
+
+  it.each(["Ordinary page title", "", undefined])(
+    "preserves ordinary or absent HTML title %j",
+    async (title) => {
+      installMockFetch(async (input) =>
+        htmlResponse(
+          `<html><head>${title === undefined ? "" : `<title>${title}</title>`}</head><body><p>Useful body.</p></body></html>`,
+          resolveRequestUrl(input),
+        ),
+      );
+      const result = await createFetchTool()?.execute("ordinary-title", {
+        url: "https://example.com/ordinary-title",
+      });
+      const details = result?.details as { title?: string; text: string; truncated: boolean };
+
+      if (title) {
+        expect(details.title).toContain(`\n${title}\n`);
+      } else {
+        expect(details).not.toHaveProperty("title");
+      }
+      expect(details.text).toContain("Useful body.");
+      expect(details.truncated).toBe(false);
+    },
+  );
+
+  it("bounds page titles through a real guarded HTTP fetch", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(
+        `<html><head><title>${"title ".repeat(12_000)}</title></head><body><p>Live HTTP body.</p></body></html>`,
+      );
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback TCP address");
+      }
+      const tool = createWebFetchTool({
+        config: {
+          tools: {
+            web: {
+              fetch: { cacheTtlMinutes: 0, ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } },
+            },
+          },
+        },
+      });
+      const result = await tool?.execute("live-title-budget", {
+        url: `http://127.0.0.1:${address.port}/title`,
+        maxChars: 1_000,
+      });
+      const details = result?.details as { text: string; title: string; truncated: boolean };
+      expect(details.text).toContain("Live HTTP body.");
+      expect(details.title.length).toBeLessThanOrEqual(400);
+      expect(details.text.length + details.title.length).toBeLessThanOrEqual(1_000);
+      expect(details.truncated).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
+    }
+  });
+
   it("rejects fractional maxChars before fetching", async () => {
-    const fetchMock = installMockFetch(
-      (input: RequestInfo | URL) =>
-        Promise.resolve(textResponse("unused", resolveRequestUrl(input))) as Promise<Response>,
+    const fetchMock = installMockFetch(async (input) =>
+      textResponse("unused", resolveRequestUrl(input)),
     );
 
     const tool = createFetchTool({ firecrawl: { enabled: false } });

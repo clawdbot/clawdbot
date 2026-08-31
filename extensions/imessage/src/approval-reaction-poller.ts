@@ -1,17 +1,14 @@
 // Imessage plugin module implements approval reaction poller behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  asDateTimestampMs,
-  asPositiveFiniteNumber,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { asDateTimestampMs, asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
-  extractIMessageApprovalPromptBinding,
-  handleIMessageApprovalReaction,
   listPendingIMessageApprovalReactionPollTargets,
-  registerIMessageApprovalReactionTarget,
   type PendingIMessageApprovalReactionPollTarget,
+} from "./approval-reaction-poll-targets.js";
+import {
+  handleIMessageApprovalReaction,
+  registerIMessageApprovalReactionTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
 import type { IMessageRpcClient } from "./client.js";
@@ -19,9 +16,6 @@ import type { IMessagePayload } from "./monitor/types.js";
 
 const RECENT_CHAT_LIMIT = 50;
 const PER_CHAT_HISTORY_LIMIT = 30;
-const OBSERVED_APPROVAL_PROMPT_TARGET_TTL_MS = 5 * 60 * 1000;
-
-const accountIdsWithCompletedNoTargetDiscovery = new Set<string>();
 
 type ChatListEntry = {
   id?: number | null;
@@ -191,39 +185,6 @@ function bindObservedConversation(params: {
   }
 }
 
-function bindObservedApprovalPrompt(params: {
-  accountId: string;
-  message: HistoryMessage;
-}): PendingIMessageApprovalReactionPollTarget | null {
-  if (params.message.is_from_me !== true) {
-    return null;
-  }
-  const messageId = params.message.guid?.trim();
-  if (!messageId) {
-    return null;
-  }
-  const binding = extractIMessageApprovalPromptBinding(params.message.text ?? "");
-  if (!binding) {
-    return null;
-  }
-  const conversation = buildConversationKeyFromMessage(params.message);
-  const expiresAtMs = resolveExpiresAtMsFromDurationMs(OBSERVED_APPROVAL_PROMPT_TARGET_TTL_MS);
-  if (expiresAtMs === undefined) {
-    return null;
-  }
-  const target: PendingIMessageApprovalReactionPollTarget = {
-    accountId: params.accountId,
-    conversation,
-    messageId,
-    approvalId: binding.approvalId,
-    approvalKind: binding.approvalKind,
-    allowedDecisions: binding.allowedDecisions,
-    expiresAtMs,
-  };
-  bindObservedConversation({ target, message: params.message });
-  return target;
-}
-
 export async function pollPendingIMessageApprovalReactions(params: {
   client: IMessageRpcClient;
   cfg: OpenClawConfig;
@@ -232,37 +193,29 @@ export async function pollPendingIMessageApprovalReactions(params: {
   gatewayRuntime?: IMessageApprovalGatewayRuntime;
   logVerboseMessage?: (message: string) => void;
 }): Promise<void> {
-  const targets = listPendingIMessageApprovalReactionPollTargets({
+  const targets = await listPendingIMessageApprovalReactionPollTargets({
     accountId: params.accountId,
   });
-  const shouldAttemptNoTargetDiscovery =
-    targets.length === 0 &&
-    params.allowRecentChatDiscovery === true &&
-    !accountIdsWithCompletedNoTargetDiscovery.has(params.accountId);
-  if (targets.length === 0 && !shouldAttemptNoTargetDiscovery) {
+  if (targets.length === 0) {
     return;
   }
   const pendingByMessageId = buildPendingTargetsByMessageId(targets);
   const explicitChatIds = listTargetChatIds(targets);
+  // Send-side DM registration may know only a handle, not a chat id. Scan recent chats
+  // for those typed GUID targets or a watch-missed tapback would silently resolve nothing.
   const shouldDiscoverRecentChats =
-    params.allowRecentChatDiscovery === true &&
-    (targets.length === 0 || hasUnscopedTarget(targets));
+    params.allowRecentChatDiscovery === true && targets.length > 0 && hasUnscopedTarget(targets);
   const chatIds = shouldDiscoverRecentChats
     ? uniqueChatIds([...explicitChatIds, ...(await listRecentChatIds(params.client))])
     : explicitChatIds;
   if (chatIds.length === 0) {
-    if (shouldAttemptNoTargetDiscovery) {
-      accountIdsWithCompletedNoTargetDiscovery.add(params.accountId);
-    }
     return;
   }
-  let hadHistoryFetchError = false;
   for (const chatId of chatIds) {
     let messages: HistoryMessage[];
     try {
       messages = await fetchRecentHistory({ client: params.client, chatId });
     } catch (err) {
-      hadHistoryFetchError = true;
       params.logVerboseMessage?.(
         `imessage: approval reaction poll skipped chat_id=${chatId}: ${String(err)}`,
       );
@@ -275,11 +228,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
       }
       const target =
         pendingByMessageId.get(targetGuid) ??
-        pendingByMessageId.get(normalizeMessageGuid(targetGuid)) ??
-        bindObservedApprovalPrompt({
-          accountId: params.accountId,
-          message,
-        });
+        pendingByMessageId.get(normalizeMessageGuid(targetGuid));
       if (!target) {
         continue;
       }
@@ -298,15 +247,9 @@ export async function pollPendingIMessageApprovalReactions(params: {
           logVerboseMessage: params.logVerboseMessage,
         });
         if (handled.stopPolling) {
-          if (shouldAttemptNoTargetDiscovery && handled.stopPollingReason !== "resolver-error") {
-            break;
-          }
           return;
         }
       }
     }
-  }
-  if (shouldAttemptNoTargetDiscovery && !hadHistoryFetchError) {
-    accountIdsWithCompletedNoTargetDiscovery.add(params.accountId);
   }
 }

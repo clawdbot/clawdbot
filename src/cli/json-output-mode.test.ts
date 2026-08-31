@@ -4,6 +4,7 @@ import { loggingState } from "../logging/state.js";
 import {
   applyResolvedCommandOutputMode,
   hasJsonOutputFlag,
+  isJsonOutputModeActive,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
 
@@ -62,7 +63,16 @@ describe("json output mode", () => {
         expect(loggingState.forceConsoleToStderr).toBe(true);
         applyResolvedCommandOutputMode(false);
         expect(loggingState.forceConsoleToStderr).toBe(false);
+        expect(
+          isJsonOutputModeActive(["node", "openclaw", "config", "set", "x", "1", "--json"]),
+        ).toBe(false);
       },
+    );
+  });
+
+  it("does not treat config set's parser alias as JSON output before Commander resolves it", () => {
+    expect(isJsonOutputModeActive(["node", "openclaw", "config", "set", "x", "1", "--json"])).toBe(
+      false,
     );
   });
 
@@ -75,6 +85,32 @@ describe("json output mode", () => {
         applyResolvedCommandOutputMode(false);
         expect(loggingState.forceConsoleToStderr).toBe(true);
       },
+    );
+  });
+
+  it("retains stderr routing through preaction for plain machine output", async () => {
+    await withConsoleLogsRoutedToStderrForJson(
+      ["node", "openclaw", "models", "aliases", "list", "--plain"],
+      async () => {
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+        applyResolvedCommandOutputMode(false, true);
+        expect(loggingState.forceConsoleToStderr).toBe(true);
+        expect(
+          isJsonOutputModeActive(["node", "openclaw", "models", "aliases", "list", "--plain"]),
+        ).toBe(false);
+      },
+      { machineOutput: true },
+    );
+  });
+
+  it("still restores stdout when preaction resolves neither JSON nor plain machine output", async () => {
+    await withConsoleLogsRoutedToStderrForJson(
+      ["node", "openclaw", "models", "aliases", "list", "--plain"],
+      async () => {
+        applyResolvedCommandOutputMode(false);
+        expect(loggingState.forceConsoleToStderr).toBe(false);
+      },
+      { machineOutput: true },
     );
   });
 });

@@ -4,24 +4,25 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadNodeHostConfig } from "../node-host/config.js";
+import {
+  loadNodeHostConfig,
+  NODE_HOST_CONFIG_KEY,
+  type NodeHostConfig,
+} from "../node-host/config.js";
+import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyNodeHostConfig,
   migrateLegacyNodeHostConfig,
 } from "./state-migrations.node-host.js";
 
-type NodeHostConfigDatabase = Pick<OpenClawStateKyselyDatabase, "node_host_config">;
+type NodeHostConfigDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 const fixtureDigest = ["fixture", "digest"].join("-");
 
 describe("legacy node-host Doctor migration", () => {
@@ -69,38 +70,34 @@ describe("legacy node-host Doctor migration", () => {
     displayName?: string;
     gatewayHost?: string;
     updatedAtMs: number;
-    token?: string | null;
   }): void {
     const database = openOpenClawStateDatabase({ env: params.env });
     executeSqliteQuerySync(
       database.db,
       getNodeSqliteKysely<NodeHostConfigDatabase>(database.db)
-        .insertInto("node_host_config")
+        .insertInto("config_machine_state")
         .values({
-          config_key: "current",
-          version: 1,
-          node_id: params.nodeId ?? "legacy-node-id",
-          token: params.token ?? null,
-          display_name: params.displayName ?? "Legacy Node",
-          gateway_host: params.gatewayHost ?? "gateway.example",
-          gateway_port: 18443,
-          gateway_tls: 0,
-          gateway_tls_fingerprint: fixtureDigest,
-          gateway_context_path: "/openclaw-gw",
+          state_key: NODE_HOST_CONFIG_KEY,
+          value_json: JSON.stringify({
+            version: 1,
+            nodeId: params.nodeId ?? "legacy-node-id",
+            displayName: params.displayName ?? "Legacy Node",
+            gateway: {
+              host: params.gatewayHost ?? "gateway.example",
+              port: 18443,
+              tls: false,
+              tlsFingerprint: fixtureDigest,
+              contextPath: "/openclaw-gw",
+            },
+            installedAppsSharing: false,
+          } satisfies NodeHostConfig),
           updated_at_ms: params.updatedAtMs,
         }),
     );
   }
 
   function readCanonicalRow(env: NodeJS.ProcessEnv) {
-    const database = openOpenClawStateDatabase({ env });
-    return executeSqliteQueryTakeFirstSync(
-      database.db,
-      getNodeSqliteKysely<NodeHostConfigDatabase>(database.db)
-        .selectFrom("node_host_config")
-        .selectAll()
-        .where("config_key", "=", "current"),
-    );
+    return readConfigMachineStateWithMetadata<NodeHostConfig>(NODE_HOST_CONFIG_KEY, { env });
   }
 
   it("detects source and interrupted claim only for explicit Doctor repair", async () => {
@@ -141,7 +138,7 @@ describe("legacy node-host Doctor migration", () => {
       },
       installedAppsSharing: false,
     });
-    expect(readCanonicalRow(env)?.token).toBeNull();
+    expect(readCanonicalRow(env)?.value).not.toHaveProperty("token");
     expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
@@ -231,7 +228,6 @@ describe("legacy node-host Doctor migration", () => {
       displayName: "Newer Canonical",
       gatewayHost: "newer.example",
       updatedAtMs: mtimeMs + 1_000,
-      token: "test-token-placeholder",
     });
     const result = await migrateLegacyNodeHostConfig({
       detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
@@ -242,10 +238,12 @@ describe("legacy node-host Doctor migration", () => {
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain("Kept newer canonical node-host SQLite state.");
     expect(readCanonicalRow(env)).toMatchObject({
-      display_name: "Newer Canonical",
-      gateway_host: "newer.example",
-      token: null,
+      value: {
+        displayName: "Newer Canonical",
+        gateway: { host: "newer.example" },
+      },
     });
+    expect(readCanonicalRow(env)?.value).not.toHaveProperty("token");
     expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
@@ -266,9 +264,11 @@ describe("legacy node-host Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(readCanonicalRow(env)).toMatchObject({
-      display_name: "Legacy Node",
-      gateway_host: "gateway.example",
-      updated_at_ms: mtimeMs,
+      value: {
+        displayName: "Legacy Node",
+        gateway: { host: "gateway.example" },
+      },
+      updatedAtMs: mtimeMs,
     });
   });
 
@@ -343,7 +343,7 @@ describe("legacy node-host Doctor migration", () => {
     });
     expect(first.warnings[0]).toContain("legacy cleanup failed");
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);
-    expect(readCanonicalRow(env)?.node_id).toBe("legacy-node-id");
+    expect(readCanonicalRow(env)?.value.nodeId).toBe("legacy-node-id");
 
     const retry = await migrateLegacyNodeHostConfig({
       detected: detectLegacyNodeHostConfig({ stateDir, doctorOnlyStateMigrations: true }),
@@ -352,7 +352,7 @@ describe("legacy node-host Doctor migration", () => {
     });
     expect(retry.warnings).toEqual([]);
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
-    expect(readCanonicalRow(env)?.node_id).toBe("legacy-node-id");
+    expect(readCanonicalRow(env)?.value.nodeId).toBe("legacy-node-id");
   });
 
   it("refuses symlinked, hardlinked, and oversized sources", async () => {

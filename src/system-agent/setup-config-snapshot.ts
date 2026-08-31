@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../agents/agent-scope.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { shortenHomePath } from "../utils.js";
@@ -26,4 +27,3 @@ export function requireValidSystemAgentSetupSnapshot(snapshot: ConfigFileSnapsho
   }
   return { sourceConfig, runtimeConfig };
 }
-import { listAgentEntries } from "../agents/agent-scope.js";

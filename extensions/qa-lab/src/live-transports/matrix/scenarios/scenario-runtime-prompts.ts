@@ -40,7 +40,6 @@ export function buildMatrixToolProgressPrompt(sutUserId: string) {
     `${sutUserId} Tool progress QA check: call the read tool exactly once on \`${MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME}\` before answering.`,
     `The QA harness must observe that read tool call; the only valid final marker is inside that file.`,
     `Do not guess or send any marker before the tool result returns.`,
-    `Do not read \`HEARTBEAT.md\` for this check.`,
     `After that read completes, reply with only the exact marker from the file and no other text.`,
   ].join(" ");
 }

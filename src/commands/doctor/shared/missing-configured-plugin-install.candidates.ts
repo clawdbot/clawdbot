@@ -45,6 +45,7 @@ export type DownloadableInstallCandidate = {
   expectedIntegrity?: string;
   trustedSourceLinkedOfficialInstall?: boolean;
   defaultChoice?: PluginPackageInstall["defaultChoice"];
+  versionBoundToOpenClaw?: boolean;
 };
 
 export type BundledPluginPackageDescriptor = {
@@ -68,7 +69,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     installRecords: {},
   }).plugins.filter((plugin) => plugin.origin === "bundled");
   const knownIds = new Set([
-    ...snapshot.plugins.map((plugin) => plugin.id),
+    ...snapshot.plugins.filter((plugin) => plugin.origin !== "bundled").map((plugin) => plugin.id),
     ...currentBundledPlugins.map((plugin) => plugin.pluginId),
   ]);
   const configuredChannelOwnerPluginIds = collectEffectiveConfiguredChannelOwnerPluginIds({
@@ -77,14 +78,11 @@ export async function resolveConfiguredPluginInstallContext(params: {
     snapshot,
     configuredChannelIds: params.configuredChannelIds,
   });
-  const bundledPluginsById = new Map<string, BundledPluginPackageDescriptor>([
-    ...snapshot.plugins
-      .filter((plugin) => plugin.origin === "bundled")
-      .map((plugin) => [plugin.id, plugin] as const),
-    ...currentBundledPlugins.map(
+  const bundledPluginsById = new Map<string, BundledPluginPackageDescriptor>(
+    currentBundledPlugins.map(
       (plugin) => [plugin.pluginId, { packageName: plugin.packageName }] as const,
     ),
-  ]);
+  );
   const configuredPluginIdsWithStaleDescriptors =
     collectConfiguredPluginIdsWithMissingChannelConfigDescriptors({
       snapshot,
@@ -288,7 +286,10 @@ export function collectDownloadableInstallCandidates(params: {
     if (params.blockedPluginIds?.has(entry.pluginId)) {
       continue;
     }
-    if (!candidates.has(entry.pluginId)) {
+    const existing = candidates.get(entry.pluginId);
+    if (existing && entry.versionBoundToOpenClaw) {
+      candidates.set(entry.pluginId, { ...existing, versionBoundToOpenClaw: true });
+    } else if (!existing) {
       candidates.set(entry.pluginId, entry);
     }
   }

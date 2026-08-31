@@ -3,6 +3,30 @@
 // Both surfaces answer the same question — "which tools does this query mean?" —
 // so they index and score through here rather than keeping separate heuristics
 // that can disagree about the same catalog.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
+/** Collects property names and descriptions from a JSON-Schema-shaped value. */
+export function readParameterText(parameters: unknown, depth = 0): string {
+  if (depth > 4 || !isRecord(parameters)) {
+    return "";
+  }
+  const parts: string[] = [];
+  const description = parameters.description;
+  if (typeof description === "string") {
+    parts.push(description);
+  }
+  const properties = parameters.properties;
+  if (isRecord(properties)) {
+    for (const [name, child] of Object.entries(properties)) {
+      parts.push(name, readParameterText(child, depth + 1));
+    }
+  }
+  const items = parameters.items;
+  if (items !== undefined) {
+    parts.push(readParameterText(items, depth + 1));
+  }
+  return parts.filter(Boolean).join(" ");
+}
 
 /** BM25 term-frequency saturation. Standard Okapi default. */
 const BM25_K1 = 1.2;

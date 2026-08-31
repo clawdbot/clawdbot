@@ -5,6 +5,7 @@ import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatErrorMessage,
+  formatErrorMessageWithCode,
   formatUncaughtError,
   hasErrnoCode,
   isErrno,
@@ -127,8 +128,7 @@ describe("error helpers", () => {
       cause: rootCause,
     });
     const formatted = formatErrorMessage(httpError);
-    expect(formatted).toContain("Network request for 'sendMessage' failed!");
-    expect(formatted).toContain("ECONNRESET");
+    expect(formatted).toBe("Network request for 'sendMessage' failed! | ECONNRESET");
   });
 
   it("handles circular .cause references without infinite loop", () => {
@@ -150,8 +150,13 @@ describe("error helpers", () => {
   it("redacts sensitive tokens from formatted error messages", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));
+    const codeFormatted = formatErrorMessageWithCode(
+      Object.assign(new Error("request failed"), { code: `token=${token}` }),
+    );
     expect(formatted).toContain("Authorization: Bearer");
     expect(formatted).not.toContain(token);
+    expect(codeFormatted).toContain("request failed");
+    expect(codeFormatted).not.toContain(token);
   });
 
   it("redacts HTTP client config secrets from formatted error chains", () => {

@@ -343,13 +343,12 @@ describe("plugin runtime command execution", () => {
           provider: DEFAULT_PROVIDER,
         });
         expectFunctionKeys(runtime.agent as Record<string, unknown>, [
+          "runCommandFromIngress",
           "runEmbeddedAgent",
-          "runEmbeddedPiAgent",
           "normalizeThinkingLevel",
           "resolveThinkingPolicy",
           "resolveAgentDir",
         ]);
-        expect(runtime.agent.runEmbeddedPiAgent).toBe(runtime.agent.runEmbeddedAgent);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
           "createSessionEntry",
           "getSessionEntry",
@@ -470,6 +469,14 @@ describe("plugin runtime command execution", () => {
     expectGatewaySubagentRunFailure(runtime, { sessionKey: "s-1", message: "hello" });
   });
 
+  it("exposes a node duplex capability even when Gateway access is unavailable", () => {
+    const nodes = createPluginRuntime().nodes;
+    expect(nodes).toHaveProperty("openDuplex", expect.any(Function));
+    expect(() => nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).toThrow(
+      "only available inside the Gateway",
+    );
+  });
+
   it("uses an explicit subagent runtime", async () => {
     const run = vi.fn().mockResolvedValue({ runId: "run-1" });
     const runtime = createPluginRuntime({
@@ -488,6 +495,7 @@ describe("plugin runtime command execution", () => {
     const nodes = {
       list: vi.fn().mockResolvedValue({ nodes: [] }),
       invoke: vi.fn().mockResolvedValue({ ok: true }),
+      openDuplex: vi.fn().mockResolvedValue({ closed: Promise.resolve({ ok: true }) }),
     };
     const runtime = createPluginRuntime({ nodes });
 
@@ -497,5 +505,9 @@ describe("plugin runtime command execution", () => {
     ).resolves.toEqual({ ok: true });
     expect(nodes.list).toHaveBeenCalledWith({ connected: true });
     expect(nodes.invoke).toHaveBeenCalledWith({ nodeId: "node-1", command: "browser.proxy" });
+    await expect(
+      runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" }),
+    ).resolves.toMatchObject({ closed: expect.any(Promise) });
+    expect(nodes.openDuplex).toHaveBeenCalledWith({ nodeId: "node-1", command: "image.bridge" });
   });
 });

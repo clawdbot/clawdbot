@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
+import { extractHttpResponseBody } from "../../shared/http-error-response.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import {
@@ -70,7 +71,7 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
   if (typeof inferred !== "number" || inferred < 400) {
     return false;
   }
-  const rest = extractLeadingHttpStatus(candidate)?.rest ?? candidate;
+  const rest = extractHttpResponseBody(extractLeadingHttpStatus(candidate))?.body ?? candidate;
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
 }
 function isCloudflareChallengeResponse(message: string): boolean {

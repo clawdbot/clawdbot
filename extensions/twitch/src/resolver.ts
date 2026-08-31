@@ -13,8 +13,12 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { ChannelResolveKind, ChannelResolveResult } from "./types.js";
-import type { ChannelLogSink, TwitchAccountConfig } from "./types.js";
+import type {
+  ChannelResolveKind,
+  ChannelResolveResult,
+  ChannelLogSink,
+  TwitchAccountConfig,
+} from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
 const TWITCH_HELIX_USER_LOOKUP_TIMEOUT_MS = 10_000;

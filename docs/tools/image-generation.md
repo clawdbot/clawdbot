@@ -399,8 +399,10 @@ and ComfyUI support 1.
   </Accordion>
   <Accordion title="OpenRouter image models">
     OpenRouter image generation uses the same `OPENROUTER_API_KEY` and
-    routes through OpenRouter's chat completions image API. Select
-    OpenRouter image models with the `openrouter/` prefix:
+    routes canonical requests through OpenRouter's dedicated `/api/v1/images`
+    endpoint. Configured custom OpenRouter base URLs retain the existing
+    chat-completions image route for proxy compatibility. Select OpenRouter
+    image models with the `openrouter/` prefix:
 
     ```json5
     {

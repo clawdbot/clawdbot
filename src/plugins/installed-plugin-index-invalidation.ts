@@ -45,6 +45,8 @@ export function diffInstalledPluginIndexInvalidationReasons(
     if (
       previousPlugin.rootDir !== currentPlugin.rootDir ||
       previousPlugin.manifestPath !== currentPlugin.manifestPath ||
+      previousPlugin.source !== currentPlugin.source ||
+      previousPlugin.setupSource !== currentPlugin.setupSource ||
       resolveInstalledPluginIndexInstallOwner(previousPlugin) !==
         resolveInstalledPluginIndexInstallOwner(currentPlugin) ||
       isInstalledPluginIndexInstallOwnerAmbiguous(previousPlugin) !==

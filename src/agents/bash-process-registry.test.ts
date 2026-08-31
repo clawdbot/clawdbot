@@ -10,17 +10,15 @@ import {
   addSession,
   appendOutput,
   deleteSession,
-  drainFinishedSession,
-  drainSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
-  getFinishedSessionForProcess,
   isProcessSessionIdTaken,
   listFinishedSessions,
   listRunningSessions,
   markBackgrounded,
   markExited,
   markTerminalPollObserved,
+  prepareSessionPoll,
   recordNotifyOnExitRemoval,
   setJobTtlMs,
   tail,
@@ -28,6 +26,8 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createSessionSlug } from "./session-slug.js";
+
+const drainSession = (session: ProcessSession) => prepareSessionPoll(session, undefined);
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureInt: vi.fn(() => 0),
@@ -106,9 +106,9 @@ describe("bash process registry", () => {
     appendOutput(session, "stdout", payload);
 
     const drained = drainSession(session);
-    expect(drained.stdout).toBe("b".repeat(20_000));
+    expect(drained.output).toBe("b".repeat(20_000));
     expect(drained.outputDropped).toBe(true);
-    expect(session.pendingStdout).toHaveLength(0);
+    expect(session.pendingOutput).toHaveLength(0);
     expect(session.pendingStdoutChars).toBe(0);
     expect(drainSession(session).outputDropped).toBe(false);
     expect(session.truncated).toBe(true);
@@ -125,7 +125,7 @@ describe("bash process registry", () => {
     appendOutput(session, "stdout", "x".repeat(10_000));
 
     const drained = drainSession(session);
-    expect(drained.stdout.length).toBe(5_000);
+    expect(drained.output.length).toBe(5_000);
     expect(session.truncated).toBe(true);
   });
 
@@ -142,9 +142,29 @@ describe("bash process registry", () => {
     appendOutput(session, "stderr", "c".repeat(12));
 
     const drained = drainSession(session);
-    expect(drained.stdout).toBe("a".repeat(4) + "b".repeat(6));
-    expect(drained.stderr).toBe("c".repeat(10));
+    expect(drained.output).toBe("a".repeat(4) + "b".repeat(6) + "c".repeat(10));
     expect(session.truncated).toBe(true);
+  });
+
+  it("keeps independently capped stream chunks in callback order", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 10,
+      backgrounded: true,
+    });
+
+    addSession(session);
+    appendOutput(session, "stdout", "a".repeat(6));
+    appendOutput(session, "stderr", "ERR-safe\n");
+    appendOutput(session, "stdout", "b".repeat(6));
+
+    expect(session.pendingStdoutChars).toBe(10);
+    expect(session.pendingStderrChars).toBe(9);
+    const drained = drainSession(session);
+    expect(drained.output).toBe(`${"a".repeat(4)}ERR-safe\n${"b".repeat(6)}`);
+    expect(drained.outputDropped).toBe(true);
+    expect(session.pendingStdoutChars).toBe(0);
+    expect(session.pendingStderrChars).toBe(0);
   });
 
   it("keeps aggregate, pending, and tail suffix cuts on UTF-16 boundaries", () => {
@@ -159,7 +179,7 @@ describe("bash process registry", () => {
 
     expect(session.aggregated).toBe("bc");
     expect(session.pendingStdoutChars).toBe(2);
-    expect(drainSession(session).stdout).toBe("bc");
+    expect(drainSession(session).output).toBe("bc");
     expect(tail("a🎉bc", 3)).toBe("bc");
   });
 
@@ -175,7 +195,7 @@ describe("bash process registry", () => {
     appendOutput(session, "stdout", "bc");
 
     expect(session.pendingStdoutChars).toBe(2);
-    expect(drainSession(session).stdout).toBe("bc");
+    expect(drainSession(session).output).toBe("bc");
   });
 
   it("only persists finished sessions when backgrounded", () => {
@@ -188,34 +208,21 @@ describe("bash process registry", () => {
     addSession(session);
     markExited(session, 0, null, "completed");
     expect(listFinishedSessions()).toHaveLength(0);
+    expect(session.endedAt).toBeUndefined();
 
     markBackgrounded(session);
     markExited(session, 0, null, "completed");
     const finishedSessions = listFinishedSessions();
     const endedAt = finishedSessions[0]?.endedAt;
     expect(endedAt).toEqual(expect.any(Number));
-    expect(finishedSessions).toStrictEqual([
-      {
-        id: "sess",
-        command: "echo test",
-        scopeKey: undefined,
-        startedAt: session.startedAt,
-        endedAt,
-        cwd: "/tmp",
-        status: "completed",
-        exitCode: 0,
-        exitSignal: null,
-        exitReason: undefined,
-        aggregated: "",
-        tail: "",
-        truncated: false,
-        totalOutputChars: 0,
-        unreadOutput: { stdout: "", stderr: "", outputDropped: false },
-      },
-    ]);
+    expect(finishedSessions).toEqual([session]);
+    expect(session.terminalStatus).toBe("completed");
+    deleteSession(session.id);
+    expect(session.endedAt).toBe(endedAt);
+    expect(listFinishedSessions()).toHaveLength(0);
   });
 
-  it("moves unread output into the exact finished snapshot and consumes it once", () => {
+  it("retains unread output on its exact process and consumes it once", () => {
     const session = createRegistrySession({
       id: "exact-finished-output",
       maxOutputChars: 100,
@@ -226,11 +233,10 @@ describe("bash process registry", () => {
     appendOutput(session, "stdout", "terminal output\n");
     markExited(session, 0, null, "completed");
 
-    const finished = getFinishedSessionForProcess(session);
-    expect(finished).toBe(getFinishedSession(session.id));
-    expect(finished && drainFinishedSession(finished).stdout).toBe("terminal output\n");
-    expect(finished && drainFinishedSession(finished).stdout).toBe("");
-    expect(drainSession(session).stdout).toBe("");
+    const finished = getFinishedSession(session.id);
+    expect(finished).toBe(session);
+    expect(finished && drainSession(finished).output).toBe("terminal output\n");
+    expect(drainSession(session).output).toBe("");
   });
 
   it("evicts the oldest finished sessions when their count exceeds the retention limit", () => {
@@ -349,6 +355,7 @@ describe("bash process registry", () => {
 
     addSession(session);
     markBackgrounded(session);
+    session.backgrounded = false;
     deleteSession(session.id);
 
     expect(listRunningSessions()).toHaveLength(0);
@@ -358,23 +365,28 @@ describe("bash process registry", () => {
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
   });
 
-  it("keeps a hidden active session id reserved until exit", () => {
-    const session = createRegistrySession({
-      id: "amber-atlas",
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
-      backgrounded: false,
-    });
+  it.each([false, true])(
+    "keeps a hidden active session id reserved until exit (backgrounded=%s)",
+    (backgrounded) => {
+      const session = createRegistrySession({
+        id: "amber-atlas",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: false,
+      });
 
-    addSession(session);
-    markBackgrounded(session);
-    deleteSession(session.id);
-    expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas-2");
+      addSession(session);
+      if (backgrounded) {
+        markBackgrounded(session);
+      }
+      deleteSession(session.id);
+      expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas-2");
 
-    session.backgrounded = false;
-    markExited(session, 0, null, "completed");
-    expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas");
-  });
+      session.backgrounded = false;
+      markExited(session, 0, null, "completed");
+      expect(createSessionSlug(isProcessSessionIdTaken)).toBe("amber-atlas");
+    },
+  );
 
   it("clears background activity in the test reset", () => {
     const session = createRegistrySession({
@@ -389,6 +401,34 @@ describe("bash process registry", () => {
 
     resetProcessRegistryForTests();
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
+  });
+
+  it("resets its own registry after another module instance replaces the global test API", async () => {
+    const testApiKey = Symbol.for("openclaw.bashProcessRegistryTestApi");
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const originalTestApi = globalStore[testApiKey];
+    const session = createRegistrySession({
+      id: "original-registry-session",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    addSession(session);
+
+    try {
+      const registrySpecifier = "./bash-process-registry.js?reset-owner-regression";
+      const reloadedRegistry = (await import(
+        registrySpecifier
+      )) as typeof import("./bash-process-registry.js");
+      expect(globalStore[testApiKey]).not.toBe(originalTestApi);
+      expect(reloadedRegistry.listRunningSessions()).toEqual([]);
+
+      resetProcessRegistryForTests();
+      expect(listRunningSessions()).toEqual([]);
+    } finally {
+      globalStore[testApiKey] = originalTestApi;
+      resetProcessRegistryForTests();
+    }
   });
 
   it("clamps a zero retention TTL to one minute", () => {

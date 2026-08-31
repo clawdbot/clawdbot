@@ -261,11 +261,11 @@ describe("memory legacy migration cleanup", () => {
     });
     expect(managerLoaded.ok, managerLoaded.error).toBe(true);
     db.close();
-    Reflect.set(manager, "db", vectorDb);
+    Reflect.set(Reflect.get(manager, "database"), "db", vectorDb);
     vectorState.enabled = true;
     vectorState.available = true;
     vectorState.extensionPath = vectorExtensionPath;
-    Reflect.set(manager, "vectorReady", null);
+    Reflect.set(Reflect.get(manager, "database"), "vectorReady", null);
     await expect(
       (
         manager as unknown as {

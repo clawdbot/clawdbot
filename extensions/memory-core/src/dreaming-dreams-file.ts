@@ -1,23 +1,14 @@
 // Memory Core helpers for safe managed DREAMS.md updates.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
-import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
 import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 
-const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
+export const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
 const DEEP_END_MARKER = "<!-- openclaw:dreaming:deep:end -->";
-const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
-
-type DreamsFileLockEntry = {
-  withLock: ReturnType<typeof createAsyncLock>;
-  refs: number;
-};
-
-const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
 
 export async function resolveDreamsPath(workspaceDir: string): Promise<string> {
   for (const name of DREAMS_FILENAMES) {
@@ -26,7 +17,7 @@ export async function resolveDreamsPath(workspaceDir: string): Promise<string> {
       await fs.access(target);
       return target;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      if (extractErrorCode(err) !== "ENOENT") {
         throw err;
       }
     }
@@ -104,29 +95,18 @@ export async function updateDreamsFile<T>(params: {
         shouldWrite?: boolean;
       };
 }): Promise<T> {
-  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-  let lockEntry = dreamsFileLocks.get(dreamsPath);
-  if (!lockEntry) {
-    lockEntry = { withLock: createAsyncLock(), refs: 0 };
-    dreamsFileLocks.set(dreamsPath, lockEntry);
-  }
-  lockEntry.refs += 1;
-  try {
-    return await lockEntry.withLock(async () => {
-      const existing = await readDreamsFile(dreamsPath);
-      const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
-      if (shouldWrite) {
-        await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
-      }
-      return result;
-    });
-  } finally {
-    lockEntry.refs -= 1;
-    if (lockEntry.refs <= 0 && dreamsFileLocks.get(dreamsPath) === lockEntry) {
-      dreamsFileLocks.delete(dreamsPath);
+  // Read and replace under the purge owner's lock so an awaited diary update
+  // cannot write a pre-deletion file snapshot back over the scrubbed contents.
+  return await withMemoryWorkspaceLock(params.workspaceDir, async () => {
+    const dreamsPath = await resolveDreamsPath(params.workspaceDir);
+    await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
+    const existing = await readDreamsFile(dreamsPath);
+    const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
+    if (shouldWrite) {
+      await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
     }
-  }
+    return result;
+  });
 }
 
 export async function updateDeepDreamsFile(params: {

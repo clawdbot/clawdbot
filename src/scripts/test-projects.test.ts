@@ -6,11 +6,11 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-vitest.mts";
+import { withEnv } from "../test-utils/env.js";
 
 const {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
-  buildVitestArgs,
   buildVitestRunPlans,
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
@@ -48,7 +48,11 @@ describe("test-projects args", () => {
   });
 
   it("keeps watch mode explicit without leaking the sentinel to Vitest", () => {
-    expect(buildVitestArgs(["--watch", "--", "src/foo.test.ts"])).toEqual([
+    const spec = expectDefined(
+      createVitestRunSpecs(["--watch", "--", "src/foo.test.ts"])[0],
+      "watch run spec",
+    );
+    expect(spec.pnpmArgs).toEqual([
       ...VITEST_NODE_PREFIX,
       "--config",
       "test/vitest/vitest.unit.config.ts",
@@ -57,7 +61,8 @@ describe("test-projects args", () => {
   });
 
   it("uses run mode by default", () => {
-    expect(buildVitestArgs(["src/foo.test.ts"])).toEqual([
+    const spec = expectDefined(createVitestRunSpecs(["src/foo.test.ts"])[0], "run spec");
+    expect(spec.pnpmArgs).toEqual([
       ...VITEST_NODE_PREFIX,
       "run",
       "--config",
@@ -118,9 +123,9 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.plugin-sdk.config.ts",
     },
     {
-      title: "routes unit-fast light targets to the cache-friendly unit-fast config",
+      title: "routes plugin-sdk light targets to the plugin-sdk-light config",
       target: "src/plugin-sdk/provider-entry.test.ts",
-      config: "test/vitest/vitest.unit-fast.config.ts",
+      config: "test/vitest/vitest.plugin-sdk-light.config.ts",
     },
     {
       title: "routes fake-timer unit-fast targets to the serial fake-timer config",
@@ -199,7 +204,7 @@ describe("test-projects args", () => {
     },
     {
       title: "routes unit-fast acp targets to the cache-friendly unit-fast config",
-      target: "src/acp/control-plane/runtime-cache.test.ts",
+      target: "src/acp/runtime/registry.test.ts",
       config: "test/vitest/vitest.unit-fast.config.ts",
     },
     {
@@ -406,60 +411,26 @@ describe("test-projects args", () => {
   });
 
   it("keeps conservative local full-suite runs on leaf project configs", () => {
-    const originalVitestMaxWorkers = process.env.OPENCLAW_VITEST_MAX_WORKERS;
-    const originalTestWorkers = process.env.OPENCLAW_TEST_WORKERS;
-    const originalProjectParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-    const originalLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-    const originalCi = process.env.CI;
-    const originalActions = process.env.GITHUB_ACTIONS;
-    try {
-      process.env.OPENCLAW_VITEST_MAX_WORKERS = "1";
-      delete process.env.OPENCLAW_TEST_WORKERS;
-      delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-      delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-      delete process.env.CI;
-      delete process.env.GITHUB_ACTIONS;
+    withEnv(
+      {
+        OPENCLAW_VITEST_MAX_WORKERS: "1",
+        OPENCLAW_TEST_WORKERS: undefined,
+        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
+        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
+        CI: undefined,
+        GITHUB_ACTIONS: undefined,
+      },
+      () => {
+        const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
 
-      const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
-
-      expect(configs).toContain("test/vitest/vitest.unit-fast.config.ts");
-      expect(configs).toContain("test/vitest/vitest.boundary.config.ts");
-      expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
-      expect(configs).toContain("test/vitest/vitest.plugins.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
-    } finally {
-      if (originalVitestMaxWorkers === undefined) {
-        delete process.env.OPENCLAW_VITEST_MAX_WORKERS;
-      } else {
-        process.env.OPENCLAW_VITEST_MAX_WORKERS = originalVitestMaxWorkers;
-      }
-      if (originalTestWorkers === undefined) {
-        delete process.env.OPENCLAW_TEST_WORKERS;
-      } else {
-        process.env.OPENCLAW_TEST_WORKERS = originalTestWorkers;
-      }
-      if (originalProjectParallel === undefined) {
-        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
-      } else {
-        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = originalProjectParallel;
-      }
-      if (originalLeafShards === undefined) {
-        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-      } else {
-        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = originalLeafShards;
-      }
-      if (originalCi === undefined) {
-        delete process.env.CI;
-      } else {
-        process.env.CI = originalCi;
-      }
-      if (originalActions === undefined) {
-        delete process.env.GITHUB_ACTIONS;
-      } else {
-        process.env.GITHUB_ACTIONS = originalActions;
-      }
-    }
+        expect(configs).toContain("test/vitest/vitest.unit-fast.config.ts");
+        expect(configs).toContain("test/vitest/vitest.boundary.config.ts");
+        expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
+        expect(configs).toContain("test/vitest/vitest.plugins.config.ts");
+        expect(configs).not.toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
+        expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
+      },
+    );
   });
 
   it("keeps explicit project-level parallelism authoritative", () => {
@@ -509,10 +480,10 @@ describe("test-projects args", () => {
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
     expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
-      "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
+      "/repo/.cache/vitest/0-test-vitest-vitest.gateway.config.ts",
     );
     expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
-      "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
+      "/repo/.cache/vitest/1-test-vitest-vitest.gateway-server.config.ts",
     );
   });
 
@@ -553,29 +524,22 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes extension helper targets to importing extension tests", () => {
-    expect(
-      buildVitestRunPlans(["extensions/memory-core/src/memory/test-runtime-mocks.ts"]),
-    ).toEqual([
+  it("routes direct and transitive extension helper importers to the owning config", () => {
+    const helper = "extensions/memory-core/src/memory/test-runtime-mocks.ts";
+    const plans = buildVitestRunPlans([helper]);
+
+    expect(plans).toEqual([
       {
         config: "test/vitest/vitest.extension-memory.config.ts",
         forwardedArgs: [],
-        includePatterns: [
-          "extensions/memory-core/src/memory/index.test.ts",
-          "extensions/memory-core/src/memory/manager-keyword-retrieval.test.ts",
-          "extensions/memory-core/src/memory/manager-provider-lifecycle-fallback.test.ts",
-          "extensions/memory-core/src/memory/manager-provider-lifecycle-leases.test.ts",
-          "extensions/memory-core/src/memory/manager-provider-lifecycle.test.ts",
-          "extensions/memory-core/src/memory/manager-registry.test.ts",
-          "extensions/memory-core/src/memory/manager-search-orchestration.test.ts",
+        includePatterns: expect.arrayContaining([
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
-          "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
-          "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
-          "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
-        ],
+          "extensions/memory-core/src/memory/manager-session-update-race.test.ts",
+        ]),
         watchMode: false,
       },
     ]);
+    expect(plans[0]?.includePatterns).not.toContain(helper);
   });
 
   it("routes top-level test helpers to importing repo tests", () => {

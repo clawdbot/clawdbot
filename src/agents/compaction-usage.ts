@@ -1,3 +1,4 @@
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 /**
  * Shared helpers for clearing assistant usage snapshots invalidated by
  * transcript compaction.
@@ -59,4 +60,3 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
   }
   return out;
 }
-import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

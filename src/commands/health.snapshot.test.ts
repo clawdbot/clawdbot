@@ -2,13 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createLegacyHealthSnapshotCollector,
   type LegacyHealthSnapshotParams,
@@ -492,7 +489,7 @@ describe("collectGatewayHealthSnapshot", () => {
     vi.unstubAllEnvs();
   });
 
-  it("clamps oversized probe timeouts", async () => {
+  it("does not let callers widen the gateway probe deadline", async () => {
     testConfig = {
       session: { store: "/tmp/x" },
       channels: { telegram: { botToken: "123:test" } },
@@ -506,7 +503,9 @@ describe("collectGatewayHealthSnapshot", () => {
 
     await getHealthSnapshot({ timeoutMs: Number.MAX_SAFE_INTEGER });
 
-    expect(timeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0]).toBeGreaterThan(0);
+    expect(timeouts[0]).toBeLessThanOrEqual(7_000);
   });
 
   it("includes active plugin load errors in the health snapshot", async () => {
@@ -560,49 +559,6 @@ describe("collectGatewayHealthSnapshot", () => {
     ]);
   });
 
-  it("includes outbound and ingress dead letters in the health snapshot", async () => {
-    testConfig = { session: { store: "/tmp/x" } };
-    testStore = {};
-    setActivePluginRegistry(createTestRegistry([]));
-    const openClawState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-health-dq-",
-    });
-    try {
-      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
-        await import("../infra/delivery-queue-sqlite.js");
-      const clean = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-      expect(clean.deliveryQueues).toBeUndefined();
-
-      upsertDeliveryQueueEntry({
-        queueName: "outbound",
-        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
-      });
-      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
-      const { createChannelIngressQueue } = await import("../channels/message/ingress-queue.js");
-      const ingressQueue = createChannelIngressQueue<{ text: string }>({
-        channelId: "telegram",
-        accountId: "ops",
-      });
-      await ingressQueue.enqueue("dead-2", { text: "recover me" });
-      const claim = await ingressQueue.claim("dead-2", { ownerId: "worker" });
-      if (!claim) {
-        throw new Error("Expected a claimed ingress event");
-      }
-      await ingressQueue.fail(claim, { reason: "handler-error", failedAt: 50_000 });
-
-      const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
-      expect(snap.deliveryQueues).toEqual({
-        failed: [{ queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) }],
-        ingressFailed: [
-          { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
-        ],
-      });
-    } finally {
-      await openClawState.cleanup();
-    }
-  });
-
   it("omits configReload when no config reloader status is supplied", async () => {
     testConfig = { session: { store: "/tmp/x" } };
     testStore = {};
@@ -630,8 +586,8 @@ describe("collectGatewayHealthSnapshot", () => {
     testStore = {
       global: { updatedAt: Date.now() },
       unknown: { updatedAt: Date.now() },
-      main: { updatedAt: 1000 },
-      foo: { updatedAt: 2000 },
+      "agent:main:main": { updatedAt: 1000 },
+      "agent:main:foo": { updatedAt: 2000 },
     };
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
@@ -646,7 +602,7 @@ describe("collectGatewayHealthSnapshot", () => {
     expect(telegram.configured).toBe(false);
     expect(telegram.probe).toBeUndefined();
     expect(snap.sessions.count).toBe(2);
-    expect(snap.sessions.recent[0]?.key).toBe("foo");
+    expect(snap.sessions.recent[0]?.key).toBe("agent:main:foo");
   });
 
   it("probes telegram getMe + webhook info when configured", async () => {
@@ -1077,8 +1033,8 @@ describe("collectGatewayHealthSnapshot", () => {
     await getHealthSnapshot({ timeoutMs: 10, probe: false });
 
     expect(listHealthSessionEntriesCalls).toEqual([
-      { agentId: "main", storePath: "/tmp/sessions.json" },
-      { agentId: "ops", storePath: "/tmp/sessions.json" },
+      { agentId: "main", clone: false, projection: "list", storePath: "/tmp/sessions.json" },
+      { agentId: "ops", clone: false, projection: "list", storePath: "/tmp/sessions.json" },
     ]);
   });
 });

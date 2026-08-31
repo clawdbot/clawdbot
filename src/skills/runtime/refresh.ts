@@ -6,9 +6,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import chokidar, { type FSWatcher } from "chokidar";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
-import { resolvePluginSkillDirs } from "../loading/plugin-skills.js";
+import {
+  resolvePluginSkillRoots,
+  resolvePluginSkillRootsFromMetadata,
+} from "../loading/plugin-skills.js";
 import {
   resolveAllowedSkillSymlinkTargetRealPaths,
   tryRealpath,
@@ -62,6 +67,9 @@ const pathWatchers = new Map<string, SkillsPathWatchState>();
 // Watch targets each workspace is currently subscribed to, used to reconcile
 // subscriptions and to detect watch-target changes across calls.
 const workspaceWatchTargets = new Map<string, WatchTarget[]>();
+// A watcher key may include an execution root, but refresh events and versions
+// retain the configured agent workspace as their stable public identity.
+const workspaceWatchOwnerDirs = new Map<string, string>();
 // Resolved nested skill watch roots are filesystem-derived. Cache them so the
 // per-turn watcher reconciliation path stays cheap until config or watched
 // filesystem changes require a fresh root scan.
@@ -90,7 +98,13 @@ const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.cache([\\/]|$)/,
 ];
 
-function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): WatchTarget[] {
+function resolveWatchTargets(
+  workspaceDir: string,
+  config: OpenClawConfig | undefined,
+  executionSkillsDir: string | undefined,
+  watcherKey: string,
+  pluginMetadataSnapshot: PluginMetadataSnapshot | undefined,
+): WatchTarget[] {
   const baseRoots: Array<{ path: string; source: string }> = [];
   if (workspaceDir.trim()) {
     baseRoots.push({ path: path.join(workspaceDir, "skills"), source: "openclaw-workspace" });
@@ -98,6 +112,9 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): Wat
       path: path.join(workspaceDir, ".agents", "skills"),
       source: "agents-skills-project",
     });
+  }
+  if (executionSkillsDir) {
+    baseRoots.push({ path: executionSkillsDir, source: "openclaw-workspace" });
   }
   baseRoots.push({ path: path.join(CONFIG_DIR, "skills"), source: "openclaw-managed" });
   if (isDefaultStateDir()) {
@@ -111,7 +128,14 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): Wat
     .map((d) => normalizeOptionalString(d) ?? "")
     .filter(Boolean)
     .map((dir) => resolveUserPath(dir));
-  const pluginSkillDirs = resolvePluginSkillDirs({ workspaceDir, config });
+  const pluginSkillRoots = pluginMetadataSnapshot
+    ? resolvePluginSkillRootsFromMetadata({
+        workspaceDir,
+        config,
+        metadataSnapshot: pluginMetadataSnapshot,
+      })
+    : resolvePluginSkillRoots({ workspaceDir, config });
+  const pluginSkillDirs = pluginSkillRoots.map((root) => root.dir);
   const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(config);
   const signature = JSON.stringify({
     basePaths: baseRoots.map((root) => toWatchRoot(root.path)),
@@ -119,7 +143,7 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): Wat
     pluginSkillDirs: pluginSkillDirs.map(toWatchRoot),
     allowSymlinkTargets: allowedSymlinkTargetRealPaths,
   });
-  const cached = workspaceWatchTargetCache.get(workspaceDir);
+  const cached = workspaceWatchTargetCache.get(watcherKey);
   if (cached?.signature === signature) {
     return cached.targets;
   }
@@ -189,7 +213,7 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): Wat
     );
   }
   const sortedTargets = Array.from(targets.values()).toSorted((a, b) => a.key.localeCompare(b.key));
-  workspaceWatchTargetCache.set(workspaceDir, { signature, targets: sortedTargets });
+  workspaceWatchTargetCache.set(watcherKey, { signature, targets: sortedTargets });
   return sortedTargets;
 }
 
@@ -366,13 +390,6 @@ function watchDepthForPath(raw: string, depth: number): number {
   return depth + missingSegments;
 }
 
-function isPathInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 function isPathInsideAnyRoot(roots: readonly string[], child: string): boolean {
   return roots.some((root) => isPathInside(root, child));
 }
@@ -533,10 +550,10 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
       state.timer = undefined;
       // Fan the change out to every workspace subscribed to this directory so a
       // shared skill root refreshes the snapshot for all agents that use it.
-      for (const workspaceDir of state.subscribers) {
-        workspaceWatchTargetCache.delete(workspaceDir);
+      for (const watcherKey of state.subscribers) {
+        workspaceWatchTargetCache.delete(watcherKey);
         bumpSkillsSnapshotVersion({
-          workspaceDir,
+          workspaceDir: workspaceWatchOwnerDirs.get(watcherKey) ?? watcherKey,
           reason: "watch",
           changedPath: pendingPath,
         });
@@ -621,16 +638,18 @@ function unsubscribeWorkspaceFromPath(workspaceDir: string, watchTarget: WatchTa
 }
 
 function disposeWorkspaceWatchState(
-  workspaceDir: string,
-  watchTargets: readonly WatchTarget[] = workspaceWatchTargets.get(workspaceDir) ?? [],
+  watcherKey: string,
+  watchTargets: readonly WatchTarget[] = workspaceWatchTargets.get(watcherKey) ?? [],
 ): void {
+  const workspaceDir = workspaceWatchOwnerDirs.get(watcherKey) ?? watcherKey;
   const hadWatchTargets = watchTargets.length > 0;
   for (const watchTarget of watchTargets) {
-    unsubscribeWorkspaceFromPath(workspaceDir, watchTarget);
+    unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
   }
-  workspaceWatchTargets.delete(workspaceDir);
-  workspaceWatchTargetCache.delete(workspaceDir);
-  workspaceWatchLastEnsuredAt.delete(workspaceDir);
+  workspaceWatchTargets.delete(watcherKey);
+  workspaceWatchOwnerDirs.delete(watcherKey);
+  workspaceWatchTargetCache.delete(watcherKey);
+  workspaceWatchLastEnsuredAt.delete(watcherKey);
   if (hadWatchTargets) {
     // Watcher disposal creates an unwatched interval; mark the workspace dirty
     // so the next turn rebuilds skills even if file events were missed.
@@ -648,23 +667,48 @@ function evictIdleWorkspaceWatchStates(now: number): void {
   }
 }
 
-export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {
+function resolveSkillsWatcherKey(params: {
+  workspaceDir: string;
+  executionSkillsDir?: string;
+}): string {
+  return params.executionSkillsDir
+    ? JSON.stringify([params.workspaceDir, params.executionSkillsDir])
+    : params.workspaceDir;
+}
+
+export function ensureSkillsWatcher(params: {
+  workspaceDir: string;
+  executionSkillsDir?: string;
+  config?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+}) {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     return;
   }
+  const watcherKey = resolveSkillsWatcherKey({
+    workspaceDir,
+    ...(params.executionSkillsDir ? { executionSkillsDir: params.executionSkillsDir } : {}),
+  });
+  workspaceWatchOwnerDirs.set(watcherKey, workspaceDir);
   const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
-  const previousTargets = workspaceWatchTargets.get(workspaceDir) ?? [];
+  const previousTargets = workspaceWatchTargets.get(watcherKey) ?? [];
 
   if (!watchEnabled) {
-    disposeWorkspaceWatchState(workspaceDir, previousTargets);
+    disposeWorkspaceWatchState(watcherKey, previousTargets);
     evictIdleWorkspaceWatchStates(now);
     return;
   }
 
-  workspaceWatchLastEnsuredAt.set(workspaceDir, now);
-  const watchTargets = resolveWatchTargets(workspaceDir, params.config);
+  workspaceWatchLastEnsuredAt.set(watcherKey, now);
+  const watchTargets = resolveWatchTargets(
+    workspaceDir,
+    params.config,
+    params.executionSkillsDir,
+    watcherKey,
+    params.pluginMetadataSnapshot,
+  );
   const targetsUnchanged = sameWatchTargets(previousTargets, watchTargets);
   const watcherDepthsCoverTargets = watchTargets.every(
     (watchTarget) => (pathWatchers.get(watchTarget.key)?.depth ?? -1) >= watchTarget.depth,
@@ -678,13 +722,13 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   const nextTargetKeys = new Set(watchTargets.map((target) => target.key));
   for (const watchTarget of previousTargets) {
     if (!nextTargetKeys.has(watchTarget.key)) {
-      unsubscribeWorkspaceFromPath(workspaceDir, watchTarget);
+      unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
     }
   }
   for (const watchTarget of watchTargets) {
-    subscribeWorkspaceToPath(workspaceDir, watchTarget);
+    subscribeWorkspaceToPath(watcherKey, watchTarget);
   }
-  workspaceWatchTargets.set(workspaceDir, watchTargets);
+  workspaceWatchTargets.set(watcherKey, watchTargets);
 
   if (watchTargetsChanged) {
     bumpSkillsSnapshotVersion({
@@ -696,12 +740,14 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   evictIdleWorkspaceWatchStates(now);
 }
 
-async function resetSkillsRefreshForTest(): Promise<void> {
-  resetSkillsRefreshStateForTest();
-
+export async function closeSkillsWatchers(resetState = false): Promise<void> {
+  if (resetState) {
+    resetSkillsRefreshStateForTest();
+  }
   const active = Array.from(pathWatchers.values());
   pathWatchers.clear();
   workspaceWatchTargets.clear();
+  workspaceWatchOwnerDirs.clear();
   workspaceWatchTargetCache.clear();
   workspaceWatchLastEnsuredAt.clear();
   await Promise.all(
@@ -720,6 +766,6 @@ async function resetSkillsRefreshForTest(): Promise<void> {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillsRefreshTestApi")] = {
-    resetSkillsRefreshForTest,
+    resetSkillsRefreshForTest: () => closeSkillsWatchers(true),
   };
 }

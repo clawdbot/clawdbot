@@ -33,6 +33,8 @@ import {
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
 
+const CODEX_META_KEY = "__openclaw";
+
 function isRestrictivePromptToolsAllow(toolsAllow: string[] | undefined): boolean {
   return toolsAllow !== undefined && !toolsAllow.some((name) => name.trim() === "*");
 }
@@ -50,6 +52,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     skillsCollaborationInstructions,
     promptState,
     codexContextProjectionMaxChars,
+    codexContinuityProjectionMaxChars,
   } = context;
   const {
     connection,
@@ -78,11 +81,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       assembledMessages: historyState.messages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: codexContinuityProjectionMaxChars,
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
+    promptState.noEngineContinuityProjectionApplied = true;
   };
   const applyActiveContextEngineProjection = async (
     decisionStartupBinding: typeof mutable.startupBinding,
@@ -184,16 +188,28 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const buildPromptFromCurrentInputs = async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
-      developerInstructions: promptState.developerInstructions,
+      developerInstructions: {
+        build: ({ toolsAllow }) => {
+          if (isRestrictivePromptToolsAllow(toolsAllow)) {
+            throw new Error(
+              "Codex app-server cannot enforce before_prompt_build toolsAllow; use the embedded or Copilot runtime for turn-scoped tool policy.",
+            );
+          }
+          return promptState.developerInstructions;
+        },
+      },
       messages: structuredClone(historyState.messages),
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
+      toolAuthority: {
+        fingerprint: params.toolAuthorityFingerprint,
+        activeToolNames: () =>
+          flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
+            .map((tool) => tool.name)
+            .filter(isNonEmptyString),
+        assertActive: params.hostCapabilities.assertActive,
+      },
     });
-    if (isRestrictivePromptToolsAllow(result.toolsAllow)) {
-      throw new Error(
-        "Codex app-server cannot enforce before_prompt_build toolsAllow; use the embedded or Copilot runtime for turn-scoped tool policy.",
-      );
-    }
     return result;
   };
   const resolveShiftedPromptInputRange = (
@@ -327,8 +343,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       if (message.role !== "user" && message.role !== "assistant") {
         return false;
       }
-      const record = message as unknown as Record<string, unknown>;
-      const meta = record["__openclaw"];
+      const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
       const mirrorIdentity =
         meta && typeof meta === "object" && !Array.isArray(meta)
           ? (meta as Record<string, unknown>).mirrorIdentity
@@ -345,8 +360,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             : Number.NaN;
       return (
         !(
-          typeof record.idempotencyKey === "string" &&
-          record.idempotencyKey.startsWith("codex-app-server:")
+          "idempotencyKey" in message &&
+          typeof message.idempotencyKey === "string" &&
+          message.idempotencyKey.startsWith("codex-app-server:")
         ) &&
         mirrorOrigin !== "codex-app-server" &&
         !(typeof mirrorIdentity === "string" && mirrorIdentity.startsWith("codex-app-server:")) &&
@@ -366,11 +382,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       assembledMessages: newerVisibleMessages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: codexContinuityProjectionMaxChars,
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
+    promptState.noEngineContinuityProjectionApplied = true;
     return true;
   };
   const precomputeNoContextEngineStaleBindingProjection = () => {

@@ -14,9 +14,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { createConfigIO, resetConfigRuntimeState } from "../config/config.js";
 import type {
-  MemoryEmbeddingProviderAdapter,
-  MemoryEmbeddingProviderCallOptions,
-} from "../plugins/memory-embedding-providers.js";
+  EmbeddingInput,
+  EmbeddingProviderCallOptions,
+} from "../plugins/embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
@@ -39,13 +40,17 @@ let createEmbeddingProviderMock: ReturnType<
       provider: string;
       model: string;
       agentDir?: string;
+      dimensions?: number;
       acquireLocalService?: unknown;
     }) => Promise<{
       provider: {
         id: string;
         model: string;
-        embedQuery: (text: string) => Promise<number[]>;
-        embedBatch: (texts: string[]) => Promise<number[][]>;
+        embed: (input: EmbeddingInput, options?: EmbeddingProviderCallOptions) => Promise<number[]>;
+        embedBatch: (
+          inputs: EmbeddingInput[],
+          options?: EmbeddingProviderCallOptions,
+        ) => Promise<number[][]>;
         close?: () => Promise<void> | void;
       };
     }>
@@ -53,15 +58,14 @@ let createEmbeddingProviderMock: ReturnType<
 >;
 let embedBatchMock: ReturnType<
   typeof vi.fn<
-    (texts: string[], options?: MemoryEmbeddingProviderCallOptions) => Promise<number[][]>
+    (inputs: EmbeddingInput[], options?: EmbeddingProviderCallOptions) => Promise<number[][]>
   >
 >;
 let closeEmbeddingProviderMock: ReturnType<typeof vi.fn<() => Promise<void> | void>>;
-let clearMemoryEmbeddingProviders: typeof import("../plugins/memory-embedding-providers.js").clearMemoryEmbeddingProviders;
-let registerMemoryEmbeddingProvider: typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider;
 let openAiAdapter: MemoryEmbeddingProviderAdapter;
 let drainRetainedOpenAiEmbeddingProviders: typeof import("./embeddings-http.js").drainRetainedOpenAiEmbeddingProviders;
 let clearEmbeddingProviders: typeof import("../plugins/embedding-providers.js").clearEmbeddingProviders;
+let registerEmbeddingProvider: typeof import("../plugins/embedding-providers.js").registerEmbeddingProvider;
 let enabledServer: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>>;
 let genericEmbeddingServer: { baseUrl: string; close: () => Promise<void> };
 let enabledPort: number;
@@ -132,11 +136,10 @@ async function startGenericEmbeddingServer(): Promise<{
 
 beforeAll(async () => {
   ({ drainRetainedOpenAiEmbeddingProviders } = await import("./embeddings-http.js"));
-  ({ clearMemoryEmbeddingProviders, registerMemoryEmbeddingProvider } =
-    await import("../plugins/memory-embedding-providers.js"));
-  ({ clearEmbeddingProviders } = await import("../plugins/embedding-providers.js"));
-  embedBatchMock = vi.fn(async (texts: string[]) =>
-    texts.map((_text, index) => [index + 0.1, index + 0.2]),
+  ({ clearEmbeddingProviders, registerEmbeddingProvider } =
+    await import("../plugins/embedding-providers.js"));
+  embedBatchMock = vi.fn(async (inputs: EmbeddingInput[]) =>
+    inputs.map((_input, index) => [index + 0.1, index + 0.2]),
   );
   closeEmbeddingProviderMock = vi.fn(async () => {});
   createEmbeddingProviderMock = vi.fn(
@@ -144,7 +147,7 @@ beforeAll(async () => {
       provider: {
         id: options.provider,
         model: options.model,
-        embedQuery: async () => [0.1, 0.2],
+        embed: async () => [0.1, 0.2],
         embedBatch: embedBatchMock,
         close: closeEmbeddingProviderMock,
       },
@@ -166,6 +169,7 @@ beforeAll(async () => {
         provider: options.provider ?? "openai",
         model: options.model,
         agentDir: options.agentDir,
+        dimensions: options.dimensions,
         acquireLocalService: localServiceOptions.acquireLocalService,
       });
       return result;
@@ -193,11 +197,10 @@ beforeEach(() => {
     activateGlobalSideEffects: true,
   });
   setTestPluginRegistry(builder.registry);
-  registerMemoryEmbeddingProvider(openAiAdapter);
+  registerEmbeddingProvider(openAiAdapter);
 });
 
 afterEach(() => {
-  clearMemoryEmbeddingProviders();
   clearEmbeddingProviders();
   resetTestPluginRegistry();
 });
@@ -362,6 +365,33 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     }
   });
 
+  it.each([
+    { enabled: false, dimensions: 8, expected: 8 },
+    { enabled: true, dimensions: 8, expected: 8 },
+    { enabled: false, dimensions: undefined, expected: undefined },
+    { enabled: true, dimensions: undefined, expected: 16 },
+  ])(
+    "passes dimensions=$dimensions with memory search enabled=$enabled",
+    async ({ enabled, dimensions, expected }) => {
+      const configPath = createConfigIO().configPath;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ memory: { search: { enabled, outputDimensionality: 16 } } }),
+      );
+      resetConfigRuntimeState();
+
+      const res = await postEmbeddings({
+        model: "openclaw/default",
+        input: "hello",
+        dimensions,
+      });
+
+      await expectDefaultEmbeddingResponse(res);
+      expect(createEmbeddingProviderMock.mock.calls.at(-1)?.[0].dimensions).toBe(expected);
+    },
+  );
+
   it("passes provider aliases and local-service acquisition to memory adapters", async () => {
     const configPath = createConfigIO().configPath;
     await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -440,6 +470,22 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       input: [{ nope: true }],
     });
     await expectInvalidEmbeddingRequest(res);
+  });
+
+  it.each([
+    { name: "unsupported encoding", option: { encoding_format: "hex" } },
+    { name: "numeric encoding", option: { encoding_format: 1 } },
+    { name: "zero dimensions", option: { dimensions: 0 } },
+    { name: "negative dimensions", option: { dimensions: -1 } },
+    { name: "fractional dimensions", option: { dimensions: 1.5 } },
+    { name: "string dimensions", option: { dimensions: "768" } },
+    { name: "unsafe dimensions", option: { dimensions: Number.MAX_SAFE_INTEGER + 1 } },
+  ])("rejects $name before creating an embedding provider", async ({ option }) => {
+    const providersCreatedBefore = createEmbeddingProviderMock.mock.calls.length;
+    const res = await postEmbeddings({ model: "openclaw/default", input: "hello", ...option });
+
+    await expectInvalidEmbeddingRequest(res);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(providersCreatedBefore);
   });
 
   it.each([
@@ -855,7 +901,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       provider: {
         id: "local",
         model: "local-embed",
-        embedQuery: async () => [0.1, 0.2],
+        embed: async () => [0.1, 0.2],
         embedBatch: embedBatchMock,
         close: closeEmbeddingProviderMock,
       },
@@ -927,7 +973,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
         provider: {
           id: "openai",
           model: "text-embedding-3-small",
-          embedQuery: async () => [1, 2],
+          embed: async () => [1, 2],
           embedBatch: firstEmbed,
           close: vi.fn(async () => {}),
         },
@@ -936,7 +982,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
         provider: {
           id: "openai",
           model: "text-embedding-3-small",
-          embedQuery: async () => [3, 4],
+          embed: async () => [3, 4],
           embedBatch: secondEmbed,
           close: vi.fn(async () => {}),
         },

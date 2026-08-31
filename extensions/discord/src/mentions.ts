@@ -155,26 +155,18 @@ function findNextMarkdownCodeSegment(
   text: string,
   startIndex: number,
 ): { startIndex: number; endIndex: number } | null {
-  let searchIndex = startIndex;
-  while (searchIndex < text.length) {
-    const segmentStart = text.indexOf("`", searchIndex);
-    if (segmentStart === -1) {
-      return null;
-    }
-    const runLength = countBacktickRun(text, segmentStart);
-    const inlineEndIndex = findSameLineBacktickRun(text, segmentStart + runLength, runLength);
-    if (inlineEndIndex !== null) {
-      return { startIndex: segmentStart, endIndex: inlineEndIndex };
-    }
-    if (runLength >= 3) {
-      return {
-        startIndex: segmentStart,
-        endIndex: findFenceEnd(text, segmentStart, runLength),
-      };
-    }
-    searchIndex = segmentStart + runLength;
+  const segmentOffset = text.slice(startIndex).search(/(?<=(?:^|[^\\])(?:\\\\)*)`/);
+  if (segmentOffset === -1) {
+    return null;
   }
-  return null;
+  const segmentStart = startIndex + segmentOffset;
+  const runLength = countBacktickRun(text, segmentStart);
+  return {
+    startIndex: segmentStart,
+    endIndex:
+      findSameLineBacktickRun(text, segmentStart + runLength, runLength) ??
+      (runLength >= 3 ? findFenceEnd(text, segmentStart, runLength) : text.length),
+  };
 }
 
 export function rewriteDiscordKnownMentions(

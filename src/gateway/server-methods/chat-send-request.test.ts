@@ -30,6 +30,86 @@ function validParams(overrides: Record<string, unknown> = {}) {
 }
 
 describe("normalizeChatSendRequest", () => {
+  it.each(["clear the backlog", "/stop", "/btw investigate", "  résumé\n\n  preserve spacing  "])(
+    "admits Goal objective %j literally without command interpretation",
+    (message) => {
+      expect(
+        normalizeChatSendRequest({
+          params: validParams({
+            message,
+            intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
+          }),
+          client: null,
+        }),
+      ).toMatchObject({
+        ok: true,
+        value: {
+          inboundMessage: message,
+          rawMessage: message,
+          stopCommand: false,
+          turnKind: "main",
+          suppressCommandInterpretation: true,
+          goalOperation: { action: "start", objective: message, operationId: "request-1" },
+        },
+      });
+    },
+  );
+
+  it.each([
+    { message: "  " },
+    { message: "x".repeat(16_001) },
+    { message: "bad\u0001text" },
+    { queueMode: "steer" },
+    { thinking: "high" },
+    { fastMode: "on" },
+    { fastAutoOnSeconds: 10 },
+    { timeoutMs: 1000 },
+    { deliver: true },
+    { idempotencyKey: "x".repeat(129) },
+    { intent: { kind: "session-goal-resume", version: 1, issuedAtMs: 1 } },
+    { intent: { kind: "session-goal-start", version: 2, issuedAtMs: 1 } },
+    { intent: { kind: "session-goal-start", version: 1 } },
+    {
+      intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1, objective: "second target" },
+    },
+  ])("rejects invalid Goal intent before admission: %j", (overrides) => {
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({
+          intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
+          ...overrides,
+        }),
+        client: null,
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("binds Goal retries to immutable attachments, reply context, options, and timestamp", () => {
+    const base = validParams({
+      intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1 },
+      attachments: [{ mimeType: "text/plain", content: "aGVsbG8=" }],
+      replyToId: "reply-1",
+    });
+    const fingerprint = (params: Record<string, unknown>) => {
+      const result = normalizeChatSendRequest({ params, client: null });
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      return result.value.goalOperation?.requestFingerprint;
+    };
+    const original = fingerprint(base);
+    expect(fingerprint(Object.fromEntries(Object.entries(base).toReversed()))).toBe(original);
+    for (const change of [
+      { attachments: [] },
+      { replyToId: "reply-2" },
+      { sessionId: "other-session" },
+      { message: "different" },
+      { intent: { kind: "session-goal-start", version: 1, issuedAtMs: 2 } },
+    ]) {
+      expect(fingerprint({ ...base, ...change })).not.toBe(original);
+    }
+  });
+
   it("normalizes the message and derives the main-turn defaults", () => {
     const result = normalizeChatSendRequest({ params: validParams(), client: null });
 
@@ -55,7 +135,7 @@ describe("normalizeChatSendRequest", () => {
     expect(result).toEqual({ ok: false, error: "message or attachment required" });
   });
 
-  it("preserves targetless steer for leaf-bound compatibility admission", () => {
+  it("accepts start-or-steer requests with or without a transcript leaf", () => {
     expect(
       normalizeChatSendRequest({
         params: validParams({ queueMode: "steer" }),
@@ -68,12 +148,6 @@ describe("normalizeChatSendRequest", () => {
           queueMode: "steer",
           expectedLeafEntryId: "leaf-1",
         }),
-        client: null,
-      }),
-    ).toMatchObject({ ok: true });
-    expect(
-      normalizeChatSendRequest({
-        params: validParams({ queueMode: "steer", expectedRunId: " run-1 " }),
         client: null,
       }),
     ).toMatchObject({ ok: true });

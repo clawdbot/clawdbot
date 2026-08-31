@@ -21,6 +21,7 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
+import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import {
@@ -37,7 +38,6 @@ import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import {
   captureDeliveredTranscriptMirror,
-  getDispatcherFinalOutcomeCounts,
   mirrorDeliveredReplyToTranscript,
   mirrorTranscriptAfterDispatcherSettled,
   transcriptMirrorForDeliveredPayload,
@@ -317,7 +317,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         suppressionReason: preparation.reason,
       };
     }
-    const payload = preparation.payload;
+    const payload = renderPostCompactionModelFailurePayload(preparation.payload);
     const payloadMetadata = getReplyPayloadMetadata(payload);
     const expectedWriterRunId = normalizeOptionalString(params.replyOptions?.runId);
     const expectedLifecycleRevision = sessionStoreEntry.entry?.lifecycleRevision;
@@ -492,15 +492,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           )
         : undefined);
     markInboundDedupeReplayUnsafe();
-    const finalOutcomeBefore = transcriptMirror
-      ? getDispatcherFinalOutcomeCounts(dispatcher)
-      : undefined;
     const finalDeliveryCapture = transcriptMirror ? {} : undefined;
     const deliveredTranscriptMirror = transcriptMirror
       ? captureDeliveredTranscriptMirror({
           dispatcher,
           metadata: transcriptMirror,
-          deliveryId: options.deliveryId,
           captureToken: finalDeliveryCapture,
         })
       : undefined;
@@ -517,14 +513,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       "final",
       normalizedPayload,
     );
-    if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
+    if (queuedFinal && deliveredTranscriptMirror && dispatcherOutcome) {
       // The common settle owner runs this after successful delivery or
-      // cancellation. Keeping reconciliation out of the reply operation lets a
-      // newer foreground turn settle without creating an operation/idle cycle.
+      // cancellation. Keeping reconciliation out of the reply operation avoids
+      // creating another operation/idle cycle during delivery settlement.
       registerReplyDispatcherSettledTask(dispatcher, () =>
         mirrorTranscriptAfterDispatcherSettled({
-          dispatcher,
-          before: finalOutcomeBefore,
+          outcome: dispatcherOutcome,
           metadata: deliveredTranscriptMirror,
           cfg,
         }),
@@ -621,7 +616,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
   }
 
-  if (hookRunner?.hasHooks("reply_dispatch")) {
+  if (hookRunner?.hasHooks("reply_dispatch", { dispatchKind: state.dispatchKind })) {
     const replyDispatchResult = await traceReplyPhase("reply.reply_dispatch_hooks", () =>
       runWithDispatchLifecycleAdmission(
         async () =>
@@ -653,9 +648,14 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                 }),
                 {
                   cfg,
+                  dispatchKind: state.dispatchKind,
                   dispatcher: state.dispatchHookDispatcher,
                   abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                   onReplyStart: params.replyOptions?.onReplyStart,
+                  onAgentRunStart: params.replyOptions?.onAgentRunStart,
+                  userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
+                  prepareAssistantTranscriptMessage:
+                    params.replyOptions?.prepareAssistantTranscriptMessage,
                   recordProcessed,
                   markIdle,
                 },
@@ -677,7 +677,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
   }
 
-  const dispatchAcquisition = await state.ensureDispatchReplyOperation("dispatch");
+  const dispatchAcquisition = await state.ensureDispatchReplyOperation(
+    state.activeRunSafeCommandTurn ? "command_resolution" : "dispatch",
+  );
   if (dispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
   }

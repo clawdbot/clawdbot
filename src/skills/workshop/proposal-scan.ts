@@ -1,6 +1,5 @@
 import { scanSkillContent, scanSource } from "../security/scanner.js";
-import type { PreparedSkillProposalSupportFile } from "./store.js";
-import type { SkillProposalScan } from "./types.js";
+import type { PreparedSkillProposalSupportFile, SkillProposalScan } from "./types.js";
 
 export function scanProposalBundle(
   content: string,

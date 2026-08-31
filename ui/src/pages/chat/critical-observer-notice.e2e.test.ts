@@ -236,8 +236,6 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        page.setDefaultTimeout(10_000);
-
         const gateway = await installMockGateway(page, {
           historyMessages: [
             {
@@ -407,8 +405,6 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        page.setDefaultTimeout(10_000);
-
         const gateway = await installMockGateway(page, {
           assistantAgentId: "work",
           defaultAgentId: "work",

@@ -1,31 +1,25 @@
 // Shared provider HTTP/audio helpers for media-understanding integrations,
 // including guarded fetches, deadlines, retries, and multipart upload bodies.
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  assertOkOrThrowHttpError,
-  createProviderHttpError,
-  readProviderJsonObjectResponse,
-} from "../agents/provider-http-errors.js";
-export {
-  assertOkOrThrowHttpError,
-  readProviderJsonObjectResponse,
-  readProviderJsonResponse,
-} from "../agents/provider-http-errors.js";
 import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
 } from "../agents/provider-attribution.js";
 import {
+  assertOkOrThrowHttpError,
+  createProviderHttpError,
+  readProviderJsonObjectResponse,
+} from "../agents/provider-http-errors.js";
+import {
   buildProviderRequestDispatcherPolicy,
   resolveProviderRequestPolicyConfig,
   type ModelProviderRequestTransportOverrides,
-  type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
@@ -38,6 +32,11 @@ import {
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export {
+  assertOkOrThrowHttpError,
+  readProviderJsonObjectResponse,
+  readProviderJsonResponse,
+} from "../agents/provider-http-errors.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
@@ -386,7 +385,6 @@ type ResolvedProviderHttpRequestConfig = {
   allowPrivateNetwork: boolean;
   headers: Headers;
   dispatcherPolicy?: PinnedDispatcherPolicy;
-  requestConfig: ResolvedProviderRequestConfig;
 };
 
 type ResolvedProviderHttpRequestConfigWithOriginTrust = ResolvedProviderHttpRequestConfig & {
@@ -430,11 +428,7 @@ function resolveProviderHttpRequestConfigWithOriginTrustInternal(params: {
     allowPrivateNetwork: requestConfig.allowPrivateNetwork,
     headers,
     dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
-    requestConfig,
-    trustConfiguredBaseUrlOrigin:
-      !requestConfig.privateNetworkExplicitlyDenied &&
-      (requestConfig.policy.endpointClass === "custom" ||
-        requestConfig.policy.endpointClass === "local"),
+    trustConfiguredBaseUrlOrigin: requestConfig.trustConfiguredBaseUrlOrigin,
   };
 }
 
@@ -447,7 +441,6 @@ export function resolveProviderHttpRequestConfig(
     allowPrivateNetwork: resolved.allowPrivateNetwork,
     headers: resolved.headers,
     dispatcherPolicy: resolved.dispatcherPolicy,
-    requestConfig: resolved.requestConfig,
   };
 }
 

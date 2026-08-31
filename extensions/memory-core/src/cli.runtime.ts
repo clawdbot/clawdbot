@@ -1,4 +1,5 @@
 export {
+  runMemoryForget,
   runMemoryIndex,
   runMemoryPromote,
   runMemoryPromoteExplain,

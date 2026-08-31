@@ -47,11 +47,11 @@ describe("native notifications", () => {
 
     capability = createNativeNotificationsCapability();
 
-    expect(capability?.snapshot).toEqual({ permission: "unknown" });
+    expect(capability?.snapshot).toEqual({ permission: "unknown", test: null });
     expect(postMessage).toHaveBeenCalledWith({ type: "status" });
   });
 
-  it("seeds status from the native snapshot", () => {
+  it("accepts the permission-only native snapshot", () => {
     installBridge();
     (window as NativeNotificationsTestWindow)["__OPENCLAW_NATIVE_NOTIFICATIONS__"] = {
       permission: "granted",
@@ -59,7 +59,7 @@ describe("native notifications", () => {
 
     capability = createNativeNotificationsCapability();
 
-    expect(capability?.snapshot).toEqual({ permission: "granted" });
+    expect(capability?.snapshot).toEqual({ permission: "granted", test: null });
   });
 
   it("publishes valid status events", () => {
@@ -70,12 +70,12 @@ describe("native notifications", () => {
 
     window.dispatchEvent(
       new CustomEvent(NATIVE_NOTIFICATIONS_STATUS_EVENT, {
-        detail: { permission: "denied" },
+        detail: { permission: "denied", test: null },
       }),
     );
 
-    expect(capability?.snapshot).toEqual({ permission: "denied" });
-    expect(listener).toHaveBeenCalledWith({ permission: "denied" });
+    expect(capability?.snapshot).toEqual({ permission: "denied", test: null });
+    expect(listener).toHaveBeenCalledWith({ permission: "denied", test: null });
   });
 
   it("ignores invalid status event details", () => {
@@ -90,7 +90,7 @@ describe("native notifications", () => {
       }),
     );
 
-    expect(capability?.snapshot).toEqual({ permission: "unknown" });
+    expect(capability?.snapshot).toEqual({ permission: "unknown", test: null });
     expect(listener).not.toHaveBeenCalled();
   });
 
@@ -104,18 +104,48 @@ describe("native notifications", () => {
     expect(postMessage).toHaveBeenCalledWith({ type: "status" });
   });
 
-  it("posts permission and test actions", () => {
+  it("posts permission requests", () => {
     const postMessage = installBridge();
     capability = createNativeNotificationsCapability();
     postMessage.mockClear();
 
     capability?.requestPermission();
+
+    expect(postMessage).toHaveBeenCalledWith({ type: "request-permission" });
+  });
+
+  it("publishes pending immediately and suppresses duplicate test sends", () => {
+    const postMessage = installBridge();
+    capability = createNativeNotificationsCapability();
+    postMessage.mockClear();
+
+    capability?.sendTest();
     capability?.sendTest();
 
-    expect(postMessage.mock.calls).toEqual([
-      [{ type: "request-permission" }],
-      [{ type: "send-test" }],
-    ]);
+    expect(capability?.snapshot).toEqual({ permission: "unknown", test: { state: "pending" } });
+    expect(postMessage.mock.calls).toEqual([[{ type: "send-test" }]]);
+  });
+
+  it("keeps permission and failed send as independent facts across focus refresh", () => {
+    const postMessage = installBridge();
+    capability = createNativeNotificationsCapability();
+
+    window.dispatchEvent(
+      new CustomEvent(NATIVE_NOTIFICATIONS_STATUS_EVENT, {
+        detail: {
+          permission: "granted",
+          test: { state: "error", message: "Open System Settings and try again." },
+        },
+      }),
+    );
+    postMessage.mockClear();
+    window.dispatchEvent(new Event("focus"));
+
+    expect(capability?.snapshot).toEqual({
+      permission: "granted",
+      test: { state: "error", message: "Open System Settings and try again." },
+    });
+    expect(postMessage).toHaveBeenCalledWith({ type: "status" });
   });
 
   it("removes listeners on dispose", () => {
@@ -130,7 +160,7 @@ describe("native notifications", () => {
     window.dispatchEvent(new Event("focus"));
     window.dispatchEvent(
       new CustomEvent(NATIVE_NOTIFICATIONS_STATUS_EVENT, {
-        detail: { permission: "granted" },
+        detail: { permission: "granted", test: null },
       }),
     );
 

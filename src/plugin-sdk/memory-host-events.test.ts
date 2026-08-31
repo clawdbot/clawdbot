@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   listStoredMemoryHostEvents,
+  normalizeMemoryHostEventRecordForStorage,
   setMaxMemoryHostEventsForTests,
 } from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
@@ -233,6 +234,43 @@ describe("memory host event journal helpers", () => {
     }
     expect(event.results).toHaveLength(10);
     expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeLessThanOrEqual(8 * 1024);
+  });
+
+  it("validates only the retained prefix of an oversized event", () => {
+    const result = {
+      path: "memory/2026-04-05.md",
+      startLine: 1,
+      endLine: 2,
+      score: 0.9,
+    };
+    const normalized = normalizeMemoryHostEventRecordForStorage({
+      type: "memory.recall.recorded",
+      timestamp: "2026-04-05T12:00:00.000Z",
+      query: "bounded tail",
+      resultCount: 11,
+      results: [...Array.from({ length: 10 }, () => result), { path: 42 }],
+    });
+
+    expect(normalized).toMatchObject({ storageTruncated: true });
+    expect(normalized?.type === "memory.recall.recorded" ? normalized.results : []).toHaveLength(
+      10,
+    );
+  });
+
+  it.each([
+    { name: "unknown event type", value: { type: "memory.unknown", timestamp: "now" } },
+    {
+      name: "malformed retained result",
+      value: {
+        type: "memory.recall.recorded",
+        timestamp: "now",
+        query: "invalid",
+        resultCount: 1,
+        results: [{ path: 42 }],
+      },
+    },
+  ])("rejects $name", ({ value }) => {
+    expect(normalizeMemoryHostEventRecordForStorage(value)).toBeNull();
   });
 
   it("rotates old events without evicting the workspace sequence cursor", async () => {

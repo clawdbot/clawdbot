@@ -6,11 +6,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
-import {
-  resolveDefaultAgentId,
-  resolveAgentWorkspaceDir,
-  resolveAgentDir,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveAgentDir } from "../agents/agent-scope.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
@@ -73,11 +69,12 @@ function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | unde
 export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
+  agentId: string;
   /** Optional hook-level override; the embedded runner owns model resolution. */
   model?: string;
 }): Promise<string | null> {
   try {
-    const agentId = resolveDefaultAgentId(params.cfg);
+    const agentId = params.agentId;
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     const agentDir = resolveAgentDir(params.cfg, agentId);
 
@@ -114,6 +111,9 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
         model: params.model,
         timeoutMs,
         runId,
+        // Conversation-derived utility input must never regain caller-denied capabilities.
+        disableTools: true,
+        toolsAllow: [],
         disableTrajectory: true,
         cleanupBundleMcpOnRunEnd: true,
         // Internal helper run: route failures lane-local so an upstream 400/billing

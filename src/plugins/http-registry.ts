@@ -12,11 +12,25 @@ type PluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<boolean | void> | boolean | void;
 
-const pluginHttpRouteRegistryScope = new AsyncLocalStorage<PluginRegistry>();
+type PluginHttpRouteRegistrationLease = {
+  isActive: () => boolean;
+  retain: (unregister: () => void) => () => void;
+};
+
+const pluginHttpRouteRegistryScope = new AsyncLocalStorage<{
+  registry: PluginRegistry;
+  leases: readonly PluginHttpRouteRegistrationLease[];
+}>();
 const noopUnregister = () => {};
 
-export function withPluginHttpRouteRegistry<T>(registry: PluginRegistry, run: () => T): T {
-  return pluginHttpRouteRegistryScope.run(registry, run);
+export function withPluginHttpRouteRegistry<T>(
+  registry: PluginRegistry,
+  run: () => T,
+  lease?: PluginHttpRouteRegistrationLease,
+): T {
+  const inherited = pluginHttpRouteRegistryScope.getStore()?.leases ?? [];
+  const leases = lease && !inherited.includes(lease) ? [...inherited, lease] : inherited;
+  return pluginHttpRouteRegistryScope.run({ registry, leases }, run);
 }
 
 export function registerPluginHttpRoute(params: {
@@ -39,14 +53,8 @@ export function registerPluginHttpRoute(params: {
   log?: (message: string) => void;
   registry?: PluginRegistry;
 }): () => void {
-  const registry =
-    params.registry ??
-    pluginHttpRouteRegistryScope.getStore() ??
-    requireActivePluginHttpRouteRegistry();
-  const routes = registry.httpRoutes ?? [];
-  registry.httpRoutes = routes;
-
-  const normalizedPath = normalizePluginHttpPath(params.path, params.fallbackPath);
+  const scope = pluginHttpRouteRegistryScope.getStore();
+  const registry = params.registry ?? scope?.registry ?? requireActivePluginHttpRouteRegistry();
   const suffix = params.accountId ? ` for account "${params.accountId}"` : "";
   const rejectRegistration = (message: string): (() => void) => {
     params.log?.(message);
@@ -55,6 +63,15 @@ export function registerPluginHttpRoute(params: {
     }
     return noopUnregister;
   };
+  // AsyncLocalStorage survives timed-out service callbacks; expired continuations must not
+  // regain route authority, even when they retained an explicit registry reference.
+  if (scope?.leases.some((lease) => !lease.isActive())) {
+    return rejectRegistration("plugin service HTTP route lease is no longer active");
+  }
+
+  const routes = registry.httpRoutes ?? [];
+  registry.httpRoutes = routes;
+  const normalizedPath = normalizePluginHttpPath(params.path, params.fallbackPath);
   if (!normalizedPath) {
     return rejectRegistration(`plugin: webhook path missing${suffix}`);
   }
@@ -146,10 +163,16 @@ export function registerPluginHttpRoute(params: {
   };
   routes.push(entry);
 
-  return () => {
+  const releases: Array<() => void> = [];
+  const unregister = () => {
     const index = routes.indexOf(entry);
     if (index >= 0) {
       routes.splice(index, 1);
     }
+    for (const release of releases.splice(0)) {
+      release();
+    }
   };
+  scope?.leases.forEach((lease) => releases.push(lease.retain(unregister)));
+  return unregister;
 }

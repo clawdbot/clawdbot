@@ -6,7 +6,8 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import * as skillsLoaderModule from "../loading/workspace-skill-loader.js";
-import type { SkillSnapshot } from "../types.js";
+import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
+import type { SkillEntry, SkillSnapshot } from "../types.js";
 import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 
 describe("resolveEmbeddedRunSkillEntries", () => {
@@ -178,10 +179,38 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       skillsSnapshot: snapshot,
     });
 
-    expect(result).toEqual({
-      shouldLoadSkillEntries: false,
-      skillEntries: [],
-    });
+    expect(result.shouldLoadSkillEntries).toBe(false);
+    expect(result.skillEntries).toEqual([]);
     expect(loadWorkspaceSkillsSpy).not.toHaveBeenCalled();
+  });
+
+  it("exposes a cached lazy loader without eagerly loading a modern snapshot", () => {
+    const loadedEntries: SkillEntry[] = [
+      {
+        skill: createCanonicalFixtureSkill({
+          name: "healthy",
+          description: "healthy",
+          filePath: "/tmp/workspace/skills/healthy/SKILL.md",
+          baseDir: "/tmp/workspace/skills/healthy",
+          source: "test",
+        }),
+        frontmatter: {},
+      },
+    ];
+    loadWorkspaceSkillsSpy.mockReturnValue(loadedEntries);
+    const result = resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace",
+      config: {},
+      skillsSnapshot: {
+        prompt: "skills prompt",
+        skills: [{ name: "healthy", skillKey: "healthy" }],
+        resolvedSkills: [],
+      },
+    });
+
+    expect(loadWorkspaceSkillsSpy).not.toHaveBeenCalled();
+    expect(result.loadSkillEntries()).toBe(loadedEntries);
+    expect(result.loadSkillEntries()).toBe(loadedEntries);
+    expect(loadWorkspaceSkillsSpy).toHaveBeenCalledOnce();
   });
 });

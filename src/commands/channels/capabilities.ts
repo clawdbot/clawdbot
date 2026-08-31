@@ -16,17 +16,20 @@ import type {
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
+import { ExpectedCliError } from "../../cli/failure-output.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
-import { persistResolvedChannelPluginConfig } from "./plugin-config-persistence.js";
-import { formatChannelAccountLabel, requireValidChannelConfig } from "./shared.js";
+import { requireValidConfigFileSnapshot } from "../config-validation.js";
+import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
+import { formatChannelAccountLabel } from "./shared.js";
 
 export type ChannelsCapabilitiesOptions = {
   channel?: string;
@@ -297,40 +300,37 @@ async function resolveChannelReports(params: {
   return reports;
 }
 
+async function resolveCapabilitiesRuntimeConfig(config: OpenClawConfig, runtime: RuntimeEnv) {
+  return (
+    await resolveCommandConfigWithSecrets({
+      config,
+      commandName: "channels",
+      targetIds: getChannelsCommandSecretTargetIds(),
+      runtime,
+    })
+  ).effectiveConfig;
+}
+
 /** Print or serialize configured channel capabilities, actions, and optional health probe details. */
 export async function channelsCapabilitiesCommand(
   opts: ChannelsCapabilitiesOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
-  const loadedCfg = await requireValidChannelConfig(runtime);
-  if (!loadedCfg) {
+  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!configSnapshot) {
     return;
   }
-  let cfg = loadedCfg;
+  let cfg = await resolveCapabilitiesRuntimeConfig(configSnapshot.config, runtime);
   const timeoutMs = resolveChannelCapabilitiesTimeoutMs(
     parseTimeoutMsWithFallback(opts.timeout, 10_000),
   );
   const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
   const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
-  if (opts.account && (!rawChannel || rawChannel === "all")) {
-    runtime.error(
-      danger(
-        `--account requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
-      ),
-    );
-    runtime.exit(1);
-    return;
-  }
-  if (rawTarget && (!rawChannel || rawChannel === "all")) {
-    runtime.error(
-      danger(
-        `--target requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
-      ),
-    );
-    runtime.exit(1);
-    return;
+  if ((!rawChannel || rawChannel === "all") && (opts.account || rawTarget)) {
+    const option = opts.account ? "--account" : "--target";
+    const message = `${option} requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`;
+    throw new ExpectedCliError({ message, humanOutput: danger(message), machineOutput: message });
   }
 
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
@@ -341,17 +341,21 @@ export async function channelsCapabilitiesCommand(
       ? plugins
       : await (async () => {
           const resolved = await resolveInstallableChannelPlugin({
-            cfg,
+            cfg: configSnapshot.sourceConfig,
             runtime,
             rawChannel,
             allowInstall: true,
           });
           if (resolved.configChanged) {
-            cfg = await persistResolvedChannelPluginConfig({
-              resolved,
-              baseHash: (await sourceSnapshotPromise)?.hash,
+            await persistChannelPluginConfig({
+              cfg: resolved.cfg,
+              pluginInstalled: resolved.pluginInstalled,
+              baseHash: configSnapshot.hash,
               runtime,
             });
+            // The writer refreshes the active runtime snapshot; probes must use that prepared
+            // view rather than the authored config that installation persisted.
+            cfg = await resolveCapabilitiesRuntimeConfig(getRuntimeConfig(), runtime);
           }
           return resolved.plugin ? [resolved.plugin] : null;
         })();
@@ -371,9 +375,8 @@ export async function channelsCapabilitiesCommand(
       );
       return;
     }
-    runtime.error(danger(formatUnknownChannelMessage({ channel: rawChannel })));
-    runtime.exit(1);
-    return;
+    const message = formatUnknownChannelMessage({ channel: rawChannel });
+    throw new ExpectedCliError({ message, humanOutput: danger(message), machineOutput: message });
   }
 
   const reports: ChannelCapabilitiesReport[] = [];

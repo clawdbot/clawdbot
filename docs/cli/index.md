@@ -24,7 +24,7 @@ Setup commands by intent:
 | Setup and onboarding         | [`openclaw`](/cli/openclaw) · [`setup`](/cli/setup) · [`onboard`](/cli/onboard) · [`configure`](/cli/configure) · [`config`](/cli/config) · [`completion`](/cli/completion) · [`doctor`](/cli/doctor) · [`dashboard`](/cli/dashboard) |
 | Reset, backup, and migration | [`backup`](/cli/backup) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                                                                 |
 | Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                                         |
-| Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                                                     |
+| Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
 | Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
 | Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`wiki`](/cli/wiki)                                                            |
 | Network and nodes            | [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
@@ -64,6 +64,26 @@ state directories and config paths remain unchanged.
   and pure side-effect commands may omit `--json` when they have no meaningful
   report to return.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
+
+### JSON failures
+
+Successful JSON payloads remain command-specific. When a command in JSON output
+mode fails, it exits nonzero and writes one JSON document to stdout with this
+envelope:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "cli_error",
+    "message": "Description of the failure"
+  }
+}
+```
+
+A command may add domain-specific fields, such as per-item results, beside this
+envelope. Failure messages are sanitized. Human-readable diagnostics may also be
+written to stderr, so scripts should parse stdout and still check the exit status.
 
 ## Color palette
 
@@ -105,6 +125,7 @@ openclaw [--dev] [--profile <name>] <command>
     validate
   completion
   doctor
+  triage
   dashboard
   backup
     create
@@ -330,8 +351,7 @@ openclaw [--dev] [--profile <name>] <command>
     invoke
     notify
     push
-    canvas snapshot|present|hide|navigate|eval
-    canvas a2ui push|reset
+    canvas present|hide|navigate
     camera list|snap|clip
     screen record
     location get

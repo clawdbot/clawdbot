@@ -96,6 +96,7 @@ function createAcceptedWorkspacePublisherFactory(
             contentHashCount: 0,
             contentHashDurationMs: 0,
             memoHitCount: 0,
+            memoTruncatedCount: 0,
             totalDurationMs: 0,
           },
         })}\n`,

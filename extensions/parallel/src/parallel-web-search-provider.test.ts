@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
@@ -16,6 +19,7 @@ type ToolParameters = {
 };
 const endpointMockState = vi.hoisted(() => ({
   calls: [] as EndpointCall[],
+  effects: [] as Array<(() => void) | undefined>,
   responses: [] as Response[],
 }));
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
@@ -29,6 +33,7 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
         if (!response) {
           throw new Error("Missing mocked Parallel response.");
         }
+        endpointMockState.effects.shift()?.();
         return await run(response);
       },
     ),
@@ -55,9 +60,9 @@ function paidTool(searchConfig: Record<string, unknown> = { parallel: { apiKey: 
     "Parallel tool definition",
   );
 }
-function freeTool() {
+function freeTool(searchConfig: Record<string, unknown> = {}) {
   return expectDefined(
-    createParallelFreeWebSearchProvider().createTool({ config: {}, searchConfig: {} }),
+    createParallelFreeWebSearchProvider().createTool({ config: {}, searchConfig }),
     "Parallel free tool definition",
   );
 }
@@ -120,7 +125,60 @@ const cacheKey = (overrides: Partial<CacheKeyParams> = {}) =>
   testing.buildParallelCacheKey({ ...CACHE_KEY_BASE, ...overrides });
 beforeEach(() => {
   endpointMockState.calls = [];
+  endpointMockState.effects = [];
   endpointMockState.responses = [];
+});
+describe.each(["paid", "free"] as const)("Parallel %s cache policy", (transport) => {
+  it.each([0, 1])(
+    "honors the current %i-minute TTL after populating at 15 minutes",
+    async (ttl) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const createTool = (cacheTtlMinutes: number) =>
+        transport === "paid"
+          ? paidTool({ parallel: { apiKey: "par-secret" }, cacheTtlMinutes })
+          : freeTool({ cacheTtlMinutes });
+      const enqueue = transport === "paid" ? enqueueJson : pushMcpHandshake;
+      const callsPerSearch = transport === "paid" ? 1 : 3;
+      const args = { search_queries: [`parallel-${transport}-ttl-${ttl}`] };
+      try {
+        enqueue({ search_id: "original", results: [] });
+        const originalTool = createTool(15);
+        await originalTool.execute(args);
+        expect(await originalTool.execute(args)).toMatchObject({
+          searchId: "original",
+          cached: true,
+        });
+        expect(endpointMockState.calls).toHaveLength(callsPerSearch);
+
+        clock.mockReturnValue(now + 60_000);
+        enqueue({ search_id: "fresh", results: [] });
+        const currentTool = createTool(ttl);
+        const fresh = await currentTool.execute(args);
+        expect(fresh.searchId).toBe("fresh");
+        expect(fresh).not.toHaveProperty("cached");
+        expect(endpointMockState.calls).toHaveLength(2 * callsPerSearch);
+
+        if (ttl === 0) {
+          enqueue({ search_id: "fresh-again", results: [] });
+          expect(await currentTool.execute(args)).toMatchObject({ searchId: "fresh-again" });
+          expect(await originalTool.execute(args)).toMatchObject({
+            searchId: "original",
+            cached: true,
+          });
+          expect(endpointMockState.calls).toHaveLength(3 * callsPerSearch);
+        } else {
+          expect(await currentTool.execute(args)).toMatchObject({
+            searchId: "fresh",
+            cached: true,
+          });
+          expect(endpointMockState.calls).toHaveLength(2 * callsPerSearch);
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 });
 describe("parallel web search provider", () => {
   it("exposes the expected metadata and selection wiring", () => {
@@ -137,7 +195,7 @@ describe("parallel web search provider", () => {
     const countParam = (paidTool({}).parameters as ToolParameters).properties.count;
     expect(countParam).toMatchObject({ type: "integer", minimum: 1, maximum: 40 });
   });
-  it("keeps the lightweight contract surface aligned with provider metadata", () => {
+  it("keeps the contract export aligned with provider metadata", () => {
     const provider = createParallelWebSearchProvider();
     const contractProvider = createContractParallelWebSearchProvider();
     const applied = expectDefined(
@@ -160,7 +218,8 @@ describe("parallel web search provider", () => {
     expect(Object.fromEntries(keys.map((key) => [key, contractProvider[key]]))).toEqual(
       Object.fromEntries(keys.map((key) => [key, provider[key]])),
     );
-    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
+    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).not.toBeNull();
+    expect(endpointMockState.calls).toHaveLength(0);
     expect(expectDefined(applied.plugins?.entries?.parallel, "contract plugin entry").enabled).toBe(
       true,
     );
@@ -460,6 +519,86 @@ describe("parallel web search provider", () => {
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });
+  it("redacts reflected credentials from Parallel API error bodies", async () => {
+    // No dictionary words: the value must be masked even when only the
+    // header-shaped (x-api-key: <value>) redaction can catch it.
+    const apiKey = "par-live-4c9d2e7ab1f0c9d2e7ab1f0c9d2e7";
+    endpointMockState.responses.push(
+      new Response(`<html><body>edge failure for request with x-api-key: ${apiKey}</body></html>`, {
+        status: 502,
+        statusText: "Bad Gateway",
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+    const error = await paidTool({ parallel: { apiKey } })
+      .execute({
+        objective: `parallel-error-redact-${Date.now()}`,
+        search_queries: ["openclaw"],
+      })
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Parallel API error (502)");
+    expect((error as Error).message).not.toContain(apiKey);
+  });
+  it("redacts credentials reflected in the statusText fallback when the body is empty", async () => {
+    const apiKey = "par-live-4c9d2e7ab1f0c9d2e7ab1f0c9d2e7";
+    endpointMockState.responses.push(
+      new Response("", {
+        status: 502,
+        statusText: `Bad Gateway reflected x-api-key: ${apiKey}`,
+      }),
+    );
+    const error = await paidTool({ parallel: { apiKey } })
+      .execute({
+        objective: `parallel-error-redact-reason-${Date.now()}`,
+        search_queries: ["openclaw"],
+      })
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Parallel API error (502)");
+    expect((error as Error).message).not.toContain(apiKey);
+  });
+  it("applies configured logging.redactPatterns to reflected Parallel error bodies", async () => {
+    // Organization-specific secret shape that no built-in pattern covers, plus a
+    // configured field-name pattern that would rewrite the x-api-key header name
+    // before the structured matcher can see it — the key value must stay masked.
+    const orgSecret = "acme-internal-bluefin-042";
+    const apiKey = "par-live-4c9d2e7ab1f0c9d2e7ab1f0c9d2e7";
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "parallel-redact-config-"));
+    const configPath = path.join(configDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        logging: { redactPatterns: ["acme-internal-[a-z0-9-]+", "api[_-]?key"] },
+      }),
+    );
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    try {
+      endpointMockState.responses.push(
+        new Response(
+          `<html><body>edge failure for ${orgSecret} on request with x-api-key: ${apiKey}</body></html>`,
+          {
+            status: 502,
+            statusText: "Bad Gateway",
+            headers: { "Content-Type": "text/html" },
+          },
+        ),
+      );
+      const error = await paidTool({ parallel: { apiKey } })
+        .execute({
+          objective: `parallel-error-redact-config-${Date.now()}`,
+          search_queries: ["openclaw"],
+        })
+        .catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("Parallel API error (502)");
+      expect((error as Error).message).not.toContain(orgSecret);
+      expect((error as Error).message).not.toContain(apiKey);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(configDir, { force: true, recursive: true });
+    }
+  });
   it("bounds successful Parallel JSON bodies instead of buffering the whole response", async () => {
     const streamed = createStreamingResponse({
       chunkCount: 200,
@@ -709,6 +848,24 @@ describe("parallel-free web search provider", () => {
 
     expect(endpointMockState.calls).toHaveLength(3);
     expect(endpointMockState.calls.every((call) => call.signal === controller.signal)).toBe(true);
+  });
+
+  it("does not cache a free MCP result completed after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Parallel free search cancelled after response");
+    pushMcpHandshake({ search_id: "cancelled-free", results: [] });
+    pushMcpHandshake({ search_id: "recovered-free", results: [] });
+    endpointMockState.effects.push(undefined, undefined, () => controller.abort(reason));
+    const args = {
+      objective: "verify Parallel cancellation cache ownership",
+      search_queries: ["parallel cancellation cache"],
+    };
+
+    await expect(freeTool().execute(args, { signal: controller.signal })).rejects.toBe(reason);
+    const recovered = await freeTool().execute(args);
+
+    expect(endpointMockState.calls).toHaveLength(6);
+    expect(recovered.searchId).toBe("recovered-free");
   });
 
   it("exposes keyless metadata without claiming auto-detect fallback", () => {

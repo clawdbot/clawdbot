@@ -53,6 +53,54 @@
   },
   "redirects": [
     {
+      "source": "/install/clawdock",
+      "destination": "/install/docker#clawdock-migration"
+    },
+    {
+      "source": "/concepts/message-lifecycle-refactor",
+      "destination": "/plugins/sdk-channel-outbound"
+    },
+    {
+      "source": "/plan/cloud-workers",
+      "destination": "/gateway/cloud-workers"
+    },
+    {
+      "source": "/plan/computer-use",
+      "destination": "/nodes/computer-use"
+    },
+    {
+      "source": "/plan/memory-provenance",
+      "destination": "/concepts/memory-provenance"
+    },
+    {
+      "source": "/plan/runners",
+      "destination": "/gateway/cloud-sessions"
+    },
+    {
+      "source": "/plan/ui-channels",
+      "destination": "/plugins/message-presentation"
+    },
+    {
+      "source": "/plan/worker-hibernation",
+      "destination": "/gateway/cloud-workers#warm-images"
+    },
+    {
+      "source": "/refactor/acp",
+      "destination": "/tools/acp-agents"
+    },
+    {
+      "source": "/refactor/database-first",
+      "destination": "/reference/database-schemas"
+    },
+    {
+      "source": "/refactor/operator-approvals",
+      "destination": "/tools/exec-approvals"
+    },
+    {
+      "source": "/start/onboarding-redesign",
+      "destination": "/cli/onboard"
+    },
+    {
       "source": "/gateway/security/shrinkwrap",
       "destination": "/gateway/security/dependency-locking"
     },
@@ -87,6 +135,10 @@
     {
       "source": "/reference/openclaw-sdk-api-design",
       "destination": "/gateway/external-apps"
+    },
+    {
+      "source": "/reference/wizard",
+      "destination": "/start/wizard-cli-reference"
     },
     {
       "source": "/reference/maturity-scorecard",
@@ -1050,6 +1102,7 @@
                 "pages": [
                   "index",
                   "start/showcase",
+                  "start/why-openclaw",
                   "concepts/features"
                 ]
               },
@@ -1066,6 +1119,7 @@
                 "group": "Guides",
                 "pages": [
                   "start/openclaw",
+                  "start/teams",
                   "start/wizard-cli-reference",
                   "start/wizard-cli-automation"
                 ]
@@ -1088,6 +1142,7 @@
                 "pages": [
                   "install/backups",
                   "install/updating",
+                  "install/update-troubleshooting",
                   {
                     "group": "Migrating",
                     "pages": [
@@ -1105,7 +1160,6 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
-                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -1177,6 +1231,7 @@
               {
                 "group": "Developer and self-hosted",
                 "pages": [
+                  "channels/a2a",
                   "channels/buzz",
                   "channels/clickclack",
                   "channels/irc",
@@ -1251,7 +1306,6 @@
                   "concepts/session",
                   "concepts/session-attachment",
                   "concepts/session-search",
-                  "concepts/channel-docking",
                   "concepts/session-pruning",
                   "concepts/session-state",
                   "concepts/session-tool",
@@ -1260,6 +1314,7 @@
                     "pages": [
                       "concepts/memory",
                       "concepts/memory-architecture",
+                      "concepts/memory-provenance",
                       "concepts/user-model",
                       "concepts/standing-intents",
                       "concepts/memory-builtin",
@@ -1286,7 +1341,6 @@
                 "group": "Messages and delivery",
                 "pages": [
                   "concepts/messages",
-                  "concepts/message-lifecycle-refactor",
                   "concepts/streaming",
                   "concepts/progress-drafts",
                   "concepts/retry",
@@ -1329,6 +1383,7 @@
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
+                  "plugins/geolocation",
                   "plugins/beam",
                   "plugins/voice-call",
                   "plugins/vault",
@@ -1357,6 +1412,7 @@
                 "group": "Skills",
                 "pages": [
                   "tools/skills",
+                  "tools/custodian-skills",
                   "tools/skill-workshop",
                   "tools/self-learning",
                   "tools/creating-skills",
@@ -1370,6 +1426,7 @@
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
+                  "automation/imap",
                   "automation/tasks",
                   "automation/taskflow",
                   "automation/standing-orders",
@@ -1386,6 +1443,7 @@
                   "tools/code-mode",
                   "tools/diffs",
                   "tools/screen",
+                  "tools/progress-card",
                   "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
@@ -1400,6 +1458,7 @@
                   "tools/music-generation",
                   "tools/pdf",
                   "tools/reactions",
+                  "tools/secrets",
                   "tools/thinking",
                   "tools/tokenjuice",
                   "tools/tool-search",
@@ -1670,6 +1729,7 @@
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/audit",
+                      "gateway/telemetry",
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",
@@ -1684,6 +1744,7 @@
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",
+                      "gateway/cloud-sessions",
                       "gateway/cloud-workers",
                       "gateway/multiple-gateways",
                       "gateway/multi-tenant-hosting"
@@ -1701,7 +1762,8 @@
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
-                      "gateway/sandbox-vs-tool-policy-vs-elevated"
+                      "gateway/sandbox-vs-tool-policy-vs-elevated",
+                      "gateway/permission-modes"
                     ]
                   },
                   {
@@ -1737,7 +1799,8 @@
                   "gateway/remote",
                   "gateway/remote-gateway-readme",
                   "gateway/stable-https-url",
-                  "gateway/tailscale"
+                  "gateway/tailscale",
+                  "gateway/cloudflare-access"
                 ]
               },
               {
@@ -1819,6 +1882,7 @@
                       "cli/security",
                       "cli/setup",
                       "cli/status",
+                      "cli/triage",
                       "cli/uninstall",
                       "cli/update"
                     ]
@@ -1975,7 +2039,6 @@
                 "group": "Technical reference",
                 "pages": [
                   "agent-runtime-architecture",
-                  "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
                   "reference/openclaw-ai",
@@ -2020,6 +2083,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.8.1",
                   "releases/2026.7.1",
                   "releases/2026.6.11"
                 ]

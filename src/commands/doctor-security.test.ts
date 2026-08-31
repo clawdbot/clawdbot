@@ -34,7 +34,7 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
   };
 });
 
-import { noteSecurityWarnings } from "./doctor-security.js";
+import { collectSecurityWarnings, noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
   let prevToken: string | undefined;
@@ -152,13 +152,32 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
   it("warns when exposed without auth", async () => {
     const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
+    const findings = await collectSecurityWarnings(cfg, {});
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "gateway.bind_no_auth",
+        severity: "critical",
+        title: "CRITICAL",
+        detail: expect.stringContaining("without authentication"),
+        remediation: expect.stringContaining("openclaw doctor --fix"),
+      }),
+    ]);
+
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).toContain("CRITICAL");
-    expect(message).toContain("without authentication");
-    expect(message).toContain("Safer remote access");
-    expect(message).toContain("ssh -N -L 18789:127.0.0.1:18789");
-    expect(message).toContain("openclaw security audit --deep");
+    expect(message).toBe(
+      [
+        '- CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
+        "  Anyone on your network (or internet if port-forwarded) can fully control your agent.",
+        "  Fix: openclaw config set gateway.bind loopback",
+        "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
+        "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
+        "  Docs: https://docs.openclaw.ai/gateway/remote",
+        "  Fix: openclaw doctor --fix to generate a token",
+        "  Or set token directly: openclaw config set gateway.auth.mode token",
+        "- Run: openclaw security audit --deep",
+      ].join("\n"),
+    );
   });
 
   it("uses env token to avoid critical warning", async () => {
@@ -335,6 +354,36 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("openclaw approvals get --gateway");
   });
 
+  it("explains how to renew inactive generated exec approvals", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        agents: {
+          main: {
+            allowlist: [
+              {
+                pattern: "/usr/bin/git",
+                source: "allow-always",
+                argPattern: "sha256:argv:obsolete",
+              },
+              { pattern: "/usr/bin/python3", argPattern: "^script\\.py$" },
+            ],
+          },
+        },
+      },
+      async () => {
+        const findings = await collectSecurityWarnings({} as OpenClawConfig, {});
+        const finding = findings.find(
+          (candidate) => candidate.checkId === "doctor.exec_approvals_require_cwd_renewal",
+        );
+        expect(finding?.detail).toContain("1 older generated approval is inactive");
+        expect(finding?.remediation).toContain("openclaw doctor --fix");
+        expect(finding?.remediation).toContain('choose "Always allow here"');
+        expect(finding?.remediation).toContain("Manual allowlist rules are unchanged");
+      },
+    );
+  });
+
   it("warns when filesystem tools are disabled but exec remains available", async () => {
     await noteSecurityWarnings({
       tools: {
@@ -373,7 +422,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   it("warns when model provider API keys are stored as plaintext in config", async () => {
-    await noteSecurityWarnings({
+    const cfg = {
       models: {
         providers: {
           openai: {
@@ -381,7 +430,19 @@ describe("noteSecurityWarnings gateway exposure", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as OpenClawConfig;
+    const findings = await collectSecurityWarnings(cfg, {});
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "config.plaintext_secrets",
+        severity: "warn",
+        title: "WARNING",
+        detail: "openclaw.json contains plaintext secret-bearing config fields.",
+        remediation: expect.stringContaining("models.providers.openai.apiKey"),
+      }),
+    ]);
+
+    await noteSecurityWarnings(cfg);
 
     const message = lastMessage();
     expect(message).toContain("plaintext secret-bearing config fields");

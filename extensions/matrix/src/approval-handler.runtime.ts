@@ -299,6 +299,7 @@ function buildPendingApprovalContent(params: {
     params.view.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({
           request: {
+            approvalKind: "plugin",
             id: params.view.approvalId,
             request: {
               title: params.view.title,
@@ -307,6 +308,7 @@ function buildPendingApprovalContent(params: {
               toolName: params.view.toolName ?? undefined,
               pluginId: params.view.pluginId ?? undefined,
               agentId: params.view.agentId ?? undefined,
+              scope: params.view.scope ?? undefined,
             },
             createdAtMs: 0,
             expiresAtMs: params.view.expiresAtMs,
@@ -325,6 +327,7 @@ function buildPendingApprovalContent(params: {
           cwd: params.view.cwd ?? undefined,
           host: params.view.host === "node" ? "node" : "gateway",
           nodeId: params.view.nodeId ?? undefined,
+          scope: params.view.scope ?? undefined,
           sessionKey: params.view.sessionKey ?? undefined,
           expiresAtMs: params.view.expiresAtMs,
           nowMs: params.nowMs,

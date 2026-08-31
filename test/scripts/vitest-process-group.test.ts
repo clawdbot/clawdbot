@@ -117,10 +117,17 @@ describe("vitest process group helpers", () => {
   it("formats bounded process-group diagnostics without command arguments", () => {
     expect(
       parseVitestProcessGroupMembers(
-        [" 116 1 116 Z node", " 117 1 116 Sl claude", " 118 1 999 S unrelated"].join("\n"),
+        [
+          " 116 1 116 Z node",
+          " 117 1 116 Sl ci.internal.example:8443",
+          " 118 1 116 S SECRET_TOKEN",
+          " 119 1 999 S unrelated",
+        ].join("\n"),
         116,
       ),
-    ).toBe("pid=116 ppid=1 state=Z comm=node; pid=117 ppid=1 state=Sl comm=claude");
+    ).toBe(
+      "pid=116 ppid=1 state=Z comm=node; pid=117 ppid=1 state=Sl comm=other; pid=118 ppid=1 state=S comm=other",
+    );
   });
 
   it.each(["rw", "rw,hidepid=0", "rw,hidepid=off"])(
@@ -278,10 +285,10 @@ describe("vitest process group helpers", () => {
     await rejected;
   });
 
-  it("sorts and bounds sanitized Linux process-group diagnostics", async () => {
+  it("sorts and bounds classified Linux process-group diagnostics", async () => {
     vi.useFakeTimers();
     const pids = Array.from({ length: 22 }, (_, index) => String(4200 + index)).toReversed();
-    const comm = `bad\n\t${"x".repeat(100)}`;
+    const comm = "ci.internal.example:8443";
     mockLinuxProc(
       pids,
       Object.fromEntries(pids.map((pid) => [pid, procStat(Number(pid), "S", 1, 4200, comm)])),
@@ -297,7 +304,8 @@ describe("vitest process group helpers", () => {
     expect(message.indexOf("pid=4200")).toBeLessThan(message.indexOf("pid=4201"));
     expect(message).toContain("pid=4219");
     expect(message).not.toContain("pid=4220");
-    expect(message).toContain(`comm=bad ${"x".repeat(76)}`);
+    expect(message).toContain("comm=other");
+    expect(message).not.toContain("internal.example");
     expect(message).not.toContain("\n");
   });
 

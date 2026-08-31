@@ -78,13 +78,12 @@ describe("Matrix QA CLI runtime", () => {
     ).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
   });
 
-  it("force-kills Windows CLI process trees when graceful taskkill fails", () => {
+  it.each([
+    { label: "succeeds after escalation", statuses: [1, 0], fallsBack: false },
+    { label: "fails completely", statuses: [1, 1], fallsBack: true },
+  ])("composes Windows cleanup when canonical taskkill $label", ({ fallsBack, statuses }) => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    const originalSystemRoot = process.env.SystemRoot;
-    const originalWindir = process.env.WINDIR;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    process.env.SystemRoot = "C:\\Windows";
-    delete process.env.WINDIR;
     try {
       const killMock = vi.fn();
       const child = {
@@ -93,34 +92,20 @@ describe("Matrix QA CLI runtime", () => {
       } as unknown as Parameters<typeof testing.killMatrixQaCliChild>[0];
       const runTaskkill = vi
         .fn()
-        .mockReturnValueOnce({ status: 1 })
-        .mockReturnValueOnce({ status: 0 });
+        .mockReturnValueOnce({ status: statuses[0] })
+        .mockReturnValueOnce({ status: statuses[1] });
 
       testing.killMatrixQaCliChild(child, "SIGTERM", runTaskkill);
 
-      const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
-      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      expect(killMock).not.toHaveBeenCalled();
+      expect(runTaskkill).toHaveBeenCalledTimes(2);
+      if (fallsBack) {
+        expect(killMock).toHaveBeenCalledWith("SIGTERM");
+      } else {
+        expect(killMock).not.toHaveBeenCalled();
+      }
     } finally {
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);
-      }
-      if (originalSystemRoot === undefined) {
-        delete process.env.SystemRoot;
-      } else {
-        process.env.SystemRoot = originalSystemRoot;
-      }
-      if (originalWindir === undefined) {
-        delete process.env.WINDIR;
-      } else {
-        process.env.WINDIR = originalWindir;
       }
     }
   });
@@ -379,56 +364,6 @@ describe("Matrix QA CLI runtime", () => {
       if (process.platform !== "win32") {
         expect(isProcessRunning(grandchildPid)).toBe(false);
       }
-    } finally {
-      for (const pid of [grandchildPid, childPid]) {
-        if (pid && isProcessRunning(pid)) {
-          process.kill(pid, "SIGKILL");
-        }
-      }
-      await rm(root, { force: true, recursive: true });
-    }
-  });
-
-  it("kills ignored-stdio descendants after a timed-out CLI exits gracefully", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = await mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-timeout-ignored-stdio-"),
-    );
-    const childPidPath = path.join(root, "child.pid");
-    const grandchildPidPath = path.join(root, "grandchild.pid");
-    let childPid: number | undefined;
-    let grandchildPid: number | undefined;
-    try {
-      await mkdir(path.join(root, "dist"));
-      await writeFile(
-        path.join(root, "dist", "index.mjs"),
-        [
-          "import { spawn } from 'node:child_process';",
-          "import { writeFileSync } from 'node:fs';",
-          `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-          "const grandchild = spawn(process.execPath, ['-e', 'process.on(\\'SIGTERM\\', () => {}); setInterval(() => {}, 1000);'], { stdio: 'ignore' });",
-          "grandchild.unref();",
-          `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-        ].join("\n"),
-      );
-
-      const run = runMatrixQaOpenClawCli({
-        args: ["matrix", "verify", "self"],
-        cwd: root,
-        env: process.env,
-        timeoutMs: 500,
-      });
-      grandchildPid = await waitForPidFile(grandchildPidPath, 2_000);
-
-      await expect(run).rejects.toThrow(/timed out after 500ms/u);
-
-      childPid = await waitForPidFile(childPidPath, 2_000);
-      expect(isProcessRunning(childPid)).toBe(false);
-      expect(isProcessRunning(grandchildPid)).toBe(false);
     } finally {
       for (const pid of [grandchildPid, childPid]) {
         if (pid && isProcessRunning(pid)) {

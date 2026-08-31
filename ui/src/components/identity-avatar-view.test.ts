@@ -2,7 +2,8 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveAvatarInitials, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
 import {
   identityAvatarClass,
   renderIdentityAvatarImage,

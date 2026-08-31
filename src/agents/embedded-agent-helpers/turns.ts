@@ -28,15 +28,15 @@ function isAbortedAssistantTurn(message: AgentMessage): boolean {
   return stopReason === "aborted" || stopReason === "error";
 }
 
-function extractToolResultMatchIds(record: Record<string, unknown>): Set<string> {
+function extractToolResultMatchIds(record: object): Set<string> {
   const ids = new Set<string>();
   for (const value of [
-    record.toolUseId,
-    record.toolCallId,
-    record.tool_use_id,
-    record.tool_call_id,
-    record.callId,
-    record.call_id,
+    Reflect.get(record, "toolUseId"),
+    Reflect.get(record, "toolCallId"),
+    Reflect.get(record, "tool_use_id"),
+    Reflect.get(record, "tool_call_id"),
+    Reflect.get(record, "callId"),
+    Reflect.get(record, "call_id"),
   ]) {
     const id = normalizeOptionalString(value);
     if (id) {
@@ -46,8 +46,12 @@ function extractToolResultMatchIds(record: Record<string, unknown>): Set<string>
   return ids;
 }
 
-function extractToolResultMatchName(record: Record<string, unknown>): string | null {
-  return normalizeOptionalString(record.toolName) ?? normalizeOptionalString(record.name) ?? null;
+function extractToolResultMatchName(record: object): string | null {
+  return (
+    normalizeOptionalString(Reflect.get(record, "toolName")) ??
+    normalizeOptionalString(Reflect.get(record, "name")) ??
+    null
+  );
 }
 
 function collectAnyToolResultIds(message: AgentMessage): Set<string> {
@@ -61,8 +65,7 @@ function collectAnyToolResultIds(message: AgentMessage): Set<string> {
       ids.add(toolResultId);
     }
   } else if (role === "tool") {
-    const record = message as unknown as Record<string, unknown>;
-    for (const id of extractToolResultMatchIds(record)) {
+    for (const id of extractToolResultMatchIds(message)) {
       ids.add(id);
     }
   }
@@ -102,10 +105,9 @@ function collectTrustedToolResultMatches(message: AgentMessage): Map<string, Set
   };
 
   if (role === "toolResult") {
-    const record = message as unknown as Record<string, unknown>;
     addMatch(
       [
-        ...extractToolResultMatchIds(record),
+        ...extractToolResultMatchIds(message),
         ...(() => {
           const canonicalId = extractToolResultId(
             message as Extract<AgentMessage, { role: "toolResult" }>,
@@ -113,11 +115,10 @@ function collectTrustedToolResultMatches(message: AgentMessage): Map<string, Set
           return canonicalId ? [canonicalId] : [];
         })(),
       ],
-      extractToolResultMatchName(record),
+      extractToolResultMatchName(message),
     );
   } else if (role === "tool") {
-    const record = message as unknown as Record<string, unknown>;
-    addMatch(extractToolResultMatchIds(record), extractToolResultMatchName(record));
+    addMatch(extractToolResultMatchIds(message), extractToolResultMatchName(message));
   }
 
   return matches;

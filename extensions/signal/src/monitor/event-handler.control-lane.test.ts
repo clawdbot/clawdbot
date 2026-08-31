@@ -170,6 +170,14 @@ describe("Signal active-run control lane", () => {
     sendTypingMock.mockReset().mockResolvedValue(true);
   });
 
+  it("collects both authorized messages through one debounce dispatch", async () => {
+    const handler = createHandler(10);
+    await Promise.all([handler(signalText("first", 1)), handler(signalText("second", 2))]);
+    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+
+    expect(dispatchedCommandBody(0)).toBe("first\nsecond");
+  });
+
   it.each([
     "stop",
     "/approve abc12345 allow-once",

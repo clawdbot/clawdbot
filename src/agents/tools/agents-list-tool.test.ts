@@ -83,6 +83,49 @@ describe("agents_list tool", () => {
     });
   });
 
+  it("resolves configured model aliases to the canonical model identity", async () => {
+    // Routing aliases are transport-level names; the tool must publish the
+    // resolved model that will actually run so spawn decisions see one identity.
+    loadConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          model: {
+            primary: "clawrouter/openai/gpt-5.6",
+            fallbacks: ["openai/gpt-5.6-luna"],
+          },
+          models: {
+            "openai/gpt-5.6-sol": {
+              alias: "clawrouter/openai/gpt-5.6",
+              agentRuntime: { id: "codex" },
+            },
+          },
+          subagents: { allowAgents: ["main"] },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as unknown as OpenClawConfig);
+
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+    const details = result.details as AgentListDetails;
+
+    expect(details).toStrictEqual({
+      requester: "main",
+      allowAny: false,
+      agents: [
+        {
+          id: "main",
+          name: undefined,
+          configured: true,
+          model: "openai/gpt-5.6-sol",
+          agentRuntime: { id: "codex", source: "model" },
+        },
+      ],
+    });
+  });
+
   it("does not advertise stale allowlist-only targets as spawnable agents", async () => {
     // Allowlist entries are permissions, not agent definitions; stale ids should
     // not be presented as runnable subagents.
@@ -132,7 +175,7 @@ describe("agents_list tool", () => {
           id: "main",
           name: undefined,
           configured: true,
-          model: undefined,
+          model: "openai/gpt-5.6-sol",
           agentRuntime: { id: "codex", source: "implicit" },
         },
       ],
@@ -201,7 +244,7 @@ describe("agents_list tool", () => {
           id: "strict",
           name: undefined,
           configured: true,
-          model: undefined,
+          model: "openai/gpt-5.6-sol",
           agentRuntime: { id: "codex", source: "implicit" },
         },
       ],

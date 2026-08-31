@@ -165,7 +165,7 @@ describe("agents.workspace RPC handlers", () => {
     const error = expectError(
       await invokeWorkspaceHandler("agents.workspace.list", { agentId: "ghost" }),
     );
-    expect(error.message).toContain("unknown agent id");
+    expect(error.message).toContain('agent "ghost" not found');
   });
 
   it("rejects traversal outside the workspace for list and get", async () => {

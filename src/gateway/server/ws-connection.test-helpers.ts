@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import { expect, vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import { prepareGatewayIngressAttribution } from "../ingress-attribution.js";
 import type { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 type AttachGatewayWsConnectionParams = Parameters<typeof attachGatewayWsConnectionHandler>[0];
@@ -16,10 +17,12 @@ export type GatewayWsTestSocket = EventEmitter & {
     localAddress: string;
     localPort: number;
   };
+  readyState: number;
   bufferedAmount: number;
   send: ReturnType<typeof vi.fn>;
   ping?: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  terminate: ReturnType<typeof vi.fn>;
 };
 
 export function createGatewayWsTestLogger() {
@@ -48,6 +51,9 @@ export function createGatewayWsTestRequestContext(
     unsubscribeAllSessionEvents: vi.fn(),
     nodeRegistry: overrides.nodeRegistry ?? { unregister: vi.fn() },
     nodeUnsubscribeAll: vi.fn(),
+    broadcast: vi.fn(),
+    incrementPresenceVersion: vi.fn(() => 1),
+    getHealthVersion: vi.fn(() => 1),
   };
 }
 
@@ -65,6 +71,7 @@ export function createGatewayWsTestSocket(
       localAddress: "127.0.0.1",
       localPort: 5678,
     },
+    readyState: 1,
     bufferedAmount: 0,
     send: vi.fn((data: string, cb?: (err?: Error) => void) => {
       params.onSend?.(data);
@@ -76,6 +83,7 @@ export function createGatewayWsTestSocket(
         socket.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
       }
     }),
+    terminate: vi.fn(),
   });
   return socket;
 }
@@ -86,7 +94,9 @@ export function attachGatewayWsForTest(params: {
   headers?: Record<string, string>;
   host?: string;
   options?: Partial<AttachGatewayWsConnectionParams>;
+  prepareIngressAttribution?: typeof prepareGatewayIngressAttribution;
   socket?: GatewayWsTestSocket;
+  trustedProxies?: string[];
 }) {
   const listeners = new Map<string, (...args: unknown[]) => void>();
   const wss = {
@@ -97,13 +107,22 @@ export function attachGatewayWsForTest(params: {
   const socket = params.socket ?? createGatewayWsTestSocket();
   const upgradeReq = {
     headers: { host: params.host ?? "127.0.0.1:19001", ...params.headers },
-    socket: { localAddress: "127.0.0.1" },
+    socket: {
+      remoteAddress: socket["_socket"].remoteAddress,
+      localAddress: socket["_socket"].localAddress,
+      localPort: socket["_socket"].localPort,
+    },
   };
+  (params.prepareIngressAttribution ?? prepareGatewayIngressAttribution)({
+    req: upgradeReq as never,
+    trustedProxies: params.trustedProxies,
+  });
   const clients = params.clients ?? new Set<unknown>();
 
   params.attach({
     wss,
     clients: clients as never,
+    bootId: "ws-test-boot",
     preauthConnectionBudget: { release: vi.fn() } as never,
     port: 19001,
     getResolvedAuth: () => createResolvedGatewayTokenAuth("token"),

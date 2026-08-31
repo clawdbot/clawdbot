@@ -39,10 +39,11 @@ The keepalive options reduce idle tunnel drops during onboarding.
 
 ## Install OpenClaw
 
-Inside the Box:
+Inside the Box, use the following command on npm 12 or npm 11.16+. On npm 11.15
+and earlier, omit `--allow-scripts=openclaw`.
 
 ```bash
-sudo npm install -g openclaw
+sudo npm install -g openclaw --allow-scripts=openclaw
 ```
 
 ## Run onboarding

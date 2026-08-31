@@ -156,6 +156,24 @@ describe("fetchHttpJson error body boundary", () => {
         return;
       }
 
+      if (req.url === "/navigation-blocked") {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "browser navigation blocked by policy",
+            reason: "navigation_blocked",
+            details: { url: "http://internal.example/admin" },
+          }),
+        );
+        return;
+      }
+
+      if (req.url === "/evaluate-disabled") {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "evaluation disabled", code: "ACT_EVALUATE_DISABLED" }));
+        return;
+      }
+
       res.writeHead(500, { "Content-Type": "text/plain" });
       let written = 0;
       let closed = false;
@@ -272,6 +290,33 @@ describe("fetchHttpJson error body boundary", () => {
         headlessSource: "config",
         displayPresent: false,
       },
+    });
+  });
+
+  it("preserves a navigation denial without exposing raw policy details over HTTP", async () => {
+    const error = await fetchBrowserJson(`${baseUrl}/navigation-blocked`).catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "browser navigation blocked by policy",
+      reason: "navigation_blocked",
+      status: 400,
+      details: undefined,
+    });
+  });
+
+  it("preserves validated browser action error codes over HTTP", async () => {
+    const error = await fetchBrowserJson(`${baseUrl}/evaluate-disabled`).catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "evaluation disabled",
+      code: "ACT_EVALUATE_DISABLED",
+      status: 403,
     });
   });
 });

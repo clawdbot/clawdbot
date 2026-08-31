@@ -3,6 +3,7 @@ import {
   activateSelfRemovingControl,
   captureUiProof,
   createSessionManagementE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
@@ -57,7 +58,7 @@ suite.define(() => {
     }
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:move-me"));
       const field = await openNewGroupDialog();
       const create = page.getByRole("button", { name: "Create group" });
       await captureUiProof(page, "new-group-dialog-dark.png");

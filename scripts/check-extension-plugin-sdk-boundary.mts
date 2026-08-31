@@ -299,7 +299,7 @@ const defaultBoundaryChecker = createExtensionPluginSdkBoundaryChecker();
 /**
  * Entrypoint wrapper for the extension plugin SDK boundary check.
  */
-export async function main(argv?: string[], io?: BoundaryCheckIo): Promise<0 | 1> {
+async function main(argv?: string[], io?: BoundaryCheckIo): Promise<0 | 1> {
   const exitCode = await defaultBoundaryChecker.main(argv, io);
   if (!io) {
     process.exitCode = exitCode;

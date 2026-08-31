@@ -33,6 +33,7 @@ describe("EmbeddedPluginApprovalBroker", () => {
       "broker.listPending()[0] test invariant",
     );
 
+    expect(approval.approvalKind).toBe("plugin");
     expect(approval?.request.toolName).toBe("skill_workshop");
     expect(events[0]).toEqual({
       event: "plugin.approval.requested",

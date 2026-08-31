@@ -20,59 +20,15 @@ import {
   globalAfterEach0,
   globalAfterAll1,
   updatePluginManifest,
+  writeFixtureText,
+  writeFixtureJson,
+  pluginManifest,
+  channelPluginSource,
 } from "./loader.test-harness.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
-
-function writeFixtureText(rootDir: string, relativePath: string, body: string) {
-  const filePath = path.join(rootDir, relativePath);
-  mkdirSafe(path.dirname(filePath));
-  fs.writeFileSync(filePath, body, "utf-8");
-}
-
-function writeFixtureJson(rootDir: string, relativePath: string, value: unknown) {
-  writeFixtureText(rootDir, relativePath, JSON.stringify(value, null, 2));
-}
-
-function pluginManifest(id: string, channels?: string[]) {
-  return {
-    id,
-    configSchema: EMPTY_PLUGIN_SCHEMA,
-    ...(channels ? { channels } : {}),
-  };
-}
-
-function channelPluginSource(params: {
-  pluginId: string;
-  channelId?: string;
-  label: string;
-  docsPath: string;
-  blurb: string;
-}) {
-  const channelId = params.channelId ?? params.pluginId;
-  return `module.exports = { id: ${JSON.stringify(params.pluginId)}, register(api) {
-    api.registerChannel({
-      plugin: {
-        id: ${JSON.stringify(channelId)},
-        meta: {
-          id: ${JSON.stringify(channelId)},
-          label: ${JSON.stringify(params.label)},
-          selectionLabel: ${JSON.stringify(params.label)},
-          docsPath: ${JSON.stringify(params.docsPath)},
-          blurb: ${JSON.stringify(params.blurb)},
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" }),
-        },
-        outbound: { deliveryMode: "direct" },
-      },
-    });
-  } };`;
-}
 
 function createSetupFailureFixture(params: {
   id: string;
@@ -198,6 +154,75 @@ function loadBuiltArtifactScenario(scenario: BuiltArtifactScenario) {
         )
       : load();
   return registry.plugins.find((entry) => entry.id === scenario.id)?.status;
+}
+
+function loadSourceExternalArtifactScenario(params: {
+  sourceBody: string;
+  packageLocalBody: string;
+  rootBuildBody?: string;
+  runtimeOverlayBody?: string;
+}) {
+  const id = "source-external-artifact-test";
+  const repoRoot = makePluginLoaderTempDir();
+  const sourceDir = path.join(repoRoot, "extensions", id);
+  const rootBuildDir = path.join(repoRoot, "dist", "extensions", id);
+  mkdirSafe(path.join(repoRoot, ".git"));
+  mkdirSafe(path.join(repoRoot, "src"));
+  writeFixtureText(repoRoot, "pnpm-workspace.yaml", "packages: []\n");
+  writeFixtureJson(sourceDir, "openclaw.plugin.json", pluginManifest(id));
+  writeFixtureJson(sourceDir, "package.json", {
+    openclaw: {
+      extensions: ["./index.ts"],
+      build: { bundledDist: false },
+    },
+  });
+  writeFixtureText(sourceDir, "index.ts", params.sourceBody);
+  writeFixtureText(sourceDir, "dist/index.js", params.packageLocalBody);
+  if (params.rootBuildBody) {
+    mkdirSafe(rootBuildDir);
+    fs.copyFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      path.join(rootBuildDir, "openclaw.plugin.json"),
+    );
+    writeFixtureJson(rootBuildDir, "package.json", {
+      openclaw: { extensions: ["./index.js"] },
+    });
+    writeFixtureText(rootBuildDir, "index.js", params.rootBuildBody);
+  }
+  if (params.runtimeOverlayBody) {
+    writeFixtureText(
+      repoRoot,
+      path.join("dist-runtime", "extensions", id, "index.js"),
+      params.runtimeOverlayBody,
+    );
+  }
+
+  const config = {
+    plugins: {
+      allow: [id],
+      entries: { [id]: { enabled: true } },
+    },
+  };
+  const registry = withEnv(
+    {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: params.rootBuildBody
+        ? path.join(repoRoot, "dist", "extensions")
+        : path.join(repoRoot, "extensions"),
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+    },
+    () => {
+      const manifestRegistry = loadPluginManifestRegistryCore({ config });
+      return loadOpenClawPlugins({
+        cache: false,
+        preferBuiltPluginArtifacts: true,
+        onlyPluginIds: [id],
+        config,
+        manifestRegistry,
+      });
+    },
+  );
+  return registry.plugins.find((entry) => entry.id === id)?.status;
 }
 
 describe("loadOpenClawPlugins", () => {
@@ -567,12 +592,19 @@ ${channelPluginSource({
       ids: ["setup-runtime-error-test", "setup-runtime-helper-test"],
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")?.status).toBe(
-      "error",
+    expect(registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")).toMatchObject(
+      {
+        status: "error",
+        failurePhase: "load",
+        error: expect.stringContaining("broken setup runtime setter"),
+      },
     );
-    expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")?.error,
-    ).toContain("broken setup runtime setter");
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "setup-runtime-error-test",
+        code: "channel-setup-failure",
+      }),
+    );
     expect(registry.plugins.find((entry) => entry.id === "setup-runtime-helper-test")?.status).toBe(
       "loaded",
     );
@@ -602,11 +634,18 @@ ${channelPluginSource({
     });
 
     expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.status,
-    ).toBe("error");
-    expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.error,
-    ).toContain("broken setup-runtime registrar");
+      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test"),
+    ).toMatchObject({
+      status: "error",
+      failurePhase: "register",
+      error: expect.stringContaining("broken setup-runtime registrar"),
+    });
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "setup-runtime-route-error-test",
+        code: "channel-setup-failure",
+      }),
+    );
     expect(registry.httpRoutes.some((route) => route.path === "/setup-runtime-route-error")).toBe(
       false,
     );
@@ -766,7 +805,7 @@ ${channelPluginSource({
     });
   });
 
-  it("records a diagnostic when registerChannel throws in the setup-entry path", () => {
+  it("rolls back setup registrations and records a diagnostic when registerChannel throws", () => {
     useNoBundledPlugins();
     const brokenDir = createSetupFailureFixture({
       id: "register-channel-throws-test",
@@ -780,6 +819,13 @@ ${channelPluginSource({
   });
   module.exports = {
     kind: "bundled-channel-setup-entry",
+    registerSetupRuntime(api) {
+      api.registerHttpRoute({
+        path: "/register-channel-throws-route",
+        auth: "gateway",
+        handler: async () => true,
+      });
+    },
     loadSetupPlugin: () => ({
       id: "register-channel-throws-test",
       meta: {
@@ -821,6 +867,9 @@ ${channelPluginSource({
       pluginId: "register-channel-throws-test",
       message: "failed to register setup channel",
     });
+    expect(
+      registry.httpRoutes.some((route) => route.path === "/register-channel-throws-route"),
+    ).toBe(false);
     // The healthy plugin loaded AFTER the broken one must still be present.
     const healthyChannel = registry.channels.find(
       (entry) => entry.plugin.id === "healthy-after-register-throw-chat",
@@ -863,80 +912,25 @@ ${channelPluginSource({
     ).toBe("loaded");
   });
 
-  it("ignores built artifacts when the bundled source plugin opts out of core dist", () => {
-    const repoRoot = makePluginLoaderTempDir();
-    const sourceDir = path.join(repoRoot, "extensions", "source-only-artifact-test");
-    const builtPluginDir = path.join(repoRoot, "dist", "extensions", "source-only-artifact-test");
-    mkdirSafe(path.join(repoRoot, ".git"));
-    mkdirSafe(path.join(repoRoot, "src"));
-    writeFixtureText(repoRoot, "pnpm-workspace.yaml", "packages: []\n");
-    writeFixtureJson(
-      sourceDir,
-      "openclaw.plugin.json",
-      pluginManifest("source-only-artifact-test"),
-    );
-    writeFixtureJson(sourceDir, "package.json", {
-      openclaw: {
-        extensions: ["./index.ts"],
-        build: { bundledDist: false },
-      },
-    });
-    writeFixtureText(
-      sourceDir,
-      "index.ts",
-      'export default { id: "source-only-artifact-test", register() {} };\n',
-    );
-    writeFixtureText(
-      sourceDir,
-      "dist/index.js",
-      'throw new Error("stale package-local dist should not load");\n',
-    );
-    mkdirSafe(builtPluginDir);
-    fs.copyFileSync(
-      path.join(sourceDir, "openclaw.plugin.json"),
-      path.join(builtPluginDir, "openclaw.plugin.json"),
-    );
-    writeFixtureJson(builtPluginDir, "package.json", {
-      openclaw: { extensions: ["./index.js"] },
-    });
-    writeFixtureText(
-      builtPluginDir,
-      "index.js",
-      'throw new Error("stale discovered core dist should not load");\n',
-    );
-    writeFixtureText(
-      repoRoot,
-      "dist-runtime/extensions/source-only-artifact-test/index.js",
-      'throw new Error("stale core dist should not load");\n',
-    );
+  it("ignores package-local dist when a bundled source plugin opts out of core dist", () => {
+    expect(
+      loadSourceExternalArtifactScenario({
+        sourceBody: 'export default { id: "source-external-artifact-test", register() {} };\n',
+        packageLocalBody: 'throw new Error("stale package-local dist should not load");\n',
+      }),
+    ).toBe("loaded");
+  });
 
-    const config = {
-      plugins: {
-        allow: ["source-only-artifact-test"],
-        entries: { "source-only-artifact-test": { enabled: true } },
-      },
-    };
-    const registry = withEnv(
-      {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist", "extensions"),
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      },
-      () => {
-        const manifestRegistry = loadPluginManifestRegistryCore({ config });
-        return loadOpenClawPlugins({
-          cache: false,
-          preferBuiltPluginArtifacts: true,
-          onlyPluginIds: ["source-only-artifact-test"],
-          config,
-          manifestRegistry,
-        });
-      },
-    );
-
-    expect(registry.plugins.find((entry) => entry.id === "source-only-artifact-test")?.status).toBe(
-      "loaded",
-    );
+  it("prefers the root build when a bundled source plugin opts out of core dist", () => {
+    expect(
+      loadSourceExternalArtifactScenario({
+        sourceBody: 'throw new Error("source should not load when root build exists");\n',
+        packageLocalBody: 'throw new Error("stale package-local dist should not load");\n',
+        rootBuildBody: 'module.exports = { id: "source-external-artifact-test", register() {} };\n',
+        runtimeOverlayBody:
+          'throw new Error("staged runtime should canonicalize to the root build");\n',
+      }),
+    ).toBe("loaded");
   });
 
   it("prefers package-local dist artifacts over workspace source TS when requested", () => {
@@ -1462,37 +1456,6 @@ ${channelPluginSource({
       undefined,
       undefined,
     ]);
-  });
-
-  it("warns when plugins register deprecated subagent_spawning typed hooks", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "legacy-subagent-spawning-hook",
-      filename: "legacy-subagent-spawning-hook.cjs",
-      body: `module.exports = { id: "legacy-subagent-spawning-hook", register(api) {
-    api.on("subagent_spawning", () => ({ status: "ok" }));
-  } };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["legacy-subagent-spawning-hook"],
-      },
-    });
-
-    expect(
-      registry.plugins.find((entry) => entry.id === "legacy-subagent-spawning-hook")?.status,
-    ).toBe("loaded");
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["subagent_spawning"]);
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.pluginId === "legacy-subagent-spawning-hook" &&
-          diag.message ===
-            'typed hook "subagent_spawning" is deprecated (legacy-subagent-spawning-hook); Core prepares thread-bound subagent bindings through channel session-binding adapters before `subagent_spawned` fires. Use `subagent_spawned` for observation; core session bindings for routing. This compatibility hook will be removed after 2026-08-30.',
-      ),
-    ).toBe(true);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

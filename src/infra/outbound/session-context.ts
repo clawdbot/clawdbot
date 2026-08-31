@@ -103,12 +103,9 @@ export function buildOutboundSessionContext(params: {
   const requesterSenderName = normalizeOptionalString(params.requesterSenderName);
   const requesterSenderUsername = normalizeOptionalString(params.requesterSenderUsername);
   const requesterSenderE164 = normalizeOptionalString(params.requesterSenderE164);
-  const derivedAgentId = key
-    ? resolveSessionAgentId({ sessionKey: key, config: params.cfg })
-    : undefined;
-  // Prefer explicit caller ownership, but derive from the canonical session key
-  // so redirected deliveries still get workspace-scoped media policy.
-  const agentId = explicitAgentId ?? derivedAgentId;
+  const agentId = key
+    ? resolveSessionAgentId({ sessionKey: key, config: params.cfg, agentId: explicitAgentId })
+    : explicitAgentId;
   if (
     !key &&
     !policyKey &&

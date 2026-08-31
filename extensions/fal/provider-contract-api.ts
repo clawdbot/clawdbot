@@ -2,7 +2,6 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const PROVIDER_ID = "fal";
-const FAL_DEFAULT_IMAGE_MODEL_REF = "fal/fal-ai/flux/dev";
 
 export function createFalProvider(): ProviderPlugin {
   return {
@@ -16,7 +15,7 @@ export function createFalProvider(): ProviderPlugin {
         kind: "api_key",
         label: "fal API key",
         hint: "Image, video, and music generation API key",
-        run: async () => ({ profiles: [], defaultModel: FAL_DEFAULT_IMAGE_MODEL_REF }),
+        run: async () => ({ profiles: [] }),
         wizard: {
           choiceId: "fal-api-key",
           choiceLabel: "fal API key",

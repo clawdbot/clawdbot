@@ -41,13 +41,11 @@ import {
   validateTalkSessionSteerParams,
   validateWakeParams,
   type ValidationError,
-} from "./index.js";
-import type {
-  ConfigSchemaLookupParams,
-  ModelsListParams,
-  SessionsCatalogListParams,
-  SessionsCatalogStartTerminalParams,
-  TalkEvent,
+  type ConfigSchemaLookupParams,
+  type ModelsListParams,
+  type SessionsCatalogListParams,
+  type SessionsCatalogStartTerminalParams,
+  type TalkEvent,
 } from "./index.js";
 import type * as Schema from "./schema.js";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
@@ -168,8 +166,9 @@ describe("lazy protocol validators", () => {
       { archived: false },
       { archived: true },
       { archived: "all" },
+      { involvingMe: true },
     ]);
-    expectRejected(validateSessionsListParams, [{ archived: "archived" }]);
+    expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
   });
 
   it("validates session board face list and patch values", () => {
@@ -179,21 +178,6 @@ describe("lazy protocol validators", () => {
     expectRejected(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "grid" }]);
     // The schemas are closed objects; the pre-rename name must not slip back in.
     expectRejected(validateSessionsListParams, [{ face: "dashboard" }]);
-  });
-
-  it("validates session patch compare-and-swap identity", () => {
-    expectAccepted(validateSessionsPatchParams, [
-      sessionPatch({
-        key: "agent:main:self-archive",
-        archived: true,
-        expectedSessionId: "session-self-archive",
-        expectedLifecycleRevision: "revision-self-archive",
-      }),
-    ]);
-    expectRejected(validateSessionsPatchParams, [
-      sessionPatch({ key: "agent:main:self-archive", expectedSessionId: "" }),
-      sessionPatch({ key: "agent:main:self-archive", expectedLifecycleRevision: "" }),
-    ]);
   });
 
   it("validates bounded closed bulk session patch requests", () => {
@@ -214,6 +198,7 @@ describe("lazy protocol validators", () => {
       archived: false,
       pinned: true,
       unread: true,
+      contextWindow: "1m",
       thinkingLevel: "high",
       fastMode: "auto",
       toolOverrides: null,
@@ -223,8 +208,6 @@ describe("lazy protocol validators", () => {
       responseUsage: "full",
       elevatedLevel: "on",
       execHost: "gateway",
-      execSecurity: "allowlist",
-      execAsk: "on-miss",
       execNode: "node-1",
       model: "openai/gpt-5.6-luna",
       completionOwnerSessionKey: "agent:main:main",
@@ -269,6 +252,15 @@ describe("lazy protocol validators", () => {
     ]);
   });
 
+  it.each(["execSecurity", "execAsk"])("accepts retired v4 session policy field %s", (field) => {
+    for (const value of ["deny", "always", null]) {
+      expectAccepted(validateSessionsPatchParams, [sessionPatch({ [field]: value })]);
+      expectAccepted(validateSessionsPatchManyParams, [
+        { targets: [{ key: "agent:main:main" }], patch: { [field]: value } },
+      ]);
+    }
+  });
+
   it("validates sparse session tool overrides", () => {
     expectAccepted(validateSessionsPatchParams, [
       sessionPatch({
@@ -297,6 +289,7 @@ describe("lazy protocol validators", () => {
     expectRejected(validateConnectParams, [{}]);
     expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");
     expectAccepted(validateConnectParams, [connect]);
+    expectAccepted(validateConnectParams, [{ ...connect, computerUse: { version: 2 } }]);
     expect(validateConnectParams.errors).toBeNull();
   });
 
@@ -408,10 +401,17 @@ describe("lazy protocol validators", () => {
   });
 
   it("accepts selected-agent scope on chat metadata params", () => {
-    expectAccepted(validateChatMetadataParams, [{}, { agentId: "work" }]);
+    expectAccepted(validateChatMetadataParams, [
+      {},
+      { agentId: "work" },
+      { sessionKey: "agent:work:main" },
+      { agentId: "work", sessionKey: "global" },
+    ]);
     expectRejected(validateChatMetadataParams, [
       { agentId: "" },
       { agentId: "work", view: "configured" },
+      { sessionKey: "" },
+      { sessionKey: "agent:work:main", authProfileId: "test:locked" },
     ]);
   });
 
@@ -570,6 +570,7 @@ describe("lazy protocol validators", () => {
         idempotencyKey: "revision-run-1",
       }),
       proposalRequest({
+        expectedRevisionHash: "a".repeat(64),
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
         idempotencyKey: "revision-run-1",
@@ -850,7 +851,7 @@ describe("validateTalkSessionRelayParams", () => {
     expectAccepted(validateTalkSessionAppendAudioParams, [
       talkSession({ audioBase64: "aGVsbG8=", timestamp: 123 }),
     ]);
-    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ reason: "barge-in" })]);
+    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ turnId: "turn-7" })]);
     expectAccepted(validateTalkSessionSubmitToolResultParams, [
       talkSession({
         callId: "call-1",
@@ -1005,6 +1006,8 @@ describe("validateModelsListParams", () => {
       { view: "default" },
       { view: "configured" },
       { view: "all" },
+      { view: "configured", preparedOnly: true },
+      { view: "all", refresh: true },
     ]);
   });
 

@@ -3,6 +3,7 @@
  */
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { log } from "../logger.js";
 import { flushSessionManagerTranscript } from "./attempt-transcript-helpers.js";
@@ -71,8 +72,9 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
         );
         flushSessionManagerTranscript(input.sessionManager);
       });
-      input.activeSession.agent.state.messages =
-        input.sessionManager.buildSessionContext().messages;
+      input.activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+        input.sessionManager.buildSessionContext().messages,
+      );
       return true;
     } catch (err) {
       log.warn(

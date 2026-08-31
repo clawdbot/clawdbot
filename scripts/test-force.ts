@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { forceFreePort } from "../src/cli/ports.js";
-import { resolveGatewayPort } from "../src/config/config.js";
+import { resolveGatewayPort } from "../src/config/paths.js";
 
 type PortProcess = ReturnType<typeof forceFreePort>[number];
 
@@ -29,11 +29,6 @@ function parseArgs(argv: readonly string[]): { help: boolean } {
   }
   return { help: false };
 }
-
-export const testForceTesting = {
-  parseArgs,
-  usage,
-};
 
 function killGatewayListeners(port: number): PortProcess[] {
   try {
@@ -72,7 +67,7 @@ function runTests() {
   process.exit(result.status ?? 1);
 }
 
-export function main(argv: readonly string[] = process.argv.slice(2)) {
+function main(argv: readonly string[] = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
     console.log(usage());

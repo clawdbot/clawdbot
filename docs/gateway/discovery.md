@@ -74,10 +74,6 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
   | `sshPort=<port>`            | Present only when `discovery.mdns.mode="full"`; omitted (SSH defaults to `22`) in the default `"minimal"` mode, on both the LAN advertiser and wide-area DNS-SD. |
   | `cliPath=<path>`            | Same `discovery.mdns.mode="full"` gate as `sshPort`; a remote-install hint for the CLI path.                                                                     |
 
-  A `canvasPort` TXT key is defined in the plugin discovery contract for a
-  future canvas host port, but no current code path sets a value, so it is
-  never emitted today.
-
 Security notes:
 
 - Bonjour/mDNS TXT records are **unauthenticated**. Clients must treat TXT

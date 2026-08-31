@@ -16,6 +16,7 @@ import {
 } from "./manager.backend-failover.js";
 import {
   appendBackgroundTaskProgressSummary,
+  bindBackgroundTaskExecution,
   createBackgroundTaskRecord,
   markBackgroundTaskRunning,
   markBackgroundTaskTerminal,
@@ -23,6 +24,7 @@ import {
   resolveBackgroundTaskFailureStatus,
   resolveBackgroundTaskTerminalResult,
 } from "./manager.background-task.js";
+import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
@@ -45,13 +47,7 @@ import type {
 import { normalizeActorKey, requireReadySessionMeta } from "./manager.utils.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
-
-type ApplyRuntimeControls = (params: {
-  sessionKey: string;
-  runtime: AcpRuntime;
-  handle: AcpRuntimeHandle;
-  meta: SessionAcpMeta;
-}) => Promise<void>;
+const ACP_COMPLETION_EVIDENCE_MAX_BYTES = 100 * 1024;
 
 /** Executes one ACP prompt turn against the selected backend and records terminal state. */
 export async function runManagerTurn(params: {
@@ -62,7 +58,6 @@ export async function runManagerTurn(params: {
   activeTurnBySession: Map<string, ActiveTurnState>;
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
-  applyRuntimeControls: ApplyRuntimeControls;
   setSessionState: SetManagerSessionState;
   recordTurnCompletion: (params: {
     startedAt: number;
@@ -87,9 +82,14 @@ export async function runManagerTurn(params: {
           text: input.text,
         })
       : null;
-  if (taskContext) {
-    createBackgroundTaskRecord(taskContext, turnStartedAt);
-  }
+  const taskRecord = taskContext
+    ? createBackgroundTaskRecord(
+        taskContext,
+        turnStartedAt,
+        input.admittedRunContext.operationalRunInstance.instanceId,
+      )
+    : undefined;
+  let taskExecutionBound = false;
   let taskProgressSummary = "";
   const initialResolution = params.resolveSession({
     cfg: input.cfg,
@@ -140,7 +140,7 @@ export async function runManagerTurn(params: {
         lastEventAt: Date.now(),
         error: formatAcpErrorChain(errorToRecord),
         progressSummary: taskProgressSummary || null,
-        terminalSummary: null,
+        terminalSummary: failureStatus === "timed_out" ? taskProgressSummary || null : null,
       });
       if (spawnedByWatcher) {
         recordSubagentTerminalState({
@@ -195,9 +195,6 @@ export async function runManagerTurn(params: {
                 sessionKey,
               });
         const resolvedMeta = requireReadySessionMeta(resolution);
-        const metaWithBackend: SessionAcpMeta = currentBackend
-          ? { ...resolvedMeta, backend: currentBackend }
-          : resolvedMeta;
         let runtime: AcpRuntime | undefined;
         let handle: AcpRuntimeHandle | undefined;
         let meta: SessionAcpMeta | undefined;
@@ -205,23 +202,38 @@ export async function runManagerTurn(params: {
         let internalAbortController: AbortController | undefined;
         let onCallerAbort: (() => void) | undefined;
         let activeTurnStarted = false;
+        let promptStarted = false;
         let sawTurnOutput = false;
         let retryFreshHandle = false;
         let skipPostTurnCleanup = false;
+        let completionEvidenceText = "";
+        let completionEvidenceBytes = 0;
+        let completionEvidenceOverflowed = false;
         try {
           const ensured = await params.ensureRuntimeHandle({
             cfg: input.cfg,
             sessionKey,
-            meta: metaWithBackend,
+            meta: resolvedMeta,
+            selectedBackend: currentBackend,
           });
           runtime = ensured.runtime;
           handle = ensured.handle;
           meta = ensured.meta;
-          await params.applyRuntimeControls({
+          await applyManagerRuntimeControls({
             sessionKey,
             runtime,
             handle,
             meta,
+            getCachedRuntimeState: (key) => params.runtimeHandles.get(key),
+            onOptionsChanged: async (runtimeOptions) => {
+              await params.writeSessionMeta({
+                cfg: input.cfg,
+                sessionKey,
+                mutate: (current) => (current ? { ...current, runtimeOptions } : null),
+                failOnError: true,
+              });
+              meta = { ...ensured.meta, runtimeOptions };
+            },
           });
 
           await params.setSessionState({
@@ -242,21 +254,18 @@ export async function runManagerTurn(params: {
           }
 
           activeTurn = {
+            requestId: input.requestId,
+            instanceId: input.admittedRunContext.operationalRunInstance.instanceId,
             runtime,
             handle,
             abortController: internalAbortController,
           };
           params.activeTurnBySession.set(actorKey, activeTurn);
           activeTurnStarted = true;
-
           const combinedSignal = input.signal
             ? AbortSignal.any([input.signal, internalAbortController.signal])
             : internalAbortController.signal;
           const eventGate = { open: true };
-          await input.onLifecycle?.({
-            type: "prompt_submitted",
-            at: Date.now(),
-          });
           const turnPromise = consumeAcpTurnStream({
             runtime,
             turn: {
@@ -266,8 +275,27 @@ export async function runManagerTurn(params: {
               mode: input.mode,
               requestId: input.requestId,
               signal: combinedSignal,
+              onElicitation: input.onElicitation,
             },
             eventGate,
+            onBeforePrompt: input.onBeforePrompt,
+            onPromptStarted: async ({ authoritative }) => {
+              promptStarted = authoritative;
+              if (authoritative && taskRecord && !taskExecutionBound) {
+                taskExecutionBound = true;
+                bindBackgroundTaskExecution(taskRecord, input.admittedRunContext);
+              }
+              try {
+                await input.onLifecycle?.({
+                  type: "prompt_submitted",
+                  at: Date.now(),
+                });
+              } catch (error) {
+                logVerbose(
+                  `acp-manager: prompt submission observer failed for ${sessionKey}: ${String(error)}`,
+                );
+              }
+            },
             onOutputEvent: (event) => {
               sawTurnOutput = true;
               if (event.type === "text_delta" && event.stream !== "thought" && event.text) {
@@ -275,6 +303,15 @@ export async function runManagerTurn(params: {
                   taskProgressSummary,
                   event.text,
                 );
+                // Keep semantic evidence attempt-local; only the bounded display summary is persisted.
+                if (taskContext && !completionEvidenceOverflowed) {
+                  completionEvidenceText += event.text;
+                  completionEvidenceBytes = Buffer.byteLength(completionEvidenceText, "utf8");
+                  if (completionEvidenceBytes > ACP_COMPLETION_EVIDENCE_MAX_BYTES) {
+                    completionEvidenceOverflowed = true;
+                    completionEvidenceText = "";
+                  }
+                }
               }
               if (taskContext) {
                 markBackgroundTaskRunning(taskContext.runId, {
@@ -325,7 +362,16 @@ export async function runManagerTurn(params: {
             startedAt: turnStartedAt,
           });
           if (taskContext) {
-            const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
+            const terminalResult =
+              turnOutcome.terminalStatus === "cancelled"
+                ? {}
+                : completionEvidenceOverflowed
+                  ? {
+                      terminalOutcome: "blocked" as const,
+                      terminalSummary:
+                        "Required completion output exceeded the 100 KB verification limit; inspect the child session for the final deliverable.",
+                    }
+                  : resolveBackgroundTaskTerminalResult(completionEvidenceText);
             markBackgroundTaskTerminal(taskContext.runId, {
               sessionKey,
               status: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "succeeded",
@@ -365,6 +411,7 @@ export async function runManagerTurn(params: {
             cfg: input.cfg,
             sessionKey,
             error: acpError,
+            promptStarted,
             sawTurnOutput,
             runtime,
             meta,
@@ -379,6 +426,7 @@ export async function runManagerTurn(params: {
             backend: describeBackendCandidate(currentBackend),
             error: acpError.message,
             code: acpError.code,
+            promptStarted,
             sawOutput: sawTurnOutput,
           };
           backendAttempts.push(backendAttempt);

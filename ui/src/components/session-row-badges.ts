@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 // Deep import on purpose: the protocol barrel carries typebox and every
 // schema, which must stay out of the Control UI startup bundle.
 import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
+import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -38,6 +39,7 @@ function renderSessionRowBadge(
   count = 0,
   pullRequestState?: SessionCatalogPullRequestSummary["state"],
   placementState?: SessionPlacementState,
+  diskSpaceStatus?: SessionPlacementDiskSpace["status"],
   workspaceConflictCount = 0,
 ) {
   return html`<openclaw-tooltip .content=${label}>
@@ -45,6 +47,7 @@ function renderSessionRowBadge(
       class=${`session-row-badge${modifier ? ` ${modifier}` : ""}`}
       data-pull-request-state=${pullRequestState ?? nothing}
       data-placement-state=${placementState ?? nothing}
+      data-disk-space-status=${diskSpaceStatus ?? nothing}
       data-workspace-conflicts=${workspaceConflictCount ? String(workspaceConflictCount) : nothing}
       role="img"
       aria-label=${label}
@@ -56,15 +59,16 @@ function renderSessionRowBadge(
 export function renderSessionRowBadges(params: {
   isChild?: boolean;
   incognito?: boolean;
-  hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
-  outboxCount?: number;
+  outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   placementState?: SessionPlacementState;
+  placementProviderId?: string;
+  placementProfileId?: string;
+  diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
 }) {
-  const hasAutomation = !params.isChild && params.hasAutomation;
   const pullRequestLabel = params.pullRequest
     ? formatSessionPullRequestSummary(params.pullRequest)
     : undefined;
@@ -78,33 +82,49 @@ export function renderSessionRowBadges(params: {
   const conflictPlacementState = workspaceConflictCount > 0 ? params.placementState : undefined;
   const displayedPlacementState = cloudPlacementState ?? conflictPlacementState;
   const hasWorkspaceConflict = workspaceConflictCount > 0;
-  const outboxCount = Math.max(0, Math.floor(params.outboxCount ?? 0));
-  const outboxLabel =
-    outboxCount > 0
-      ? t(outboxCount === 1 ? "sessionsView.queuedMessage" : "sessionsView.queuedMessages", {
-          count: String(outboxCount),
-        })
+  const diskSpaceStatus = params.isChild ? undefined : params.diskSpaceStatus;
+  const diskSpaceLabel =
+    diskSpaceStatus === "critical"
+      ? t("sessionsView.cloudWorkerDiskCritical")
+      : diskSpaceStatus === "warning"
+        ? t("sessionsView.cloudWorkerDiskWarning")
+        : "";
+  const attentionCount = Math.max(0, Math.floor(params.outboxAttentionCount ?? 0));
+  const attentionLabel =
+    attentionCount > 0
+      ? t(
+          attentionCount === 1
+            ? "sessionsView.messageNeedsAttention"
+            : "sessionsView.messagesNeedAttention",
+          {
+            count: String(attentionCount),
+          },
+        )
       : "";
   if (
     !params.incognito &&
-    !hasAutomation &&
     !pullRequestLabel &&
     !params.hasApproval &&
-    outboxCount === 0 &&
+    attentionCount === 0 &&
     !params.hasComposerDraft &&
     !displayedPlacementState &&
     !hasWorkspaceConflict
   ) {
     return nothing;
   }
-  const cloudLabel = hasWorkspaceConflict
+  const placementLabel = displayedPlacementState
+    ? params.placementProviderId && params.placementProfileId
+      ? `${params.placementProviderId} · ${params.placementProfileId} · ${displayedPlacementState}`
+      : t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
+    : "";
+  const cloudPlacementLabel = hasWorkspaceConflict
     ? displayedPlacementState
       ? t(
           workspaceConflictCount === 1
-            ? "sessionsView.cloudWorkerPlacementConflict"
-            : "sessionsView.cloudWorkerPlacementConflicts",
+            ? "sessionsView.placementWorkspaceConflict"
+            : "sessionsView.placementWorkspaceConflicts",
           {
-            state: displayedPlacementState,
+            placement: placementLabel,
             count: String(workspaceConflictCount),
           },
         )
@@ -114,9 +134,8 @@ export function renderSessionRowBadges(params: {
             : "sessionsView.cloudWorkerDescendantConflicts",
           { count: String(workspaceConflictCount) },
         )
-    : displayedPlacementState
-      ? t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
-      : "";
+    : placementLabel;
+  const cloudLabel = [cloudPlacementLabel, diskSpaceLabel].filter(Boolean).join(" · ");
   return html`<span class="session-row-badges">
     ${params.incognito
       ? renderSessionRowBadge(
@@ -125,13 +144,10 @@ export function renderSessionRowBadges(params: {
           "session-row-badge--incognito",
         )
       : nothing}
-    ${hasAutomation
-      ? renderSessionRowBadge(t("sessionsView.automationAttached"), icons.clock)
-      : nothing}
     ${pullRequestLabel
       ? renderSessionRowBadge(
           pullRequestLabel,
-          icons.gitPullRequest,
+          pullRequestState === "merged" ? icons.gitMerge : icons.gitPullRequest,
           "session-row-badge--pull-request",
           0,
           pullRequestState,
@@ -144,8 +160,13 @@ export function renderSessionRowBadges(params: {
           "session-row-badge--approval",
         )
       : nothing}
-    ${outboxCount > 0
-      ? renderSessionRowBadge(outboxLabel, icons.clock, "session-row-badge--queued", outboxCount)
+    ${attentionCount > 0
+      ? renderSessionRowBadge(
+          attentionLabel,
+          icons.alertTriangle,
+          "session-row-badge--attention",
+          attentionCount,
+        )
       : nothing}
     ${params.hasComposerDraft
       ? renderSessionRowBadge(
@@ -162,20 +183,31 @@ export function renderSessionRowBadges(params: {
           0,
           undefined,
           displayedPlacementState,
+          diskSpaceStatus,
           hasWorkspaceConflict ? workspaceConflictCount : 0,
         )
       : nothing}
   </span>`;
 }
 
-export function renderOfflineSidebarStatus(props: {
-  queuedOutboxCount: number;
-  reconnecting: string;
+export function renderSidebarConnectionStatus(props: {
+  kind: "offline" | "restarting";
+  queuedOutboxCount?: number;
   title?: string;
   onRetry: () => void;
 }) {
+  if (props.kind === "restarting") {
+    return html`<span
+      class="sidebar-footer-bar__status sidebar-footer-bar__status--restarting"
+      role="status"
+      aria-live="polite"
+      ><span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
+        "connection.restarting",
+      )}</span
+    >`;
+  }
   const offline = t("common.offline");
-  const count = props.queuedOutboxCount;
+  const count = props.queuedOutboxCount ?? 0;
   const queued = count ? t("connection.queuedCount", { count: String(count) }) : null;
   return html`<openclaw-tooltip .content=${props.title ?? ""}>
     <button
@@ -187,7 +219,7 @@ export function renderOfflineSidebarStatus(props: {
     >
       <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${offline}<span
         class="sidebar-footer-bar__status-detail"
-        >· ${props.reconnecting}</span
+        >· ${t("connection.reconnecting")}</span
       >${queued
         ? html`<span class="sidebar-footer-bar__status-detail">· ${queued}</span>`
         : nothing}

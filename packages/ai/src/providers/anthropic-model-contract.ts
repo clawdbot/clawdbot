@@ -156,6 +156,7 @@ export function mapAnthropicStopReason(reason: string | undefined): StopReason {
   switch (reason) {
     case "end_turn":
     case "pause_turn":
+    case "compaction":
     case "stop_sequence":
       return "stop";
     case "max_tokens":
@@ -192,8 +193,15 @@ export function prepareClaudeNoPrefillRequestContext(model: Model, context: Cont
     : { ...context, messages: context.messages.slice(0, end) };
 }
 
+type ClaudeSamplingRequestParams = {
+  temperature?: unknown;
+  top_p?: unknown;
+  top_k?: unknown;
+  service_tier?: unknown;
+};
+
 export function applyClaudeRequestContract(
-  params: Record<string, unknown>,
+  params: ClaudeSamplingRequestParams,
   model: {
     id?: string;
     params?: Record<string, unknown>;

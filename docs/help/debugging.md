@@ -156,6 +156,24 @@ Add gateway CLI flags after `gateway:watch` and they pass through on each restar
 
 ## Dev profile + dev gateway (--dev)
 
+When you run `pnpm openclaw`, `pnpm dev`, or a Gateway development runner from
+a checkout, the runner selects that checkout's plugins ahead of tracked global
+copies with the same id. Built plugin output remains preferred when available;
+source-only plugins still load from the checkout. Rebuild to pick up source
+changes when using built output.
+
+This selection is separate from the `--dev` profile. It does not grant trusted
+plugin capabilities to arbitrary local links, `npm-pack:` installs, or plugins
+with an official-looking name. Explicit `plugins.load.paths` overrides still
+win; an alias of the same independently discovered bundled entry retains its
+bundled provenance. A different local copy remains untrusted.
+
+The runners supply the existing `OPENCLAW_DEV_SOURCE_ROOT` selector unless you
+set it explicitly. When launching `node dist/entry.js` directly for debugging,
+set it to the running checkout root for the same duplicate-selection behavior.
+It does not add an unrelated checkout to trusted bundled discovery. Use
+`pnpm openclaw plugins inspect <id> --json` to check the selected source and origin.
+
 Two **separate** `--dev` flags:
 
 - **Global `--dev` (profile):** isolates state under `~/.openclaw-dev` and defaults the gateway port to `19001` (derived ports shift with it).
@@ -185,7 +203,7 @@ What this does:
    - Default identity: **C3-PO** (protocol droid).
    - `pnpm gateway:dev` also sets `OPENCLAW_SKIP_CHANNELS=1` to skip channel providers.
 
-Dev Gateways ignore ambient channel environment triggers by default, so credentials inherited from your shell do not connect the development instance to real channel services. Explicit `channels.<id>` configuration still works. Pass `--dev-ambient-channels` with `--dev` to restore ambient channel auto-configuration for that run.
+All Gateways ignore ambient channel environment triggers by default, so credentials inherited from the launching shell do not connect to channel services without explicit intent. A `channels.<id>` configuration block still enables that channel and can use environment variables for its credentials. Pass `--ambient-channels` to restore ambient channel auto-configuration for that run; `--dev-ambient-channels` remains as a deprecated alias.
 
 Reset flow (fresh start):
 

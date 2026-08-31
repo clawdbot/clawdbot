@@ -1,6 +1,8 @@
 {
   "id": "line",
-  "doctorContract": {},
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "name": "LINE",
   "description": "OpenClaw LINE channel plugin for LINE Bot API chats.",
   "icon": "https://cdn.simpleicons.org/line",

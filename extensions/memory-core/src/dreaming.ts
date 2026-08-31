@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   uniqueStrings,
@@ -361,21 +362,19 @@ function sortManagedJobs(managed: ManagedCronJobLike[]): ManagedCronJobLike[] {
   });
 }
 
+function isCronServiceLike(candidate: unknown): candidate is CronServiceLike {
+  return (
+    isRecord(candidate) &&
+    typeof candidate.list === "function" &&
+    typeof candidate.add === "function" &&
+    typeof candidate.update === "function" &&
+    typeof candidate.remove === "function" &&
+    typeof candidate.removeStaleJobFamily === "function"
+  );
+}
+
 function resolveCronServiceFromCandidate(candidate: unknown): CronServiceLike | null {
-  if (!candidate || typeof candidate !== "object") {
-    return null;
-  }
-  const cron = candidate as Partial<CronServiceLike>;
-  if (
-    typeof cron.list !== "function" ||
-    typeof cron.add !== "function" ||
-    typeof cron.update !== "function" ||
-    typeof cron.remove !== "function" ||
-    typeof cron.removeStaleJobFamily !== "function"
-  ) {
-    return null;
-  }
-  return cron as CronServiceLike;
+  return isCronServiceLike(candidate) ? candidate : null;
 }
 
 function resolveCronServiceFromGatewayContext(context: { getCron?: () => unknown } | undefined) {
@@ -575,13 +574,18 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   // carries its owning agent. The triggering agent owns whatever the roster cannot attribute.
   const triggerAgentId = normalizeLowercaseStringOrEmpty(params.agentId);
   const seenWorkspaces = new Set<string>();
-  const workspaces: Array<{ agentId?: string; workspaceDir: string }> = [];
-  const addWorkspace = (workspaceDir: string, agentId: string): void => {
+  const workspaces: Array<{ agentId?: string; agentIds: readonly string[]; workspaceDir: string }> =
+    [];
+  const addWorkspace = (
+    workspaceDir: string,
+    agentId: string,
+    agentIds: readonly string[] = [agentId],
+  ): void => {
     if (!workspaceDir || seenWorkspaces.has(workspaceDir)) {
       return;
     }
     seenWorkspaces.add(workspaceDir);
-    workspaces.push({ ...(agentId ? { agentId } : {}), workspaceDir });
+    workspaces.push({ ...(agentId ? { agentId } : {}), agentIds, workspaceDir });
   };
   // The triggering agent wins its own workspace; otherwise sort so a workspace shared by
   // several agents always resolves the same owner across sweeps.
@@ -598,7 +602,11 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
       // the host falls back to the roster default agent when the turn has no id.
       ...(triggerAgentId ? { primaryAgentId: triggerAgentId } : {}),
     })) {
-      addWorkspace(entry.workspaceDir, resolveWorkspaceOwnerAgentId(entry.agentIds));
+      addWorkspace(
+        entry.workspaceDir,
+        resolveWorkspaceOwnerAgentId(entry.agentIds),
+        entry.agentIds,
+      );
     }
   }
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
@@ -643,7 +651,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
     import("./dreaming-phases.js"),
     import("./short-term-promotion.js"),
   ]);
-  for (const { agentId, workspaceDir } of workspaces) {
+  for (const { agentId, agentIds, workspaceDir } of workspaces) {
     const sweepNowMs = Date.now();
     try {
       const phaseResult = await runDreamingSweepPhases({
@@ -702,6 +710,8 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
         );
       }
       const applied = await applyShortTermPromotions({
+        agentId,
+        workspaceAgentIds: agentIds,
         workspaceDir,
         candidates,
         limit: params.config.limit,
@@ -748,6 +758,9 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
           phase: "deep",
           snippets: candidates.map((c) => c.snippet).filter(Boolean),
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
+          sourceEntryKeys: [
+            ...new Set([...candidates, ...applied.appliedCandidates].map((c) => c.key)),
+          ],
         };
         if (!params.subagent) {
           await appendFallbackNarrativeEntry({
@@ -818,7 +831,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   // startGatewaySidecars — the startup event fires via setTimeout(250ms) before deps.cron is
   // attached). By keeping the context, we can call getCron() again on later reconciliation
   // attempts when the service is guaranteed to be ready.  Fixes #67362.
-  let gatewayContext: { getCron?: () => CronServiceLike | null } | null = null;
+  let gatewayContext: { getCron?: () => unknown } | null = null;
   let unavailableCronWarningEmitted = false;
   let lastRuntimeReconcileAtMs = 0;
   let lastRuntimeConfigKey: string | null = null;
@@ -1096,7 +1109,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }
     const generation = ++gatewayLifecycleGeneration;
     // Store the gateway context for runtime cron resolution retries.
-    gatewayContext = ctx as unknown as { getCron?: () => CronServiceLike | null };
+    gatewayContext = ctx;
     try {
       await reconcileManagedDreamingCron({
         reason: "startup",

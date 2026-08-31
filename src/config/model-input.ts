@@ -76,6 +76,36 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   return modelKey(provider, normalizedModel);
 }
 
+/** Normalizes primary/fallback refs without replacing unchanged config values. */
+export function normalizeAgentModelSelectionForConfig(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeAgentModelRefForConfig(value);
+  }
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  let next = value;
+  const assign = (key: string, candidate: unknown) => {
+    if (candidate !== next[key]) {
+      next = { ...next, [key]: candidate };
+    }
+  };
+  if (typeof value.primary === "string") {
+    assign("primary", normalizeAgentModelRefForConfig(value.primary));
+  }
+  if (Array.isArray(value.fallbacks)) {
+    const originalFallbacks = value.fallbacks;
+    const fallbacks = originalFallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+    if (fallbacks.some((fallback, index) => fallback !== originalFallbacks[index])) {
+      assign("fallbacks", fallbacks);
+    }
+  }
+  return next;
+}
+
 function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {
   if (!isPlainRecord(existing) || !isPlainRecord(incoming)) {
     return incoming;

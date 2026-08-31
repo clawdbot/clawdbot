@@ -28,9 +28,11 @@ export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
  * on these instead of matching freeform diagnostic message text.
  */
 export type PluginDiagnosticCode =
+  | "backup-resource-declaration-invalid"
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
-  | "plugin-verification";
+  | "plugin-verification"
+  | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
 export type PluginDiagnostic = {
@@ -178,6 +180,13 @@ export type PluginManifestActivation = {
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
+/** Root CLI command metadata available before plugin code is imported. */
+export type PluginManifestCliCommand = {
+  name: string;
+  description: string;
+  hasSubcommands: boolean;
+};
+
 export type PluginManifestDefaultPlatform = NodeJS.Platform;
 
 export type PluginManifestSetupProvider = {
@@ -221,7 +230,7 @@ export type PluginManifestSetup = {
   configMigrations?: string[];
   /**
    * Whether setup still needs plugin runtime execution after descriptor lookup.
-   * Defaults to false when omitted.
+   * Explicit false disables setup runtime; omission preserves the legacy fallback.
    */
   requiresRuntime?: boolean;
 };
@@ -290,7 +299,7 @@ export type PluginManifestSecretInputPath = {
   /** Expected resolved type for SecretRef materialization. */
   expected?: "string";
   /** Runtime owner kind used to isolate this surface when resolution fails. */
-  ownerKind?: "route";
+  ownerKind?: "capability" | "route";
 };
 
 export type PluginManifestSecretInputContracts = {
@@ -327,9 +336,18 @@ export type PluginManifestCatalog = {
   order?: number;
 };
 
+/** Declarative backup ownership rooted at host-managed state or each configured agent. */
+export type PluginManifestBackupResource = {
+  disposition: "include" | "regenerable";
+  scope: "state" | "agent";
+  relativePath: string;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  /** Static backup inclusion/exclusion declarations; resolved without loading plugin runtime. */
+  backupResources?: PluginManifestBackupResource[];
   /** Plugin ids that must also be installed for this plugin to have effect. */
   requiresPlugins?: string[];
   enabledByDefault?: boolean;
@@ -383,6 +401,8 @@ export type PluginManifest = {
    * config diagnostics before runtime loads.
    */
   commandAliases?: PluginManifestCommandAlias[];
+  /** Root commands advertised by help and activation planning before runtime loads. */
+  cliCommands?: PluginManifestCliCommand[];
   /** Usage/billing credentials excluded from inference auth but included in secret scrubbing. */
   providerUsageAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
@@ -398,6 +418,8 @@ export type PluginManifest = {
   setup?: PluginManifestSetup;
   /** Doctor contract surfaces available without loading the plugin artifact. */
   doctorContract?: PluginManifestDoctorContract;
+  /** Whether the plugin public API registers structured health checks. */
+  doctorHealthChecks?: boolean;
   /** Static ownership metadata for doctor session-route state repairs. */
   sessionRouteStateOwners?: DoctorSessionRouteStateOwner[];
   /** Cheap QA runner metadata exposed before plugin runtime loads. */
@@ -449,7 +471,6 @@ export type PluginManifestContracts = {
    */
   externalAuthProviders?: string[];
   embeddingProviders?: string[];
-  memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
@@ -525,9 +546,15 @@ export type PluginManifestCapabilityProviderMetadata = {
 
 export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
   optional?: boolean;
+  /** Built-in tool profiles that expose this plugin tool by default. */
+  profiles?: PluginManifestToolProfile[];
   /** Tool execution is safe to repeat after an incomplete model turn. */
   replaySafe?: boolean;
+  /** Tool execution can change durable state and failed attempts must remain visible. */
+  sideEffecting?: boolean;
 };
+
+export type PluginManifestToolProfile = "minimal" | "coding" | "messaging" | "full";
 
 export type PluginManifestProviderAuthChoice = {
   /** Provider id owned by this manifest entry. */

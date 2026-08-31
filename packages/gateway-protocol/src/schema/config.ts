@@ -60,8 +60,10 @@ export const ConfigSchemaLookupParamsSchema = closedObject({
   path: ConfigSchemaLookupPathString,
 });
 
-/** Empty request payload for checking update/restart status. */
-export const UpdateStatusParamsSchema = closedObject({});
+/** Request payload for cached status or an explicit checkout refresh. */
+export const UpdateStatusParamsSchema = closedObject({
+  refreshCheckout: Type.Optional(Type.Boolean()),
+});
 
 const UpdateCommitSchema = closedObject({
   sha: NonEmptyString,
@@ -190,6 +192,16 @@ export const UpdateRunParamsSchema = closedObject({
   continuationMessage: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  target: Type.Optional(
+    closedObject({
+      kind: Type.Literal("git"),
+      upstreamRef: Type.String({
+        minLength: 1,
+        pattern: "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]+$",
+      }),
+      upstreamSha: Type.String({ pattern: "^[a-fA-F0-9]{40}$" }),
+    }),
+  ),
 });
 
 /** UI metadata attached to config schema paths. */

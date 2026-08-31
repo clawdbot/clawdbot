@@ -73,7 +73,7 @@ export default definePluginEntry({
       },
     });
     api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
-    api.registerMemoryEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider());
     api.registerRealtimeTranscriptionProvider(buildOpenAIRealtimeTranscriptionProvider());
     api.registerRealtimeVoiceProvider(

@@ -8,7 +8,11 @@ let buildPinHarness: typeof import("./system-event-test-harness.js").createSlack
 type PinOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => pinEnqueueMock(...args),
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => pinEnqueueMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
 type PinHandler = import("./system-event-test-harness.js").SlackSystemEventHandler;
 
@@ -175,12 +179,14 @@ describe("registerSlackPinEvents", () => {
     const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
     const resolveUserName = vi.fn(harness.ctx.resolveUserName);
     const resolveSessionKey = vi.fn(
-      (input: Parameters<typeof harness.ctx.resolveSlackSystemEventSessionKey>[0]) =>
-        `session:${input.eventScope?.teamId ?? "workspace"}`,
+      (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
+        agentId: "main",
+        sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
+      }),
     );
     harness.ctx.resolveChannelName = resolveChannelName;
     harness.ctx.resolveUserName = resolveUserName;
-    harness.ctx.resolveSlackSystemEventSessionKey = resolveSessionKey;
+    harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
     registerSlackPinEvents({ ctx: harness.ctx });
     const handler = harness.getHandler("pin_added") as PinHandler | null;
     if (!handler) {

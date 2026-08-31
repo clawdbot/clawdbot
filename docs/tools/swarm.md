@@ -324,6 +324,24 @@ Collector results remain waitable until their group is archived. After every
 member reaches its retention deadline, OpenClaw archives the group's children
 as a batch so completed swarms do not remain in the live session tree.
 
+## Stop a Swarm
+
+Use **Stop** in the parent chat to cancel a running swarm. A Stop targeting a
+specific parent run also cancels its associated collector children and their
+nested descendants. Collector mode changes result delivery, not cancellation
+scope. Successful cancellation prevents selected queued children from starting
+as running siblings stop; it does not cancel work from unrelated parent turns.
+
+If Stop reports incomplete descendant cancellation, inspect the remaining work
+on the [Tasks page](/automation/tasks#control-ui) and retry cancellation for
+those children. A stopped parent alone does not confirm that every child stopped,
+and a cancellation acknowledgment does not promise instantaneous runtime cleanup.
+
+Already-accepted children remain independent when the parent completes normally,
+yields, or times out. If the parent is no longer active, cancel the child tasks
+directly. See [Sub-agent stopping](/tools/subagents#stopping) for exact-run and
+session-wide Stop scopes.
+
 ## Use Swarm from other harnesses
 
 You can use Swarm without OpenClaw Code Mode. Its core tools are
@@ -389,7 +407,10 @@ while (pending.size > 0) {
   for (const item of batch.completed) {
     pending.delete(item.runId);
     if (item.status !== "done") {
-      throw new Error(item.schemaError ?? item.result ?? `${item.runId}: ${item.status}`);
+      const detail = [item.error, item.schemaError, item.result].find(
+        (value) => typeof value === "string" && value.trim(),
+      );
+      throw new Error(detail ?? `${item.runId}: ${item.status}`);
     }
     completed.push(item); // Process each result as soon as it finishes.
   }
@@ -412,6 +433,7 @@ type AgentsWaitResult = {
     status: "done" | "failed" | "killed" | "timeout";
     result: string;
     structured?: unknown;
+    error?: string;
     schemaError?: string;
     sessionKey: string;
     label?: string;
@@ -424,6 +446,16 @@ type AgentsWaitResult = {
   }>;
 };
 ```
+
+A completed item can contain partial `structured` data and still have
+`status: "failed"` when the provider or runtime fails afterward. In that case,
+`error` is the authoritative terminal failure. Recovery code should prefer a
+nonblank `error`, then `schemaError`, then a nonblank `result`, and finally a
+run/status fallback.
+
+Individual failed items do not make a mixed `agents_wait` poll a top-level tool
+error. The poll remains a successful JSON result so callers can process its
+`completed`, `pending`, and `errors` arrays independently.
 
 The call returns immediately when any requested child is already complete,
 when at least one pending child completes, when no valid pending ids remain,

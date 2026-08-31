@@ -16,12 +16,14 @@ import {
   type McpServerSummary,
   type McpServersPatchBuildResult,
 } from "../lib/config/mcp-servers.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import { renderMcpServerForm, type McpServerForm } from "./mcp-server-form.ts";
 import {
   renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsSection,
   renderSettingsStatus,
@@ -68,7 +70,7 @@ class McpServersCard extends OpenClawLightDomElement {
           .catch((error: unknown) => {
             this.message = {
               kind: "error",
-              text: error instanceof Error ? error.message : String(error),
+              text: formatUiError(error),
             };
           });
         return runtimeConfig.subscribe(() => this.syncRows());
@@ -236,8 +238,7 @@ class McpServersCard extends OpenClawLightDomElement {
           {
             title: t("mcpPage.configuredServers"),
             description: html`
-              ${t("mcpPage.runtimeHint")}
-              <a href=${this.pluginsHref}>${t("mcpPage.connectorsLink")}</a>
+              ${t("mcpPage.runtimeHint")} ${renderLearnMoreLink(this.pluginsHref)}
             `,
             actions: html`
               <button

@@ -16,7 +16,7 @@ Adds the openclaw path CLI for oc:// workspace file addressing.
 
 ## Surface
 
-plugin
+CLI commands: `openclaw path`
 
 ## Related docs
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolveMemorySearchConfig } from "../../../agents/memory-search.js";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
-import { resolveModelEntries } from "../../../media-understanding/resolve.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
@@ -42,6 +42,80 @@ describe("legacy config migration end to end", () => {
   it("keeps agents.defaults.tts outside the schema", () => {
     expect(validateConfigObjectRaw({ agents: { defaults: { tts: {} } } }).ok).toBe(false);
   });
+
+  it.each([
+    {
+      name: "defaults-only QMD session indexing",
+      canonical: undefined,
+      defaults: {
+        provider: "none",
+        rememberAcrossConversations: false,
+        extraPaths: ["/defaults-existing"],
+      },
+      expectedSources: ["memory", "sessions"],
+      expectedPaths: ["/defaults-existing", "/defaults-qmd"],
+    },
+    {
+      name: "explicit canonical privacy and indexing policy",
+      canonical: {
+        provider: "none",
+        rememberAcrossConversations: false,
+        experimental: { sessionMemory: false },
+        sources: ["memory"],
+        extraPaths: ["/canonical"],
+      },
+      defaults: {
+        provider: "openai",
+        rememberAcrossConversations: true,
+        experimental: { sessionMemory: true },
+        extraPaths: ["/defaults-existing"],
+      },
+      expectedSources: ["memory"],
+      expectedPaths: ["/canonical", "/defaults-qmd"],
+    },
+  ])(
+    "migrates $name into validated effective memory settings",
+    ({ canonical, defaults, expectedSources, expectedPaths }) => {
+      const result = migrateLegacyConfig({
+        ...(canonical ? { memory: { search: canonical } } : {}),
+        session: { dmScope: "per-peer" },
+        agents: {
+          entries: { main: {} },
+          defaults: {
+            memory: {
+              search: {
+                ...defaults,
+                qmd: {
+                  sessions: { enabled: true },
+                  extraCollections: [{ path: "/defaults-qmd" }],
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.partiallyValid).toBeUndefined();
+      expect(result.config).not.toHaveProperty("agents.defaults.memory");
+      const validation = validateConfigObjectRaw(result.config);
+      expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(
+        true,
+      );
+      if (!validation.ok) {
+        return;
+      }
+      const resolved = resolveMemorySearchConfig(validation.config, "main");
+      expect(resolved).toMatchObject({
+        provider: "none",
+        rememberAcrossConversations: false,
+        sources: expectedSources,
+        searchSources: expectedSources,
+        extraPaths: expectedPaths,
+      });
+      expect(validation.config.memory?.search?.experimental?.sessionMemory).toBe(!canonical);
+      expect(migrateLegacyConfig(validation.config)).toEqual({ config: null, changes: [] });
+    },
+  );
 
   it("canonicalizes a multi-family legacy config and is idempotent", () => {
     const result = migrateLegacyConfig({
@@ -212,66 +286,5 @@ describe("legacy config migration end to end", () => {
     });
     expect(validateConfigObjectRaw(result.config).ok).toBe(true);
     expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
-  });
-
-  it("loads the OpenCode doctor contract from an exec reviewer fallback", () => {
-    const raw = {
-      tools: {
-        exec: {
-          reviewer: { model: { fallbacks: ["opencode/hy3-free@work"] } },
-        },
-      },
-    };
-    const applied = applyLegacyDoctorMigrations(raw);
-
-    expect(applied.next?.tools).toEqual({
-      exec: {
-        reviewer: { model: { fallbacks: ["opencode/laguna-s-2.1-free@work"] } },
-      },
-    });
-    const result = migrateLegacyConfig(raw);
-
-    expect(result.partiallyValid).toBeUndefined();
-    expect(result.config?.tools?.exec?.reviewer?.model).toEqual({
-      fallbacks: ["opencode/laguna-s-2.1-free@work"],
-    });
-    expect(result.changes).toContain(
-      "Updated tools.exec.reviewer.model.fallbacks.0 from the retired OpenCode Zen model to opencode/laguna-s-2.1-free.",
-    );
-    const validation = validateConfigObjectRaw(result.config);
-    expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
-    expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
-    expect(migrateLegacyConfig(result.config)).toEqual({ config: null, changes: [] });
-  });
-
-  it("keeps a repaired OpenCode media preference selected", () => {
-    const result = migrateLegacyConfig({
-      tools: {
-        media: {
-          image: { preferredModel: "opencode/hy3-free" },
-          models: [
-            { provider: "other", model: "alternative", capabilities: ["image"] },
-            { provider: "opencode", model: "hy3-free", capabilities: ["image"] },
-          ],
-        },
-      },
-    });
-
-    expect(result.config?.tools?.media?.image?.preferredModel).toBe("opencode/laguna-s-2.1-free");
-    const entries = resolveModelEntries({
-      cfg: result.config ?? {},
-      capability: "image",
-      config: result.config?.tools?.media?.image,
-      providerRegistry: new Map([
-        ["opencode", { capabilities: ["image"] }],
-        ["other", { capabilities: ["image"] }],
-      ]),
-    });
-    expect(entries[0]?.entry).toMatchObject({
-      provider: "opencode",
-      model: "laguna-s-2.1-free",
-    });
-    expect(validateConfigObjectRaw(result.config).ok).toBe(true);
-    expect(migrateLegacyConfig(result.config)).toEqual({ config: null, changes: [] });
   });
 });

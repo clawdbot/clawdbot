@@ -36,6 +36,40 @@ function trustedInterAgentNotification(params: {
 }
 
 describe("Codex native subagent notifications", () => {
+  it("recognizes a native completion receipt without treating its payload as a status", () => {
+    expect(
+      codexNativeSubagentNotifications.deliveredAgentPaths({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          item: {
+            type: "agent_message",
+            author: "/root/worker",
+            recipient: "/root",
+            content: [
+              {
+                type: "input_text",
+                text: "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nBuild result",
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual(["/root/worker"]);
+  });
+
+  it("recognizes the earlier trusted inter-agent completion envelope as a delivery receipt", () => {
+    expect(
+      codexNativeSubagentNotifications.deliveredAgentPaths(
+        trustedInterAgentNotification({
+          agentPath: "child-thread",
+          text: '<subagent_notification>{"agent_path":"child-thread","status":{"completed":"done"}}</subagent_notification>',
+        }),
+      ),
+    ).toEqual(["child-thread"]);
+  });
+
   it("parses completed child results from Codex notification XML", () => {
     expect(
       extractCodexNativeSubagentCompletionsFromText(

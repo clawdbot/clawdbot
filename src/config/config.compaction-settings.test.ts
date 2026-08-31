@@ -73,7 +73,7 @@ describe("config compaction settings", () => {
     expect(compaction?.qualityGuard?.maxRetries).toBe(99);
   });
 
-  it.each(["off", "low", "adaptive", "max", "ultra"] as const)(
+  it.each(["off", "low", "adaptive", "max", "ultra", "inherit"] as const)(
     "preserves compaction thinkingLevel=%s during materialization",
     (thinkingLevel) => {
       expect(materializeCompactionConfig({ thinkingLevel })?.thinkingLevel).toBe(thinkingLevel);

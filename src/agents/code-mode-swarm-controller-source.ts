@@ -32,7 +32,9 @@ export const CODE_MODE_SWARM_CONTROLLER_SOURCE = String.raw`
     if (!completion || completion.status !== "done") {
       const runId = completion?.runId ?? spawned.runId ?? "unknown";
       const status = completion?.status ?? "failed";
-      const detail = completion?.schemaError || completion?.result || "collector returned no result";
+      const detail = [completion?.error, completion?.schemaError, completion?.result].find(
+        (value) => typeof value === "string" && value.trim()
+      ) || "collector returned no result";
       throw new SwarmAgentError(runId, status, detail);
     }
     return options.schema !== undefined ? completion.structured : completion.result;

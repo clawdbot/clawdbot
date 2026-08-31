@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 
 export const COLD_READ_COMMAND_PATHS: string[][] = [
+  ["audit"],
   ["skills", "info"],
   ["skills", "search"],
   ["hooks"],
@@ -11,6 +12,10 @@ export const COLD_READ_COMMAND_PATHS: string[][] = [
 ];
 
 export function registerColdReadCommandFixtures(program: Command, skills: Command): void {
+  program
+    .command("audit")
+    .option("--json")
+    .action(() => {});
   for (const skillCommand of ["info", "search"]) {
     skills
       .command(skillCommand)

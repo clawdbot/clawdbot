@@ -5,11 +5,13 @@ import {
   buildPairingConnectErrorDetails,
   buildPairingConnectErrorMessage,
   classifyGatewayConnectFailure,
+  ConnectErrorDetailCodes,
   describePairingConnectRequirement,
   formatConnectErrorMessage,
   formatConnectPairingRequiredMessage,
   normalizePairingConnectRequestId,
   readConnectErrorDetailCode,
+  readControlUiBuildMismatchId,
   readConnectErrorRecoveryAdvice,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
@@ -39,6 +41,38 @@ describe("readConnectErrorDetailCode", () => {
   it("returns null for invalid detail payloads", () => {
     expect(readConnectErrorDetailCode(null)).toBeNull();
     expect(readConnectErrorDetailCode("AUTH_TOKEN_MISMATCH")).toBeNull();
+  });
+});
+
+describe("readControlUiBuildMismatchId", () => {
+  it.each([
+    ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+  ])("returns a bounded reload target for %s", (code) => {
+    expect(
+      readControlUiBuildMismatchId({
+        code,
+        gatewayBuildId: "gateway-build",
+        reloadRequired: true,
+      }),
+    ).toBe("gateway-build");
+  });
+
+  it.each([
+    {},
+    { code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH },
+    {
+      code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+      gatewayBuildId: "x".repeat(97),
+      reloadRequired: true,
+    },
+    {
+      code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+      gatewayBuildId: "gateway-build",
+      reloadRequired: false,
+    },
+  ])("rejects malformed details", (details) => {
+    expect(readControlUiBuildMismatchId(details)).toBeNull();
   });
 });
 
@@ -204,6 +238,26 @@ describe("classifyGatewayConnectFailure", () => {
       remediation: undefined,
     },
     {
+      name: "identity proxy redirect rejection",
+      input: {
+        details: { reason: "websocket-upgrade-rejected", httpStatus: 302 },
+        message: "gateway rejected websocket upgrade (HTTP 302)",
+      },
+      kind: "identity-proxy",
+      message: "gateway rejected websocket upgrade (HTTP 302)",
+      remediation: "gateway.remote.edgeAuth",
+    },
+    {
+      name: "identity proxy forbidden rejection",
+      input: {
+        details: { reason: "websocket-upgrade-rejected", httpStatus: 403 },
+        message: "gateway rejected websocket upgrade (HTTP 403)",
+      },
+      kind: "identity-proxy",
+      message: "gateway rejected websocket upgrade (HTTP 403)",
+      remediation: "identity-aware proxy",
+    },
+    {
       name: "unreachable endpoint",
       input: { message: "connect ECONNREFUSED 127.0.0.1:18789" },
       kind: "unreachable",
@@ -224,11 +278,45 @@ describe("classifyGatewayConnectFailure", () => {
       expect(result.remediation).toContain("--token/--password");
     }
   });
+
+  it("adds a Cloudflare hint only for Cloudflare Access redirect hosts", () => {
+    const cloudflare = classifyGatewayConnectFailure({
+      details: {
+        reason: "websocket-upgrade-rejected",
+        httpStatus: 302,
+        location: "https://team.cloudflareaccess.com/cdn-cgi/access/login?token=***",
+      },
+    });
+    const generic = classifyGatewayConnectFailure({
+      details: {
+        reason: "websocket-upgrade-rejected",
+        httpStatus: 302,
+        location: "https://login.example/authorize",
+      },
+    });
+
+    expect(cloudflare.kind).toBe("identity-proxy");
+    expect(cloudflare.kind).not.toBe("unreachable");
+    expect(cloudflare.remediation).toContain("Cloudflare Access");
+    expect(generic.remediation).not.toContain("Cloudflare");
+  });
 });
 
 describe("resolveAuthConnectErrorDetailCode", () => {
   it("maps device token scope mismatches to a dedicated auth detail", () => {
     expect(resolveAuthConnectErrorDetailCode("scope_mismatch")).toBe("AUTH_SCOPE_MISMATCH");
+  });
+
+  it("keeps trusted-proxy identity rejection distinct from generic unauthorized auth", () => {
+    expect(
+      resolveAuthConnectErrorDetailCode("trusted_proxy_missing_header_cf-access-jwt-assertion"),
+    ).toBe("AUTH_IDENTITY_HEADER_REQUIRED");
+  });
+
+  it("keeps non-header trusted-proxy rejection generic", () => {
+    expect(resolveAuthConnectErrorDetailCode("trusted_proxy_local_interface_check_failed")).toBe(
+      "AUTH_UNAUTHORIZED",
+    );
   });
 });
 

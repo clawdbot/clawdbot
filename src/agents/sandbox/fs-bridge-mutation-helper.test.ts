@@ -5,11 +5,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { buildPinnedWritePlan } from "./fs-bridge-mutation-helper.js";
 import {
-  buildPinnedWritePlan,
   SANDBOX_CREATE_EXISTS_EXIT_CODE,
   SANDBOX_PINNED_MUTATION_PYTHON,
-} from "./fs-bridge-mutation-helper.js";
+} from "./fs-bridge-mutation-python.js";
 
 function runMutation(args: string[], input?: string) {
   return spawnSync("python3", ["-c", SANDBOX_PINNED_MUTATION_PYTHON, ...args], {

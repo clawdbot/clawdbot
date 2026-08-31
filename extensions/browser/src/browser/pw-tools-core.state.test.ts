@@ -35,7 +35,7 @@ const stateMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./playwright-core.runtime.js", () => ({
-  playwrightCore: { devices: stateMocks.devices },
+  getPlaywrightCore: () => ({ devices: stateMocks.devices }),
 }));
 
 vi.mock("./pw-session.js", () => ({

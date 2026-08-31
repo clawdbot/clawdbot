@@ -1263,8 +1263,46 @@ function listInheritedProviderPoliciesWithProfiles(
   return entries;
 }
 
+function bindingMatchHasLegacyDmPeerKind(binding: unknown): boolean {
+  const match = getRecord(getRecord(binding)?.match);
+  const peer = getRecord(match?.peer);
+  return peer !== null && peer.kind === "dm";
+}
+
+const BINDING_DM_PEER_KIND_RULE: LegacyConfigRule = {
+  path: ["bindings"],
+  message:
+    'bindings[].match.peer.kind uses the retired "dm" alias; use "direct". Run "openclaw doctor --fix".',
+  match: (value) =>
+    Array.isArray(value) && value.some((binding) => bindingMatchHasLegacyDmPeerKind(binding)),
+};
+
 /** Legacy config migration specs for agent/runtime-owned config keys. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "bindings.match.peer.kind.dm-to-direct",
+    describe: "Move deprecated bindings match.peer.kind dm values to direct",
+    legacyRules: [BINDING_DM_PEER_KIND_RULE],
+    apply: (raw, changes) => {
+      if (!Array.isArray(raw.bindings)) {
+        return;
+      }
+      let migrated = 0;
+      for (const binding of raw.bindings) {
+        const match = getRecord(getRecord(binding)?.match);
+        const peer = getRecord(match?.peer);
+        if (peer !== null && peer.kind === "dm") {
+          peer.kind = "direct";
+          migrated += 1;
+        }
+      }
+      if (migrated > 0) {
+        changes.push(
+          `Moved deprecated bindings[].match.peer.kind "dm" → "direct" for ${migrated} binding${migrated === 1 ? "" : "s"}.`,
+        );
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "tools.profile-configured-sections-alsoAllow",
     describe: "Repair explicit configured-section tool grants filtered by profiles",

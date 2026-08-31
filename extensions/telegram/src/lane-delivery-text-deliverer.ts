@@ -1,11 +1,9 @@
 // Telegram plugin module implements lane delivery text deliverer behavior.
 import {
   createPreviewMessageReceipt,
-  type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
-import {
   isPotentialTruncatedFinal,
   selectLongerFinalText,
+  type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
@@ -13,6 +11,7 @@ import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { TelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
@@ -325,6 +324,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       }
     } else {
       await params.flushDraftLane(lane);
+      if (buttons) {
+        await stream.waitForInFlight();
+      }
     }
     const messageId = stream.messageId();
     if (typeof messageId !== "number") {
@@ -356,6 +358,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     const activeSnapshot =
       finalizePreview || buttons ? stream.currentMessageSnapshot?.() : undefined;
     let buttonsAttached = false;
+    let buttonAttachmentError: unknown;
     if (buttons && activeSnapshot) {
       try {
         await onPlatformSendDispatch?.();
@@ -368,14 +371,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         });
         buttonsAttached = true;
       } catch (err) {
+        buttonAttachmentError = err;
         params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
       }
     }
-    if (!finalizePreview) {
+    if (!finalizePreview && buttonAttachmentError === undefined) {
       return result("preview-updated");
     }
     if (!activeSnapshot) {
-      promptContextSequence.invalidate();
+      if (finalizePreview) {
+        promptContextSequence.invalidate();
+      }
       return undefined;
     }
     lane.finalized = true;
@@ -384,11 +390,15 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     if (!followedByDurablePayload) {
       await promptContextSequence.finish();
     }
-    return result("preview-finalized", {
+    const delivery = {
       content: previewText,
       messageId,
       buttonsAttached,
-    });
+      receipt: createPreviewMessageReceipt({ id: messageId }),
+    };
+    return buttonAttachmentError
+      ? { kind: "preview-finalized-partial", delivery, error: buttonAttachmentError }
+      : result("preview-finalized", delivery);
   };
 
   return async ({
@@ -474,6 +484,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
         onPlatformSendDispatch,
       );
       if (finalizedPreview) {
+        if (finalizedPreview.kind === "preview-finalized-partial") {
+          return finalizedPreview;
+        }
         const stripButtons =
           finalizedPreview.kind === "preview-finalized" &&
           finalizedPreview.delivery.buttonsAttached === true;
@@ -534,4 +547,3 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     return delivered ? result("sent") : result("skipped");
   };
 }
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

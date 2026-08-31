@@ -8,8 +8,11 @@ import type {
   PageState,
   PendingObservedDialog,
 } from "./pw-session-contracts.js";
-import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
-import { OBSERVED_DIALOG_TIMEOUT_MS, MAX_RECENT_DIALOGS } from "./pw-session-contracts.js";
+import {
+  BrowserObservedDialogBlockedError,
+  OBSERVED_DIALOG_TIMEOUT_MS,
+  MAX_RECENT_DIALOGS,
+} from "./pw-session-contracts.js";
 
 export function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
   const parsed = parseFiniteNumber(timeoutMs);
@@ -55,11 +58,11 @@ export function clearArmedDialogResponse(state: PageState): void {
   state.armedDialogResponse = undefined;
 }
 
-function abortActionsBlockedByDialog(state: PageState): void {
+function abortActionsBlockedByDialog(state: PageState, reason?: unknown): void {
   if (state.dialogAbortControllers.size === 0) {
     return;
   }
-  const err = new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state));
+  const err = reason ?? new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state));
   for (const controller of state.dialogAbortControllers) {
     if (!controller.signal.aborted) {
       controller.abort(err);
@@ -92,9 +95,6 @@ export async function settleObservedDialog(params: {
     }
   } catch (err) {
     if (!isNoDialogShowingError(err)) {
-      if (params.closedBy === "agent") {
-        state.pendingDialogs.push(pending);
-      }
       throw err;
     }
     closedBy = "remote";
@@ -136,7 +136,7 @@ export function observeDialog(pageState: PageState, dialog: Dialog): void {
       accept: armed.accept,
       ...(armed.promptText !== undefined ? { promptText: armed.promptText } : {}),
       closedBy: "armed",
-    }).catch(() => {});
+    }).catch((err: unknown) => abortActionsBlockedByDialog(pageState, err));
     return;
   }
   if (armed) {

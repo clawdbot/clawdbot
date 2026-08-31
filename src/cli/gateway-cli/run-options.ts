@@ -22,6 +22,7 @@ export type GatewayRunOpts = {
   rawStream?: boolean;
   rawStreamPath?: unknown;
   dev?: boolean;
+  ambientChannels?: boolean;
   devAmbientChannels?: boolean;
   reset?: boolean;
 };
@@ -42,6 +43,7 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "tailscaleResetOnExit",
   "allowUnconfigured",
   "dev",
+  "ambientChannels",
   "devAmbientChannels",
   "reset",
   "force",

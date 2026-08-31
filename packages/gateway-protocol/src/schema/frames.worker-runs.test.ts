@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateConnectParams } from "../validator-registry.js";
 
-describe("node worker-runs connect manifest", () => {
+describe("legacy node worker-runs connect manifest", () => {
   const connect = {
     minProtocol: 1,
     maxProtocol: 1,
@@ -19,6 +19,28 @@ describe("node worker-runs connect manifest", () => {
         },
       }),
     ).toBe(true);
+    expect(
+      validateConnectParams({
+        ...connect,
+        workerRuns: {
+          bundleHash: "a".repeat(64),
+          openclawVersion: "2026.8.12",
+          protocolFeatures: ["worker-heartbeat-v1"],
+          bundlePrewarm: 2,
+        },
+      }),
+    ).toBe(true);
     expect(validateConnectParams({ ...connect, workerRuns: { enabled: true } })).toBe(false);
+    expect(
+      validateConnectParams({
+        ...connect,
+        workerRuns: {
+          bundleHash: "a".repeat(64),
+          openclawVersion: "2026.8.12",
+          protocolFeatures: ["worker-heartbeat-v1"],
+          bundlePrewarm: 0,
+        },
+      }),
+    ).toBe(false);
   });
 });

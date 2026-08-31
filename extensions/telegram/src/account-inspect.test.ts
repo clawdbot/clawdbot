@@ -53,33 +53,39 @@ describe("inspectTelegramAccount SecretRef resolution", () => {
     });
   });
 
-  it("does not read env values for non-env providers", () => {
-    withEnv({ TG_EXEC_PROVIDER: "123:token" }, () => {
-      const cfg: OpenClawConfig = {
-        secrets: {
-          defaults: {
-            env: "exec-provider",
-          },
-          providers: {
-            "exec-provider": {
-              source: "exec",
-              command: "/usr/bin/env",
+  it.each([
+    { provider: "default", value: "123:token", expected: "available" },
+    { provider: "exec-provider", value: "123:token", expected: "available" },
+    { provider: "exec-provider", value: undefined, expected: "configured_unavailable" },
+  ])(
+    "inspects env-template default $provider shadowing exec ($expected)",
+    ({ provider, value, expected }) => {
+      withEnv({ TG_EXEC_PROVIDER: value, TELEGRAM_BOT_TOKEN: "123:fallback" }, () => {
+        const cfg: OpenClawConfig = {
+          secrets: {
+            defaults: provider === "default" ? undefined : { env: provider },
+            providers: {
+              [provider]: {
+                source: "exec",
+                command: "/unused",
+              },
             },
           },
-        },
-        channels: {
-          telegram: {
-            botToken: "${TG_EXEC_PROVIDER}",
+          channels: {
+            telegram: {
+              botToken: "${TG_EXEC_PROVIDER}",
+            },
           },
-        },
-      };
+        };
 
-      const account = inspectTelegramAccount({ cfg, accountId: "default" });
-      expect(account.tokenSource).toBe("env");
-      expect(account.tokenStatus).toBe("configured_unavailable");
-      expect(account.token).toBe("");
-    });
-  });
+        const account = inspectTelegramAccount({ cfg, accountId: "default" });
+        expect(account.tokenSource).toBe("env");
+        expect(account.tokenStatus).toBe(expected);
+        expect(account.configured).toBe(true);
+        expect(account.token).toBe(expected === "available" ? "123:token" : "");
+      });
+    },
+  );
 
   it("matches runtime token lookup for account keys that need full normalization", () => {
     const cfg: OpenClawConfig = {

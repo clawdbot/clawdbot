@@ -13,6 +13,7 @@ import {
   defaultJavaScriptRegexConstructor,
 } from "@shikijs/engine-javascript";
 import { createOnigurumaEngine, loadWasm } from "@shikijs/engine-oniguruma";
+import { bundledThemes } from "shiki/themes";
 import {
   bundledLanguagesBase,
   bundledLanguagesInfo,
@@ -20,7 +21,6 @@ import {
 export * from "@shikijs/core";
 export { bundledLanguagesBase, bundledLanguagesInfo };
 export { bundledThemes, bundledThemesInfo } from "shiki/themes";
-import { bundledThemes } from "shiki/themes";
 
 export const bundledLanguagesAlias = Object.fromEntries(
   bundledLanguagesInfo.flatMap((language) =>

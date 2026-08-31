@@ -17,11 +17,6 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
   resolvePluginMetadataSnapshot:
     vi.fn<typeof import("../plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot>(),
-  isPluginMetadataSnapshotCompatible:
-    vi.fn<typeof import("../plugin-metadata-snapshot.js").isPluginMetadataSnapshotCompatible>(),
-  rebasePluginMetadataSnapshotManifestRegistry: vi.fn<
-    typeof import("../plugin-metadata-snapshot.js").rebasePluginMetadataSnapshotManifestRegistry
-  >((snapshot) => snapshot),
   listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
   resolveAgentWorkspaceDir: vi.fn<
     typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
@@ -29,6 +24,12 @@ const mocks = vi.hoisted(() => ({
   tryResolveConfiguredAgentWorkspaceDir: vi.fn<
     typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
   >(() => "/resolved-workspace"),
+  resolvePluginControlPlaneWorkspace: vi.fn<
+    typeof import("../control-plane-workspace.js").resolvePluginControlPlaneWorkspace
+  >((params) => ({
+    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
+    workspaceScope: "selected",
+  })),
   resolveDefaultAgentId: vi.fn<typeof import("../../agents/agent-scope.js").resolveDefaultAgentId>(
     () => "default",
   ),
@@ -63,16 +64,17 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
     mocks.applyPluginAutoEnable(...args),
 }));
 
-vi.mock("../plugin-metadata-snapshot.js", () => ({
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshot: (
+    ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
+  ) => mocks.resolvePluginMetadataSnapshot(...args),
+}));
+
+vi.mock("../plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugin-metadata-snapshot.js")>()),
   resolvePluginMetadataSnapshot: (
     ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
   ) => mocks.resolvePluginMetadataSnapshot(...args),
-  isPluginMetadataSnapshotCompatible: (
-    ...args: Parameters<typeof mocks.isPluginMetadataSnapshotCompatible>
-  ) => mocks.isPluginMetadataSnapshotCompatible(...args),
-  rebasePluginMetadataSnapshotManifestRegistry: (
-    ...args: Parameters<typeof mocks.rebasePluginMetadataSnapshotManifestRegistry>
-  ) => mocks.rebasePluginMetadataSnapshotManifestRegistry(...args),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -87,11 +89,17 @@ vi.mock("../../agents/agent-scope.js", () => ({
     mocks.resolveDefaultAgentId(...args),
 }));
 
+vi.mock("../control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: (
+    ...args: Parameters<typeof mocks.resolvePluginControlPlaneWorkspace>
+  ) => mocks.resolvePluginControlPlaneWorkspace(...args),
+}));
+
 import { ensurePluginRegistryLoaded } from "./runtime-registry-loader.js";
 
 function useMemoryProviderOwner(params: {
   adapterId: string;
-  contract: "embeddingProviders" | "memoryEmbeddingProviders";
+  contract: "embeddingProviders";
   pluginId: string;
 }): void {
   mocks.resolvePluginMetadataSnapshot.mockReturnValue({
@@ -101,6 +109,7 @@ function useMemoryProviderOwner(params: {
       plugins: [
         {
           pluginId: params.pluginId,
+          startup: { sidecar: false, memory: false, agentHarnesses: [] },
           contributions: {
             contracts: { [params.contract]: [params.adapterId] },
           },
@@ -123,10 +132,17 @@ describe("ensurePluginRegistryLoaded", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolvePluginMetadataSnapshot.mockReset().mockReturnValue({
-      index: { installRecords: {}, plugins: [{ pluginId: "openai" }] },
+      index: {
+        installRecords: {},
+        plugins: [
+          {
+            pluginId: "openai",
+            startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          },
+        ],
+      },
       manifestRegistry: { plugins: [], diagnostics: [] },
     } as never);
-    mocks.isPluginMetadataSnapshotCompatible.mockReturnValue(true);
     mocks.applyPluginAutoEnable.mockImplementation((params) => ({
       config: params.config ?? {},
       changes: [],
@@ -179,6 +195,121 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
+  it("loads only matching configured sandbox backend owners, never unrelated broken plugins", () => {
+    const config = {
+      agents: {
+        defaults: { sandbox: { backend: "sandbox-owner" } },
+        entries: { research: { sandbox: { backend: "research-owner" } } },
+      },
+      plugins: {
+        entries: {
+          "sandbox-owner": { enabled: true },
+          "research-owner": { enabled: true },
+          "broken-plugin": { enabled: true },
+        },
+      },
+    };
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      index: {
+        installRecords: {},
+        plugins: ["sandbox-owner", "research-owner", "broken-plugin"].map((pluginId) => ({
+          pluginId,
+          startup: { sidecar: false, memory: false, agentHarnesses: [] },
+        })),
+      },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as never);
+    mocks.loadOpenClawPlugins.mockImplementationOnce((options) => {
+      if (options?.onlyPluginIds?.includes("broken-plugin")) {
+        throw new Error("unrelated plugin failed to initialize");
+      }
+      return undefined as never;
+    });
+
+    expect(() => ensurePluginRegistryLoaded({ scope: "sandbox-backends", config })).not.toThrow();
+    expect(requireLoadOptions().onlyPluginIds).toEqual(["research-owner", "sandbox-owner"]);
+    expect(mocks.resolveEffectivePluginIds).not.toHaveBeenCalled();
+  });
+
+  it("loads installed persisted sandbox owners after configuration switches to Docker", () => {
+    const config = {
+      agents: { defaults: { sandbox: { backend: "docker" } } },
+      plugins: {
+        entries: {
+          openshell: { enabled: true },
+          "broken-plugin": { enabled: true },
+        },
+      },
+    };
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      index: {
+        installRecords: {},
+        plugins: ["openshell", "broken-plugin"].map((pluginId) => ({
+          pluginId,
+          startup: { sidecar: false, memory: false, agentHarnesses: [] },
+        })),
+      },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as never);
+
+    ensurePluginRegistryLoaded({
+      scope: "sandbox-backends",
+      config,
+      persistedSandboxBackendIds: ["openshell", "docker", "missing-owner"],
+    });
+
+    expect(requireLoadOptions().onlyPluginIds).toEqual(["openshell"]);
+  });
+
+  it.each([undefined, "docker", "podman", "ssh"])(
+    "does not activate plugins for the built-in sandbox backend %s",
+    (backend) => {
+      mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+        index: {
+          installRecords: {},
+          plugins: ["docker", "podman", "ssh"].map((pluginId) => ({
+            pluginId,
+            startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          })),
+        },
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      } as never);
+
+      ensurePluginRegistryLoaded({
+        scope: "sandbox-backends",
+        config: { agents: { defaults: { sandbox: { backend } } } },
+      });
+
+      expect(requireLoadOptions().onlyPluginIds).toEqual([]);
+      expect(mocks.resolveEffectivePluginIds).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not guess a differently named sandbox backend owner", () => {
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      index: {
+        installRecords: {},
+        plugins: [
+          {
+            pluginId: "actual-owner",
+            startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          },
+        ],
+      },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as never);
+
+    ensurePluginRegistryLoaded({
+      scope: "sandbox-backends",
+      config: {
+        agents: { defaults: { sandbox: { backend: "different-backend" } } },
+        plugins: { entries: { "actual-owner": { enabled: true } } },
+      },
+    });
+
+    expect(requireLoadOptions().onlyPluginIds).toEqual([]);
+  });
+
   it("loads only the selected memory backend and embedding provider owners", () => {
     const config = {
       memory: { search: { provider: "openai" } },
@@ -206,7 +337,7 @@ describe("ensurePluginRegistryLoaded", () => {
   it.each([
     {
       adapterId: "gemini",
-      contract: "memoryEmbeddingProviders" as const,
+      contract: "embeddingProviders" as const,
       pluginId: "google",
     },
     {
@@ -243,7 +374,7 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["gemini"]));
     useMemoryProviderOwner({
       adapterId: "gemini",
-      contract: "memoryEmbeddingProviders",
+      contract: "embeddingProviders",
       pluginId: "google",
     });
 

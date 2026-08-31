@@ -1,7 +1,10 @@
 // Tests dispatch-from-config runtime selection, hooks, and provider handoff.
 import { vi, type Mock } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
+import type {
+  ChannelMessagingAdapter,
+  ChannelThreadingAdapter,
+} from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   AcpRuntime,
@@ -31,6 +34,7 @@ import {
   mocks,
   noAbortResult,
   parseGenericThreadSessionInfo,
+  placementContextMocks,
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -71,11 +75,9 @@ export const automaticDirectReplyConfig = {
 
 export let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 
-export let dispatchFromConfigTesting: typeof import("./dispatch-from-config.test-support.js").testing;
-
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
-export let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tryDispatchAcpReplyHook;
+export let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispatchAcpReplyHook;
 
 export let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 
@@ -288,7 +290,11 @@ export function firstRouteReplyCall(): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
-export function installThreadingTestPlugin(params: { defaultAccountId?: string; id: string }) {
+export function installThreadingTestPlugin(params: {
+  defaultAccountId?: string;
+  id: string;
+  resolveReplyToMode?: NonNullable<ChannelThreadingAdapter["resolveReplyToMode"]>;
+}) {
   const plugin = createChannelTestPluginBase({ id: params.id });
   const defaultAccountId = params.defaultAccountId;
   const registry = createTestRegistry([
@@ -301,7 +307,7 @@ export function installThreadingTestPlugin(params: { defaultAccountId?: string; 
           ? { ...plugin.config, defaultAccountId: () => defaultAccountId }
           : plugin.config,
         threading: {
-          resolveReplyToMode: () => "all",
+          resolveReplyToMode: params.resolveReplyToMode ?? (() => "all"),
         },
       },
     },
@@ -369,11 +375,11 @@ export function messageAuditEvents(): Array<Record<string, unknown>> {
 
 export const globalBeforeAll0 = async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-  ({ testing: dispatchFromConfigTesting } = await import("./dispatch-from-config.test-support.js"));
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-  ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
+  // The broad facade imports the real manager outside this fixture's mocked dispatch boundary.
+  ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acpx.js"));
   ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));
   ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
   ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =
@@ -622,6 +628,10 @@ export const describe2BeforeEach0 = () => {
   mocks.routeReply.mockReset();
   mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
   sessionStoreMocks.currentEntry = undefined;
+  placementContextMocks.getMany.mockReset().mockReturnValue(new Map());
+  placementContextMocks.resolveSessionWorkerPlacementContext
+    .mockReset()
+    .mockReturnValue(placementContextMocks.context);
   sessionBindingMocks.resolveByConversation.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();

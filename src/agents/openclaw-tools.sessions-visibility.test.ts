@@ -50,7 +50,7 @@ describe("sessions tools visibility", () => {
     callGatewayMock.mockClear();
   });
 
-  it("defaults to tree visibility (self + spawned) for sessions_history", async () => {
+  it("defaults to same-agent visibility for sessions_history", async () => {
     mockConfig = {
       session: { mainKey: "main", scope: "per-sender" },
       tools: { agentToAgent: { enabled: false } },
@@ -68,10 +68,12 @@ describe("sessions tools visibility", () => {
 
     const tool = getSessionsHistoryTool();
 
-    const denied = await tool.execute("call1", {
+    const sibling = await tool.execute("call1", {
       sessionKey: "agent:main:quietchat:direct:someone-else",
     });
-    expect((denied.details as { status?: string }).status).toBe("forbidden");
+    expect((sibling.details as { sessionKey?: string }).sessionKey).toBe(
+      "agent:main:quietchat:direct:someone-else",
+    );
 
     const allowed = await tool.execute("call2", { sessionKey: "subagent:child-1" });
     expect((allowed.details as { sessionKey?: string }).sessionKey).toBe("subagent:child-1");

@@ -7,16 +7,18 @@ import {
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "../config/sessions/session-transcript-read-fence.js";
-import type { TranscriptTurnAdmission } from "../config/sessions/transcript-entry-anchor.js";
-import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import type {
+  TranscriptTurnAdmission,
+  TranscriptEntryAnchor,
+} from "../config/sessions/transcript-entry-anchor.js";
 import type { AgentMessage } from "./agent-core.js";
 import {
   withProjectedSessionTranscriptWriteLock,
   type InternalSessionTranscriptWriteLockContext,
   type InternalSessionTranscriptWriteLockParams,
 } from "./session-transcript-lock-runtime.js";
-import { publishSessionTranscriptUpdateByIdentity } from "./session-transcript-runtime.js";
 import {
+  publishSessionTranscriptUpdateByIdentity,
   readSessionTranscriptEvents,
   resolveSessionTranscriptIdentity,
   type SessionTranscriptTargetParams,

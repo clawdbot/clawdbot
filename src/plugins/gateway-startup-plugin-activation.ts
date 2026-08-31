@@ -52,11 +52,11 @@ type StartupActivationPolicy =
   | "speech"
   | "root"
   | "harness"
-  | "hook";
+  | "hook"
+  | "tool";
 type StartupContractKey =
   | keyof ConfiguredGenerationProviderIds
   | keyof ConfiguredVoiceProviderIds
-  | "memoryEmbeddingProviders"
   | "embeddingProviders";
 
 export function addRequiredAgentHarnessPluginIds(
@@ -247,11 +247,6 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
     matches: ({ manifest, configuredMemoryEmbeddingProviderIds }) =>
       manifestOwnsConfiguredContract(
         manifest,
-        "memoryEmbeddingProviders",
-        configuredMemoryEmbeddingProviderIds,
-      ) ||
-      manifestOwnsConfiguredContract(
-        manifest,
         "embeddingProviders",
         configuredMemoryEmbeddingProviderIds,
       ),
@@ -261,6 +256,12 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
     matches: ({ activationSource, manifest, plugin }) =>
       manifest?.activation?.onCapabilities?.includes("hook") === true ||
       hasExplicitHookPolicyConfig(activationSource.plugins.entries[plugin.pluginId]),
+  },
+  {
+    policy: "tool",
+    // Tool factories execute synchronously while an agent surface is built. Load enabled owners
+    // at the Gateway lifecycle boundary so a first concurrent turn cannot block control traffic.
+    matches: ({ manifest }) => (manifest?.contracts?.tools?.length ?? 0) > 0,
   },
   {
     policy: "provider",

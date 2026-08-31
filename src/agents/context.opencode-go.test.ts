@@ -8,7 +8,10 @@ describe("OpenCode Go context metadata", () => {
   let configuredModels: OpenClawConfig["models"];
 
   beforeAll(async () => {
-    const cfg: OpenClawConfig = { plugins: { allow: ["opencode-go"] } };
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "opencode-go/deepseek-v4-pro" } } },
+      plugins: { allow: ["opencode-go"] },
+    };
 
     await refreshContextWindowCache(cfg);
     contextWindowTokens = resolveMemoryFlushContextWindowTokens({

@@ -15,10 +15,8 @@ import {
   type SkillProposalRecord,
   type SkillProposalRollback,
 } from "../skills/workshop/types.js";
-import {
-  OPENCLAW_STATE_SCHEMA_VERSION,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -322,7 +320,16 @@ describe("doctor Skill Workshop SQLite migration", () => {
     );
 
     await expect(listSkillProposals()).resolves.toMatchObject({ proposals: [] });
-    const result = await migrateLegacySkillWorkshopProposals({ config: {} });
+    const result = await migrateLegacySkillWorkshopProposals({
+      config: {
+        agents: {
+          entries: {
+            main: { workspace: oldWorkspace },
+            other: { workspace: currentWorkspace },
+          },
+        },
+      },
+    });
     expect(result).toMatchObject({ detected: 1, migrated: 1, warnings: [] });
 
     const listed = await listSkillProposals({ agentId: "main", workspaceDir: currentWorkspace });

@@ -7,11 +7,12 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
-import { execSchema } from "./bash-tools.schemas.js";
+import { execCompletionSchema, execSchema } from "./bash-tools.schemas.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type BashToolsModule = typeof import("./bash-tools.js");
+type LoadedExecTool = ReturnType<BashToolsModule["createExecTool"]>;
 
 const bashToolsModuleLoader = createLazyImportLoader<BashToolsModule>(
   () => import("./bash-tools.js"),
@@ -26,14 +27,14 @@ export function createLazyExecTool(
   defaults?: ExecToolDefaults,
   presentation?: LazyExecToolPresentation,
 ): AnyAgentTool {
-  let loadedTool: AnyAgentTool | undefined;
-  let loadingTool: Promise<AnyAgentTool> | undefined;
+  let loadedTool: LoadedExecTool | undefined;
+  let loadingTool: Promise<LoadedExecTool> | undefined;
   const loadTool = () => {
     if (loadedTool) {
       return Promise.resolve(loadedTool);
     }
     loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
-      loadedTool = createExecTool(defaults) as unknown as AnyAgentTool;
+      loadedTool = createExecTool(defaults);
       return loadedTool;
     });
     return loadingTool;
@@ -49,16 +50,27 @@ export function createLazyExecTool(
         describeExecTool({
           agentId: defaults?.agentId,
           hasCronTool: defaults?.hasCronTool === true,
+          hasProcessTool: defaults?.processToolAvailabilityRef?.value,
         })
       );
     },
-    parameters: presentation?.parameters ?? execSchema,
+    get parameters() {
+      return (
+        presentation?.parameters ??
+        (defaults?.processToolAvailabilityRef?.value === false ? execCompletionSchema : execSchema)
+      );
+    },
     prepareBeforeToolCallParams: async (...args) =>
       (await loadTool()).prepareBeforeToolCallParams?.(...args) ?? args[0],
     finalizeBeforeToolCallParams: (params, preparedParams) =>
       loadedTool?.finalizeBeforeToolCallParams?.(params, preparedParams) ?? params,
-    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
-      (await loadTool()).execute(...args),
+    execute: async (toolCallId, params, signal, onUpdate) =>
+      (await loadTool()).execute(
+        toolCallId,
+        params as Parameters<LoadedExecTool["execute"]>[1],
+        signal,
+        onUpdate,
+      ),
   } as AnyAgentTool;
 }
 

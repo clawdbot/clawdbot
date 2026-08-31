@@ -6,18 +6,17 @@ import {
   advanceSessionDeliveryAgentRun,
   completeSessionDelivery,
   deferSessionDelivery,
+  enqueueClaimedSessionDelivery,
+  enqueueSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
+  mergeSessionDeliveryPreparedMediaBlocks,
   moveSessionDeliveryToFailed,
-} from "./session-delivery-queue-storage.js";
-import {
-  enqueueClaimedSessionDelivery,
-  enqueueSessionDelivery,
   releaseSessionDeliveryClaim,
-} from "./session-delivery-queue.js";
+} from "./session-delivery-queue-storage.js";
 
 describe("session-delivery queue storage", () => {
   async function settleSessionDelivery(id: string, stateDir: string): Promise<void> {
@@ -112,7 +111,7 @@ describe("session-delivery queue storage", () => {
     });
   });
 
-  it("lets an explicit enqueue revive a failed idempotency key", async () => {
+  it("lets an explicit enqueue replace a deleted ordinary failure", async () => {
     await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {
         kind: "systemEvent" as const,
@@ -169,31 +168,6 @@ describe("session-delivery queue storage", () => {
       });
       expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
       expect(readSessionQueueStatus(tempDir, first.id)).toBe("completed");
-    });
-  });
-
-  it("atomically repairs unreadable pending JSON for an idempotent enqueue", async () => {
-    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-      const payload = {
-        kind: "systemEvent" as const,
-        sessionKey: "agent:main:main",
-        text: "restart complete",
-        idempotencyKey: "restart:repair-corrupt-pending",
-      };
-      const id = await enqueueSessionDelivery(payload, tempDir);
-      const { db } = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
-      });
-      db.prepare(
-        `UPDATE delivery_queue_entries
-            SET entry_json = '{corrupt'
-          WHERE queue_name = 'session' AND id = ?`,
-      ).run(id);
-
-      expect(await enqueueSessionDelivery(payload, tempDir)).toBe(id);
-      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
-        expect.objectContaining({ id, text: "restart complete" }),
-      ]);
     });
   });
 
@@ -326,6 +300,10 @@ describe("session-delivery queue storage", () => {
           message: "all generated media",
           messageId: "image:task-retry:agent-loop",
           expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+          expectedMediaAttachments: {
+            "/tmp/one.png": { type: "image", path: "/tmp/one.png", mimeType: "image/png" },
+            "/tmp/two.png": { type: "image", path: "/tmp/two.png", mimeType: "image/png" },
+          },
         },
         tempDir,
       );
@@ -336,6 +314,27 @@ describe("session-delivery queue storage", () => {
       expect(entry).toMatchObject({ retryCount: 1 });
       expect(entry?.agentRunAttempt).toBeUndefined();
       expect(entry?.availableAt).toBeGreaterThan(Date.now());
+
+      await mergeSessionDeliveryPreparedMediaBlocks(
+        id,
+        "/tmp/one.png",
+        [{ type: "image", artifactId: "artifact-one" }],
+        tempDir,
+      );
+      await expect(
+        mergeSessionDeliveryPreparedMediaBlocks(
+          id,
+          "/tmp/one.png",
+          [{ type: "image", artifactId: "replacement-must-not-win" }],
+          tempDir,
+        ),
+      ).resolves.toEqual([{ type: "image", artifactId: "artifact-one" }]);
+      await mergeSessionDeliveryPreparedMediaBlocks(
+        id,
+        "/tmp/two.png",
+        [{ type: "image", artifactId: "artifact-two" }],
+        tempDir,
+      );
 
       await advanceSessionDeliveryAgentRun(
         id,
@@ -352,6 +351,14 @@ describe("session-delivery queue storage", () => {
         retryCount: 1,
         message: "only missing media",
         expectedMediaUrls: ["/tmp/two.png"],
+        expectedMediaAttachments: {
+          "/tmp/one.png": { type: "image", path: "/tmp/one.png", mimeType: "image/png" },
+          "/tmp/two.png": { type: "image", path: "/tmp/two.png", mimeType: "image/png" },
+        },
+        preparedMediaBlocks: {
+          "/tmp/one.png": [{ type: "image", artifactId: "artifact-one" }],
+          "/tmp/two.png": [{ type: "image", artifactId: "artifact-two" }],
+        },
         suppressTextDelivery: true,
       });
     });

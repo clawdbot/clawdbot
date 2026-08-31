@@ -1,8 +1,16 @@
 // Screen-recording payload helpers for node media commands.
 import * as path from "node:path";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
-import { writeBase64ToFile } from "./nodes-camera.js";
+import {
+  parseScreenSnapshotResult,
+  type ScreenSnapshotResult,
+} from "../plugins/computer-use-contract.js";
 import { asRecord, readStringValue, resolveTempPathParts } from "./nodes-media-utils.js";
+
+export {
+  writeBase64ToFile as writeScreenRecordToFile,
+  writeBase64ToFile as writeScreenSnapshotToFile,
+} from "./nodes-camera.js";
 
 /** Validated payload returned by `nodes screen record` RPC calls. */
 type ScreenRecordPayload = {
@@ -38,42 +46,10 @@ export function screenRecordTempPath(opts: { ext: string; tmpDir?: string; id?: 
   return path.join(tmpDir, `openclaw-screen-record-${id}${ext}`);
 }
 
-/** Decode and write a screen recording payload to disk. */
-export async function writeScreenRecordToFile(
-  filePath: string,
-  base64: string,
-  opts?: { maxBytes?: number },
-) {
-  return writeBase64ToFile(filePath, base64, opts);
-}
-
 /** Validated payload returned by `nodes screen snapshot` RPC calls. */
-type ScreenSnapshotPayload = {
-  format: string;
-  base64: string;
-  /** Node-issued token binding this image to one physical display geometry. */
-  displayFrameId?: string;
-  screenIndex?: number;
-  width?: number;
-  height?: number;
-};
-
 /** Validate and normalize an unknown screen-snapshot payload. */
-export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotPayload {
-  const obj = asRecord(value);
-  const format = readStringValue(obj.format);
-  const base64 = readStringValue(obj.base64);
-  if (!format || !base64) {
-    throw new Error("invalid screen.snapshot payload");
-  }
-  return {
-    format,
-    base64,
-    displayFrameId: readStringValue(obj.displayFrameId) || undefined,
-    screenIndex: typeof obj.screenIndex === "number" ? obj.screenIndex : undefined,
-    width: typeof obj.width === "number" ? obj.width : undefined,
-    height: typeof obj.height === "number" ? obj.height : undefined,
-  };
+export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotResult {
+  return parseScreenSnapshotResult(value);
 }
 
 /**
@@ -98,13 +74,4 @@ export function screenSnapshotTempPath(opts: { ext: string; tmpDir?: string; id?
   // is how a JPEG snapshot ends up named `.png`.
   const { tmpDir, id, ext } = resolveTempPathParts(opts);
   return path.join(tmpDir, `openclaw-screen-snapshot-${id}${ext}`);
-}
-
-/** Decode and write a screen snapshot payload to disk. */
-export async function writeScreenSnapshotToFile(
-  filePath: string,
-  base64: string,
-  opts?: { maxBytes?: number },
-) {
-  return writeBase64ToFile(filePath, base64, opts);
 }

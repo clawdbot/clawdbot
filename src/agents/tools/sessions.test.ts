@@ -18,13 +18,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { extractStoredAssistantText, sanitizeTextContent } from "./chat-history-text.js";
+import { extractStoredAssistantText } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
 const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opts));
 const inProcessCreationMock = vi.fn(
   async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
 );
+const recordParticipantMock = vi.fn();
 // Default false mirrors running outside a gateway process; the trusted-creation
 // regression test flips it on and restores it.
 let inProcessGatewayContextAvailable = false;
@@ -106,6 +107,9 @@ vi.mock("../../config/config.js", async () => {
 });
 vi.mock("./sessions-send-tool.a2a.js", () => ({
   runSessionsSendA2AFlow: vi.fn(),
+}));
+vi.mock("../../sessions/session-participant-recording.js", () => ({
+  recordSessionParticipantBestEffort: (...args: unknown[]) => recordParticipantMock(...args),
 }));
 
 let createSessionsListTool: typeof import("./sessions-list-tool.js").createSessionsListTool;
@@ -362,6 +366,13 @@ async function executeFireAndForgetA2AFrom(
   });
 
   expect(requireDetails(result).status).toBe("accepted");
+  expect(recordParticipantMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      identity: { type: "agent", id: "main" },
+      agentId: "other",
+      sessionKey: targetSessionKey,
+    }),
+  );
   const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
   if (!flowParams) {
     throw new Error("expected A2A flow");
@@ -369,13 +380,13 @@ async function executeFireAndForgetA2AFrom(
   return flowParams;
 }
 
-describe("sanitizeTextContent", () => {
+describe("extractStoredAssistantText sanitization", () => {
   it("strips minimax tool call XML and downgraded markers", () => {
     // Session recall should not replay provider/tool markup as assistant text.
     const input =
       'Hello <invoke name="tool">payload</invoke></minimax:tool_call> ' +
       "[Tool Call: foo (ID: 1)] world";
-    const result = sanitizeTextContent(input).trim();
+    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
     expect(result).toBe("Hello  world");
     expect(result).not.toContain("invoke");
     expect(result).not.toContain("Tool Call");
@@ -383,19 +394,20 @@ describe("sanitizeTextContent", () => {
 
   it("strips tool_result XML via the shared assistant-visible sanitizer", () => {
     const input = 'Prefix\n<tool_result>{"output":"hidden"}</tool_result>\nSuffix';
-    const result = sanitizeTextContent(input).trim();
+    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
     expect(result).toBe("Prefix\n\nSuffix");
     expect(result).not.toContain("tool_result");
   });
 
   it("strips thinking tags", () => {
     const input = "Before <think>secret</think> after";
-    const result = sanitizeTextContent(input).trim();
+    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
     expect(result).toBe("Before  after");
   });
 });
 
 beforeEach(() => {
+  recordParticipantMock.mockClear();
   facadeRuntimeMock.sessionKeyResolvers.clear();
   inProcessGatewayRequestMock.mockReset();
   inProcessGatewayRequestMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
@@ -931,7 +943,7 @@ describe("sessions_list gating", () => {
       mode: "tree",
       restricted: true,
       warning:
-        "Session visibility is restricted (effective tools.sessions.visibility=tree: current session + own spawn subtree; reads also cover any watched same-agent group sessions). Sessions outside that scope are omitted from results and count.",
+        "Session visibility is restricted (effective tools.sessions.visibility=tree: current session + own spawn subtree; the main session sees all sessions of its agent). Sessions outside that scope are omitted from results and count.",
     });
   });
 
@@ -1034,6 +1046,22 @@ describe("sessions_send gating", () => {
     );
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
+  it("rejects an unrepresentable agent id before resolving a main session", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-invalid-agent", {
+      agentId: "агент✨",
+      message: "hello",
+      timeoutSeconds: 5,
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "error",
+      error: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("conceals missing explicit keys denied by session visibility", async () => {
@@ -1431,59 +1459,81 @@ describe("sessions_send gating", () => {
     ]);
   });
 
-  it("keeps synchronous distinct-target sends unchanged", async () => {
-    const targetSessionKey = "agent:main:other";
-    const tool = createSessionsSendTool({
-      agentSessionKey: MAIN_AGENT_SESSION_KEY,
-      agentChannel: MAIN_AGENT_CHANNEL,
-      config: {
-        session: { scope: "per-sender", mainKey: "main" },
-        tools: {
-          agentToAgent: { enabled: false },
-          sessions: { visibility: "all" },
-        },
-      } as never,
-    });
-    let historyCalls = 0;
-    const staleAssistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "older reply from a previous run" }],
-      timestamp: 20,
-    };
+  it.each(["silent", "empty"] as const)(
+    "reports a terminal %s target without leaving an announcement pending",
+    async (disposition) => {
+      const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+      vi.mocked(runSessionsSendA2AFlow).mockClear();
+      const targetSessionKey = "agent:main:other";
+      const tool = createSessionsSendTool({
+        agentSessionKey: MAIN_AGENT_SESSION_KEY,
+        agentChannel: MAIN_AGENT_CHANNEL,
+        config: {
+          session: { scope: "per-sender", mainKey: "main" },
+          tools: {
+            agentToAgent: { enabled: false },
+            sessions: { visibility: "all" },
+          },
+        } as never,
+      });
+      let historyCalls = 0;
+      const staleAssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "older reply from a previous run" }],
+        timestamp: 20,
+      };
+      const freshPrivateFinal = {
+        role: "assistant",
+        content: [{ type: "text", text: "private final that must stay private" }],
+        timestamp: 21,
+      };
 
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [{ key: targetSessionKey, kind: "direct" }],
-        };
-      }
-      if (request.method === "agent") {
-        return { runId: "run-stale-send", acceptedAt: 123 };
-      }
-      if (request.method === "agent.wait") {
-        return { runId: "run-stale-send", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        historyCalls += 1;
-        return { messages: [staleAssistantMessage] };
-      }
-      return {};
-    });
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: Record<string, unknown> };
+        if (request.method === "sessions.list") {
+          return {
+            path: "/tmp/sessions.json",
+            sessions: [{ key: targetSessionKey, kind: "direct" }],
+          };
+        }
+        if (request.method === "agent") {
+          return { runId: "run-stale-send", acceptedAt: 123 };
+        }
+        if (request.method === "agent.wait") {
+          return {
+            runId: "run-stale-send",
+            status: "ok",
+            terminalReply: { disposition },
+          };
+        }
+        if (request.method === "chat.history") {
+          historyCalls += 1;
+          return {
+            messages:
+              historyCalls === 1
+                ? [staleAssistantMessage]
+                : [staleAssistantMessage, freshPrivateFinal],
+          };
+        }
+        return {};
+      });
 
-    const result = await tool.execute("call-stale-send", {
-      sessionKey: targetSessionKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
+      const result = await tool.execute("call-stale-send", {
+        sessionKey: targetSessionKey,
+        message: "ping",
+        timeoutSeconds: 1,
+      });
 
-    expect(historyCalls).toBe(2);
-    const details = requireDetails(result);
-    expect(details.status).toBe("ok");
-    expect(details.reply).toBeUndefined();
-    expect(details.sessionKey).toBe(targetSessionKey);
-  });
+      expect(historyCalls).toBe(1);
+      const details = requireDetails(result);
+      expect(details.status).toBe("no_reply");
+      expect(details.reply).toBeUndefined();
+      expect(details.delivery).toBeUndefined();
+      expect(details.message).toContain("pending announcement");
+      expect(details.sessionKey).toBe(targetSessionKey);
+      expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {
     const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
@@ -1906,7 +1956,7 @@ describe("sessions_send gating", () => {
       timeoutSeconds: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(requireDetails(result).status).toBe("ok");
+    expect(requireDetails(result).status).toBe("no_reply");
     expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 });

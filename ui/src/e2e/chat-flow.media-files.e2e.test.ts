@@ -1,7 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import {
+  buildLocalWebchatAudioMessage,
   captureUiProofEnabled,
   copiedViaExec,
   createChatFlowE2eSuite,
@@ -11,11 +13,12 @@ import {
   managedImageCacheProofDir,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("downloads an assistant document with the server-provided Unicode filename", async () => {
+  it("exposes an assistant document download with its Unicode filename and ticketed URL", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -24,19 +27,6 @@ suite.define(() => {
     const page = await context.newPage();
     const source = "/tmp/openclaw/测试 report.pdf";
     const mediaUrl = `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-download`;
-    const requestedUrls: URL[] = [];
-    // The document opens in a new tab, so intercept at the context boundary.
-    await context.route("**/__openclaw__/assistant-media?**", async (route) => {
-      const url = new URL(route.request().url());
-      requestedUrls.push(url);
-      await route.fulfill({
-        body: "%PDF-1.4\n",
-        contentType: "application/pdf",
-        headers: {
-          "Content-Disposition": `attachment; filename="__ report.pdf"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%20report.pdf`,
-        },
-      });
-    });
     await installMockGateway(page, {
       historyMessages: [
         {
@@ -60,14 +50,17 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const link = page.getByRole("link", { name: "测试 report.pdf", exact: true });
+      const card = page
+        .locator(".chat-assistant-attachment-card--compact")
+        .filter({ hasText: "测试 report.pdf" });
+      const link = card.locator(".chat-assistant-attachment-card__download");
       await link.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await link.getAttribute("href")).toBe(mediaUrl);
+      await card.hover();
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
+      await download.path();
 
       expect(download.suggestedFilename()).toBe("测试 report.pdf");
-      expect(requestedUrls).toHaveLength(1);
-      expect(requestedUrls[0]?.searchParams.get("source")).toBe(source);
-      expect(requestedUrls[0]?.searchParams.get("mediaTicket")).toBe("ticket-download");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -84,9 +77,25 @@ suite.define(() => {
       source: "/home/node/.openclaw/media/outbound/bootstrap-image.png",
       ticket: "ticket-bootstrap-image",
     },
+    {
+      kind: "image",
+      source: "FILE:///home/node/.openclaw/media/outbound/bootstrap-uppercase-image.png",
+      ticket: "ticket-bootstrap-uppercase-image",
+    },
+    {
+      kind: "image",
+      source: "file:/home/node/.openclaw/media/outbound/bootstrap-authorityless-image.png",
+      ticket: "ticket-bootstrap-authorityless-image",
+    },
+    {
+      kind: "audio",
+      source: `FILE:${path.join(managedImageCacheProofDir, "bootstrap-structured-audio.mp3")}`,
+      ticket: "ticket-bootstrap-structured-audio",
+      structured: true,
+    },
   ] as const)(
     "renders local assistant $kind through server metadata before preview roots load",
-    async ({ kind, source, ticket }) => {
+    async ({ kind, source, ticket, ...options }) => {
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -94,12 +103,13 @@ suite.define(() => {
       });
       const page = await context.newPage();
       const requestedMediaUrls: URL[] = [];
+      const expectedSource = "structured" in options ? new URL(source).pathname : source;
 
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
         requestedMediaUrls.push(url);
-        expect(url.searchParams.get("source")).toBe(source);
+        expect(url.searchParams.get("source")).toBe(expectedSource);
         if (url.searchParams.get("meta") === "1") {
           expect(request.headers().authorization).toBe("Bearer e2e-device-token");
           await route.fulfill({
@@ -119,14 +129,11 @@ suite.define(() => {
           kind === "image"
             ? {
                 contentType: "image/png",
-                body: Buffer.from(
-                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
-                  "base64",
-                ),
+                body: await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png")),
               }
             : {
                 contentType: "audio/mpeg",
-                body: Buffer.from("ID3\u0003\u0000\u0000\u0000\u0000\u0000\u0000"),
+                body: createPlaybackMediaFixture("mp3"),
               },
         );
       });
@@ -143,7 +150,10 @@ suite.define(() => {
             : {
                 id: "assistant-bootstrap-local-audio",
                 role: "assistant",
-                content: [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
+                content:
+                  "structured" in options
+                    ? (await buildLocalWebchatAudioMessage(source)).content
+                    : [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
                 timestamp: Date.now(),
               },
         ],
@@ -154,14 +164,30 @@ suite.define(() => {
         const media =
           kind === "image"
             ? page.getByAltText("Local bootstrap image")
-            : page.locator(".chat-assistant-attachment-card audio");
+            : page.locator("openclaw-chat-audio-player");
         await media.waitFor({
-          state: kind === "image" ? "visible" : "attached",
+          state: "visible",
           timeout: 10_000,
         });
-        await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
+        await expect
+          .poll(() => requestedMediaUrls.length, { timeout: 10_000 })
+          .toBeGreaterThanOrEqual(2);
         expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
-        expect(requestedMediaUrls[1]?.searchParams.get("mediaTicket")).toBe(ticket);
+        expect(
+          requestedMediaUrls.slice(1).some((url) => url.searchParams.get("mediaTicket") === ticket),
+        ).toBe(true);
+        if (kind === "audio") {
+          expect(
+            await media.locator(".chat-assistant-attachment-card__download").getAttribute("href"),
+          ).toContain(`mediaTicket=${ticket}`);
+          await expect
+            .poll(() =>
+              media
+                .locator("audio")
+                .evaluate((element) => (element as HTMLMediaElement).readyState),
+            )
+            .toBeGreaterThanOrEqual(1);
+        }
         expect(await page.getByText("Outside allowed folders").count()).toBe(0);
 
         if (kind === "image") {
@@ -171,7 +197,7 @@ suite.define(() => {
                 element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
               ),
             )
-            .toBe(1);
+            .toBe(180);
         }
 
         const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -179,7 +205,7 @@ suite.define(() => {
           await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             fullPage: true,
-            path: path.join(artifactDir, `bootstrap-local-${kind}.png`),
+            path: path.join(artifactDir, `bootstrap-local-${kind}-${ticket}.png`),
           });
         }
         if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
@@ -253,12 +279,12 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page
-          .getByText(reason, { exact: true })
-          .waitFor({ state: "visible", timeout: 10_000 });
+        const status = page.locator(".chat-assistant-attachment-card__status-meta");
+        await status.waitFor({ state: "visible", timeout: 10_000 });
+        await expect.poll(() => status.textContent()).toContain(reason);
         expect(requestedMediaUrls).toHaveLength(1);
         expect(await page.locator(".chat-assistant-attachment-card audio").count()).toBe(0);
-        expect(await page.locator(".chat-assistant-attachment-card__link").count()).toBe(0);
+        expect(await page.locator(".chat-assistant-attachment-card__download").count()).toBe(0);
 
         const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
         if (artifactDir) {
@@ -394,6 +420,167 @@ suite.define(() => {
         sessionKey: "agent:main:main",
         artifactId,
       });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("moves a managed document batch from skeletons directly to final cards", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const managedAttachmentSource = (artifactId: string) =>
+      `/api/chat/media/outgoing/agent%3Amain%3Amain/${artifactId.slice("artifact_managed_media_".length)}/full`;
+    const attachments = [
+      {
+        artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+        label: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 8_231,
+      },
+      {
+        artifactId: "artifact_managed_media_22222222-2222-4222-8222-222222222222",
+        label: "table.csv",
+        mimeType: "text/csv",
+        sizeBytes: 2_774,
+      },
+      {
+        artifactId: "artifact_managed_media_33333333-3333-4333-8333-333333333333",
+        label: "notes.txt",
+        mimeType: "text/plain",
+        sizeBytes: 981,
+      },
+      {
+        artifactId: "artifact_managed_media_44444444-4444-4444-8444-444444444444",
+        label: "bundle.zip",
+        mimeType: "application/zip",
+        sizeBytes: 42_831,
+      },
+    ] as const;
+    const methodCases = attachments.map((attachment) => {
+      const id = attachment.artifactId.slice("artifact_managed_media_".length);
+      return {
+        match: { artifactId: attachment.artifactId, sessionKey: "agent:main:main" },
+        response: {
+          artifact: {
+            id: attachment.artifactId,
+            type: "attachment",
+            title: attachment.label,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            download: { mode: "url" },
+          },
+          url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${id}/full?mediaTicket=ticket-${id}`,
+          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        },
+      };
+    });
+    const gateway = await installMockGateway(page, {
+      heldMethods: ["artifacts.download"],
+      historyMessages: [
+        {
+          role: "assistant",
+          content: attachments.map((attachment) => ({
+            type: "attachment",
+            attachment: {
+              artifactId: attachment.artifactId,
+              url: managedAttachmentSource(attachment.artifactId),
+              kind: "document",
+              label: attachment.label,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            },
+          })),
+          timestamp: Date.now(),
+        },
+      ],
+      methodResponses: {
+        "artifacts.download": { cases: methodCases },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const checkingCards = page.locator(".chat-assistant-attachment-card--checking");
+      await checkingCards.first().waitFor({ state: "visible", timeout: 10_000 });
+      expect(await checkingCards.count()).toBe(4);
+      const skeletons = checkingCards.locator(
+        ".chat-assistant-attachment-card__status-meta.skeleton",
+      );
+      expect(await skeletons.count()).toBe(4);
+      expect(await skeletons.first().getAttribute("aria-hidden")).toBe("true");
+      expect(
+        await skeletons
+          .first()
+          .evaluate((element) => getComputedStyle(element, "::after").animationName),
+      ).toBe("shimmer");
+      const metadataSize = await skeletons.first().evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { height: rect.height, width: rect.width };
+      });
+      expect(metadataSize.height).toBe(14);
+      expect(metadataSize.width).toBeGreaterThanOrEqual(112);
+      expect(metadataSize.width).toBeLessThanOrEqual(144);
+      const actionSkeletons = checkingCards.locator(
+        ".chat-assistant-attachment-card__action-skeleton.skeleton",
+      );
+      expect(await actionSkeletons.count()).toBe(4);
+      const actionSkeletonSize = await actionSkeletons.first().evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { height: rect.height, width: rect.width };
+      });
+      expect(actionSkeletonSize.height).toBeCloseTo(30, 3);
+      expect(actionSkeletonSize.width).toBeCloseTo(64, 3);
+      expect(
+        await actionSkeletons
+          .first()
+          .evaluate((element) => getComputedStyle(element, "::after").animationName),
+      ).toBe("shimmer");
+      const pendingActionWidths = await checkingCards
+        .locator(".chat-assistant-attachment-card__actions--loading")
+        .evaluateAll((elements) =>
+          elements.map((element) => element.getBoundingClientRect().width),
+        );
+      expect(await page.getByText("Checking...", { exact: true }).count()).toBe(0);
+      expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
+      if (proofDir) {
+        await mkdir(proofDir, { recursive: true });
+        await page.screenshot({ path: path.join(proofDir, "media-batch-skeletons.png") });
+      }
+
+      await gateway.resolveDeferred("artifacts.download");
+      await expect
+        .poll(() => page.locator(".chat-assistant-attachment-card--compact").count())
+        .toBe(4);
+      expect(await checkingCards.count()).toBe(0);
+      expect(await page.locator(".chat-assistant-attachment-card .skeleton").count()).toBe(0);
+      const finalActionWidths = await page
+        .locator(
+          ".chat-assistant-attachment-card--compact .chat-assistant-attachment-card__actions",
+        )
+        .evaluateAll((elements) =>
+          elements.map((element) => element.getBoundingClientRect().width),
+        );
+      expect(finalActionWidths).toHaveLength(pendingActionWidths.length);
+      for (const [index, width] of finalActionWidths.entries()) {
+        expect(Math.abs(width - (pendingActionWidths[index] ?? 0))).toBeLessThanOrEqual(0.5);
+      }
+      for (const attachment of attachments) {
+        const card = page
+          .locator(".chat-assistant-attachment-card--compact")
+          .filter({ hasText: attachment.label });
+        expect(await card.count()).toBe(1);
+        expect(await card.locator(".chat-assistant-attachment-card__expand").count()).toBe(1);
+        expect(await card.locator(".chat-assistant-attachment-card__download").count()).toBe(1);
+      }
+      expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "media-batch-final.png") });
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -836,7 +1023,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".chat-workspace-toggle").click();
+      await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
@@ -846,197 +1033,6 @@ suite.define(() => {
       expect(await copiedViaExec(page)).toContain("/workspace/AGENTS.md");
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("starts the workspace files panel collapsed and toggles it open", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "artifacts.list": {
-          artifacts: [
-            {
-              download: { mode: "bytes" },
-              id: "artifact-1",
-              mimeType: "image/png",
-              sizeBytes: 128,
-              title: "preview.png",
-              type: "image",
-            },
-          ],
-        },
-        "sessions.files.list": {
-          browser: {
-            entries: [
-              {
-                kind: "directory",
-                name: "src",
-                path: "src",
-                sessionKind: "modified",
-              },
-              {
-                kind: "file",
-                name: "package.json",
-                path: "package.json",
-                size: 4096,
-              },
-            ],
-            path: "",
-          },
-          files: [
-            {
-              kind: "modified",
-              missing: false,
-              name: "AGENTS.md",
-              path: "/workspace/AGENTS.md",
-              size: 2048,
-            },
-          ],
-          root: "/workspace",
-          sessionKey: "main",
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      // Collapsed rails render nothing; the title-bar toggle carries the
-      // changed-file badge.
-      const opener = page.locator(".chat-workspace-toggle");
-      await opener.waitFor({ timeout: 10_000 });
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
-      expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
-
-      await opener.click();
-      await page.locator(".chat-workspace-rail__collapse-toggle").waitFor({ timeout: 10_000 });
-      await expect.poll(() => opener.getAttribute("aria-expanded")).toBe("true");
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
-        timeout: 10_000,
-      });
-      await page
-        .locator(".chat-workspace-rail__file-name", { hasText: "preview.png" })
-        .waitFor({ timeout: 10_000 });
-      await page.getByText("Project files").waitFor({ timeout: 10_000 });
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "package.json" }).waitFor({
-        timeout: 10_000,
-      });
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
-      expect(await gateway.getRequests("artifacts.list")).toHaveLength(1);
-      // The rail docks flush to the window edge (no content gutter).
-      expect(
-        await page.locator(".chat-workspace-rail").evaluate((element) => {
-          return window.innerWidth - element.getBoundingClientRect().right;
-        }),
-      ).toBe(0);
-
-      await page.locator(".chat-workspace-rail__collapse-toggle").click();
-      await opener.waitFor({ timeout: 10_000 });
-      expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
-
-      await opener.click();
-      await page.locator(".chat-workspace-rail__collapse-toggle").waitFor({ timeout: 10_000 });
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
-        timeout: 10_000,
-      });
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
-
-      await page.setViewportSize({ height: 900, width: 760 });
-      const workbench = page.locator(".chat-workbench");
-      await expect
-        .poll(() => workbench.getAttribute("class"))
-        .toContain("chat-workbench--dock-bottom");
-      const workspaceRail = page.locator(".chat-workspace-rail");
-      await expect
-        .poll(async () => {
-          const box = await workspaceRail.boundingBox();
-          return Boolean(box && box.width > 0 && box.height > 0);
-        })
-        .toBe(true);
-      expect(await page.locator(".chat-workspace-rail__dock").count()).toBe(0);
-      expect(await page.locator(".chat-workspace-rail__grip").count()).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("keeps long workspace file sections scrollable inside the rail", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 720, width: 1280 },
-    });
-    const page = await context.newPage();
-    const browserEntries = Array.from({ length: 60 }, (_, index) => ({
-      kind: "file" as const,
-      name: `file-${String(index + 1).padStart(2, "0")}.ts`,
-      path: `src/file-${String(index + 1).padStart(2, "0")}.ts`,
-      size: 2048 + index,
-    }));
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.files.list": {
-          browser: {
-            entries: browserEntries,
-            path: "",
-          },
-          files: [],
-          root: "/workspace",
-          sessionKey: "main",
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".chat-workspace-toggle").click();
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
-        timeout: 10_000,
-      });
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
-
-      const browserSection = page.locator(".chat-workspace-rail__section", {
-        hasText: "Project files",
-      });
-      await expect
-        .poll(
-          () =>
-            browserSection.evaluate((section) => {
-              const element = section as HTMLElement;
-              const scroll = element.closest(".chat-workspace-rail__scroll") as HTMLElement | null;
-              if (!scroll) {
-                throw new Error("Expected workspace rail scroll container");
-              }
-              const sectionRect = element.getBoundingClientRect();
-              const scrollRect = scroll.getBoundingClientRect();
-              const style = getComputedStyle(element);
-              return {
-                bottomWithinRail: Math.ceil(sectionRect.bottom) <= Math.ceil(scrollRect.bottom),
-                clientHeight: element.clientHeight,
-                overflowY: style.overflowY,
-                scrollHeight: element.scrollHeight,
-              };
-            }),
-          { timeout: 10_000 },
-        )
-        .toMatchObject({
-          bottomWithinRail: true,
-          overflowY: "auto",
-        });
-      const sectionMetrics = await browserSection.evaluate((section) => {
-        const element = section as HTMLElement;
-        return {
-          clientHeight: element.clientHeight,
-          scrollHeight: element.scrollHeight,
-        };
-      });
-      expect(sectionMetrics.scrollHeight).toBeGreaterThan(sectionMetrics.clientHeight);
     } finally {
       await suite.closeBrowserContext(context);
     }

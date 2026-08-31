@@ -17,7 +17,7 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gatew
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { probePortalReachable } from "./portal-reachability.ts";
+import { probePortalReachable, type PortalReachability } from "./portal-reachability.ts";
 import { resolvePortalUrl } from "./portal-url.ts";
 import "./portals.css";
 
@@ -26,7 +26,7 @@ const PORTAL_FRAME_SANDBOX =
 
 type PortalProbeState = {
   key: string;
-  status: "probing" | "reachable" | "unreachable";
+  status: "probing" | PortalReachability;
 };
 
 class PortalsPage extends OpenClawLightDomElement {
@@ -44,7 +44,7 @@ class PortalsPage extends OpenClawLightDomElement {
   private requestGeneration = 0;
   private portalSetRevision = 0;
   private portalProbeGeneration = 0;
-  private readonly portalProbeCache = new Map<string, boolean>();
+  private readonly portalProbeCache = new Map<string, PortalReachability>();
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => this.resetGatewayState(),
@@ -135,16 +135,16 @@ class PortalsPage extends OpenClawLightDomElement {
     }
     const cached = force ? undefined : this.portalProbeCache.get(key);
     if (cached !== undefined) {
-      this.portalProbeState = { key, status: cached ? "reachable" : "unreachable" };
+      this.portalProbeState = { key, status: cached };
       return;
     }
 
     const generation = ++this.portalProbeGeneration;
     this.portalProbeState = { key, status: "probing" };
-    void probePortalReachable(url).then((reachable) => {
-      this.portalProbeCache.set(key, reachable);
+    void probePortalReachable(url).then((reachability) => {
+      this.portalProbeCache.set(key, reachability);
       if (generation === this.portalProbeGeneration && this.portalProbeState?.key === key) {
-        this.portalProbeState = { key, status: reachable ? "reachable" : "unreachable" };
+        this.portalProbeState = { key, status: reachability };
       }
     });
   }

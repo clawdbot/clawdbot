@@ -100,6 +100,57 @@ describe("native link routing", () => {
     ]);
   });
 
+  it("preserves link handlers that cancel an external click", () => {
+    const bridge = installBridge();
+    routing = startNativeLinkRouting();
+    const anchor = appendLink("https://example.com/handled");
+    anchor.addEventListener("click", (event) => event.preventDefault());
+
+    const event = click(anchor);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(bridge.messages).toEqual([]);
+  });
+
+  it("defines the hovercard once across duplicate bootstrap module instances", async () => {
+    // Regression: the non-isolated jsdom lane evaluates the registration
+    // module once per sibling file against one persistent document, so stale
+    // bootstrap listeners fire alongside this file's own. Reproduce that order
+    // and require a single registry definition.
+    vi.resetModules();
+    await import("../components/github-link-hovercard-registration.ts");
+    const define = vi.spyOn(customElements, "define");
+    const provider = document.createElement(
+      "openclaw-github-link-hovercard-provider",
+    ) as GitHubLinkHovercardProvider;
+    provider.client = {
+      request: vi.fn().mockResolvedValue({
+        comments: 1,
+        createdAt: "2026-07-09T10:00:00Z",
+        kind: "issue",
+        login: "octocat",
+        number: 102691,
+        owner: "openclaw",
+        repo: "openclaw",
+        state: "open",
+        title: "Open links in a sidebar browser",
+        updatedAt: "2026-07-09T10:00:00Z",
+      }),
+    } as unknown as GatewayBrowserClient;
+    const anchor = document.createElement("a");
+    anchor.href = "https://github.com/openclaw/openclaw/issues/102691";
+    anchor.textContent = "#102691";
+    provider.append(anchor);
+    document.body.append(provider);
+    anchor.focus();
+    await vi.waitFor(() => expect(document.querySelector(".github-link-hovercard")).not.toBeNull());
+    const hovercardDefines = define.mock.calls.filter(
+      ([tag]) => tag === "openclaw-github-link-hovercard-provider",
+    );
+    expect(hovercardDefines).toHaveLength(1);
+    define.mockRestore();
+  });
+
   it("closes an active GitHub hovercard after routing its link", async () => {
     const bridge = installBridge();
     routing = startNativeLinkRouting();

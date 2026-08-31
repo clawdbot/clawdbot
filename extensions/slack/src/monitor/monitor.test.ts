@@ -357,12 +357,13 @@ describe("normalizeSlackChannelType", () => {
   });
 });
 
-describe("resolveSlackSystemEventSessionKey", () => {
+describe("resolveSlackSystemEventRoute", () => {
   it("defaults missing channel_type to channel sessions", () => {
     const ctx = createSlackMonitorContext(baseParams());
-    expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
-      "agent:main:slack:channel:c123",
-    );
+    expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:c123",
+    });
   });
 
   it("uses the configured default agent for fallback system-event sessions", () => {
@@ -372,9 +373,10 @@ describe("resolveSlackSystemEventSessionKey", () => {
         agents: { list: [{ id: "ops", default: true }] },
       },
     });
-    expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
-      "agent:ops:slack:channel:c123",
-    );
+    expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
+      agentId: "ops",
+      sessionKey: "agent:ops:slack:channel:c123",
+    });
   });
 
   it("routes channel system events through account bindings", () => {
@@ -393,9 +395,9 @@ describe("resolveSlackSystemEventSessionKey", () => {
         ],
       },
     });
-    expect(
-      ctx.resolveSlackSystemEventSessionKey({ channelId: "C123", channelType: "channel" }),
-    ).toBe("agent:ops:slack:channel:c123");
+    expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123", channelType: "channel" })).toEqual(
+      { agentId: "ops", sessionKey: "agent:ops:slack:channel:c123" },
+    );
   });
 
   it("routes DM system events through direct-peer bindings when sender is known", () => {
@@ -416,12 +418,12 @@ describe("resolveSlackSystemEventSessionKey", () => {
       },
     });
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelId: "D123",
         channelType: "im",
         senderId: "U123",
       }),
-    ).toBe("agent:ops-dm:main");
+    ).toEqual({ agentId: "ops-dm", sessionKey: "agent:ops-dm:main" });
   });
 });
 

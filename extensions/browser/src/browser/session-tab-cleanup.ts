@@ -13,6 +13,7 @@ import {
   type ResolvedBrowserTabCleanupConfig,
 } from "./config.js";
 import { sweepTrackedBrowserTabs } from "./session-tab-registry.js";
+import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 
 const MIN_SWEEP_INTERVAL_MS = 60_000;
 
@@ -38,7 +39,12 @@ function resolveBrowserTabCleanupRuntimeConfig(): ResolvedBrowserTabCleanupConfi
 async function runTrackedBrowserTabCleanupOnce(params?: {
   now?: number;
   cleanup?: ResolvedBrowserTabCleanupConfig;
-  closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
+  closeTab?: (tab: {
+    targetId: string;
+    baseUrl?: string;
+    route?: BrowserSessionTabRoute;
+    profile?: string;
+  }) => Promise<void>;
   getResolvedBrowserConfig?: () => ResolvedBrowserConfig | null;
   onWarn?: (message: string) => void;
 }): Promise<number> {

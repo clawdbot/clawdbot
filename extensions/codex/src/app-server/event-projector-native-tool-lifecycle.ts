@@ -19,10 +19,7 @@ import {
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
-import {
-  readCodexNotificationThreadId,
-  readCodexNotificationTurnId,
-} from "./notification-correlation.js";
+import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -73,11 +70,7 @@ export class CodexNativeToolLifecycleProjector {
 
   handleNotification(notification: CodexServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (
-      !params ||
-      readCodexNotificationThreadId(params) !== this.threadId ||
-      readCodexNotificationTurnId(params) !== this.turnId
-    ) {
+    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
     if (notification.method === "turn/completed") {

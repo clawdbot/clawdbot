@@ -1,7 +1,6 @@
 import path from "node:path";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
-import { commandError, runGit } from "./git.js";
-import { listGitWorktrees } from "./git.js";
+import { commandError, runGit, listGitWorktrees } from "./git.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const OPENCLAW_LOCK_PATTERN = /^openclaw pid=(\d+)$/;

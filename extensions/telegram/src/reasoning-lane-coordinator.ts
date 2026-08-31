@@ -1,12 +1,13 @@
 // Telegram plugin module implements reasoning lane coordinator behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
-import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
-import type {
-  TelegramBufferedFinalAnswer,
-  TelegramReasoningStepState,
-} from "./bot-message-dispatch.types.js";
+import {
+  findCodeRegions,
+  isInsideCode,
+  stripReasoningTagsFromText,
+} from "openclaw/plugin-sdk/text-chunking";
+import type { TelegramReasoningStepState } from "./bot-message-dispatch.types.js";
 
 // A durable reasoning message already marked channel-side: 🧠 + italic body
 // (see markReasoningMessage). Detect it so a re-split passes it through
@@ -130,7 +131,7 @@ export function splitTelegramReasoningText(
 
 export function createTelegramReasoningStepState(): TelegramReasoningStepState {
   let reasoningStatus: "none" | "hinted" | "delivered" = "none";
-  let bufferedFinalAnswer: TelegramBufferedFinalAnswer | undefined;
+  let bufferedFinalAnswer: ReplyPayload | undefined;
 
   const noteReasoningHint = () => {
     if (reasoningStatus === "none") {
@@ -146,11 +147,11 @@ export function createTelegramReasoningStepState(): TelegramReasoningStepState {
     return reasoningStatus === "hinted" && !bufferedFinalAnswer;
   };
 
-  const bufferFinalAnswer = (value: TelegramBufferedFinalAnswer) => {
+  const bufferFinalAnswer = (value: ReplyPayload) => {
     bufferedFinalAnswer = value;
   };
 
-  const takeBufferedFinalAnswer = (): TelegramBufferedFinalAnswer | undefined => {
+  const takeBufferedFinalAnswer = (): ReplyPayload | undefined => {
     const value = bufferedFinalAnswer;
     bufferedFinalAnswer = undefined;
     return value;
