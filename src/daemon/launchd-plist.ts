@@ -43,6 +43,25 @@ export function parseLaunchdPlistLabel(contents: string): string | null {
   return rawLabel === undefined ? null : plistUnescape(rawLabel).trim() || null;
 }
 
+function parseLaunchdPlistStringValue(contents: string, key: string): string | null {
+  const match = contents.match(
+    new RegExp(`<key>${key}<\\/key>\\s*<string>([\\s\\S]*?)<\\/string>`, "i"),
+  );
+  const raw = match?.at(1);
+  return raw === undefined ? null : plistUnescape(raw).trim() || null;
+}
+
+/** Reads StandardOutPath / StandardErrorPath from an installed LaunchAgent plist. */
+export function parseLaunchdPlistStdioPaths(contents: string): {
+  stdoutPath: string | null;
+  stderrPath: string | null;
+} {
+  return {
+    stdoutPath: parseLaunchdPlistStringValue(contents, "StandardOutPath"),
+    stderrPath: parseLaunchdPlistStringValue(contents, "StandardErrorPath"),
+  };
+}
+
 type ReadLaunchAgentProgramArgumentsOptions = GatewayServiceReadOptions & {
   expectedEnvironmentWrapperPath?: string;
   expectedEnvironmentFilePath?: string;

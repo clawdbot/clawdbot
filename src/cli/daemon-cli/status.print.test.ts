@@ -71,6 +71,18 @@ vi.mock("../../daemon/inspect.js", () => ({
   renderGatewayServiceCleanupHints: renderGatewayServiceCleanupHintsMock,
 }));
 
+const launchdStdioMocks = vi.hoisted(() => ({
+  readPersistedLaunchdStderrPath: vi.fn(() => "/Users/test/Library/Logs/openclaw/gateway.err.log"),
+}));
+
+vi.mock("../../daemon/launchd-stdio.js", () => ({
+  readPersistedLaunchdStderrPath: launchdStdioMocks.readPersistedLaunchdStderrPath,
+  resolveAdvertisedLaunchdStderr: (persistedStderrPath: string | null) =>
+    !persistedStderrPath || persistedStderrPath === "/dev/null"
+      ? { kind: "suppressed" as const }
+      : { kind: "file" as const, path: persistedStderrPath },
+}));
+
 vi.mock("../../daemon/restart-logs.js", () => ({
   resolveGatewayLogPaths: () => ({
     logDir: "/tmp",
@@ -129,6 +141,9 @@ describe("printDaemonStatus", () => {
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
     isWSLEnvMock.mockClear();
+    launchdStdioMocks.readPersistedLaunchdStderrPath
+      .mockReset()
+      .mockReturnValue("/Users/test/Library/Logs/openclaw/gateway.err.log");
   });
 
   it("preserves Gateway server metadata while sanitizing JSON output", () => {
@@ -577,6 +592,55 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.err.log");
     const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
     expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
+  });
+
+  it("does not advertise gateway.err.log when the LaunchAgent still discards stderr", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    launchdStdioMocks.readPersistedLaunchdStderrPath.mockReturnValue("/dev/null");
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "LaunchAgent",
+            loadState: { status: "loaded" },
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: { status: "running", pid: 8000 },
+            command: { programArguments: [], environment: { HOME: "/Users/test" } },
+          },
+          gateway: {
+            bindMode: "loopback",
+            bindHost: "127.0.0.1",
+            port: 18789,
+            portSource: "env/config",
+            probeUrl: "ws://127.0.0.1:18789",
+          },
+          port: {
+            port: 18789,
+            status: "free",
+            listeners: [],
+            hints: [],
+          },
+          rpc: {
+            ok: false,
+            kind: "connect",
+            capability: "unknown",
+            error: "gateway closed (1000): ",
+            url: "ws://127.0.0.1:18789",
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).toContain("suppressed (/dev/null)");
+    expect(errors).toContain("openclaw gateway install");
+    expect(errors).not.toContain("gateway.err.log");
   });
 
   it("does not claim an indeterminate port is not listening", () => {

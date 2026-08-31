@@ -7,6 +7,10 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
+  resolveAdvertisedLaunchdStderr,
+  readPersistedLaunchdStderrPath,
+} from "../../daemon/launchd-stdio.js";
+import {
   resolveGatewayLogPaths,
   resolveGatewayRestartLogPath,
   resolveGatewaySupervisorLogPaths,
@@ -445,17 +449,30 @@ export async function appendStatusAllDiagnosis(params: {
   if (logPaths) {
     params.progress.setLabel("Reading logs…");
     const restartLogPath = resolveGatewayRestartLogPath(process.env);
+    const advertisedStderr =
+      process.platform === "darwin"
+        ? resolveAdvertisedLaunchdStderr(readPersistedLaunchdStderrPath(process.env))
+        : { kind: "file" as const, path: logPaths.stderrPath };
+    const stderrPath = advertisedStderr.kind === "file" ? advertisedStderr.path : null;
     const [stderrTail, stdoutTail, restartTail] = await Promise.all([
-      readFileTailLines(logPaths.stderrPath, 40).catch(() => []),
+      stderrPath ? readFileTailLines(stderrPath, 40).catch(() => []) : Promise.resolve([]),
       readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
       readFileTailLines(restartLogPath, 30).catch(() => []),
     ]);
-    if (stderrTail.length > 0 || stdoutTail.length > 0) {
+    if (stderrTail.length > 0 || stdoutTail.length > 0 || advertisedStderr.kind === "suppressed") {
       lines.push("");
       lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));
-      lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
-      for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactStatusSecrets)) {
-        lines.push(`  ${muted(line)}`);
+      if (advertisedStderr.kind === "file") {
+        lines.push(`  ${muted(`# stderr: ${advertisedStderr.path}`)}`);
+        for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(
+          redactStatusSecrets,
+        )) {
+          lines.push(`  ${muted(line)}`);
+        }
+      } else {
+        lines.push(
+          `  ${muted("# stderr: suppressed (/dev/null); rewrite the LaunchAgent with openclaw gateway install")}`,
+        );
       }
       lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
       for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(redactStatusSecrets)) {

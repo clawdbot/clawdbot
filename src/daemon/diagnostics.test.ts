@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readGatewayLogTailLines, readLastGatewayErrorLine } from "./diagnostics.js";
+import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 const tempDirs: string[] = [];
@@ -36,6 +37,13 @@ describe("readLastGatewayErrorLine", () => {
     const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
     const launchdLogs = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
     fs.mkdirSync(launchdLogs.logDir, { recursive: true });
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(
+      plistPath,
+      `<plist><dict><key>StandardErrorPath</key><string>${launchdLogs.stderrPath}</string></dict></plist>`,
+      "utf8",
+    );
     fs.writeFileSync(launchdLogs.stderrPath, "failed to bind gateway socket EADDRINUSE\n", "utf8");
     fs.writeFileSync(launchdLogs.stdoutPath, "gateway start blocked: stale prior reason\n", "utf8");
 

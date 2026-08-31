@@ -18,6 +18,18 @@ const restartLogMocks = vi.hoisted(() => ({
   resolveGatewayRestartLogPath: vi.fn<() => string>(() => "/tmp/gateway-restart.log"),
 }));
 
+const launchdStdioMocks = vi.hoisted(() => ({
+  readPersistedLaunchdStderrPath: vi.fn(() => "/Users/test/Library/Logs/openclaw/gateway.err.log"),
+}));
+
+vi.mock("../../daemon/launchd-stdio.js", () => ({
+  readPersistedLaunchdStderrPath: launchdStdioMocks.readPersistedLaunchdStderrPath,
+  resolveAdvertisedLaunchdStderr: (persistedStderrPath: string | null) =>
+    !persistedStderrPath || persistedStderrPath === "/dev/null"
+      ? { kind: "suppressed" as const }
+      : { kind: "file" as const, path: persistedStderrPath },
+}));
+
 const gatewayMocks = vi.hoisted(() => ({
   readFileTailLines: vi.fn<(filePath: string, maxLines: number) => Promise<string[]>>(
     async () => [],
@@ -104,6 +116,9 @@ describe("status-all diagnosis port checks", () => {
     restartLogMocks.resolveGatewayRestartLogPath.mockReturnValue("/tmp/gateway-restart.log");
     gatewayMocks.readFileTailLines.mockResolvedValue([]);
     gatewayMocks.summarizeLogTail.mockImplementation((lines: string[]) => lines);
+    launchdStdioMocks.readPersistedLaunchdStderrPath
+      .mockReset()
+      .mockReturnValue("/Users/test/Library/Logs/openclaw/gateway.err.log");
   });
 
   it("keeps first config issue locations and exact pairs before applying the display cap", async () => {
