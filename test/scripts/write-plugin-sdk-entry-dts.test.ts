@@ -42,7 +42,11 @@ function runFixture(root: string, args: string[], privateQa = false) {
   });
 }
 
-function readConfigEntries(root: string, privateQa: boolean) {
+type ConfigEntries = { inputs: string[]; selected: Record<string, string> };
+// Share canonical input metadata; every case still compiles in a fresh fixture tree.
+let configEntries: { production: ConfigEntries; qa: ConfigEntries } | undefined;
+
+function readConfigEntries(root: string, privateQa: boolean): ConfigEntries {
   const result = runFixture(
     root,
     [
@@ -64,7 +68,14 @@ process.stdout.write(JSON.stringify({ inputs: Object.values(groups[0].entry), se
     privateQa,
   );
   expect(result.status, result.stdout + result.stderr).toBe(0);
-  return JSON.parse(result.stdout) as { inputs: string[]; selected: Record<string, string> };
+  const entries = JSON.parse(result.stdout) as ConfigEntries;
+  const relative = (source: string) => path.relative(root, path.resolve(root, source));
+  return {
+    inputs: entries.inputs.map(relative),
+    selected: Object.fromEntries(
+      Object.entries(entries.selected).map(([name, source]) => [name, relative(source)]),
+    ),
+  };
 }
 
 function createFixture() {
@@ -123,8 +134,10 @@ function createFixture() {
   ]) {
     write(source, "export {};\n");
   }
-  const production = readConfigEntries(root, false);
-  const qa = readConfigEntries(root, true);
+  const { production, qa } = (configEntries ??= {
+    production: readConfigEntries(root, false),
+    qa: readConfigEntries(root, true),
+  });
   // Rolldown resolves the complete canonical entry graph even for declaration-only groups.
   // Empty non-SDK sources are fixture inputs, never replacement compiler output.
   for (const source of new Set(qa.inputs)) {

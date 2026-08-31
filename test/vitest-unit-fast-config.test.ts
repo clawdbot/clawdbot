@@ -85,6 +85,13 @@ describe("unit-fast vitest lane", () => {
       import childProcess from "node:child_process";
       import fs from "node:fs";
       import { syncBuiltinESMExports } from "node:module";
+      import os from "node:os";
+      import path from "node:path";
+      const selectedTests = [
+        "src/agents/agent-tools.deferred-followup-guidance.test.ts",
+        "src/test-utils/openclaw-test-state.test.ts",
+        "src/utils.test.ts",
+      ];
       let gitLsFilesCalls = 0;
       const originalSpawnSync = childProcess.spawnSync;
       childProcess.spawnSync = function patchedSpawnSync(...args) {
@@ -110,6 +117,7 @@ describe("unit-fast vitest lane", () => {
       let readdirSyncCalls = 0;
       let hookFileReads = 0;
       let outsideFileReads = 0;
+      let unselectedFileReads = 0;
       const originalReaddirSync = fs.readdirSync;
       const originalReadFileSync = fs.readFileSync;
       fs.readdirSync = function patchedReaddirSync(...args) {
@@ -123,18 +131,36 @@ describe("unit-fast vitest lane", () => {
         } else if (file.endsWith("/src/agents/agent-tools.deferred-followup-guidance.test.ts")) {
           outsideFileReads += 1;
         }
+        if (file.endsWith(".test.ts") && !selectedTests.some((selected) => file.endsWith("/" + selected))) {
+          unselectedFileReads += 1;
+        }
         return originalReadFileSync.apply(this, args);
       };
       await import("./test/vitest/vitest.hooks.config.ts?scope-probe=" + Date.now());
       const scopedHookFileReads = hookFileReads;
       const scopedOutsideFileReads = outsideFileReads;
-      await import("./test/vitest/vitest.unit-fast.config.ts?io-probe=" + Date.now());
+      unselectedFileReads = 0;
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fast-selection-"));
+      try {
+        const includeFile = path.join(directory, "include.json");
+        fs.writeFileSync(includeFile, JSON.stringify(selectedTests));
+        process.env.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+        const selections = [];
+        for (const name of ["unit-fast", "unit-fast-isolated", "unit-fast-fake-timers"]) {
+          const { default: config } = await import("./test/vitest/vitest." + name + ".config.ts?io-probe=" + Date.now());
+          selections.push(config.test.include);
+        }
+        console.log("UNIT_FAST_SELECTION_PROBE", JSON.stringify(selections));
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
       console.log(
         "UNIT_FAST_IO_PROBE",
         gitLsFilesCalls,
         readdirSyncCalls,
         scopedHookFileReads,
         scopedOutsideFileReads,
+        unselectedFileReads,
       );
     `;
     configProbeResult = spawnNodeEvalSync(script, {
@@ -157,16 +183,24 @@ describe("unit-fast vitest lane", () => {
     broadAnalysis = collectUnitFastTestFileAnalysis(process.cwd(), { scope: "broad" });
   });
 
-  it("loads the config without recursively walking repo roots", () => {
+  it("classifies only selected fast-config sources while preserving lane ownership", () => {
     expect(configProbeResult.status, configProbeResult.stderr).toBe(0);
     const probeMatch = configProbeResult.stdout.match(
-      /UNIT_FAST_IO_PROBE (\d+) (\d+) (\d+) (\d+)/u,
+      /UNIT_FAST_IO_PROBE (\d+) (\d+) (\d+) (\d+) (\d+)/u,
     );
     expect(probeMatch, configProbeResult.stdout).not.toBeNull();
     expect(Number(probeMatch?.[1])).toBe(1);
     expect(Number(probeMatch?.[2])).toBeLessThan(20);
     expect(Number(probeMatch?.[3])).toBe(1);
     expect(Number(probeMatch?.[4])).toBe(0);
+    expect(Number(probeMatch?.[5])).toBe(0);
+    const selection = configProbeResult.stdout.match(/UNIT_FAST_SELECTION_PROBE (.+)/u);
+    expect(selection, configProbeResult.stdout).not.toBeNull();
+    expect(JSON.parse(selection?.[1] ?? "null")).toEqual([
+      ["src/agents/agent-tools.deferred-followup-guidance.test.ts"],
+      ["src/test-utils/openclaw-test-state.test.ts"],
+      ["src/utils.test.ts"],
+    ]);
   });
 
   it("keeps untracked tests in their planned fast lane and execution include list", () => {
@@ -467,6 +501,15 @@ describe("unit-fast vitest lane", () => {
         return patterns.some((pattern) => path.matchesGlob(file, pattern));
       });
       expect(getUnitFastTestFilesForIncludePatterns(patterns, { dir })).toEqual(expected);
+      for (const files of [
+        getUnitFastTestFiles,
+        getUnitFastTimerTestFiles,
+        getUnitFastIsolatedTestFiles,
+      ]) {
+        expect(files(patterns)).toEqual(
+          files().filter((file) => patterns.some((pattern) => path.matchesGlob(file, pattern))),
+        );
+      }
     }
 
     const extensionUnitFastFiles = getUnitFastTestFilesForIncludePatterns(
