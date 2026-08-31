@@ -220,10 +220,11 @@ that Region. See
 
   </Accordion>
   <Accordion title="Legacy config migrations">
-    Config parsing normalizes these legacy keys automatically and logs a
-    warning naming the replacement path; the shim is removed in a future
-    release (`2026.6.0`), so run `openclaw doctor --fix` to rewrite committed
-    config to the canonical shape:
+    Run `openclaw doctor --fix` to rewrite these legacy keys to the canonical
+    shape. The Voice Call plugin owns the migration; runtime config parsing
+    accepts only the current keys. When both old and current settings exist,
+    Doctor keeps the current setting, removes the legacy key, and reports which
+    destination it retained. Legacy values fill only missing current fields:
 
     - `provider: "log"` → `provider: "mock"`
     - `twilio.from` → `fromNumber`

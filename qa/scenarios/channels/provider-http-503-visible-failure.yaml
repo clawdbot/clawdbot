@@ -84,8 +84,8 @@ flow:
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 180000)
         - assert:
-            expr: "!outbound.deleted && outbound.conversation.id === config.conversationId && outbound.conversation.kind === 'channel' && outbound.isError === true && outbound.text === config.expectedReply"
-            message: expected one classified provider failure on the original conversation
+            expr: "!outbound.deleted && outbound.accountId === env.transport.accountId && outbound.conversation.id === config.conversationId && outbound.conversation.kind === 'channel' && outbound.isError === true && outbound.text === config.expectedReply"
+            message: expected one classified provider failure on the original account and conversation
         - call: sleep
           args:
             - expr: liveTurnTimeoutMs(env, 8000)

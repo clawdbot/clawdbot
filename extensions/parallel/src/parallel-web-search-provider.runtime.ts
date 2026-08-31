@@ -221,5 +221,4 @@ export const testing = {
   resolveParallelSearchCount,
   resolveParallelSearchEndpoint,
   PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
-  USER_AGENT,
 } as const;

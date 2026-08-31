@@ -3,6 +3,7 @@ import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-con
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { inspectGoogleChatAccount } from "./accounts.js";
 import {
   registerGoogleChatApprovalCardBinding,
   unregisterGoogleChatApprovalCardBindings,
@@ -13,6 +14,46 @@ import { googlechatSetupPlugin } from "./channel.setup.js";
 describe("googlechatPlugin config adapter", () => {
   afterEach(() => {
     unregisterGoogleChatApprovalCardBindings(["token-1"]);
+  });
+
+  it.each([
+    { serviceAccount: { client_email: "bot@example.com" }, configured: true, source: "inline" },
+    {
+      serviceAccount: { source: "env", provider: "default", id: "MISSING_GOOGLE_CHAT_ACCOUNT" },
+      configured: true,
+      source: "none",
+    },
+    { serviceAccount: undefined, configured: false, source: "none" },
+  ])("inspects service account configuration as configured=$configured", async (entry) => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          accounts: {
+            work: {
+              serviceAccount: entry.serviceAccount,
+              audienceType: "app-url",
+              audience: "https://bot.example.com/googlechat",
+              webhookPath: "/googlechat",
+              webhookUrl: "https://bot.example.com/googlechat",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = inspectGoogleChatAccount({ cfg, accountId: "work" });
+    expect(await googlechatPlugin.config.isConfigured?.(account, cfg)).toBe(entry.configured);
+    expect(account).toMatchObject({
+      accountId: "work",
+      enabled: true,
+      configured: entry.configured,
+      credentialSource: entry.source,
+      audienceType: "app-url",
+      audience: "https://bot.example.com/googlechat",
+      webhookPath: "/googlechat",
+      webhookUrl: "https://bot.example.com/googlechat",
+      dmPolicy: "pairing",
+    });
+    expect(googlechatPlugin.status?.collectStatusIssues?.([account])).toEqual([]);
   });
 
   it("keeps setup metadata aligned with the runtime plugin", () => {
