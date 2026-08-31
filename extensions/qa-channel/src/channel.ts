@@ -167,6 +167,10 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       }) => {
         const resolved = resolveQaTargetThread({ target, threadId });
         const parsed = resolved.target;
+        const baseTarget = buildQaTarget({
+          chatType: parsed.chatType,
+          conversationId: parsed.conversationId,
+        });
         const baseRoute = buildChannelOutboundSessionRoute({
           cfg,
           agentId,
@@ -180,20 +184,16 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
                 : parsed.chatType === "group"
                   ? "group"
                   : "channel",
-            id: buildQaTarget(parsed),
+            id: baseTarget,
           },
           chatType: parsed.chatType,
           from: `${QA_CHANNEL_ID}:${accountId ?? DEFAULT_ACCOUNT_ID}`,
-          to: buildQaTarget(parsed),
+          to: baseTarget,
         });
-        // An explicit thread target already owns the complete session identity;
-        // applying reply or current-thread metadata would append a second thread.
-        if (parsed.threadId !== undefined) {
-          return baseRoute;
-        }
         return buildThreadAwareOutboundSessionRoute({
           route: baseRoute,
-          replyToId,
+          // Structured thread identity is authoritative; reply metadata must not replace its thread.
+          replyToId: resolved.threadId === undefined ? replyToId : undefined,
           threadId: resolved.threadId,
           currentSessionKey,
           canRecoverCurrentThread: ({ route }) =>

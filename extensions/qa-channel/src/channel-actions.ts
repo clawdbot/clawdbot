@@ -147,7 +147,12 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
     if (action === "thread-reply") {
       const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";
       const threadId = typeof args.threadId === "string" ? args.threadId.trim() : "";
-      return channelId && threadId ? { to: `thread:${channelId}/${threadId}` } : null;
+      return channelId && threadId
+        ? {
+            to: buildQaTarget({ chatType: "channel", conversationId: channelId }),
+            threadId,
+          }
+        : null;
     }
     return null;
   },
@@ -191,7 +196,6 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
           to: buildQaTarget({
             chatType: parsed.chatType,
             conversationId: parsed.conversationId,
-            threadId: resolved.threadId,
           }),
           text,
           senderId: account.botUserId,
@@ -217,7 +221,11 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
         });
         return jsonResult({
           thread,
-          target: `thread:${target.conversationId}/${thread.id}`,
+          target: buildQaTarget({
+            chatType: target.conversationKind,
+            conversationId: target.conversationId,
+          }),
+          threadId: thread.id,
         });
       }
       case "thread-reply": {
@@ -234,7 +242,6 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
           to: buildQaTarget({
             chatType: target.conversationKind,
             conversationId: target.conversationId,
-            threadId: target.threadId,
           }),
           text,
           senderId: account.botUserId,

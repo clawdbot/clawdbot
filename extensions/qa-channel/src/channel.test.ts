@@ -185,35 +185,6 @@ async function startQaChannelTestHarness(params?: {
 }
 
 describe("qa-channel plugin", () => {
-  it("derives thread-aware outbound session routes from explicit thread targets", async () => {
-    const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      accountId: "default",
-      target: "thread:qa-room/thread-1",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.baseSessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.threadId).toBeUndefined();
-  });
-
-  it("does not append routing metadata to explicit thread targets", async () => {
-    const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      accountId: "default",
-      target: "thread:qa-room/thread-1",
-      replyToId: "reply-1",
-      threadId: "thread-1",
-      currentSessionKey: "agent:main:qa-channel:channel:thread:qa-room/thread-1:thread:stale",
-    });
-
-    expect(route?.sessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.baseSessionKey).toBe("agent:main:qa-channel:channel:thread:qa-room/thread-1");
-    expect(route?.threadId).toBeUndefined();
-  });
-
   it("rejects conflicting explicit thread routing metadata", () => {
     expect(() =>
       qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
@@ -986,6 +957,18 @@ describe("qa-channel plugin", () => {
         },
       });
       expect(sendTarget).toEqual({ to: "channel:qa-room", threadId: undefined });
+
+      const legacyThreadTarget = qaChannelPlugin.actions?.extractToolSend?.({
+        args: {
+          action: "threadReply",
+          channelId: "canonical/room",
+          threadId: "thread-1",
+        },
+      });
+      expect(legacyThreadTarget).toEqual({
+        to: "channel:canonical/room",
+        threadId: "thread-1",
+      });
 
       const result = await qaChannelPlugin.actions?.handleAction?.({
         channel: "qa-channel",

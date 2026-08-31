@@ -38,7 +38,6 @@ export async function sendQaChannelText(params: QaChannelTextSendParams) {
     to: buildQaTarget({
       chatType: parsed.chatType,
       conversationId: parsed.conversationId,
-      threadId: resolved.threadId,
     }),
     text: params.text,
     isError: params.isError,

@@ -480,6 +480,7 @@ describe("qa suite runtime agent process helpers", () => {
           to: "transport-target",
           replyChannel: "reply-channel",
           replyTo: "reply-target",
+          threadId: "adapter-thread",
         })),
       },
     } as never;
@@ -499,6 +500,7 @@ describe("qa suite runtime agent process helpers", () => {
           replyChannel?: string;
           replyTo?: string;
           sessionKey?: string;
+          threadId?: string;
           to?: string;
         }
       | undefined;
@@ -508,15 +510,17 @@ describe("qa suite runtime agent process helpers", () => {
     expect(agentPayload?.to).toBe("transport-target");
     expect(agentPayload?.replyChannel).toBe("reply-channel");
     expect(agentPayload?.replyTo).toBe("reply-target");
+    expect(agentPayload?.threadId).toBe("adapter-thread");
     expect(gatewayArgs?.[2]).toBeTypeOf("object");
   });
 
-  it("starts an interactive run without CLI task tracking", async () => {
+  it("preserves thread routing for an interactive run without CLI task tracking", async () => {
     const gatewayCall = vi.fn(async () => ({ runId: "run-chat", status: "started" }));
     const buildAgentDelivery = vi.fn(() => ({
       channel: "qa-channel",
       replyChannel: "qa-channel",
       replyTo: "dm:qa-operator",
+      threadId: "provider-topic-42",
     }));
     const env = {
       gateway: { call: gatewayCall },
@@ -529,6 +533,7 @@ describe("qa suite runtime agent process helpers", () => {
       startAgentRun(env, {
         sessionKey: "agent:qa:main",
         message: "hello",
+        threadId: "topic-42",
         taskTracking: false,
       }),
     ).resolves.toEqual({ runId: "run-chat", status: "started" });
@@ -541,10 +546,14 @@ describe("qa suite runtime agent process helpers", () => {
         deliver: true,
         originatingChannel: "qa-channel",
         originatingTo: "dm:qa-operator",
+        originatingThreadId: "provider-topic-42",
       },
       { timeoutMs: 30_000 },
     );
-    expect(buildAgentDelivery).toHaveBeenCalledWith({ target: "dm:qa-operator" });
+    expect(buildAgentDelivery).toHaveBeenCalledWith({
+      target: "dm:qa-operator",
+      threadId: "topic-42",
+    });
   });
 
   it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {

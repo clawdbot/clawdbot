@@ -9,6 +9,14 @@ type QaTargetParts = {
   threadId?: string;
 };
 
+export function buildQaConversationTarget(params: {
+  chatType: QaBusConversation["kind"];
+  conversationId: string;
+}): string {
+  const prefix = params.chatType === "direct" ? "dm" : params.chatType;
+  return `${prefix}:${params.conversationId}`;
+}
+
 export function parseQaTarget(raw: string): QaTargetParts {
   const normalized = raw.trim();
   if (!normalized) {

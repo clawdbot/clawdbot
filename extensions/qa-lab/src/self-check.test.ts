@@ -105,13 +105,14 @@ describe("createQaSelfCheckScenario", () => {
         });
         return {
           details: {
-            target: `thread:${thread.conversationId}/${thread.id}`,
+            target: `channel:${thread.conversationId}`,
+            threadId: thread.id,
             thread,
           },
         };
       }
       const message = state.readMessage({ messageId: String(args.messageId) });
-      if (args.to !== `thread:${message.conversation.id}/${String(message.threadId)}`) {
+      if (args.to !== `channel:${message.conversation.id}` || args.threadId !== message.threadId) {
         throw new Error("qa-channel message is not in the selected conversation");
       }
       targets.push(args.to);
@@ -157,11 +158,7 @@ describe("createQaSelfCheckScenario", () => {
     const thread = state.getSnapshot().threads[0];
     expect(thread).toBeDefined();
 
-    expect(targets).toEqual([
-      `thread:qa-room/${String(thread?.id)}`,
-      `thread:qa-room/${String(thread?.id)}`,
-      `thread:qa-room/${String(thread?.id)}`,
-    ]);
+    expect(targets).toEqual(["channel:qa-room", "channel:qa-room", "channel:qa-room"]);
     const deletedMessage = state.getSnapshot().messages.find((message) => message.deleted);
     if (!deletedMessage) {
       throw new Error("self-check did not preserve its deleted message tombstone");

@@ -2,24 +2,13 @@ import { createHash } from "node:crypto";
 import type {
   OpenClawCrablineInbound,
   OpenClawCrablineInboundInput,
-  StartedOpenClawCrablineAdapter,
   StartedOpenClawCrablineCorrelatedAdapter,
 } from "@openclaw/crabline";
 import { parseQaTarget } from "./qa-bus-protocol.js";
 import type { QaBusInboundMessageInput } from "./runtime-api.js";
 
-const TELEGRAM_QA_DRIVER_ID = "100001";
-const TELEGRAM_QA_OBSERVER_ID = "100002";
 const MATRIX_QA_SERVER_NAME = "matrix-qa.test";
 const MATRIX_QA_DRIVER_ID = `@driver:${MATRIX_QA_SERVER_NAME}`;
-
-export function resolveTelegramQaSenderId(senderId: string) {
-  return senderId === "driver"
-    ? TELEGRAM_QA_DRIVER_ID
-    : senderId === "observer"
-      ? TELEGRAM_QA_OBSERVER_ID
-      : senderId;
-}
 
 function resolveMatrixQaSenderId(senderId: string) {
   return senderId === "driver"
@@ -99,7 +88,7 @@ function resolveMatrixQaText(text: string, botUserId: string) {
 }
 
 export function createCrablineProviderInboundInput(
-  adapter: StartedOpenClawCrablineAdapter,
+  adapter: StartedOpenClawCrablineCorrelatedAdapter,
   input: QaBusInboundMessageInput,
 ): OpenClawCrablineInboundInput {
   const kind = input.conversation.kind === "direct" ? "direct" : "group";
@@ -114,11 +103,7 @@ export function createCrablineProviderInboundInput(
       kind,
     },
     senderId:
-      adapter.channel === "telegram"
-        ? resolveTelegramQaSenderId(input.senderId)
-        : adapter.channel === "matrix"
-          ? resolveMatrixQaSenderId(input.senderId)
-          : input.senderId,
+      adapter.channel === "matrix" ? resolveMatrixQaSenderId(input.senderId) : input.senderId,
     text:
       adapter.channel === "matrix" && adapter.manifest.provider === "matrix"
         ? resolveMatrixQaText(input.text, adapter.manifest.botUserId)
@@ -127,7 +112,7 @@ export function createCrablineProviderInboundInput(
 }
 
 export function resolveCrablineStateConversation(params: {
-  adapter: StartedOpenClawCrablineAdapter;
+  adapter: StartedOpenClawCrablineCorrelatedAdapter;
   input: QaBusInboundMessageInput;
   providerInbound: OpenClawCrablineInbound;
 }) {
@@ -139,9 +124,11 @@ export function resolveCrablineStateConversation(params: {
 export function createCrablineProviderDelivery(
   adapter: Pick<StartedOpenClawCrablineCorrelatedAdapter, "channel" | "createAgentDelivery">,
   target: string,
+  threadId?: string,
 ) {
   const { providerTargetKey, ...delivery } = adapter.createAgentDelivery({
     target: adapter.channel === "matrix" ? resolveMatrixQaTarget(target) : target,
+    threadId,
   });
   return { delivery, providerTargetKey };
 }

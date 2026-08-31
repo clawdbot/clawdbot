@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaBusState } from "./bus-state.js";
 import { getQaProvider } from "./providers/index.js";
+import { parseQaTarget } from "./qa-bus-protocol.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportAccountReady,
@@ -114,11 +115,19 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
       accountId: QA_CHANNEL_ACCOUNT_ID,
       channel: QA_CHANNEL_ID,
     });
-  buildAgentDelivery = ({ target }: { target: string }) => ({
-    channel: QA_CHANNEL_ID,
-    replyChannel: QA_CHANNEL_ID,
-    replyTo: target,
-  });
+  buildAgentDelivery = ({ target, threadId }: { target: string; threadId?: string }) => {
+    const parsed = parseQaTarget(target);
+    if (parsed.threadId && threadId && parsed.threadId !== threadId) {
+      throw new Error("QA channel delivery received conflicting thread targets");
+    }
+    const resolvedThreadId = threadId ?? parsed.threadId;
+    return {
+      channel: QA_CHANNEL_ID,
+      replyChannel: QA_CHANNEL_ID,
+      replyTo: target,
+      ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
+    };
+  };
   async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
     const { command, ...message } = input;
     await this.sendInbound({

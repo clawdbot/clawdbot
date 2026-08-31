@@ -6,6 +6,7 @@ import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
 import { deleteQaBusMessage, editQaBusMessage, sendQaBusMessage } from "./bus-client.js";
+import { qaChannelPlugin } from "./channel.js";
 import { handleQaInbound } from "./inbound.js";
 import { createQaInboundParams, firstRunAssembledParams } from "./inbound.test-harness.js";
 
@@ -105,9 +106,18 @@ describe("handleQaInbound", () => {
         replyToId: "msg-1",
         text: "preview",
         threadId: "42",
-        to: "thread:/v1/group/qa-room/42",
+        to: "group:qa-room",
       }),
     );
+    expect(assembled.ctxPayload).toMatchObject({
+      To: "group:qa-room",
+      OriginatingTo: "group:qa-room",
+      SessionKey: expect.stringMatching(/:thread:42$/u),
+    });
+    expect(assembled.ctxPayload.ParentSessionKey).toBe(
+      assembled.ctxPayload.SessionKey?.replace(/:thread:42$/u, ""),
+    );
+    expect(assembled.route.sessionKey).toBe(assembled.ctxPayload.SessionKey);
     expect(editQaBusMessage).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ messageId: "preview-1", text: "preview expanded" }),
@@ -116,6 +126,30 @@ describe("handleQaInbound", () => {
       2,
       expect.objectContaining({ messageId: "preview-1", text: "final answer" }),
     );
+  });
+
+  it("uses one session for inbound channel threads and explicit thread replies", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(
+      createQaInboundParams({
+        message: {
+          conversation: { id: "qa-room", kind: "channel" },
+          threadId: "42",
+        },
+      }),
+    );
+
+    const assembled = firstRunAssembledParams(runtime);
+    const outboundRoute = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: "thread:qa-room/42",
+    });
+
+    expect(outboundRoute?.sessionKey).toBe(assembled.route.sessionKey);
   });
 
   it("treats deliveries without dispatcher metadata as final replies", async () => {
