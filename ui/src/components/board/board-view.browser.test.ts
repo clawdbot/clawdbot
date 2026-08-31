@@ -119,6 +119,29 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(firstBounds.height).toBeGreaterThanOrEqual(BOARD_GRID_ROW_HEIGHT);
   });
 
+  it("stacks persisted logical order without replacing keyed cells", async () => {
+    const view = await mount();
+    view.style.width = "354px";
+    const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
+    const firstCell = cells.find((cell) => cell.widget?.name === "first")!;
+    const secondCell = cells.find((cell) => cell.widget?.name === "second")!;
+    const snapshot = structuredClone(source);
+    snapshot.widgets[0]!.position = 1;
+    snapshot.widgets[1]!.position = 0;
+    view.snapshot = snapshot;
+    await view.updateComplete;
+    await Promise.all(cells.map((cell) => cell.updateComplete));
+
+    expect(view.querySelectorAll("openclaw-board-widget-cell")[0]).toBe(firstCell);
+    const firstBounds = firstCell
+      .querySelector<HTMLElement>('[data-test-id="board-widget"]')!
+      .getBoundingClientRect();
+    const secondBounds = secondCell
+      .querySelector<HTMLElement>('[data-test-id="board-widget"]')!
+      .getBoundingClientRect();
+    expect(firstBounds.top).toBeGreaterThanOrEqual(secondBounds.bottom + BOARD_GRID_GAP - 1);
+  });
+
   it("hides widget chrome by default on fine-pointer devices", async () => {
     const view = await mount();
     const bar = view.querySelector<HTMLElement>(".board-widget__bar");

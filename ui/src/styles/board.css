@@ -136,10 +136,11 @@ openclaw-board-view {
 }
 
 @container (max-width: 560px) {
-  /* Persisted desktop cells can share a row, so narrow boards must replace
-     both axes to stack full-width cards without overlap. */
+  /* Persisted desktop cells can share a row and keep stable DOM identity, so
+     narrow boards replace both axes while following current logical order. */
   .board-widget {
     grid-area: auto / 1 / span var(--board-widget-rows) / -1 !important;
+    order: var(--board-widget-order);
   }
 }
 
