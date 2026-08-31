@@ -235,7 +235,10 @@ export function renderReplyPayloadsToMessages(
     // Core resolves presentations in the outbound send pipeline only, so replies the
     // monitor delivers itself still carry portable controls. Resolving here - the reply
     // path's one renderer - runs after the stream took the text Teams already showed.
-    const payload = prepareMSTeamsReplyPayload(rawPayload);
+    const payload = prepareMSTeamsReplyPayload(rawPayload, {
+      cardTextLimit: chunkLimit,
+      formatCardText: (text) => formatMSTeamsMarkdown(text, tableMode),
+    });
     // The card carries this reply's text, so it is the whole message, and it is content
     // on its own: a controls-only reply would otherwise be skipped as empty.
     const card = readMSTeamsPresentationCard(payload);

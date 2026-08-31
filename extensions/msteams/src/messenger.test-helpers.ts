@@ -1,10 +1,43 @@
-// Msteams test helpers build a Bot Framework app double and capture the activity a
-// rendered message produces, so the messenger tests assert every rendered shape against
-// one send path.
+// Msteams test helpers build a Bot Framework app double, install the text runtime the
+// render path needs, and capture the activity a rendered message produces, so every
+// suite that renders a reply asserts against one send path.
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { sendMSTeamsMessages } from "./messenger.js";
+import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsApp } from "./sdk.js";
+
+export const chunkMarkdownTextForTests = (text: string, limit: number) => {
+  if (!text) {
+    return [];
+  }
+  if (limit <= 0 || text.length <= limit) {
+    return [text];
+  }
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += limit) {
+    chunks.push(text.slice(index, index + limit));
+  }
+  return chunks;
+};
+
+/** Installs the text runtime `renderReplyPayloadsToMessages` reads for chunking. */
+export function installMSTeamsTestRuntime(): void {
+  setMSTeamsRuntime({
+    config: {
+      loadConfig: () => ({}),
+    },
+    channel: {
+      text: {
+        chunkMarkdownText: chunkMarkdownTextForTests,
+        chunkMarkdownTextWithMode: chunkMarkdownTextForTests,
+        resolveMarkdownTableMode: () => "code",
+        convertMarkdownTables: (text: string) => text,
+      },
+    },
+  } as unknown as PluginRuntime);
+}
 
 type MockAppOptions = {
   createFn?: (activity: unknown) => Promise<unknown>;

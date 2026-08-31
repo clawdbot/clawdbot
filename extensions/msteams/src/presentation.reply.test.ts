@@ -1,8 +1,9 @@
 // Msteams tests cover the controls an agent reply offers on the monitor reply path.
 import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../runtime-api.js";
 import { renderReplyPayloadsToMessages } from "./messenger.js";
+import { installMSTeamsTestRuntime } from "./messenger.test-helpers.js";
 import { prepareMSTeamsReplyPayload, readMSTeamsPresentationCard } from "./presentation.js";
 
 const PRESENTATION = {
@@ -25,6 +26,10 @@ function renderReply(payload: ReplyPayload) {
 const cardOf = readMSTeamsPresentationCard;
 
 describe("msteams reply presentation", () => {
+  beforeEach(() => {
+    installMSTeamsTestRuntime();
+  });
+
   it("carries a reply's buttons into the card the reply path sends", () => {
     // The renderer resolves the portable presentation itself - it is the one place
     // the reply path turns a payload into Teams messages.
@@ -125,6 +130,33 @@ describe("msteams reply presentation", () => {
       ],
       actions: [{ type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } }],
     });
+  });
+
+  it("keeps the text path's chunking when a reply is too long for one card", () => {
+    const longText = "x".repeat(5000);
+
+    // A card is one activity and cannot be split, so a reply past the transport limit
+    // stays on the chunked text path and its controls degrade to prose. Building one
+    // oversized card instead would have Teams reject the whole reply.
+    const messages = renderReply({ text: longText, presentation: PRESENTATION });
+
+    expect(messages.every((message) => message.card === undefined)).toBe(true);
+    expect(messages.length).toBeGreaterThan(1);
+    expect(messages.map((message) => message.text ?? "").join("")).toContain("Open");
+  });
+
+  it("renders the card's text in the dialect a plain reply would use", () => {
+    const table = "| Region | Runs |\n| --- | --- |\n| EU | 12 |";
+
+    // The card path skipped formatMSTeamsMarkdown, so a markdown table reached Teams as
+    // raw pipes inside the card while the same reply without controls rendered properly.
+    const [plain] = renderReply({ text: table });
+    const [carded] = renderReply({ text: table, presentation: PRESENTATION });
+
+    expect(plain?.text).toBeDefined();
+    expect(carded?.card?.body).toEqual(
+      expect.arrayContaining([{ type: "TextBlock", text: plain?.text, wrap: true }]),
+    );
   });
 
   it("keeps the authored fallback prose when the reply also carries media", () => {

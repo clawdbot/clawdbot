@@ -149,7 +149,15 @@ export const readMSTeamsPresentationCard = (payload: ReplyPayload) =>
  * delivery paths on one rendering. Mirrors core's renderer, including degrading controls
  * to text rather than dropping them when Teams cannot carry them natively.
  */
-export function prepareMSTeamsReplyPayload(payload: ReplyPayload): ReplyPayload {
+export function prepareMSTeamsReplyPayload(
+  payload: ReplyPayload,
+  options?: {
+    /** Transport limit for the text a single card may carry; a card cannot be chunked. */
+    cardTextLimit?: number;
+    /** Renders the card's text in the same dialect the text path sends. */
+    formatCardText?: (text: string) => string;
+  },
+): ReplyPayload {
   const presentation = normalizeMessagePresentation(payload.presentation);
   if (!presentation) {
     return payload;
@@ -173,10 +181,19 @@ export function prepareMSTeamsReplyPayload(payload: ReplyPayload): ReplyPayload 
   ) {
     return rest;
   }
-  const rendered = renderMSTeamsPresentationPayload({
-    payload: textIsFallback ? { ...rest, text: undefined } : rest,
-    presentation: adapted,
-  });
+  const cardPayload = textIsFallback ? { ...rest, text: undefined } : rest;
+  const cardText = cardPayload.text ? options?.formatCardText?.(cardPayload.text) : undefined;
+  // A card cannot be split the way message text can, so a reply whose text does not fit
+  // one card keeps the text path's chunking and degrades its controls to prose instead -
+  // the same trade the media branch makes.
+  const fitsOneCard =
+    options?.cardTextLimit === undefined || (cardText ?? "").length <= options.cardTextLimit;
+  const rendered = fitsOneCard
+    ? renderMSTeamsPresentationPayload({
+        payload: { ...cardPayload, ...(cardText ? { text: cardText } : {}) },
+        presentation: adapted,
+      })
+    : null;
   if (rendered) {
     return rendered;
   }

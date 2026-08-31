@@ -4,7 +4,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
-import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,36 +27,11 @@ import {
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
-import { buildActivity, createMockApp } from "./messenger.test-helpers.js";
-import { setMSTeamsRuntime } from "./runtime.js";
-
-const chunkMarkdownText = (text: string, limit: number) => {
-  if (!text) {
-    return [];
-  }
-  if (limit <= 0 || text.length <= limit) {
-    return [text];
-  }
-  const chunks: string[] = [];
-  for (let index = 0; index < text.length; index += limit) {
-    chunks.push(text.slice(index, index + limit));
-  }
-  return chunks;
-};
-
-const runtimeStub = {
-  config: {
-    loadConfig: () => ({}),
-  },
-  channel: {
-    text: {
-      chunkMarkdownText,
-      chunkMarkdownTextWithMode: chunkMarkdownText,
-      resolveMarkdownTableMode: () => "code",
-      convertMarkdownTables: (text: string) => text,
-    },
-  },
-} as unknown as PluginRuntime;
+import {
+  buildActivity,
+  createMockApp,
+  installMSTeamsTestRuntime,
+} from "./messenger.test-helpers.js";
 
 const createRecordedSendActivity = (
   sink: string[],
@@ -100,7 +74,7 @@ function requireAiGeneratedEntity(entities: unknown): Record<string, unknown> {
 
 describe("msteams messenger", () => {
   beforeEach(() => {
-    setMSTeamsRuntime(runtimeStub);
+    installMSTeamsTestRuntime();
     graphUploadMockState.uploadAndShareSharePoint.mockReset();
     graphUploadMockState.getDriveItemProperties.mockReset();
   });
