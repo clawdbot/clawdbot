@@ -1,6 +1,9 @@
 // chat.send owns admission, ACK timing, and detached dispatch handoff.
 import { performance } from "node:perf_hooks";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  isAgentRunRestartAbortReason,
+} from "../../agents/run-termination.js";
 import {
   lookupSessionGoalOperation,
   type SessionGoalOperation,
@@ -13,7 +16,10 @@ import {
   recordSessionCreated,
   recordSessionGoalChanged,
 } from "../../sessions/session-state-events.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
+import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
@@ -111,9 +117,12 @@ async function handleChatSendWithOptions(
   // cleanupAdmittedRun, which fires this armed discard. The hasPersisted gate
   // protects the restart-safe path, which persists durably before its abort
   // and routing exits; dispatch owns persistence after the ACK disarms this.
-  let preparedMediaRecorder: { hasPersisted: () => boolean } | undefined;
+  let preparedMediaRecorder: UserTurnTranscriptRecorder | undefined;
   admitted.value.setDiscardAbandonedPreparedMedia(() => {
-    if (!preparedMediaRecorder?.hasPersisted()) {
+    if (
+      !preparedMediaRecorder?.hasPersisted() &&
+      !preparedMediaRecorder?.getPendingInputMessage?.()
+    ) {
       void discardPreparedInboundMedia(preparedAttachments.value.offloadedRefs);
     }
   });
@@ -156,6 +165,7 @@ async function handleChatSendWithOptions(
       storePath,
       ...terminalState,
     });
+  let pendingStageAttempted = false;
   try {
     const userTurn = createGatewayChatUserTurnController({
       admission: admitted.value,
@@ -209,6 +219,15 @@ async function handleChatSendWithOptions(
       replyContextFieldsPromise,
     } = userTurn;
     preparedMediaRecorder = userTurnRecorder;
+    admitted.value.setPendingInputCleanup(() => {
+      userTurnRecorder.finishPendingInput?.(
+        activeRunAbort.controller.signal.aborted &&
+          activeRunAbort.entry?.abortStopReason !== "restart" &&
+          !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
+          ? "cancelled"
+          : "interrupted",
+      );
+    });
     const preparedUserTurn = prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
@@ -218,6 +237,51 @@ async function handleChatSendWithOptions(
       logGateway: context.logGateway,
       userTurn,
     });
+    const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
+    if (
+      entry?.sessionId &&
+      isOperatorUiClient(clientInfo) &&
+      !isInternalTextSlashCommandTurn &&
+      !normalizedRequest.value.goalOperation
+    ) {
+      // ACK transfers browser custody. Persist approved source bytes before
+      // either a direct runtime or the in-memory collector can accept them.
+      pendingStageAttempted = true;
+      const staged = await userTurnRecorder.stageApproved?.({
+        runId: clientRunId,
+        assertCurrent: () => {
+          admitted.value.assertWorkAdmissionCurrent();
+          sessionMutationCommitGuard?.();
+          sessionMutationAuthorization?.assertCurrent();
+          if (sessionRoutingChanged(context.getRuntimeConfig())) {
+            throw new Error("Session routing changed before input admission; refresh and retry.");
+          }
+        },
+      });
+      if (userTurnRecorder.isPendingInputConsumed?.()) {
+        admitted.value.cleanupAdmittedRun();
+        clearAgentRunContext(clientRunId, lifecycleGeneration);
+        respond(true, { runId: clientRunId, status: "ok" }, undefined, {
+          cached: true,
+          runId: clientRunId,
+        });
+        return;
+      }
+      if (!staged) {
+        throw new Error("Chat input was not durably admitted; refresh and retry.");
+      }
+      const approved = userTurnRecorder.getPendingInputMessage?.();
+      const text =
+        extractTextFromChatContent(approved?.content, {
+          joinWith: "\n",
+          normalizeText: (value) => value,
+        }) ?? "";
+      ctx.Body = ctx.BodyForAgent = ctx.RawBody = text;
+      ctx.BodyForCommands = ctx.CommandBody = text;
+      if (ctx.CommandTurn) {
+        ctx.CommandTurn = { ...ctx.CommandTurn, body: text };
+      }
+    }
     let goalResult: SessionGoalOperationResult | undefined;
     if (restartSafeAdmission) {
       const persistedUserTurn = await persistGatewayUserTurnTranscript();
@@ -301,7 +365,6 @@ async function handleChatSendWithOptions(
       }
     }
 
-    const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,
       request: normalizedRequest.value,
@@ -414,7 +477,7 @@ async function handleChatSendWithOptions(
     await handleChatSendSetupError({
       // Uncommitted Goal admissions may retry with their original identity. Committed
       // outcomes replay from the durable receipt instead of this transient error cache.
-      cacheResult: normalizedRequest.value.goalOperation === undefined,
+      cacheResult: normalizedRequest.value.goalOperation === undefined && !pendingStageAttempted,
       admission: admitted.value,
       context,
       error: err,

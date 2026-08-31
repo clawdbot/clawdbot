@@ -1,6 +1,6 @@
 import { normalizeControlUiBasePath } from "./grammar.js";
 
-const CATALOG_SHARE_PATH_RE = /^([a-z][a-z0-9-]*)\/([a-zA-Z0-9]{12,})$/u;
+const CATALOG_SHARE_PATH_RE = /^([a-z][a-z0-9-]*)\/(?:[a-z0-9]+-)*([a-zA-Z0-9]{12,})$/u;
 
 // This stable contract is shared by URL producers and consumers. The Control UI
 // route-table test keeps it aligned with every built-in path and alias.

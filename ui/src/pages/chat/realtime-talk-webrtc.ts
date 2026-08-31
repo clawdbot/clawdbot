@@ -21,6 +21,7 @@ import {
 import { captureRealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 import {
   RealtimeTalkWebRtcOfferExchange,
+  realtimeTalkTranscriptItem,
   RealtimeTalkResponseOutcomeOwner,
   realtimeTalkDataChannelMaxMessageSize,
   realtimeTalkImageEvent,
@@ -292,6 +293,13 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     } catch {
       return;
     }
+    const transcriptItem = realtimeTalkTranscriptItem(event);
+    if (transcriptItem) {
+      this.ctx.callbacks.onTranscriptItem?.(transcriptItem);
+      if (this.closed) {
+        return;
+      }
+    }
     switch (event.type) {
       case "input_transcript.added":
         this.emitFramelessTranscript("user", event.item?.text, false, event.item?.id);
@@ -318,8 +326,13 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         return;
       }
       case "conversation.item.input_audio_transcription.completed":
-        if (event.transcript) {
-          this.ctx.callbacks.onTranscript?.({ role: "user", text: event.transcript, final: true });
+        if (typeof event.transcript === "string") {
+          this.ctx.callbacks.onTranscript?.({
+            role: "user",
+            text: event.transcript,
+            final: true,
+            itemId: event.item_id,
+          });
           if (this.closed) {
             return;
           }
@@ -417,11 +430,16 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         return;
       }
       case "error":
-        this.responseCreateInFlight = false;
+      case "conversation.item.input_audio_transcription.failed":
+        // ASR runs independently; its failure cannot settle a pending response request.
+        if (event.type === "error") {
+          this.responseCreateInFlight = false;
+        }
         this.ctx.callbacks.onStatus?.("error", this.extractErrorDetail(event.error));
         this.emitTalkEvent({
           type: "session.error",
           final: true,
+          itemId: event.item_id,
           payload: { message: this.extractErrorDetail(event.error) },
         });
 
@@ -431,13 +449,14 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
 
   private emitAssistantTranscript(event: RealtimeServerEvent, final: boolean): void {
     const text = final ? (event.transcript ?? event.text) : event.delta;
-    if (!text) {
+    if (typeof text !== "string") {
       return;
     }
     this.ctx.callbacks.onTranscript?.({
       role: "assistant",
       text,
       final,
+      itemId: event.item_id,
     });
     if (this.closed) {
       return;
@@ -480,10 +499,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private extractErrorDetail(error: unknown): string {
-    if (!error || typeof error !== "object") {
-      return "Realtime provider error";
-    }
-    const record = error as Record<string, unknown>;
+    const record = isRecord(error) ? error : {};
     const message = typeof record.message === "string" ? record.message.trim() : "";
     const code = typeof record.code === "string" ? record.code.trim() : "";
     const type = typeof record.type === "string" ? record.type.trim() : "";

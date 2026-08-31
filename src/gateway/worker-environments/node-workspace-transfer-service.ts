@@ -18,6 +18,7 @@ import {
   streamUploadFile,
 } from "./node-workspace-upload-reader.js";
 import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
+import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import {
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
   MAX_WORKSPACE_MANIFEST_BYTES,
@@ -100,6 +101,8 @@ type TransferContext = {
   temporaryRoot: string;
   currentManifestRef: string;
   snapshots: Map<string, NodeWorkspaceTransferSnapshot>;
+  baseCommit: string | null;
+  pack?: Promise<string>;
   downloads: Map<string, DownloadCapability>;
   upload?: UploadOperation;
   abortController: AbortController;
@@ -192,6 +195,8 @@ export function createNodeWorkspaceTransferService(options: {
     if (contexts.get(context.environmentId) === context) {
       contexts.delete(context.environmentId);
     }
+    // Cancellation fences requests before pack processes release their scratch files.
+    await context.pack?.catch(() => undefined);
     await fsp.rm(context.temporaryRoot, { recursive: true, force: true });
   };
 
@@ -341,6 +346,7 @@ export function createNodeWorkspaceTransferService(options: {
           temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
           currentManifestRef: "",
           snapshots: new Map(),
+          baseCommit: null,
           downloads: new Map(),
           abortController,
         };
@@ -363,6 +369,7 @@ export function createNodeWorkspaceTransferService(options: {
             ]),
           });
           context.snapshots.set(snapshot.manifestRef, snapshot);
+          context.baseCommit = snapshot.manifest.baseCommit;
           context.currentManifestRef = snapshot.manifestRef;
           contexts.set(context.environmentId, context);
           return { snapshot, token: mintDownload(context, snapshot.manifestRef) };
@@ -499,6 +506,36 @@ export function createNodeWorkspaceTransferService(options: {
         return undefined;
       }
       return authorization.context.snapshots.get(authorization.capability.manifestRef);
+    },
+
+    async pack(authorization: TransferAuthorization): Promise<string | undefined> {
+      if (authorization.route.kind !== "pack" || !authorizationCurrent(authorization)) {
+        return undefined;
+      }
+      const { context, route } = authorization;
+      const snapshot = context.snapshots.get(route.manifestRef);
+      const { baseCommit } = context;
+      if (!baseCommit || snapshot?.manifest.baseCommit !== baseCommit) {
+        return undefined;
+      }
+      if (!context.pack) {
+        // Origin/seed sync needs only the manifest. Materialize its immutable Git base
+        // on first download; accepted manifests share this context-owned operation.
+        context.pack = prepareWorkerWorkspaceGitPack({
+          root: context.localPath,
+          baseCommit,
+          temporaryRoot: context.temporaryRoot,
+          signal: AbortSignal.any([
+            context.abortController.signal,
+            AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+          ]),
+        }).catch((error: unknown) => {
+          context.pack = undefined;
+          throw error;
+        });
+      }
+      const packPath = await context.pack;
+      return authorizationCurrent(authorization) ? packPath : undefined;
     },
 
     blob(

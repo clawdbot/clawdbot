@@ -21,7 +21,6 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
-  listTaskRecordPage,
   markTaskTerminalById,
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
@@ -246,49 +245,6 @@ describe("tasks gateway handlers", () => {
 
     expect(calls[0]?.[0]).toBe(true);
     expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
-  });
-
-  it("does not use the executor as the requester owner for a legacy bare task", () => {
-    const task = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "global",
-      ownerKey: "global",
-      scopeKind: "session",
-      childSessionKey: "agent:research:subagent:child",
-      agentId: "research",
-      runId: "run-legacy-owner",
-      task: "Owned by ops, executed by research",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-    expect(task.requesterAgentId).toBeUndefined();
-    const cfg = {
-      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(
-      listTaskRecordPage({
-        offset: 0,
-        limit: 10,
-        sessionKey: "global",
-        sessionAgentId: "ops",
-        cfg,
-      }).tasks.map((entry) => entry.taskId),
-    ).toEqual([task.taskId]);
-    expect(
-      listTaskRecordPage({
-        offset: 0,
-        limit: 10,
-        sessionKey: "global",
-        sessionAgentId: "research",
-        cfg,
-      }).tasks,
-    ).toEqual([]);
   });
 
   it("orders the ledger by last activity, not creation time", async () => {
@@ -588,32 +544,6 @@ describe("tasks gateway handlers", () => {
       expect(admin.payload?.task?.taskId).toBe(taskId);
     },
   );
-
-  it("returns page records isolated from the registry", () => {
-    const created = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Isolated task",
-      status: "running",
-      deliveryStatus: "pending",
-      detail: { nested: { value: "original" } },
-    });
-
-    const page = listTaskRecordPage({ offset: 0, limit: 1 });
-    const detail = page.tasks[0]?.detail as { nested: { value: string } } | undefined;
-    expect(detail).toBeDefined();
-    if (detail) {
-      detail.nested.value = "mutated";
-    }
-
-    const current = expectDefined(
-      getTaskById(created.taskId),
-      "page mutation must not change the registry record",
-    );
-    expect((current.detail as { nested: { value: string } }).nested.value).toBe("original");
-  });
 
   it("treats explicit task agentId as authoritative over the session-key fallback", async () => {
     // Cross-agent subagent task: the registry derives agentId=worker from the

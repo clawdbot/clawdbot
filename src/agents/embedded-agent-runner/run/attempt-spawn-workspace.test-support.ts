@@ -31,6 +31,7 @@ import type {
 import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
+import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import type { CreateAgentSessionOptions } from "../../sessions/index.js";
 import {
   getModelRegistryRuntime,
@@ -184,6 +185,7 @@ function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
+    getToolAutoDeliveryMediaUrls: () => [] as string[],
     hasToolMediaBlockReply: () => false,
     getVisibleBlockReplyCount: () => 0,
     getSuccessfulCronAdds: () => 0,
@@ -1013,6 +1015,7 @@ type MutableSession = {
   [agentSessionSetContextReplacementHook]: (
     callback: ((tokensAfter: number) => void) | undefined,
   ) => void;
+  [agentSessionSetPromptPreparation]: (prepare: (() => Promise<void>) | undefined) => void;
 };
 
 type SessionPromptOverride = (
@@ -1178,6 +1181,8 @@ export function createDefaultEmbeddedSession(params?: {
   ) => Promise<void>;
 }): MutableSession {
   let activeToolNames: string[] = [];
+  let promptPreparation: (() => Promise<void>) | undefined;
+  let promptPreparationInstalled = false;
   let pendingPrompt:
     | {
         prompt: string;
@@ -1264,9 +1269,31 @@ export function createDefaultEmbeddedSession(params?: {
       session.messages = [...session.messages, { role: "custom", timestamp: 1, ...message }];
     },
     abort: async () => {},
-    dispose: () => {},
+    dispose: () => {
+      promptPreparation = undefined;
+    },
     steer: async () => {},
     [agentSessionSetContextReplacementHook]: () => {},
+    [agentSessionSetPromptPreparation]: (prepare) => {
+      promptPreparation = prepare;
+      if (promptPreparationInstalled) {
+        return;
+      }
+      promptPreparationInstalled = true;
+      // Cases can replace prompt with a real Agent bridge before runner setup.
+      // Wrap the composed entrypoint so every fake model-start honors the host hook.
+      const prompt = session.prompt;
+      session.prompt = async (...args) => {
+        const currentPreparation = promptPreparation;
+        if (currentPreparation) {
+          await currentPreparation();
+          if (currentPreparation !== promptPreparation) {
+            throw new Error("Session prompt preparation is stale after replacement or disposal.");
+          }
+        }
+        return prompt(...args);
+      };
+    },
   };
 
   return session;

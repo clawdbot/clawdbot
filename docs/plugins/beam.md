@@ -92,15 +92,18 @@ A successful upload returns the stable Beam id and a relative Control UI URL:
 {
   "ok": true,
   "beamId": "0123456789abcdef0123456789abcdef",
-  "url": "/beam/0123456789ab"
+  "url": "/beam/fix-the-upload-flow-0123456789ab"
 }
 ```
 
-The returned URL uses a 12-character lowercase hexadecimal prefix and keeps
-that readable path in the browser while the existing read-only Beam catalog
-renders the transcript. A configured Control UI base path prefixes the route,
-for example `/openclaw/beam/0123456789ab`. Longer prefixes through the full
-32-character Beam id also work.
+The returned URL uses the session title slug followed by a 12-character lowercase
+hexadecimal id prefix, matching regular session links. The id remains authoritative:
+bare-id links and links with an older title still resolve, and the browser replaces
+the name with the current title without adding history. Titles that produce no slug
+use the bare id. A configured Control UI base path prefixes the route, for example
+`/openclaw/beam/fix-the-upload-flow-0123456789ab`. Longer prefixes through the full
+32-character Beam id also work. Update the Beam skill before updating the receiver
+so its response validator accepts named links.
 
 Uploading the same `beamId` updates the existing catalog row. A completed upload sets the row status to `completed`; earlier updates display as `live`.
 
@@ -150,13 +153,17 @@ Beam can also act as the sender: an opt-in mirror that continuously publishes th
 }
 ```
 
-- `endpoint` (required): the final remote receiver URL. Redirect responses (301, 302, 303, 307, and 308) are not followed; configure the destination URL directly. After a redirect, repeated polls are suppressed for the current mirror service instance. A Gateway restart probes the configured endpoint once again so a receiver corrected at the same URL can recover. HTTPS is enforced for non-loopback hosts; plaintext `http://` is accepted only for `localhost`/`127.0.0.1`/`::1` development.
+- `endpoint` (required): the final remote receiver URL. Changing it starts fresh delivery to that receiver, including unchanged active sessions; pending terminal retries for the previous receiver are discarded, leaving its rows to expire normally. Redirect responses (301, 302, 303, 307, and 308) are not followed; configure the destination URL directly. After a redirect, repeated polls are suppressed for the current mirror service instance. A Gateway restart probes the configured endpoint once again so a receiver corrected at the same URL can recover. HTTPS is enforced for non-loopback hosts; plaintext `http://` is accepted only for `localhost`/`127.0.0.1`/`::1` development.
 - `token`: Gateway credential for the remote receiver, sent as `Authorization: Bearer`. Accepts a plain string or a secret reference; a configured-but-unresolved token pauses mirroring instead of sending unauthenticated requests. Deployments fronted by an identity-aware proxy need an ingress that accepts this bearer credential.
 - `catalogs` (required): the session catalog ids to mirror, as explicit per-catalog consent — an omitted or empty list mirrors nothing. The local `beam` receiver catalog is always excluded so two mirrored Gateways cannot re-mirror each other's rows.
 - `pollSeconds` (default 30, minimum 10): how often the mirror scans local catalogs.
 - `activeWindowMinutes` (default 180): sessions with newer activity than this window count as live and stay mirrored; when a session goes idle past the window the running mirror service retries its final `completed` update until the receiver accepts it or the seven-day retention window ends. Retry state is process-local: a Gateway restart clears pending terminal retries, so the remote row remains live until its normal seven-day retention expires.
 
-The mirror applies the same redaction contract as the beam skill before anything leaves the machine: only user and agent message text is uploaded, while reasoning, tool calls, tool results, and raw payloads are replaced with compact counts. It converts newest-first catalog pages into chronological uploads before applying the receiver limits (200 items, 56 KiB), dropping oldest entries first and marking the upload `truncated`. Sessions on paired nodes are not mirrored; the mirror shares only sessions from this Gateway's machine, newest 32 first.
+The mirror uploads user and agent message text, replacing structured reasoning, tool calls, tool results, and raw payloads with compact counts. Titles and messages pass through OpenClaw's built-in credential masking and configured `logging.redactPatterns` before clipping, even when log redaction is disabled. The manual beam skill additionally strips setup wrappers, local paths, contact identifiers, and opaque values; automatic mirroring does not apply those additional rules. Enable it only for catalogs whose visible message text you intend to share.
+
+The mirror converts newest-first catalog pages into chronological uploads before applying the receiver limits (200 items, 56 KiB), dropping oldest entries first. It marks the upload `truncated` whenever older pages remain, the source reports truncation, or text or items were clipped. Claude catalog pages count individual text, reasoning, and tool blocks and bound their text size. Sessions on paired nodes are not mirrored; the mirror shares only sessions from this Gateway's machine, newest 32 first. A listed session that leaves the active window receives its final completed update even when its catalog has more pages; an absent session is finalized only after a complete, successful host listing.
+
+When browsing Claude sessions on paired nodes, update those nodes alongside the Gateway. Older node builds without block-resume metadata report an update-required error when a mixed row spans pages.
 
 ## Troubleshooting
 

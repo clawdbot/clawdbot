@@ -591,6 +591,18 @@ function operatorApprovalRemediation(
         },
       ];
     case "run-aborted":
+      if (
+        record.resolver?.kind === "system" &&
+        (record.resolver.id === "permission-change" ||
+          record.resolver.id === "approval-scope-closed")
+      ) {
+        return [
+          {
+            code: "request_approval_again",
+            text: "Request the action again under the current permissions if it is still needed.",
+          },
+        ];
+      }
       return [
         {
           code: "start_new_run",

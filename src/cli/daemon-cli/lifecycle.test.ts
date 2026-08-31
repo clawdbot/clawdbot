@@ -1,5 +1,6 @@
 // Daemon lifecycle tests cover CLI service lifecycle orchestration and cleanup.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
   expectRestartError,
@@ -22,7 +23,6 @@ const service = {
   restart: vi.fn(),
   stop: vi.fn(),
 };
-const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 
 const runServiceStart = vi.fn();
 const runServiceRestart = vi.fn();
@@ -95,11 +95,6 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../config/io.js", () => ({ createConfigIO }));
-
-vi.mock("../../config/paths.js", () => ({
-  isDefaultInstallIdentity: () => isDefaultInstallIdentity(),
-  resolveNativeServiceProfileConflict: () => null,
-}));
 
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync,
@@ -275,7 +270,7 @@ describe("runDaemonRestart health checks", () => {
     createGatewayLifecycleMutationAudit.mockClear();
     resolveGatewayServiceProbeHosts.mockReset().mockResolvedValue(["127.0.0.1"]);
     probePortUsage.mockReset().mockResolvedValue("free");
-    isDefaultInstallIdentity.mockReset().mockReturnValue(true);
+    mockSystemAccountHome();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -380,7 +375,7 @@ describe("runDaemonRestart health checks", () => {
     await runDaemonRestart({ json: true });
 
     const restartParams = requireMockCallArg(runServiceRestart, "runServiceRestart");
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     expect(() => (restartParams.beforeServiceMutation as () => void)()).toThrow(
       /non-default state dir/,
     );
@@ -810,7 +805,7 @@ describe("runDaemonRestart health checks", () => {
 
   it("signals a single unmanaged gateway process on restart", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });
 
@@ -834,7 +829,7 @@ describe("runDaemonRestart health checks", () => {
 
   it("rejects denied Darwin recovery when no unmanaged listener exists", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     mockUnmanagedRestart();
 
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(/non-default state dir/);
@@ -1009,7 +1004,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4300]);
     mockUnmanagedRestart();
 

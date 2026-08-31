@@ -171,8 +171,11 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const hasComposerDraft = host.hasSessionDraft(mainKey);
   const running = mainRow ? isSessionRunActive(mainRow) : false;
+  const queued = running && mainRow?.status === "queued";
   const unread = mainRow?.unread === true && !active;
-  const activeRunLabel = running ? t("sessionsView.activeRun") : "";
+  const activeRunLabel = running
+    ? t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun")
+    : "";
   const unreadLabel = unread ? t("sessionsView.unread") : "";
   const homeDescription =
     attentionLabel || (activeRunLabel && unreadLabel)
@@ -215,7 +218,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
       <span class="nav-item__text">${t("nav.home")}</span>
       ${running || outboxAttentionCount > 0 || hasComposerDraft
         ? html`<span class="nav-item__state sidebar-home-session-states">
-            ${running ? renderSessionRunSpinner() : nothing}
+            ${running ? renderSessionRunSpinner(true, queued) : nothing}
             ${renderSessionRowBadges({
               outboxAttentionCount,
               hasComposerDraft,

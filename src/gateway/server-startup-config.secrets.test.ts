@@ -14,7 +14,10 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
-import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
+import {
+  flushDiagnosticsTimeline,
+  measureDiagnosticsTimelineSpan,
+} from "../infra/diagnostics-timeline.js";
 import { providerResolutionError, refResolutionError } from "../secrets/resolve-errors.js";
 import { associateSecretResolutionErrorOwners } from "../secrets/runtime-degraded-state.js";
 import { activateProviderAuthRuntimeSnapshot } from "../secrets/runtime-provider-auth-activation.js";
@@ -198,6 +201,7 @@ function mockLogSecretsForTest(): GatewayStartupLogMock {
 }
 
 function readTimelineEvents(filePath: string): Array<Record<string, unknown>> {
+  flushDiagnosticsTimeline();
   return readFileSync(filePath, "utf8")
     .trim()
     .split(/\r?\n/u)
@@ -216,6 +220,7 @@ function installDiagnosticsTimelineEnv() {
   return {
     timelinePath,
     cleanup: () => {
+      flushDiagnosticsTimeline();
       if (previousDiagnostics === undefined) {
         delete process.env.OPENCLAW_DIAGNOSTICS;
       } else {

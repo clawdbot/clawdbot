@@ -33,7 +33,7 @@ Do not invoke Autoreview automatically before a commit, push, PR, merge, deploy,
 - Tools are useful in review mode. Codex receives the validated bundle in an empty workspace so ignored files and linked-worktree metadata remain unreadable; web search stays available for dependency contracts and upstream docs.
 - Security perspective is always included, but it should not cripple legitimate functionality. Report security findings only when the change creates a concrete, actionable risk or removes an important safety check.
 - Reviewer subprocesses preserve engine authentication and non-credentialed proxy variables needed by headless or restricted-network environments while stripping process-injection, Git override, and credentialed proxy values.
-- Immediately before every provider call, autoreview writes the exact outgoing review pack to an owner-only temporary file and scans it with TruffleHog using `verified,unknown`. It uses the installed binary with `--no-update` to disable self-update checks and attempts. The scan covers prompt and dataset inputs, untracked content, and every diff line, including deleted lines. A finding, scanner error, or missing TruffleHog binary refuses the send and names the implicated repository file when it can be resolved; credentials are never redacted and forwarded. Security-sensitive paths remain omitted. Safe large diffs are sent as one pass while they fit the aggregate prompt limit, then partitioned into complete bounded passes without truncation.
+- Credential checking belongs to the reviewer: the hard rules require inspection of the entire change bundle for accidentally committed credentials and require every suspected real credential to be reported as a P0 security finding without reproducing its value. The helper does not invoke an external credential scanner. Security-sensitive paths remain omitted. Safe large diffs are sent as one pass while they fit the aggregate prompt limit, then partitioned into complete bounded passes without truncation.
 - Regression provenance needs patch proof, not blame alone. `git log -S/-G`, `git blame`, commit subjects, and PR metadata locate candidates. Before saying `introduced by`, inspect raw parents with `git --no-replace-objects cat-file -p <sha>` and verify the implicated behavior changed in `git --no-replace-objects diff --no-ext-diff --no-textconv <raw-parent> <sha> -- <path>`; a genuine root needs raw-header proof that it has no parents.
 - Blame `^sha`, porcelain `boundary`, and shallow/grafted history alone are not introduction proof. `--root` can hide boundary markers; `git show` or `rev-list --parents` can make a shallow boundary look like a root. An available raw parent permits explicit comparison even at a shallow boundary; missing parents or an unverifiable patch require `unknown` with the gap. Use `carried forward` only for verified preexisting behavior and `made visible` only for a verified trigger. Apply the same bar to finding prose, summaries, and owner hints.
 - Keep code author, introducing PR author, merger, committer, automation trigger, and current PR author separate; none of those roles alone proves causation. Cite the verified commit/PR/date. If no PR is traceable, use the verified commit and known author identity; unknown identities stay unknown, and missing PR metadata is not a separate finding.
@@ -191,10 +191,7 @@ history and rerun. The helper does not fetch it automatically.
 
 ## Oversized Bundles
 
-The helper validates the complete patch before partitioning it. For partitioned
-reviews it scans the complete frozen input first, so credentials cannot evade
-detection by crossing a chunk boundary. It also scans each exact outgoing review
-pack before sending it. A safe bundle that fits
+The helper validates the complete patch before partitioning it. A bundle that fits
 the aggregate prompt limit remains one integrated review pass. Larger bundles
 are split at bundle sections and file boundaries where possible; an oversized
 single-file block is split at line boundaries with repeated file/hunk context
@@ -211,7 +208,7 @@ batch, and every evidence byte is retained. All validated reports are merged
 before required-finding and exit-status checks.
 There is no fixed pass-count ceiling: the complete frozen input determines the
 finite pass sequence. The helper prints its size and pass count before running
-passes serially. Each pass retains the same prompt-size limit, secret scan, and
+passes serially. Each pass retains the same prompt-size limit and
 reviewer isolation; a failed pass aborts without publishing a partial verdict.
 
 Preparation prints immediate phase updates and periodic elapsed time to stderr,
@@ -220,7 +217,7 @@ are separate from provider heartbeats and do not count against engine deadlines.
 Bundle construction captures finding membership alongside validated text; normal
 and dry runs reuse that record without reopening untracked files for membership.
 
-Dry runs reuse capture and scanning without whole-tree integrity sweeps. Real
+Dry runs reuse captured inputs and prompt construction without whole-tree integrity sweeps. Real
 reviews retain full fresh tree hashing before bundle construction, before review,
 and before publication, including unrelated tracked files, nonignored untracked files, index
 state, and initialized submodules. Explicit prompt files and datasets also retain
@@ -375,7 +372,7 @@ The helper:
 - supports `codex`, `claude`, `amp`, `pi`, and `kimi`; default is `AUTOREVIEW_ENGINE` or `codex`
 - resolves bare `git`, `gh`, reviewer, and PowerShell shell commands from absolute `PATH` entries only, never from the reviewed checkout; explicit `--*-bin` paths are interpreted from the reviewed repository root when relative and accepted only when both the supplied path and resolved target stay outside the reviewed repository
 - use `--mode commit --commit <ref>` for already-committed work, especially clean `main` after landing
-- validates complete Git patches, scans every outgoing review pack, reviews them in one pass up to the aggregate prompt limit, and automatically uses complete bounded passes above it
+- validates complete Git patches, reviews them in one pass up to the aggregate prompt limit, and automatically uses complete bounded passes above it
 - uses branch mode for committed-only PR work, or explicit local mode with a pinned merge base for a complete PR plus dirty candidate
 - writes reports to stdout and optionally to `--output` or `--json-output` files; preparation progress and provider heartbeats use stderr
 - supports `--dry-run` (validates bundle construction, reviewer CLI resolution, and local isolation startup with version/help probes without contacting a provider; exits nonzero if any check fails), an opt-in per-reviewer wall-clock bound via `--engine-timeout-seconds`, `--prompt`, repo-relative `--prompt-file`, repo-relative `--dataset`, `--no-tools`, `--no-web-search`, repeatable Codex-only safe model/response tuning with `--codex-config key=value`, Codex-only `--codex-speed fast|flex|default`, and commit refs
@@ -419,8 +416,8 @@ The exact source filename `CredentialFile.swift` is allowed for untracked and
 evidence inputs only outside sensitive parent paths, matching its existing
 tracked-source treatment. This is not a general source-extension exemption:
 credential stores, credential directories, `.env`, PEM, and key files retain
-their exclusions. TruffleHog still scans the exact outgoing pack, including
-source content, deleted lines, prompts, and datasets, before every provider call.
+their exclusions. Reviewers inspect the source content, deleted lines, prompts,
+and datasets present in each outgoing pack for accidentally committed credentials.
 
 ## Final Report
 

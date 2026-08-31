@@ -65,7 +65,7 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:main:current",
-      limit: 100,
+      limit: 800,
     });
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([
@@ -102,7 +102,7 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request).toHaveBeenNthCalledWith(2, "chat.startup", {
       sessionKey: state.sessionKey,
-      limit: 100,
+      limit: 800,
     });
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([

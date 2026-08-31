@@ -108,6 +108,7 @@ function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined
 function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElement[]): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-shortcut]").forEach((shortcut) => {
     shortcut.hidden = true;
+    shortcut.removeAttribute("data-shortcut");
     shortcut.removeAttribute("data-chat-model-shortcut-number");
   });
   rows.slice(0, 9).forEach((row, index) => {
@@ -116,6 +117,7 @@ function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElemen
       return;
     }
     shortcut.hidden = false;
+    shortcut.setAttribute("data-shortcut", String(index + 1));
     shortcut.setAttribute("data-chat-model-shortcut-number", String(index + 1));
   });
 }
@@ -352,6 +354,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
+      data-chat-autotype-shortcuts
       ?open=${params.open === true}
       @keydown=${handleModelPickerKeydown}
       @toggle=${(event: Event) => {

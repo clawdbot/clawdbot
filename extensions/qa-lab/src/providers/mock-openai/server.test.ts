@@ -42,6 +42,8 @@ const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
   "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK.";
 const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT =
   "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then reply with exact marker: `TELEGRAM-EMPTY-WRITE-RECOVERED-OK`.";
+const QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT =
+  "Empty response after write exhaustion QA check: write qa-empty-response-side-effect.txt, then reply with exact marker: `WRITE-EXHAUSTED-OK`.";
 const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT =
   "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK.";
 const QA_REASONING_ONLY_RETRY_INSTRUCTION =
@@ -8328,6 +8330,33 @@ Update and merge these partial structured summaries.`,
       expect(outputText(laterHeartbeatPayload)).toBe("HEARTBEAT_OK");
     },
   );
+
+  it("keeps settled write finalization empty for host fallback coverage", async () => {
+    const server = await startMockServer();
+    const toolPlan = await expectOpenAiStreamingResponsesText(server, {
+      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT)],
+    });
+    expect(toolPlan).toContain('"name":"write"');
+
+    const toolOutput = {
+      type: "function_call_output" as const,
+      output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+    };
+    for (const includeFinalizationPrompt of [false, true, true]) {
+      const payload = await expectOpenAiNonStreamingResponsesJson<{
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      }>(server, {
+        input: [
+          makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT),
+          ...(includeFinalizationPrompt
+            ? [makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)]
+            : []),
+          toolOutput,
+        ],
+      });
+      expect(payload.output?.[0]?.content?.[0]?.text).toBe("");
+    }
+  });
 
   it("reports a failed Code Mode read honestly through ordinary continuation", async () => {
     const server = await startMockServer();

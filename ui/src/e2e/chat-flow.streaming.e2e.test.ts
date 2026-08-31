@@ -600,7 +600,7 @@ suite.define(() => {
         .poll(async () =>
           (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
         )
-        .toBe("2.4k tokens");
+        .toBe("2,400 output tokens");
 
       const response = "The streamed response is now visible.";
       await gateway.emitGatewayEvent("chat", {
@@ -621,7 +621,7 @@ suite.define(() => {
         (row, visibleResponse) => ({
           connected: row.isConnected,
           hasResponse: row.textContent?.includes(visibleResponse) ?? false,
-          hasTokens: row.textContent?.includes("2.4k tokens") ?? false,
+          hasTokens: row.textContent?.includes("2,400 output tokens") ?? false,
           key: row.getAttribute("data-virtual-row-key"),
         }),
         response,

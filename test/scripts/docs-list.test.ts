@@ -126,6 +126,12 @@ summary: "Page"
 \`\`\`md
 ### Hidden fenced heading
 \`\`\`
+
+\`\`\`\`md
+\`\`\`json
+### Hidden nested fenced heading
+\`\`\`
+\`\`\`\`
 `,
       "utf8",
     );
@@ -141,6 +147,7 @@ summary: "Page"
     expect(output).toContain("  - H4: `![label](https://example.test/image)`");
     expect(output).toContain("## nested/index.mdx\n\n- Route: /nested");
     expect(output).not.toContain("Hidden fenced heading");
+    expect(output).not.toContain("Hidden nested fenced heading");
     expect(output).not.toContain("AGENTS.md");
     expect(existsSync(path.join(tempRepoRoot, "docs", "docs_map.md"))).toBe(false);
   });

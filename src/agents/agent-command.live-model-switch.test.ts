@@ -1978,6 +1978,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       sessionKey: "agent:main:main",
     });
 
+    expect(state.registerAgentRunContextMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ projectSessionActive: true }),
+    );
     const deliveryParams = requireRecord(
       mockCallArg(state.deliverAgentCommandResultMock),
       "ACP delivery params",
@@ -3473,18 +3477,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it.each([
-    {
-      name: "does not overwrite another active run's restart recovery context",
-      attemptResult: makeEmptyResult("openai", "gpt-5.4"),
-    },
-    {
-      name: "does not clear another active run's restart recovery context",
-      attemptResult: makeEmptyResult("openai", "gpt-5.4"),
-    },
-  ])("$name", async ({ attemptResult }) => {
+  it("does not overwrite another active run's restart recovery context", async () => {
     setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(attemptResult);
+    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
     const staleEntry = createCommandSessionEntry();
     const laterRunEntry = createCommandSessionEntry({
       updatedAt: 2,
@@ -5319,6 +5314,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionKey: "agent:main:main",
         sessionId: "session-1",
         isControlUiVisible: false,
+        projectSessionActive: false,
       }),
     );
   });

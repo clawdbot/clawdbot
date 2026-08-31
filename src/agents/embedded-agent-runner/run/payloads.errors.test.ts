@@ -77,6 +77,32 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
   });
 
+  it.each(["worker", "main"])("keeps global tool-error replies owned by %s", (agentId) => {
+    const payloads = buildPayloads({
+      agentId,
+      sessionKey: "global",
+      config: {
+        agents: {
+          entries: {
+            main: { sandbox: { mode: "off" } },
+            worker: { sandbox: { mode: "all" } },
+          },
+        },
+        tools: { sandbox: { tools: { deny: ["browser"] } } },
+      },
+      lastAssistant: makeAssistant({ errorMessage: "unknown tool: browser", content: [] }),
+    });
+    expect(payloads).toEqual([
+      {
+        text:
+          agentId === "worker"
+            ? expect.stringContaining('Tool "browser" blocked by sandbox tool policy')
+            : "LLM request failed.",
+        isError: true,
+      },
+    ]);
+  });
+
   it("turns returned OpenAI refresh failures into Codex login recovery", () => {
     const payloads = buildPayloads({
       provider: "openai",

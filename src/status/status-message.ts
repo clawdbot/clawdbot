@@ -1,4 +1,5 @@
 // Status message helpers read and format stored status messages.
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   type FastMode,
   normalizeLowercaseStringOrEmpty,
@@ -12,6 +13,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
+import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -31,6 +33,7 @@ import type {
   ElevatedLevel,
   ReasoningLevel,
   ThinkLevel,
+  ThinkingCatalogEntry,
   VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
@@ -68,7 +71,7 @@ import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
 import {
-  estimateUsageCost,
+  estimateAggregateUsageCost,
   formatTokenCount,
   formatUsd,
   resolveModelCostConfig,
@@ -96,6 +99,10 @@ type StatusArgs = {
   agent: AgentConfig;
   agentId?: string;
   configuredDefaultModelLabel?: string;
+  selectedContextWindow?: number;
+  selectedContextTokens?: number;
+  thinkingCatalog?: ThinkingCatalogEntry[];
+  runtimeContextProvider?: string;
   runtimeContextTokens?: number;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
@@ -184,13 +191,14 @@ function resolveConfiguredTextVerbosity(params: {
 }
 
 function resolveExecutionLabel(
-  args: Pick<StatusArgs, "config" | "agent" | "sessionKey" | "sessionScope">,
+  args: Pick<StatusArgs, "config" | "agent" | "agentId" | "sessionKey" | "sessionScope">,
 ): string {
   const sessionKey = args.sessionKey?.trim();
   if (args.config && sessionKey) {
     const runtimeStatus = resolveSandboxRuntimeStatus({
       cfg: args.config,
       sessionKey,
+      agentId: args.agentId,
     });
     const sandboxMode = runtimeStatus.mode ?? "off";
     if (sandboxMode === "off") {
@@ -210,12 +218,6 @@ function resolveExecutionLabel(
     }
     if (sandboxMode === "all") {
       return true;
-    }
-    if (args.config) {
-      return resolveSandboxRuntimeStatus({
-        cfg: args.config,
-        sessionKey,
-      }).sandboxed;
     }
     const sessionScope = args.sessionScope ?? "per-sender";
     const mainKey = resolveMainSessionKey({
@@ -700,13 +702,12 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
           const provider = logUsage.model.slice(0, slashIndex).trim();
           const model = logUsage.model.slice(slashIndex + 1).trim();
           if (provider && model) {
+            const catalogEntry = findModelInCatalog(args.thinkingCatalog ?? [], provider, model);
             activeProvider = provider;
             activeModel = model;
-            // Preserve model-only lookup for transcript-derived provider/model IDs
-            // like "google/gemini-2.5-pro" that may come from a different upstream
-            // provider (for example OpenRouter).
-            contextLookupProvider = undefined;
-            contextLookupModel = logUsage.model;
+            // Bind exact catalog identities; keep cross-route namespaced ids raw.
+            contextLookupProvider = catalogEntry ? provider : undefined;
+            contextLookupModel = catalogEntry ? model : logUsage.model;
           }
         } else {
           activeModel = logUsage.model;
@@ -738,23 +739,37 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     cfg: contextConfig,
     provider: selectedLookupProvider,
     model: selectedLookupModel,
+    modelContextWindow: args.selectedContextWindow,
+    modelContextTokens: args.selectedContextTokens,
     allowAsyncLoad: false,
   });
-  const explicitRuntimeContextTokens =
-    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
-      ? args.runtimeContextTokens
-      : undefined;
-  const resolvedActiveContextTokens = resolveContextTokensForModel({
+  const activeCatalogEntry = contextLookupProvider
+    ? findModelInCatalog(args.thinkingCatalog ?? [], contextLookupProvider, contextLookupModel)
+    : undefined;
+  const activeModelMatchesPreparedIdentity =
+    normalizeLowercaseStringOrEmpty(contextLookupProvider) ===
+      normalizeLowercaseStringOrEmpty(modelRefs.active.provider) &&
+    normalizeLowercaseStringOrEmpty(contextLookupModel) ===
+      normalizeLowercaseStringOrEmpty(modelRefs.active.model);
+  const activeContextProvider =
+    contextLookupProvider &&
+    normalizeLowercaseStringOrEmpty(contextLookupProvider) ===
+      normalizeLowercaseStringOrEmpty(modelRefs.active.provider)
+      ? (args.runtimeContextProvider ?? contextLookupProvider)
+      : contextLookupProvider;
+  const activeContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
-    ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+    ...(activeContextProvider ? { provider: activeContextProvider } : {}),
+    modelProvider: contextLookupProvider,
     model: contextLookupModel,
+    modelContextWindow: activeCatalogEntry?.contextWindow,
+    modelContextTokens:
+      activeCatalogEntry?.contextTokens ??
+      (activeCatalogEntry || activeModelMatchesPreparedIdentity
+        ? args.runtimeContextTokens
+        : undefined),
     allowAsyncLoad: false,
   });
-  const activeContextTokens =
-    typeof explicitRuntimeContextTokens === "number" &&
-    typeof resolvedActiveContextTokens === "number"
-      ? Math.min(explicitRuntimeContextTokens, resolvedActiveContextTokens)
-      : (explicitRuntimeContextTokens ?? resolvedActiveContextTokens);
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
     entry,
@@ -944,18 +959,20 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         allowPluginNormalization: false,
       })
     : undefined;
-  const cost = hasUsage
-    ? estimateUsageCost({
-        usage: {
-          input: inputTokens ?? undefined,
-          output: outputTokens ?? undefined,
-          cacheRead: cacheRead ?? undefined,
-          cacheWrite: cacheWrite ?? undefined,
-        },
-        cost: costConfig,
-      })
-    : undefined;
-  const costLabel = hasUsage ? formatUsd(cost) : undefined;
+  const cost =
+    asNonNegativeFiniteNumber(entry?.estimatedCostUsd) ??
+    (hasUsage
+      ? estimateAggregateUsageCost({
+          usage: {
+            input: inputTokens ?? undefined,
+            output: outputTokens ?? undefined,
+            cacheRead: cacheRead ?? undefined,
+            cacheWrite: cacheWrite ?? undefined,
+          },
+          cost: costConfig,
+        })
+      : undefined);
+  const costLabel = formatUsd(cost);
 
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);

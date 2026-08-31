@@ -15,6 +15,8 @@ export type NodeWorkerWorkspaceTransferInput =
       direction: "download";
       token: string;
       manifestRef: string;
+      /** Reuse this prepared project's immutable Git objects before downloading a pack. */
+      seedKey?: string;
       /** Install attachment files only; never replace or delete workspace entries. */
       attachments?: true;
     }

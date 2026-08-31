@@ -80,7 +80,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
   }
   try {
     const runtimeConfig = context.getRuntimeConfig();
-    const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider);
+    const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider, params.model);
     const mode = normalizeOptionalLowercaseString(params.mode) ?? realtimeConfig.mode ?? "realtime";
     if (mode !== "realtime") {
       rejectTalkClientRequest(

@@ -37,6 +37,7 @@ type EventContext = Pick<
   | "maxDurationTimers"
   | "endCallOperations"
   | "onCallAnswered"
+  | "onCallerSpeech"
   | "streamSessionIssuer"
 >;
 
@@ -358,6 +359,9 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
               resolveTranscriptWaiter(ctx, activeCall.callId, event.transcript, event.turnToken);
             });
           }
+        }
+        if (event.transcript.trim()) {
+          effects.push(() => ctx.onCallerSpeech?.(activeCall));
         }
         prepareLiveDurationTimer();
         transitionState(activeCall, "listening");

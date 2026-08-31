@@ -15,8 +15,24 @@ export function createCrabboxNodeEnrollmentSetup(params: {
   desktop?: boolean;
   leaseId: string;
 }): { command: string; forwardedEnv: Record<string, string> } {
+  return createCrabboxNodeSetup({ ...params, nodeBootstrap: params.enrollment.nodeBootstrap });
+}
+
+export function createCrabboxNodeRuntimeSetup(params: {
+  nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
+  leaseId: string;
+}): { command: string; forwardedEnv: Record<string, string> } {
+  return createCrabboxNodeSetup(params);
+}
+
+function createCrabboxNodeSetup(params: {
+  nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
+  leaseId: string;
+  enrollment?: CrabboxWorkerNodeEnrollment;
+  desktop?: boolean;
+}): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
-  const { token, ...nodeBootstrap } = enrollment.nodeBootstrap;
+  const { token, ...nodeBootstrap } = params.nodeBootstrap;
   const desktopEnvironment = params.desktop
     ? [
         "set -eu",
@@ -39,14 +55,15 @@ const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
 const bootstrap = ${JSON.stringify(nodeBootstrap)};
 const leaseId = ${JSON.stringify(leaseId)};
-const displayName = ${JSON.stringify(enrollment.displayName)};
-const mode = ${JSON.stringify(enrollment.mode)};
+const displayName = ${JSON.stringify(enrollment?.displayName)};
+const mode = ${JSON.stringify(enrollment?.mode)};
 const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
 const token = process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 const setupCode = process.env.${CLOUD_SETUP_CODE_ENV};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
 process.umask(0o077);
+let phase = "preparation";
 (async () => {
   const stateDir = path.join(os.homedir(), ".openclaw", "cloud-workers", leaseId);
   const runtimeRoot = path.join(os.homedir(), ".openclaw-worker", "node-runtimes");
@@ -55,7 +72,7 @@ process.umask(0o077);
   const pidFile = path.join(stateDir, "node.pid");
   const setupFile = path.join(stateDir, "setup-code");
   const runtimeLink = path.join(stateDir, "runtime");
-  const nodeEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
   if (desktopEnvironment) {
     // Inspect XFCE only after stripping forwarded credentials from every child environment.
     const desktop = spawnSync("bash", ["-c", desktopEnvironment, "bash", process.execPath], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
@@ -63,9 +80,11 @@ process.umask(0o077);
     delete nodeEnv.XDG_RUNTIME_DIR;
     Object.assign(nodeEnv, JSON.parse(desktop.stdout));
   }
-  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(stateDir, 0o700);
-  if (fs.existsSync(pidFile)) {
+  if (mode) {
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(stateDir, 0o700);
+  }
+  if (mode && fs.existsSync(pidFile)) {
     const pidText = fs.readFileSync(pidFile, "utf8").trim();
     if (!/^[1-9][0-9]*$/.test(pidText)) throw new Error("Cloud worker node PID is invalid; release and reprovision the worker");
     const pid = Number(pidText);
@@ -85,6 +104,7 @@ process.umask(0o077);
     fs.unlinkSync(pidFile);
   }
   const verifyRuntime = (root) => {
+    phase = "runtime verification";
     if (!fs.lstatSync(root).isDirectory() || fs.realpathSync(root) !== root) throw new Error("Cloud worker bootstrap runtime path is unsafe");
     const packageRoot = path.join(root, "node_modules", "openclaw");
     const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
@@ -98,8 +118,9 @@ process.umask(0o077);
   if (fs.existsSync(runtimeDir)) {
     verifyRuntime(runtimeDir);
   } else {
-    const stage = fs.mkdtempSync(path.join(stateDir, "node-bootstrap-"));
+    const stage = fs.mkdtempSync(path.join(runtimeRoot, "node-bootstrap-"));
     try {
+      phase = "download";
       if (!token) throw new Error("Cloud worker bootstrap download authority is unavailable");
       const url = new URL(bootstrap.url);
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || (bootstrap.tlsFingerprint && url.protocol !== "https:")) throw new Error("Cloud worker bootstrap artifact transport is invalid");
@@ -137,6 +158,7 @@ process.umask(0o077);
         }
       } finally { response.destroy(); await output.close(); }
       if (bytes !== bootstrap.bytes || hash.digest("hex") !== bootstrap.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
+      phase = "installation";
       const installDir = path.join(stage, "runtime");
       fs.mkdirSync(installDir, { mode: 0o700 });
       // npm 12 requires a project policy even when ignore-scripts is false.
@@ -157,6 +179,9 @@ process.umask(0o077);
       fs.renameSync(installDir, runtimeDir);
     } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   }
+  // A project snapshot contains only verified runtime bytes, never enrollment state.
+  if (!mode) return;
+  phase = "activation";
   try {
     if (!fs.lstatSync(runtimeLink).isSymbolicLink()) throw new Error("Cloud worker runtime pointer is occupied");
     fs.unlinkSync(runtimeLink);
@@ -171,6 +196,7 @@ process.umask(0o077);
     fs.writeFileSync(setupFile, setupCode + "\\n", { mode: 0o600 });
   }
   const args = mode === "connect" ? ["connect", "--target-file", setupFile] : ["node", "run"];
+  phase = "node launch";
   const log = fs.openSync(path.join(stateDir, "node.log"), "a", 0o600);
   let child;
   try {
@@ -180,13 +206,13 @@ process.umask(0o077);
     catch (error) { process.kill(-child.pid, "SIGTERM"); throw error; }
     child.unref();
   } finally { fs.closeSync(log); }
-})().catch((error) => { console.error(error.message); process.exitCode = 1; });
+})().catch((error) => { console.error("Cloud worker node bootstrap " + phase + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message); process.exitCode = 1; });
 CRABBOX_NODE_ENROLLMENT_SCRIPT`;
   return {
     command,
     forwardedEnv: {
       [CLOUD_BOOTSTRAP_TOKEN_ENV]: token,
-      ...(enrollment.mode === "connect" ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } : {}),
+      ...(enrollment?.mode === "connect" ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } : {}),
     },
   };
 }

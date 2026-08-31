@@ -32,7 +32,7 @@ import { CodexToolProgressProjection } from "./event-projector-tool-progress.js"
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import {
   CodexResponseCompletionProjection,
-  normalizeCodexThreadTokenUsage,
+  normalizeCodexResponseTokenUsage,
   projectCodexThreadUsageUpdate,
 } from "./event-projector-usage.js";
 import {
@@ -85,7 +85,7 @@ export class CodexAppServerEventProjector {
   private promptErrorSource: AttemptFailureSource | null = null;
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
-  private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
+  private tokenUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
   private contextTokens: number | undefined;
   private contextTokensSource: "runtime" | "runtime-configured" | "resolved" | undefined;
   private readonly responseCompletions = new CodexResponseCompletionProjection();
@@ -346,7 +346,7 @@ export class CodexAppServerEventProjector {
         await this.handleTurnCompleted(params);
         break;
       case "rawResponse/completed":
-        this.responseCompletions.record(params);
+        this.responseCompletions.record(params, this.params.hostCapabilities.reportOutputTokens);
         break;
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);

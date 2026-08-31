@@ -53,7 +53,10 @@ describe("Crabbox capture recovery", () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const store = openWarmImageStore();
       const image = store.entries()[0]!;
-      store.register(image.key, { ...image.value, createdAtMs: now - DAY_MS });
+      store.register(image.key, {
+        ...image.value,
+        image: { ...image.value.image!, createdAtMs: now - DAY_MS },
+      });
       block = true;
       const stopping = initial.provider.destroy({ leaseId: first.leaseId, profile: PROFILE });
       await entered.promise;
@@ -63,7 +66,7 @@ describe("Crabbox capture recovery", () => {
         clock.mockReturnValue(now + 15 * DAY_MS);
         await initial.provider.destroy({ leaseId: second.leaseId, profile: PROFILE });
         expect(listCrabboxWarmImages()[0]?.capture).toMatchObject({ selector, stale: true });
-        expect(store.lookup(image.key)?.checkpointId).toBe(CHECKPOINT_ID);
+        expect(store.lookup(image.key)?.image?.checkpointId).toBe(CHECKPOINT_ID);
         const reused = await provisionWarmProfile(initial.provider, PROFILE, "while-capturing");
         expect(initial.calls.findLast(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(
           CHECKPOINT_ID,
@@ -76,8 +79,13 @@ describe("Crabbox capture recovery", () => {
         release.resolve();
       }
       await stopping;
-      expect(initial.calls.at(-1)?.argv[1]).toBe("stop");
-      expect(store.lookup(image.key)?.checkpointId).toBe(fails ? CHECKPOINT_ID : "chk_after_delay");
+      expect(initial.calls.some(({ argv }) => argv[1] === "stop")).toBe(true);
+      if (!fails) {
+        expect(initial.calls.at(-1)?.argv[2]).toBe("delete");
+      }
+      expect(store.lookup(image.key)?.image?.checkpointId).toBe(
+        fails ? CHECKPOINT_ID : "chk_after_delay",
+      );
       expect(listCrabboxWarmImages()[0]?.capture?.selector).toBe(
         fails && phase === "create" ? selector : undefined,
       );
@@ -129,7 +137,10 @@ describe("Crabbox capture recovery", () => {
       await captureWarmImage(provider);
       const store = openWarmImageStore();
       const image = store.entries()[0]!;
-      store.register(image.key, { ...image.value, createdAtMs: Date.now() - DAY_MS });
+      store.register(image.key, {
+        ...image.value,
+        image: { ...image.value.image!, createdAtMs: Date.now() - DAY_MS },
+      });
       const lease = await provisionWarmProfile(provider, PROFILE, "closed-scrub");
       block = true;
       const stopping = provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
@@ -169,7 +180,7 @@ describe("Crabbox capture recovery", () => {
     const now = Date.now();
     const retained = {
       ...image.value,
-      lastUsedAtMs: now - DAY_MS,
+      image: { ...image.value.image!, lastUsedAtMs: now - DAY_MS },
       operation: {
         type: "capture" as const,
         id: "capacity-capture",
@@ -183,8 +194,7 @@ describe("Crabbox capture recovery", () => {
     for (let index = 0; index < 127; index++) {
       store.register(`idle-${index}`, {
         ...image.value,
-        checkpointId: `chk_idle_${index}`,
-        lastUsedAtMs: now,
+        image: { ...image.value.image!, checkpointId: `chk_idle_${index}`, lastUsedAtMs: now },
       });
     }
     calls.length = 0;

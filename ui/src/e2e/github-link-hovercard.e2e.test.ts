@@ -88,8 +88,9 @@ const pullPreviewResponse = {
 
 // Shared page setup for the two pointer-lifecycle cases below: both only need
 // a single previewable pull-request link, unlike the full walkthrough above.
-async function openPullPreviewPage(): Promise<{
+async function openPullPreviewPage(deferPreview = false): Promise<{
   card: Locator;
+  gateway: Awaited<ReturnType<typeof installMockGateway>>;
   page: Page;
   pullLink: Locator;
 }> {
@@ -102,7 +103,8 @@ async function openPullPreviewPage(): Promise<{
   );
 
   const page = await context.newPage();
-  await installMockGateway(page, {
+  const gateway = await installMockGateway(page, {
+    deferredMethods: deferPreview ? ["controlUi.githubPreview"] : [],
     methodResponses: {
       "controlUi.githubPreview": {
         cases: [{ match: { kind: "pull", number: 99816 }, response: pullPreviewResponse }],
@@ -123,7 +125,7 @@ async function openPullPreviewPage(): Promise<{
   const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
   const card = page.locator(".github-link-hovercard");
   await pullLink.waitFor({ state: "visible" });
-  return { card, page, pullLink };
+  return { card, gateway, page, pullLink };
 }
 
 describeControlUiE2e("GitHub link hover cards", () => {
@@ -140,6 +142,46 @@ describeControlUiE2e("GitHub link hover cards", () => {
   });
 
   afterEach(closeBrowsers);
+
+  it.each([
+    { theme: "light", reducedMotion: "no-preference", width: 1180, fails: false },
+    { theme: "dark", reducedMotion: "no-preference", width: 1180, fails: false },
+    { theme: "dark", reducedMotion: "reduce", width: 390, fails: true },
+  ] as const)("shimmers while pending ($theme, $reducedMotion, $width)", async (scenario) => {
+    const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
+    await page.emulateMedia({ colorScheme: scenario.theme, reducedMotion: scenario.reducedMotion });
+    await page.setViewportSize({ width: scenario.width, height: 800 });
+    await pullLink.focus();
+    await gateway.waitForRequest("controlUi.githubPreview");
+
+    await expect.poll(() => card.getAttribute("aria-label")).toBe("Loading GitHub details…");
+    const skeleton = card.locator('[aria-hidden="true"]');
+    await skeleton.waitFor({ state: "visible" });
+    expect(await card.locator("a").count()).toBe(0);
+    expect(await card.textContent()).toBe("");
+    const placeholder = skeleton.locator(".skeleton").first();
+    await placeholder.waitFor({ state: "visible" });
+    const animating = () =>
+      placeholder.evaluate((element) =>
+        element
+          .getAnimations({ subtree: true })
+          .some((animation) => animation.playState === "running"),
+      );
+    await expect.poll(animating).toBe(scenario.reducedMotion === "no-preference");
+    const bounds = await card.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(scenario.width);
+
+    if (scenario.fails) {
+      await gateway.rejectDeferred("controlUi.githubPreview", { message: "Unavailable" });
+      await expectText(card, "GitHub preview unavailable");
+    } else {
+      await gateway.resolveDeferred("controlUi.githubPreview");
+      await expectText(card, pullPreviewResponse.title);
+    }
+    expect(await card.locator(".skeleton").count()).toBe(0);
+    expect(await card.getAttribute("aria-label")).not.toBe("Loading GitHub details…");
+  });
 
   it("previews issue and pull request links while preserving navigation", async () => {
     const context = await newBrowserContext();

@@ -156,7 +156,7 @@ suite.define(() => {
       });
 
       const staleRequest = await gateway.waitForRequest("chat.history", { after: historyCount });
-      expect(staleRequest.params).toMatchObject({ sessionKey, limit: 100 });
+      expect(staleRequest.params).toMatchObject({ sessionKey, limit: 800 });
       // The first authoritative snapshot can promote the same interim text to
       // a durable row before the distinct terminal reply is committed. That
       // identity change is not a recovered final; retry until new content lands.

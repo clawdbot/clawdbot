@@ -131,7 +131,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         provider: backend,
       };
       try {
-        expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(67 * 60_000);
+        expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(153 * 60_000);
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
         const waitForDeviceId = vi.fn(async () => "device-classless");
         const lease = await generation.provider.provision(profile, "classless-operation", {

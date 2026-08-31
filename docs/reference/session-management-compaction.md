@@ -186,6 +186,8 @@ Notable entry types:
 
 History readers keep the latest reset window across later compactions: explicitly retained reset messages and messages after that reset remain visible, but older messages and compaction summaries do not reappear. Model context follows the latest reset or compaction instead, so compaction can summarize the current conversation without reopening its earlier history.
 
+Model-only callers can use `SessionManager.openModelContext()` to create a detached, non-persisting view. The reader selects payloads in SQLite and retains lightweight navigation outside the model window, without introducing a history size cutoff. Storage-only native prompt text and tool-result details stay out of that view; mirror identity, sender and media facts, tool content, and valid provider replay state remain available. Native fork verification, replay, exports, and doctor operations continue to use full-fidelity evidence readers.
+
 OpenClaw intentionally does not "fix up" transcripts; the Gateway uses `SessionManager` to read/write them.
 
 ## Context windows vs tracked tokens
@@ -194,6 +196,8 @@ Two different concepts:
 
 1. **Model context window**: hard cap per model (tokens visible to the model). Comes from the model catalog and can be overridden via config.
 2. **Session store counters**: rolling stats written into the session row (used for `/status` and dashboards). `contextTokens` is a runtime estimate/reporting value - do not treat it as a strict guarantee.
+
+Completed turns update session counters even when no compaction occurred. An ordered context replacement takes precedence over earlier model usage; if its size is unknown, the counters are marked stale instead of borrowing an older request's total. A superseded run cannot overwrite the current writer's counters.
 
 More on limits: [/reference/token-use](/reference/token-use).
 

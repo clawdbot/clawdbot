@@ -168,6 +168,12 @@ export async function runCiGitStep(options: {
       ".github/workflows/macos-release.yml",
       ".github/workflows/npm-placeholder-bootstrap.yml",
     ].includes(options.workflow.file);
+  const pluginRelease =
+    typeof options.workflow === "object" &&
+    [
+      ".github/workflows/plugin-clawhub-release.yml",
+      ".github/workflows/plugin-npm-release.yml",
+    ].includes(options.workflow.file);
   const publisher = options.action === "publish-generated-pr";
   const externalOwner =
     options.workflow || options.action === "mantis-validate-trusted-ref" || publisher;
@@ -277,6 +283,9 @@ export async function runCiGitStep(options: {
           mkdirSync(path.join(directory, ".git"), { recursive: true });
           writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
         }
+        if (pluginRelease) {
+          writeFileSync(path.join(workspace, "package.json"), '{"version":"2026.8.33"}\n');
+        }
       }
       if (options.startupDelay?.tree) {
         writeFileSync(
@@ -293,7 +302,7 @@ export async function runCiGitStep(options: {
         );
         if (
           action === "git-owner" &&
-          (publisher || maturity || releaseAdmission || options.performance)
+          (publisher || maturity || pluginRelease || releaseAdmission || options.performance)
         ) {
           source = source.replace(
             "def main():",
@@ -383,6 +392,7 @@ def main():`,
           docsAgent,
           docsPublish,
           maturity,
+          pluginRelease,
           releaseAdmission,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
@@ -531,6 +541,7 @@ ${run}`;
         initialBranch: publisherFixture?.initialBranch,
         publication: publisherFixture?.inspect(report.output, false),
         performance: performanceFixture?.inspect(),
+        pluginSourcePackage: pluginRelease ? readOutput("temp/fixture-source-package.json") : "",
         pushLog: readOutput("runner-temp/generated-pr-push.log"),
         workspace,
         githubOutput: readOutput("github-output"),

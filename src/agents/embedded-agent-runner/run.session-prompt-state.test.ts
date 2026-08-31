@@ -73,11 +73,7 @@ function createRecorder(
   };
 }
 
-function createState(
-  overrides: Partial<
-    Omit<PreparedEmbeddedRunInput["runParams"], "compactionCountOwner" | "onCompactionAccounting">
-  > = {},
-) {
+function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> = {}) {
   return createEmbeddedRunSessionPromptState({
     runParams: { ...BASE_RUN_PARAMS, ...overrides },
     sessionAgentId: "main",

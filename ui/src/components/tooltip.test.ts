@@ -210,7 +210,7 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
   });
 
-  it("suppresses a tooltip that repeats fully visible trigger text", async () => {
+  it("suppresses repeated trigger text before opening and after content updates", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "Claude Opus 4.7 Anthropic");
     provider.append(tooltip);
@@ -221,6 +221,15 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(0);
     hoverTrigger(trigger);
     vi.runAllTimers();
+    expectOpenCount(0);
+
+    tooltip.content = "Additional model details";
+    await tooltip.updateComplete;
+    focusTrigger(trigger);
+    expectOpenCount(1);
+
+    tooltip.content = "Claude Opus 4.7";
+    await tooltip.updateComplete;
     expectOpenCount(0);
   });
 

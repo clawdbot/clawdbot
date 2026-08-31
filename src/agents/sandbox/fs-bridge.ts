@@ -13,13 +13,13 @@ import type {
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
   buildPinnedCreatePlan,
-  SANDBOX_CREATE_EXISTS_EXIT_CODE,
   buildPinnedCopyPlan,
   buildPinnedMkdirpPlan,
   buildPinnedRemovePlan,
   buildPinnedRenamePlan,
   buildPinnedWritePlan,
 } from "./fs-bridge-mutation-helper.js";
+import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
 import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";

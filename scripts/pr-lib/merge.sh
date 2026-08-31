@@ -37,7 +37,7 @@ record_crabbox_landing_parent_audit() {
     echo "merge completed; post-merge audit failed: unable to prepare the landing parent artifact." >&2
     return 1
   fi
-  if ! gh_plain api "repos/{owner}/{repo}/commits/$landed_sha" >"$commit_file"; then
+  if ! gh_plain api "repos/$MERGE_REPO_NAME/commits/$landed_sha" >"$commit_file"; then
     rm -f "$audit_tmp"
     echo "Crabbox landing parent audit failed after merge: unable to read landed commit $landed_sha." >&2
     return 1
@@ -557,7 +557,7 @@ merge_run() {
     fi
   fi
   if [ -n "$recovery_oid" ]; then
-    recovery_actor=$(gh_plain api --hostname "$MERGE_REPO_HOST" user --jq '.login | select(type == "string" and length > 0)') || return 1
+    recovery_actor=$(gh_plain api --hostname "$MERGE_REPO_HOST" graphql -f 'query=query { viewer { login } }' --jq '.data.viewer.login | select(type == "string" and length > 0)') || return 1
     [ -n "$recovery_actor" ] || { merge_outcome_stop "cannot identify the operator recovery actor"; return 1; }
   fi
   merge_outcome_stable "$pr" || return 1
@@ -648,8 +648,8 @@ merge_run() {
   # Only this uninterrupted completion path owns cleanup. The exact-head lease
   # protects advanced/different-head recreations, but cannot detect same-SHA recreation.
   local head_json head_ref head_repo cleanup_complete=true
-  if head_json=$(gh_plain pr view "$pr" --repo "$MERGE_REPO_URL" --json headRefName,headRepository,headRepositoryOwner) &&
-    head_ref=$(printf '%s\n' "$head_json" | jq -er '.headRefName | select(type == "string" and length > 0)') &&
+  if head_json=$(gh_plain pr view "$pr" --repo "$MERGE_REPO_URL" --json headRefOid,headRefName,headRepository,headRepositoryOwner) &&
+    head_ref=$(printf '%s\n' "$head_json" | jq -er --arg head "$PREP_HEAD_SHA" 'select(.headRefOid == $head) | .headRefName | select(type == "string" and length > 0)') &&
     head_repo=$(printf '%s\n' "$head_json" | jq -er '.headRepositoryOwner.login + "/" + .headRepository.name | select(test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))') &&
     git check-ref-format "refs/heads/$head_ref"; then
     local cleanup_error ref_status=0

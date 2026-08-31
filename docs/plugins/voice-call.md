@@ -273,7 +273,7 @@ audio mode per call.
 Current runtime behavior:
 
 - `realtime.enabled` is supported for Twilio and Telnyx.
-- `realtime.provider` is optional. If unset, Voice Call uses the first registered realtime voice provider.
+- `realtime.provider` is optional. If unset, Voice Call selects the first configured realtime voice provider in provider priority order. Providers named in `realtime.providers` are discovered even when another provider is already active; plugin disablement and allow/deny rules still apply.
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
 - Voice Call exposes the built-in `openclaw_end_call` realtime tool on every call. It takes no arguments or call ID; the active voice bridge binds it to the current call.
@@ -455,7 +455,7 @@ authenticated `realtime.enabled` path instead.
 
 Current runtime behavior:
 
-- `streaming.provider` is optional. If unset, Voice Call uses the first registered realtime transcription provider.
+- `streaming.provider` is optional. If unset, Voice Call selects the first configured realtime transcription provider in provider priority order. Providers named in `streaming.providers` are discovered even when another provider is already active; plugin disablement and allow/deny rules still apply.
 - Bundled realtime transcription providers: Deepgram (`deepgram`), ElevenLabs (`elevenlabs`), Mistral (`mistral`), OpenAI (`openai`), and xAI (`xai`), registered by their provider plugins.
 - Provider-owned raw config lives under `streaming.providers.<providerId>`.
 - After Twilio sends an accepted stream `start` message, Voice Call registers the stream immediately, queues inbound media through the transcription provider while the provider connects, and starts the initial greeting only after realtime transcription is ready.
@@ -564,6 +564,7 @@ Behavior notes:
 - If a Twilio media stream is already active, Voice Call does not fall back to TwiML `<Say>`. If telephony TTS is unavailable in that state, the playback request fails instead of mixing two playback paths.
 - When telephony TTS falls back to a secondary provider, Voice Call logs a warning with the provider chain (`from`, `to`, `attempts`) for debugging.
 - When Twilio barge-in or stream teardown clears the pending TTS queue, queued playback requests settle instead of hanging callers awaiting playback completion.
+- Resumed caller speech discards older automatic replies that are still being generated. Twilio streaming reacts to speech-start and partial transcripts; carrier webhook calls react when a new speech event arrives. Explicit speech requests remain available, and already accepted agent work can finish without speaking an obsolete reply.
 
 ### TTS examples
 
