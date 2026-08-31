@@ -59,6 +59,31 @@ function axisVector(length: number, index = 0, value = 1): number[] {
   return Array.from({ length }, (_, offset) => (offset === index ? value : 0));
 }
 
+function readGeminiBatchRequestCount(init?: RequestInit): number {
+  const body = init?.body;
+  if (typeof body !== "string") {
+    throw new Error("Expected JSON string request body.");
+  }
+  const parsed = JSON.parse(body) as { requests?: unknown[] };
+  if (!Array.isArray(parsed.requests)) {
+    throw new Error("Expected Gemini batch requests.");
+  }
+  return parsed.requests.length;
+}
+
+function orderedBatchEmbeddings(
+  offset: number,
+  count: number,
+): {
+  embeddings: Array<{ values: number[] }>;
+} {
+  return {
+    embeddings: Array.from({ length: count }, (_, index) => ({
+      values: axisVector(256, offset + index),
+    })),
+  };
+}
+
 describe("Gemini embedding provider", () => {
   const providerBaseUrl = "https://provider.example.test/v1beta";
   const config = {
@@ -372,6 +397,71 @@ describe("Gemini embedding provider", () => {
     await expect(provider.embedBatch(["one", "two"], { inputType: "document" })).rejects.toThrow(
       "gemini embeddings failed: malformed JSON response",
     );
+  });
+
+  it.each([
+    { count: 100, expectedBatchSizes: [100] },
+    { count: 101, expectedBatchSizes: [100, 1] },
+    { count: 201, expectedBatchSizes: [100, 100, 1] },
+  ])(
+    "keeps $count inline document embeddings ordered across Gemini request batches",
+    async ({ count, expectedBatchSizes }) => {
+      let responseOffset = 0;
+      const batchSizes: number[] = [];
+      const fetchMock = installFetchMock((_input, init) => {
+        const batchSize = readGeminiBatchRequestCount(init);
+        batchSizes.push(batchSize);
+        const payload = orderedBatchEmbeddings(responseOffset, batchSize);
+        responseOffset += batchSize;
+        return payload;
+      });
+      const { provider } = await createGeminiEmbeddingProvider({
+        config: {} as never,
+        provider: "gemini",
+        remote: { apiKey: "test-key" },
+        model: "gemini-embedding-001",
+        fallback: "none",
+      });
+      const inputs = Array.from({ length: count }, (_, index) => `document-${index}`);
+
+      const embeddings = await provider.embedBatch(inputs, { inputType: "document" });
+
+      expect(batchSizes).toEqual(expectedBatchSizes);
+      expect(fetchMock).toHaveBeenCalledTimes(expectedBatchSizes.length);
+      expect(embeddings).toHaveLength(count);
+      expect(embeddings).toEqual(
+        Array.from({ length: count }, (_, index) => axisVector(256, index)),
+      );
+    },
+  );
+
+  it("stops Gemini document batching after a sub-batch fails", async () => {
+    let callCount = 0;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      callCount += 1;
+      const count = readGeminiBatchRequestCount(init);
+      if (callCount === 2) {
+        return new Response("batch rejected", { status: 400 });
+      }
+      return new Response(JSON.stringify(orderedBatchEmbeddings(0, count)), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+    const inputs = Array.from({ length: 201 }, (_, index) => `document-${index}`);
+
+    await expect(provider.embedBatch(inputs, { inputType: "document" })).rejects.toThrow(
+      "gemini embeddings failed",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the preview identifier compatible during migration", async () => {
