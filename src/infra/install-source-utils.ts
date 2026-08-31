@@ -9,7 +9,7 @@ import {
   satisfies as satisfiesSemver,
   validRange as validSemverRange,
 } from "semver";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
@@ -18,19 +18,22 @@ import { resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
-/** Renders a non-empty cause for npm subprocess failures that captured no output. */
-function formatSpawnFailureReason(res: {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  termination: "exit" | "timeout" | "no-output-timeout" | "signal";
-}): string {
-  if (res.termination === "timeout" || res.termination === "no-output-timeout") {
-    return "command exceeded its timeout without producing output";
+export function formatNpmCommandFailureOutput(result: SpawnResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  if (detail) {
+    return detail;
   }
-  if (res.termination === "signal" || res.signal) {
-    return `command terminated by signal ${res.signal ?? "(unknown)"} without producing output`;
+  // Timeouts normalize to exit code 124; retain the owner-recorded cause.
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    return `termination ${result.termination} (no output from npm)`;
   }
-  return `command exited with code ${res.code ?? "unknown"} without producing output`;
+  if (result.termination === "exit" && result.code !== null) {
+    return `exit code ${result.code} (no output from npm)`;
+  }
+  if (result.signal) {
+    return `signal ${result.signal} (no output from npm)`;
+  }
+  return `termination ${result.termination} (no output from npm)`;
 }
 
 /** Metadata npm reports when resolving a registry spec or packed archive. */
@@ -172,22 +175,14 @@ export async function resolveNpmSpecMetadata(params: {
     },
   );
   if (res.code !== 0) {
-    const raw = res.stderr.trim() || res.stdout.trim();
+    const raw = formatNpmCommandFailureOutput(res);
     if (/E404|is not in this registry/i.test(raw)) {
       return {
         ok: false,
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
       };
     }
-    // Preserve timeout/signal identity so the failure reason survives
-    // when npm exited with no captured output. A bare `npm view failed: `
-    // would otherwise send operators toward the wrong remediation.
-    const reason = raw || formatSpawnFailureReason(res);
-    return {
-      ok: false,
-      error: `npm view failed: ${reason}`,
-      category: "metadata-env",
-    };
+    return { ok: false, error: `npm view failed: ${raw}`, category: "metadata-env" };
   }
 
   try {
@@ -396,15 +391,14 @@ export async function packNpmSpecToArchive(params: {
     },
   );
   if (res.code !== 0) {
-    const raw = res.stderr.trim() || res.stdout.trim();
+    const raw = formatNpmCommandFailureOutput(res);
     if (/E404|is not in this registry/i.test(raw)) {
       return {
         ok: false,
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
       };
     }
-    const reason = raw || formatSpawnFailureReason(res);
-    return { ok: false, error: `npm pack failed: ${reason}` };
+    return { ok: false, error: `npm pack failed: ${raw}` };
   }
 
   const parsedJson = parseNpmPackJsonOutput(res.stdout || "");
@@ -471,11 +465,9 @@ export async function resolveNpmPackArchiveMetadata(params: {
     },
   );
   if (res.code !== 0) {
-    const raw = res.stderr.trim() || res.stdout.trim();
-    const reason = raw || formatSpawnFailureReason(res);
     return {
       ok: false,
-      error: `npm pack metadata read failed: ${reason}`,
+      error: `npm pack metadata read failed: ${formatNpmCommandFailureOutput(res)}`,
     };
   }
 
