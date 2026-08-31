@@ -5,6 +5,19 @@ import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { materializeSecretInputMock } = vi.hoisted(() => ({
+  materializeSecretInputMock: vi.fn(async (params: { value: unknown }) => {
+    if (typeof params.value === "string") {
+      return params.value;
+    }
+    return "resolved-notion-token";
+  }),
+}));
+
+vi.mock("../secrets/resolve-secret-input-string.js", () => ({
+  materializeSecretInput: materializeSecretInputMock,
+}));
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -74,6 +87,7 @@ vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
 });
 
 beforeEach(() => {
+  materializeSecretInputMock.mockClear();
   setDiagnosticsEnabledForProcess(true);
   resetAgentEventsForTest();
   resetDiagnosticRunActivityForTest();
@@ -1545,6 +1559,79 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(
       "/tmp/openclaw-gemini-system-settings.json",
     );
+  });
+
+  it("resolves a file SecretRef in backend.env to the token value at spawn time", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-secretref-"));
+    try {
+      const tokenPath = path.join(dir, "notion-token");
+      await fs.writeFile(tokenPath, "resolved-notion-token\n");
+      mockSuccessfulCliRun();
+
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "codex-cli",
+          model: "gpt-5.5",
+          config: {
+            secrets: {
+              providers: {
+                "notion-file": {
+                  source: "file",
+                  path: tokenPath,
+                  mode: "singleValue",
+                },
+              },
+            },
+          },
+          backend: {
+            env: {
+              NOTION_TOKEN: {
+                source: "file",
+                provider: "notion-file",
+                id: "value",
+              },
+            },
+          },
+        }),
+      );
+
+      const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
+      expect(input.env?.NOTION_TOKEN).toBe("resolved-notion-token");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves literal backend.env strings including $NAME / ${NAME} text", async () => {
+    mockSuccessfulCliRun();
+    const previous = process.env.HOST_SECRET_FOR_CLI_ENV;
+    process.env.HOST_SECRET_FOR_CLI_ENV = "should-not-be-injected";
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "codex-cli",
+          model: "gpt-5.5",
+          backend: {
+            env: {
+              LITERAL_DOLLAR: "$HOST_SECRET_FOR_CLI_ENV",
+              LITERAL_BRACE: "${HOST_SECRET_FOR_CLI_ENV}",
+              LITERAL_PLAIN: "plain-value",
+            },
+          },
+        }),
+      );
+
+      const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
+      expect(input.env?.LITERAL_DOLLAR).toBe("$HOST_SECRET_FOR_CLI_ENV");
+      expect(input.env?.LITERAL_BRACE).toBe("${HOST_SECRET_FOR_CLI_ENV}");
+      expect(input.env?.LITERAL_PLAIN).toBe("plain-value");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.HOST_SECRET_FOR_CLI_ENV;
+      } else {
+        process.env.HOST_SECRET_FOR_CLI_ENV = previous;
+      }
+    }
   });
 
   it("captures a runtime artifact for a strict CLI credential", async () => {

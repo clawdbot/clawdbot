@@ -1,6 +1,8 @@
 /** Executes prepared CLI backend runs and owns their queue and resource lifecycle. */
 import crypto from "node:crypto";
 import { parse as parseSemver } from "semver";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isSecretRef, type SecretInput } from "../../config/types.secrets.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
@@ -8,6 +10,7 @@ import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
+import { materializeSecretInput } from "../../secrets/resolve-secret-input-string.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   fingerprintCliRuntimeArtifact,
@@ -62,6 +65,38 @@ import {
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+/**
+ * Resolves each configured CLI backend env value through the secret-input
+ * resolver so `env` entries may be literal strings or SecretRefs (e.g. a file
+ * SecretRef pointing at a mounted token) resolved at spawn time.
+ */
+async function resolveCliBackendEnvValues(params: {
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  values: Record<string, SecretInput>;
+}): Promise<Record<string, string>> {
+  const entries = await Promise.all(
+    Object.entries(params.values).map(async ([key, value]) => {
+      // Preserve literal strings unchanged (including $NAME / ${NAME} text).
+      // Only structured SecretRef objects are materialized — materializeSecretInput
+      // would otherwise coerce env-template strings into host SecretRefs.
+      if (typeof value === "string") {
+        return [key, value] as const;
+      }
+      if (!isSecretRef(value) || !params.config) {
+        return [key, ""] as const;
+      }
+      const resolved = await materializeSecretInput({
+        config: params.config,
+        value,
+        env: params.env,
+      });
+      return [key, resolved ?? ""] as const;
+    }),
+  );
+  return Object.fromEntries(entries);
+}
 
 function normalizeCliBackendThinkingLevel(
   level: PreparedCliRunContext["params"]["thinkLevel"],
@@ -417,7 +452,12 @@ export async function executePreparedCliRun(
       const configuredBackendEnv = Object.fromEntries(
         Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
       );
-      const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
+      const resolvedBackendEnv = await resolveCliBackendEnvValues({
+        config: params.config,
+        env: process.env,
+        values: configuredBackendEnv,
+      });
+      const backendEnv = { ...resolvedBackendEnv, ...preparedBackendEnv };
       const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
         NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
       );
