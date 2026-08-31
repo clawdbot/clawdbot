@@ -19,8 +19,12 @@ function verificationSync(nextBatch: string, eventId: string): ISyncResponse {
   return {
     next_batch: nextBatch,
     rooms: {
+      invite: {},
+      leave: {},
+      knock: {},
       join: {
         [roomId]: {
+          summary: { "m.heroes": [] },
           state: { events: [] },
           timeline: {
             prev_batch: "pagination-cursor",
@@ -86,7 +90,9 @@ describe("Matrix SDK sync-cache verification routing", () => {
       await expect(store.getSavedSyncToken()).resolves.toBe(hasCache ? "saved-cursor" : null);
 
       const cachedPrepared = createDeferred<void>();
-      if (!hasCache) cachedPrepared.resolve();
+      if (!hasCache) {
+        cachedPrepared.resolve();
+      }
       const stopped = createDeferred<void>();
       const failed = createDeferred<never>();
       const completed = Promise.race([stopped.promise, failed.promise]);
@@ -97,10 +103,15 @@ describe("Matrix SDK sync-cache verification routing", () => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         expect(url.origin).toBe("https://example.org");
         const endpoint = url.pathname;
-        if (endpoint === "/.well-known/matrix/client") return Response.json({}, { status: 404 });
-        if (endpoint.endsWith("/versions"))
+        if (endpoint === "/.well-known/matrix/client") {
+          return Response.json({}, { status: 404 });
+        }
+        if (endpoint.endsWith("/versions")) {
           return Response.json({ versions: ["v1.11"], unstable_features: {} });
-        if (endpoint.endsWith("/capabilities")) return Response.json({ capabilities: {} });
+        }
+        if (endpoint.endsWith("/capabilities")) {
+          return Response.json({ capabilities: {} });
+        }
         if (endpoint.endsWith("/rtc/transports") || endpoint.endsWith("/room_keys/version")) {
           return Response.json(
             { errcode: "M_NOT_FOUND", error: "Not configured" },
@@ -112,11 +123,15 @@ describe("Matrix SDK sync-cache verification routing", () => {
             global: { override: [], content: [], room: [], sender: [], underride: [] },
           });
         }
-        if (endpoint.endsWith("/filter")) return Response.json({ filter_id: "fixture-filter" });
-        if (endpoint.endsWith("/keys/upload"))
+        if (endpoint.endsWith("/filter")) {
+          return Response.json({ filter_id: "fixture-filter" });
+        }
+        if (endpoint.endsWith("/keys/upload")) {
           return Response.json({ one_time_key_counts: { signed_curve25519: 100 } });
-        if (endpoint.endsWith("/keys/query"))
+        }
+        if (endpoint.endsWith("/keys/query")) {
           return Response.json({ device_keys: {}, failures: {} });
+        }
         if (endpoint.endsWith("/sync")) {
           syncRequests.push(url.searchParams.get("since"));
           await cachedPrepared.promise;
@@ -145,9 +160,15 @@ describe("Matrix SDK sync-cache verification routing", () => {
       client.on(ClientEvent.Event, (event) => events.push(event.getId()));
       client.on(ClientEvent.SyncUnexpectedError, (error) => failed.reject(error));
       client.on(ClientEvent.Sync, (state, _previous, data) => {
-        if (state === SyncState.Prepared && data?.fromCache) cachedPrepared.resolve();
-        if (state === SyncState.Syncing) client.stopClient();
-        if (state === SyncState.Stopped) stopped.resolve();
+        if (state === SyncState.Prepared && data?.fromCache) {
+          cachedPrepared.resolve();
+        }
+        if (state === SyncState.Syncing) {
+          client.stopClient();
+        }
+        if (state === SyncState.Stopped) {
+          stopped.resolve();
+        }
       });
       let started = false;
       try {
@@ -169,7 +190,9 @@ describe("Matrix SDK sync-cache verification routing", () => {
         expect(cryptoInput.mock.calls.map(([event]) => event.getId())).toEqual([liveEventId]);
       } finally {
         client.stopClient();
-        if (started) await stopped.promise;
+        if (started) {
+          await stopped.promise;
+        }
         await store.flush();
       }
     },
