@@ -1,21 +1,32 @@
+import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import {
   isRecord,
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const BEAM_HOST_ID = "gateway";
+export const BEAM_SESSION_SHARE_ROUTE = {
+  kind: "thread-id-prefix",
+  routeSegment: "beam",
+  hostId: BEAM_HOST_ID,
+  identifierAlphabet: "lowercase-hex",
+  fullLength: 32,
+  minPrefixLength: 12,
+  lookup: "catalog-list-search-by-thread-id-prefix",
+  ambiguity: "multiple-results-or-next-cursor",
+} as const satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
 export const BEAM_MAX_BODY_BYTES = 56 * 1024;
 export const BEAM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const BEAM_MAX_SESSIONS = 500;
 export const BEAM_MAX_ITEMS = 200;
 export const BEAM_MAX_ITEM_CHARS = 6_000;
 
-type BeamTranscriptItem = {
+export type BeamTranscriptItem = {
   type: "userMessage" | "agentMessage" | "other";
   text: string;
 };
 
-type BeamUpload = {
+export type BeamUpload = {
   version: 1;
   beamId: string;
   source: string;
@@ -28,6 +39,8 @@ type BeamUpload = {
 };
 
 export type BeamStoredSession = BeamUpload & {
+  /** Verified publisher of this snapshot; never accepted from the upload body. */
+  uploaderProfileId?: string;
   createdAt: number;
   receivedAt: number;
 };
@@ -58,27 +71,16 @@ function isIsoTimestamp(value: string): boolean {
   if (!match || !Number.isFinite(Date.parse(value))) {
     return false;
   }
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6]);
-  const offsetHour = Number(match[8] ?? 0);
-  const offsetMinute = Number(match[9] ?? 0);
-  if (hour > 23 || minute > 59 || second > 59 || offsetHour > 23 || offsetMinute > 59) {
-    return false;
-  }
-  const calendar = new Date(0);
-  calendar.setUTCFullYear(year, month - 1, day);
-  calendar.setUTCHours(hour, minute, second, 0);
+  // Date.parse normalizes impossible calendar days and 24:00. Check the date
+  // before its timezone offset and reject normalized next-day timestamps.
+  const calendar = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00Z`);
   return (
-    calendar.getUTCFullYear() === year &&
-    calendar.getUTCMonth() === month - 1 &&
-    calendar.getUTCDate() === day &&
-    calendar.getUTCHours() === hour &&
-    calendar.getUTCMinutes() === minute &&
-    calendar.getUTCSeconds() === second
+    calendar.getUTCDate() === Number(match[3]) &&
+    Number(match[4]) < 24 &&
+    Number(match[5]) < 60 &&
+    Number(match[6]) < 60 &&
+    Number(match[8] ?? 0) < 24 &&
+    Number(match[9] ?? 0) < 60
   );
 }
 

@@ -24,6 +24,7 @@ import {
   normalizeThinkLevel,
   resolveSupportedThinkingLevel,
 } from "../thinking.js";
+import { removeDirectiveSpan } from "./directive-parsing.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import {
   loadAgentRunnerRuntime,
@@ -102,14 +103,14 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   let { resolvedThinkLevel } = params;
 
   // Extract first-token think hint from the user body BEFORE prepending system events.
-  // If done after, the System: prefix becomes parts[0] and silently shadows any
+  // If done after, the System: prefix becomes the first token and silently shadows any
   // low|medium|high shorthand the user typed.
   if (!resolvedThinkLevel && prefixedBodyBase) {
-    const parts = prefixedBodyBase.split(/\s+/);
-    const maybeLevel = normalizeThinkLevel(parts[0]);
+    const firstToken = prefixedBodyBase.split(/\s+/, 1)[0] ?? "";
+    const maybeLevel = normalizeThinkLevel(firstToken);
     const thinkingCatalog = maybeLevel
       ? await traceRunPhase("reply.resolve_thinking_catalog_for_hint", () =>
-          modelState.resolveThinkingCatalog(),
+          modelState.resolveThinkingCatalog({ provider, model }),
         )
       : undefined;
     if (
@@ -123,7 +124,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       })
     ) {
       resolvedThinkLevel = maybeLevel;
-      prefixedBodyBase = parts.slice(1).join(" ").trim();
+      prefixedBodyBase = removeDirectiveSpan(prefixedBodyBase, 0, firstToken.length);
     }
   }
   const prefixedBodyCore = prefixedBodyBase;
@@ -190,6 +191,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
         const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
         return await ensureSkillSnapshot({
+          agentId,
           sessionEntry,
           sessionEntryHandle,
           sessionStore,
@@ -224,7 +226,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
-      modelState.resolveDefaultThinkingLevel(),
+      modelState.resolveDefaultThinkingLevel({ provider, model, agentRuntime: thinkingRuntime }),
     );
   }
   const allowedThinkingCatalog = modelState.allowedModelCatalog ?? [];
@@ -246,7 +248,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     // catalog load was a 14s+ reply-blocking cost for known Codex models that
     // already publish authoritative thinking metadata.
     thinkingCatalog = await traceRunPhase("reply.resolve_thinking_catalog", () =>
-      modelState.resolveThinkingCatalog(),
+      modelState.resolveThinkingCatalog({ provider, model }),
     );
     thinkingLevelSupported = isThinkingLevelSupported({
       provider,

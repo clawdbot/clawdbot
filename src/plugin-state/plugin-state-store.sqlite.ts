@@ -8,7 +8,9 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -113,10 +115,22 @@ function wrapPluginStateError(
   if (error instanceof PluginStateStoreError) {
     return error;
   }
+  let publicMessage = message;
+  // Only owner-classified failures get public hints. Cause messages can contain
+  // database paths, SQL, or stored values and must stay out of this message.
+  if (fallbackCode === "PLUGIN_STATE_OPEN_FAILED") {
+    if (isSqliteSchemaVersionError(error)) {
+      publicMessage +=
+        "\nThe state database uses a newer schema. Run an OpenClaw build that supports it.";
+    } else if (error instanceof Error && isTerminalSqliteIntegrityError(error)) {
+      publicMessage +=
+        "\nDatabase integrity verification failed. Restore or repair the state database, then run openclaw doctor --fix.";
+    }
+  }
   return createPluginStateError({
     code: fallbackCode,
     operation,
-    message,
+    message: publicMessage,
     path: pathname,
     cause: error,
   });

@@ -269,6 +269,7 @@ function captureOpenCodeContinuationCatalog() {
       pluginOwnerId: "opencode",
       initializationPending: true as const,
       ...(params.label ? { label: params.label } : {}),
+      ...(params.displayName ? { displayName: params.displayName } : {}),
       ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
       pluginExtensions: params.initialEntry.pluginExtensions,
     };
@@ -422,20 +423,20 @@ describe("OpenCode session catalog", () => {
 
     const transcript = await readTestTranscript({ limit: 20 });
     expect(transcript.items.map((item) => [item.type, item.text])).toEqual([
-      ["userMessage", "hello"],
-      ["reasoning", "thinking"],
-      ["agentMessage", "hi"],
-      ["toolCall", 'bash\n{"command":"pwd"}'],
       ["toolResult", "/workspace"],
+      ["toolCall", 'bash\n{"command":"pwd"}'],
+      ["agentMessage", "hi"],
+      ["reasoning", "thinking"],
+      ["userMessage", "hello"],
     ]);
     const itemIds = transcript.items.flatMap((item) => (item.id ? [item.id] : []));
     expect(new Set(itemIds).size).toBe(itemIds.length);
 
     const latest = await readTestTranscript({ limit: 2 });
-    expect(latest.items.map((item) => item.type)).toEqual(["toolCall", "toolResult"]);
+    expect(latest.items.map((item) => item.type)).toEqual(["toolResult", "toolCall"]);
     expect(latest.nextCursor).toBeTruthy();
     const older = await readTestTranscript({ limit: 2, cursor: latest.nextCursor });
-    expect(older.items.map((item) => item.type)).toEqual(["reasoning", "agentMessage"]);
+    expect(older.items.map((item) => item.type)).toEqual(["agentMessage", "reasoning"]);
     const nonEmitted = Buffer.from(JSON.stringify({ offset: 2, extra: true }), "utf8").toString(
       "base64url",
     );
@@ -591,9 +592,10 @@ describe("OpenCode session catalog", () => {
       },
     });
     expect(createSessionEntry).toHaveBeenCalledTimes(1);
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Catalog session",
+        displayName: "Catalog session",
         spawnedCwd: "/workspace",
         initialEntry: {
           acpBackendId: "acpx",

@@ -23,13 +23,17 @@ function collectConfiguredChannelIds(
   config: OpenClawConfig,
   activationSourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  discovery: PluginMetadataSnapshot["discovery"],
 ): string[] {
   const disabled = new Set([
     ...listExplicitlyDisabledChannelIdsForConfig(config),
     ...listExplicitlyDisabledChannelIdsForConfig(activationSourceConfig),
   ]);
   const ids = new Set([
-    ...listPotentialConfiguredChannelIds(config, env, { includePersistedAuthState: false }),
+    ...listPotentialConfiguredChannelIds(config, env, {
+      includePersistedAuthState: false,
+      discovery,
+    }),
     ...listExplicitConfiguredChannelIdsForConfig(activationSourceConfig),
   ]);
   return [...ids]
@@ -161,6 +165,7 @@ export function resolveEffectivePluginIds(params: {
     effectiveConfig,
     params.config,
     params.env,
+    prepared?.discovery,
   );
   for (const pluginId of resolveConfiguredChannelPluginIds({
     config: effectiveConfig,
@@ -168,6 +173,7 @@ export function resolveEffectivePluginIds(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     manifestRecords: prepared?.plugins,
+    discovery: prepared?.discovery,
   })) {
     ids.add(pluginId);
   }

@@ -61,10 +61,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveWorkspace,
     effectiveCwd,
     sandboxSessionKey,
+    contextSessionKey,
     sandbox,
     sessionPermissionPolicy,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     agentDir,
@@ -140,6 +142,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
   const cronCreatorToolAllowlistCaptureRef: {
     value?: { version: 1; source: "final-executable-surface" };
@@ -203,6 +206,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     ...(params.cronCreatorAuthorityUnavailableReason === "queued-local-operator" &&
@@ -249,6 +253,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   };
   const tools = await buildDynamicTools({
     ...commonToolParams,
+    registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     onPersistentWebSearchPolicyResolved: (allowed) => {
@@ -271,7 +276,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
     sessionId: params.sessionId,
     runId: params.runId,
-    agentId: sessionAgentId,
+    agentId: policyAgentId,
     agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
     agentAccountId: params.agentAccountId,
     messageProvider: params.messageProvider ?? params.messageChannel,
@@ -384,7 +389,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       runId: params.runId,
       channelId: hookChannelId,
       currentChannelProvider: resolveCodexMessageToolProvider(params),
@@ -555,6 +560,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       dynamicToolParams,
       compactionPlanState,
       computerContextEpoch,
+      runCleanups,
       toolBridge,
       toolState,
       toolOutcomeOrdinals,

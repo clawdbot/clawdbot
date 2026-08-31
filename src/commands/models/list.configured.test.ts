@@ -12,7 +12,6 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
 const mocks = vi.hoisted(() => ({
   loadPreparedModelCatalogSnapshot: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
-  shouldSuppressBuiltInModelFromManifest: vi.fn(() => false),
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
@@ -33,7 +32,6 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
 
 vi.mock("../../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModelCore: vi.fn(() => false),
-  shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -273,7 +271,6 @@ describe("configured model list rows", () => {
         configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
         discoveredKeys: new Set(),
         filter: {},
-        skipRuntimeModelSuppression: true,
       },
     });
 
@@ -330,7 +327,6 @@ describe("configured model list rows", () => {
         configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
         discoveredKeys: new Set(),
         filter: {},
-        skipRuntimeModelSuppression: true,
       },
     });
 
@@ -403,7 +399,6 @@ describe("configured model list rows", () => {
         configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
         discoveredKeys: new Set<string>(),
         filter: {},
-        skipRuntimeModelSuppression: true,
       },
     });
 

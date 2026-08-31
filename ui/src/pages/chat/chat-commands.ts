@@ -29,7 +29,7 @@ import {
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
-import { clearChatHistory } from "./chat-history.ts";
+import { clearChatHistory } from "./chat-history-actions.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import type { ChatExportResult } from "./export.ts";
@@ -231,8 +231,9 @@ async function requestRemoteSlashCommands(
 function loadRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
+  sessionKey?: string,
 ): Promise<SlashCommandDef[]> {
-  const metadata = peekChatMetadata(client, agentId);
+  const metadata = peekChatMetadata(client, { agentId, sessionKey });
   // Store-held metadata carries app-level invalidation on config changes and logical reconnects,
   // so no TTL applies here. The cache below owns only commands.list-derived entries.
   if (Array.isArray(metadata?.commands)) {
@@ -279,6 +280,7 @@ export function applyRemoteSlashCommandsResult(params: {
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;
+  sessionKey?: string;
   shouldApply?: () => boolean;
 }): Promise<void> {
   const seq = ++refreshSeq;
@@ -290,7 +292,7 @@ export async function refreshSlashCommands(params: {
     replaceSlashCommands(buildFallbackSlashCommands());
     return;
   }
-  const commands = await loadRemoteSlashCommands(params.client, agentId);
+  const commands = await loadRemoteSlashCommands(params.client, agentId, params.sessionKey);
   if (seq !== refreshSeq || params.shouldApply?.() === false) {
     return;
   }
@@ -464,7 +466,6 @@ export async function dispatchChatSlashCommand(
       host,
       `/${name} ${args}`.trim(),
       host.chatRunId,
-      undefined,
       resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
     );
   }

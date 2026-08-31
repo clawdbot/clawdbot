@@ -76,7 +76,6 @@ type ChatComposerPlusMenuProps = {
   onPatchToolOverrides: (next: SessionToolOverrides | null) => void;
   onNavigate: (routeId: MenuRoute, options?: ApplicationNavigationOptions) => void;
   onAddServer?: () => void;
-  onEnsureToolAccess?: (serverName: string) => void;
   onOpenToolAccess?: (serverName: string) => void;
 };
 
@@ -603,9 +602,6 @@ function handleMenuSelection(
 function renderChatComposerPlusMenuContent(props: ChatComposerPlusMenuProps) {
   const hasOverrides = countSessionToolOverrides(props.toolOverrides) > 0;
   const view = props.showCapabilities ? props.view : "root";
-  if (view.startsWith("tools:")) {
-    props.onEnsureToolAccess?.(view.slice("tools:".length));
-  }
   const content =
     view === "skills"
       ? renderSkillView(props)
@@ -681,7 +677,6 @@ export function renderChatComposerPlusMenu(props: {
     onPatchToolOverrides: capabilityMenu?.onPatchToolOverrides ?? (() => {}),
     onNavigate: capabilityMenu?.onNavigate ?? (() => {}),
     onAddServer: capabilityMenu?.onAddServer,
-    onEnsureToolAccess: capabilityMenu?.onEnsureToolAccess,
     onOpenToolAccess: capabilityMenu?.onOpenToolAccess,
   });
 }

@@ -25,11 +25,13 @@ export const PLUGIN_NPM_RELEASE_AUTHORITY_PATHS = [
   "scripts/generate-npm-package-lock.mjs",
   "scripts/generate-npm-package-lock.mts",
   "scripts/lib/actions-artifact-archive.mjs",
+  "scripts/lib/local-check-runtime.mts",
   "scripts/lib/npm-json-output.mts",
   "scripts/lib/plugin-npm-package-manifest.mjs",
   "scripts/lib/plugin-npm-package-manifest.mts",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/tsx-cli-shim.mjs",
+  "scripts/tsx.mjs",
   "scripts/plugin-npm-publish.sh",
   "scripts/plugin-npm-release-check.ts",
   "scripts/plugin-npm-release-plan.ts",
@@ -37,6 +39,7 @@ export const PLUGIN_NPM_RELEASE_AUTHORITY_PATHS = [
   "scripts/release-tooling-identity.d.mts",
   "scripts/release-tooling-identity.mjs",
   "scripts/verify-plugin-npm-published-runtime.mts",
+  "src/plugins/package-entrypoints.ts",
 ] as const;
 
 function hasAuthorityPathChanges(

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import type { PluginHookSessionEndReason } from "../plugins/hook-types.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
+import type { SessionMemoryTranscript } from "./bundled/session-memory/capture.js";
 import {
   createInternalHookEvent,
   hasInternalHookListeners,
@@ -33,6 +34,7 @@ export function emitSessionAutoResetHook(params: {
   agentId?: string;
   workspaceDir?: string;
   storePath?: string;
+  previousSessionMemory?: SessionMemoryTranscript;
 }): void {
   if (!isSessionAutoResetReason(params.reason) || !hasSessionAutoResetListeners()) {
     return;
@@ -62,6 +64,7 @@ export function emitSessionAutoResetHook(params: {
     transcriptArchived: params.transcriptArchived,
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
+    previousSessionMemory: params.previousSessionMemory,
   });
 
   void runWithGatewayIndependentRootWorkContinuation(() => triggerInternalHook(event)).catch(

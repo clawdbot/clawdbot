@@ -3,13 +3,16 @@ import { Type } from "typebox";
 import {
   validateSecretsStoreListResult,
   type QuestionRequestQuestion,
+  type QuestionWaitAnswerResult,
   type SecretsStoreListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ENV_SECRET_REF_ID_RE, type SecretRef } from "../../config/types.secrets.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
+import { resolveDefaultSecretProviderAlias } from "../../secrets/ref-contract.js";
 import { stringEnum } from "../schema/string-enum.js";
 import { describeSecretsTool } from "../tool-description-presets.js";
-import { DEFAULT_ASK_USER_TIMEOUT_SECONDS } from "./ask-user-tool-normalization.js";
+import { normalizeQuestionTimeoutSeconds } from "./ask-user-tool-normalization.js";
 import { beginAskUserPromptDelivery } from "./ask-user-tool.js";
 import { type AnyAgentTool, readToolStringParam, ToolInputError } from "./common.js";
 import {
@@ -44,7 +47,7 @@ const SecretsToolSchema = Type.Object(
         maxItems: 128,
         uniqueItems: true,
         description:
-          "Exact hostnames allowed to receive a secret, without scheme or port (api.stripe.com). Secret entries only; leaving this empty stores a secret that can never be substituted.",
+          "Exact hostnames allowed to receive a secret, without scheme or port (api.stripe.com). Leaving this empty prevents egress substitution; config SecretRefs remain usable.",
       }),
     ),
     reason: Type.Optional(
@@ -55,7 +58,8 @@ const SecretsToolSchema = Type.Object(
     ),
     timeoutSeconds: Type.Optional(
       Type.Integer({
-        description: "Seconds to wait for the human on request; defaults to 900, clamped 30-3600.",
+        description:
+          "Maximum human wait in seconds on request; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
       }),
     ),
   },
@@ -113,21 +117,14 @@ export function normalizeSecretsRequestParams(value: unknown): NormalizedSecrets
   if (reason && reason.length > 200) {
     throw new ToolInputError("reason must be at most 200 characters");
   }
-  const timeout = params.timeoutSeconds;
-  if (
-    timeout !== undefined &&
-    (typeof timeout !== "number" || !Number.isFinite(timeout) || !Number.isInteger(timeout))
-  ) {
-    throw new ToolInputError("timeoutSeconds must be an integer");
-  }
-  const timeoutSeconds = Math.min(3_600, Math.max(30, timeout ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS));
+  const timeoutSeconds = normalizeQuestionTimeoutSeconds(params.timeoutSeconds);
   const binding: NonNullable<QuestionRequestQuestion["secretStore"]> = {
     name,
     kind: "secret",
     ...(allowedHosts !== undefined ? { allowedHosts } : {}),
     ...(reason ? { reason } : {}),
   };
-  const question = `Provide the secret for ${name}.${reason ? ` ${reason}` : ""}`;
+  const question = `Provide the secret for ${name}.`;
   return {
     ...binding,
     kind: "secret",
@@ -154,21 +151,58 @@ function noSecretAnswerResult(status: "pending" | "expired" | "cancelled") {
   return textResult(`${note}\n\n${JSON.stringify(details, null, 2)}`, details);
 }
 
-function storedSecretResult(params: NormalizedSecretsRequestParams, replacedExisting: boolean) {
+async function fetchSecretStore(gatewayCall: GatewayQuestionCall, signal?: AbortSignal) {
+  const result = await gatewayCall("secrets.store.list", {}, {}, signal ? { signal } : undefined);
+  if (!validateSecretsStoreListResult(result)) {
+    throw new Error("secrets.store.list returned invalid metadata");
+  }
+  return result;
+}
+
+async function storedSecretResult(
+  params: NormalizedSecretsRequestParams,
+  provider: string,
+  gatewayCall: GatewayQuestionCall,
+  signal?: AbortSignal,
+) {
+  // This read observes current policy, not the earlier approval. Its failure
+  // cannot undo a committed save; never expose the inventory or read error.
+  const currentPolicy = await fetchSecretStore(gatewayCall, signal)
+    .then(({ entries }) => {
+      const entry = entries.find((candidate) => candidate.name === params.name);
+      if (!entry) {
+        return { status: "missing" as const };
+      }
+      if (entry.kind !== "secret") {
+        return { status: "kind_changed" as const };
+      }
+      const allowedHosts = entry.allowedHosts;
+      if (allowedHosts === undefined) {
+        return { status: "unavailable" as const };
+      }
+      // Return the complete policy or only its count, never a misleading prefix.
+      return JSON.stringify(allowedHosts).length > 512
+        ? { status: "omitted" as const, allowedHostCount: allowedHosts.length }
+        : { status: "available" as const, allowedHosts };
+    })
+    .catch(() => ({ status: "unavailable" as const }));
+  signal?.throwIfAborted();
+
   const details = {
     status: "stored" as const,
     name: params.name,
     kind: params.kind,
-    ...(params.allowedHosts !== undefined ? { allowedHosts: params.allowedHosts } : {}),
-    replacedExisting,
-    ref: { source: "store" as const, id: params.name },
+    ref: { source: "store", provider, id: params.name } satisfies SecretRef,
+    currentPolicy,
   };
   const guidance = [
-    `Stored ${params.name} without exposing its value.`,
-    `Reference {source:"store", id:"${params.name}"} in config SecretRefs.`,
-    "Secret values are substituted at egress only when secrets.egressProxy.enabled is true and the destination matches their allowed hosts.",
+    "Stored; value hidden. Use the returned ref for config SecretRefs.",
+    "currentPolicy is this entry's current host list; the human may edit it. Not Gateway config or an approval receipt; may change later.",
+    "Report current hosts, not proposed hosts. Do not infer why they differ or prescribe Gateway config changes from the difference.",
+    "Only available hosts are complete; [] means no egress. Otherwise make no host claims.",
+    "Stored does not prove proxy enabled or current exec snapshot; config refs are independent.",
   ];
-  return textResult(`${guidance.join(" ")}\n\n${JSON.stringify(details, null, 2)}`, details);
+  return textResult(`${guidance.join(" ")}\n\n${JSON.stringify(details)}`, details);
 }
 
 function listSecretStoreResult(result: SecretsStoreListResult) {
@@ -191,12 +225,14 @@ function listSecretStoreResult(result: SecretsStoreListResult) {
 
 /** Creates the metadata-only secret-store tool and its human-entered write flow. */
 export function createSecretsTool(params: {
+  config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
   runId?: string;
   gatewayCall?: GatewayQuestionCall;
 }): AnyAgentTool {
   const gatewayCall: GatewayQuestionCall = params.gatewayCall ?? callGatewayTool;
+  const storeProvider = resolveDefaultSecretProviderAlias(params.config ?? {}, "store");
   return {
     label: "Secrets",
     name: "secrets",
@@ -209,16 +245,7 @@ export function createSecretsTool(params: {
       const input = args;
       const action = readToolStringParam(input, "action", { required: true });
       if (action === "list") {
-        const result = await gatewayCall(
-          "secrets.store.list",
-          {},
-          {},
-          signal ? { signal } : undefined,
-        );
-        if (!validateSecretsStoreListResult(result)) {
-          throw new Error("secrets.store.list returned invalid metadata");
-        }
-        return listSecretStoreResult(result);
+        return listSecretStoreResult(await fetchSecretStore(gatewayCall, signal));
       }
       if (action === "delete") {
         const name = readSecretStoreName(input);
@@ -268,24 +295,17 @@ export function createSecretsTool(params: {
             },
             // Store-bound requests are gated on an admin client server-side; the
             // default least-privilege scope for question.request is not enough.
-            { scopes: [ADMIN_SCOPE], ...(signal ? { signal } : {}) },
+            {
+              scopes: [ADMIN_SCOPE],
+              requireAgentRuntimeIdentity: true,
+              ...(signal ? { signal } : {}),
+            },
           ),
         );
         registered = true;
         if (registration?.id !== delivery.questionId) {
           throw new Error("question.request returned an unexpected question id");
         }
-        const record = await gatewayCall(
-          "question.get",
-          {},
-          { id: delivery.questionId },
-          signal ? { signal } : undefined,
-        ).catch(() => undefined);
-        const questionRecord = asNullableRecord(asNullableRecord(record)?.question);
-        const questions = questionRecord?.questions;
-        const replacedExisting =
-          Array.isArray(questions) &&
-          asNullableRecord(questions[0])?.secretStoreExisting !== undefined;
         signal?.addEventListener("abort", cancelOnAbort, { once: true });
         if (signal?.aborted) {
           cancelOnAbort();
@@ -298,6 +318,7 @@ export function createSecretsTool(params: {
           ...(signal ? { signal } : {}),
         });
         delivery.markReady();
+        let questionResult: QuestionWaitAnswerResult | undefined;
         if (delivery.hasSubscriber) {
           const first = await Promise.race([
             delivery.waitForDelivery(signal).then((result) => ({
@@ -307,35 +328,33 @@ export function createSecretsTool(params: {
             answerPromise.then((result) => ({ kind: "answer" as const, result })),
           ]);
           if (first.kind === "delivery" && first.result.error !== undefined) {
-            await cancelPendingQuestion("prompt-delivery-failed");
-            throw new Error("credential-request prompt delivery failed", {
-              cause: first.result.error,
-            });
+            questionResult = await cancelPendingQuestion("prompt-delivery-failed");
+            signal?.throwIfAborted();
+            if (!questionResult) {
+              throw new Error("credential-request prompt delivery failed", {
+                cause: first.result.error,
+              });
+            }
           }
         }
-        const result = await answerPromise;
+        questionResult ??= await answerPromise;
+        if (questionResult.status === "pending") {
+          questionResult = (await cancelPendingQuestion("wait-timeout")) ?? questionResult;
+        }
         signal?.throwIfAborted();
-        if (result.status === "answered") {
-          if (result.answers.answers.secret_value?.[0] !== "stored") {
+        // Cancellation can lose to a committed answer; validate every recovered marker here too.
+        if (questionResult.status === "answered") {
+          if (questionResult.answers.answers.secret_value?.[0] !== "stored") {
             throw new Error("credential request returned an unexpected answer marker");
           }
-          return storedSecretResult(request, replacedExisting);
-        }
-        if (result.status === "pending") {
-          // The human may have submitted between the wait timeout and this
-          // cancel; the Gateway then rejects the cancel and hands back the
-          // answer, which means the credential is already stored.
-          const answered = await cancelPendingQuestion("wait-timeout");
-          if (answered) {
-            return storedSecretResult(request, replacedExisting);
-          }
+          return await storedSecretResult(request, storeProvider, gatewayCall, signal);
         }
         if (
-          result.status === "pending" ||
-          result.status === "expired" ||
-          result.status === "cancelled"
+          questionResult.status === "pending" ||
+          questionResult.status === "expired" ||
+          questionResult.status === "cancelled"
         ) {
-          return noSecretAnswerResult(result.status);
+          return noSecretAnswerResult(questionResult.status);
         }
         throw new Error("question.waitAnswer returned an invalid status");
       } catch (error) {

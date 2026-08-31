@@ -1,8 +1,10 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
+import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
-import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   blocksPluginStartup,
@@ -31,6 +33,7 @@ type PluginStartupActivationParams = {
   pluginsConfig: NormalizedPluginsConfig;
   activationSource: { plugins: NormalizedPluginsConfig; rootConfig?: OpenClawConfig };
   platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
 };
 
 type GatewayStartupActivationParams = PluginStartupActivationParams & {
@@ -95,16 +98,36 @@ export function addRequiredAgentHarnessPluginIds(
 function resolveStartupActivationState(
   params: PluginStartupActivationParams,
   autoEnabledReason?: string,
+  applyBundledProviderCompat = false,
 ) {
+  const config = applyBundledProviderCompat
+    ? (withBundledPluginEnablementCompat({
+        config: params.config,
+        pluginIds: [params.plugin.pluginId],
+        env: params.env,
+        activation: "defaults",
+      }) ?? params.config)
+    : params.config;
   return resolveEffectivePluginActivationState({
     id: params.plugin.pluginId,
     origin: params.plugin.origin,
-    config: params.pluginsConfig,
-    rootConfig: params.config,
+    config: applyBundledProviderCompat
+      ? normalizePluginsConfig(config.plugins)
+      : params.pluginsConfig,
+    rootConfig: config,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
     activationSource: params.activationSource,
     ...(autoEnabledReason ? { autoEnabledReason } : {}),
   });
+}
+
+function isProviderCompatStartupPolicy(policy: StartupActivationPolicy): boolean {
+  return (
+    policy === "provider" ||
+    policy === "worker" ||
+    policy === "speech" ||
+    policy === "implicit-external"
+  );
 }
 
 function hasExplicitHookPolicyConfig(
@@ -158,6 +181,12 @@ function passesPluginStartupPolicy(
   const activationState = resolveStartupActivationState(
     params,
     policy === "worker" ? "cloud worker provider required" : undefined,
+    isProviderCompatStartupPolicy(policy) &&
+      isBundledProviderCompatPlugin({
+        origin: plugin.origin,
+        providers: plugin.contributions?.providers,
+        contracts: plugin.contributions?.contracts,
+      }),
   );
   if (!activationState.enabled) {
     return false;

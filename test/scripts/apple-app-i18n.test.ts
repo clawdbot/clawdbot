@@ -31,7 +31,6 @@ describe("Apple app i18n catalogs", () => {
     };
 
     for (const key of [
-      "^[%lld agent](inflect: true) total",
       "^[%lld approval](inflect: true) waiting",
       "Approval needed",
       "Agent: %@",
@@ -357,10 +356,6 @@ describe("Apple app i18n catalogs", () => {
 
   it("keeps custom component text on explicit localized or verbatim paths", async () => {
     const design = await readFile("apps/ios/Sources/Design/OpenClawProComponents.swift", "utf8");
-    const agentOverview = await readFile(
-      "apps/ios/Sources/Design/AgentProTab+Overview.swift",
-      "utf8",
-    );
     const agentDetailComponents = await readFile(
       "apps/ios/Sources/Design/AgentProDetailComponents.swift",
       "utf8",
@@ -408,9 +403,6 @@ describe("Apple app i18n catalogs", () => {
     );
     expect(settings).toContain("self.value.text");
     expect(settings).not.toContain("Text(self.item.title)");
-    expect(agentOverview).toContain(
-      "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
-    );
     expect(agentDetailComponents).toContain(
       "func agentProDetailMetric(label: OpenClawTextValue, value: String)",
     );

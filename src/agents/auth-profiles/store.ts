@@ -4,7 +4,9 @@
  * profiles, and external CLI overlays while keeping save paths local.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
@@ -22,6 +24,7 @@ import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
   assertAuthProfileMigrationReady,
+  assertAuthProfileMigrationStateAtDatabasePath,
   clearAuthProfileMigrationRequired,
   listLegacyAuthProfileSources,
   markAuthProfileMigrationRequired,
@@ -43,6 +46,7 @@ import {
 import {
   buildPersistedAuthProfileSecretsStore,
   loadPersistedAuthProfileStore,
+  loadPersistedAuthProfileStoreAtDatabasePath,
   loadPersistedSharedAuthProfileStore,
   mergeAuthProfileStores,
 } from "./persisted.js";
@@ -53,17 +57,34 @@ import {
   setRuntimeExternalCliProfileIds,
 } from "./runtime-external-profile-references.js";
 import {
+  captureRuntimeAuthProfileLegacyCandidates,
+  createEmptyAuthProfileStore,
+  listRuntimeLocalProfileIds,
+  loadRuntimeAuthProfileOwnerSnapshot,
+  markRuntimePersistedProfiles,
+  mergeLocalAuthProfileStoreWithInheritedStore,
+  runtimeAuthProfileSnapshotSharesOwner,
+  runtimeStoreInheritsMainState,
+  setRuntimeLocalProfileMetadata,
+  stripRuntimeExternalProfileMetadata,
+} from "./runtime-snapshot-owner.js";
+import {
   clearRuntimeAuthProfileStoreSnapshotCore,
-  clearRuntimeAuthProfileStoreSnapshots,
+  clearRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
+  getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   getRuntimeAuthProfileStoreSnapshotRevision,
   getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath,
   noteRuntimeAuthProfileStorePersistedMutation,
-  listRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
+  listOwnedRuntimeAuthProfileStoreSnapshots,
+  listRuntimeAuthProfileStoreSnapshotsForSharedOwner,
+  restoreOwnedRuntimeAuthProfileStoreSnapshot,
   setRuntimeAuthProfileStoreSnapshot,
+  updateRuntimeAuthProfileStoreSnapshot,
   setRuntimeAuthProfileStoreSnapshotAtDatabasePath,
+  type OwnedRuntimeAuthProfileStoreSnapshotEntry,
 } from "./runtime-snapshots.js";
 import {
   deferAuthProfilePostCommitPublication,
@@ -73,10 +94,13 @@ import {
   readPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath as resolveAgentAuthPath,
+  resolveAuthProfileStoreOwner,
   runAuthProfileWriteTransaction,
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
   type AuthProfileDatabase,
+  type AuthProfileStoreOwner,
+  type PreparedAuthProfileStoreOwner,
 } from "./sqlite.js";
 import { buildPersistedAuthProfileState, loadPersistedAuthProfileState } from "./state.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
@@ -105,13 +129,9 @@ type SaveAuthProfileStoreOptions = {
 const INLINE_OAUTH_TOKEN_FIELDS = ["access", "refresh", "idToken"] as const;
 type AuthProfileRuntimeMode =
   | { kind: "env-only" }
-  | { kind: "agent-dir"; agentDir: string; sharedStore?: AuthProfileStore };
+  | { kind: "agent-dir"; agentDir: string; sharedStore?: AuthProfileStore; env: NodeJS.ProcessEnv };
 
 const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
-
-function createEmptyAuthProfileStore(): AuthProfileStore {
-  return { version: AUTH_STORE_VERSION, profiles: {} };
-}
 
 /** Run a bounded operation without persisted or external CLI auth profiles. */
 export function withEnvOnlyAuthProfileStore<T>(run: () => T): T {
@@ -129,7 +149,7 @@ export function withAuthProfileStoreAgentDir<T>(
   if (resolveSharedAuthStoreOwnership(env).location === "state-db") {
     const shared = loadPersistedSharedAuthProfileStore(env);
     if (!shared && inspectPersistedSharedAuthProfileStoreRaw(env).status !== "missing") {
-      throw new AuthProfileStoreUnreadableError(undefined, env);
+      throw new AuthProfileStoreUnreadableError(resolveSharedAuthPath(env));
     }
     sharedStore = shared ?? createEmptyAuthProfileStore();
   }
@@ -144,7 +164,12 @@ export function withAuthProfileStoreAgentDir<T>(
     );
     pruneAuthProfileStoreReferences(sharedStore, new Set(Object.keys(sharedStore.profiles)));
   }
-  return authProfileRuntimeMode.run({ kind: "agent-dir", agentDir, sharedStore }, run);
+  return authProfileRuntimeMode.run({ kind: "agent-dir", agentDir, sharedStore, env }, run);
+}
+
+function getScopedAuthProfileEnv(): NodeJS.ProcessEnv | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  return mode?.kind === "agent-dir" ? mode.env : undefined;
 }
 
 function getScopedSharedAuthStore(): AuthProfileStore | undefined {
@@ -252,19 +277,36 @@ type ExternalCliSyncResult = {
 
 let runtimeSnapshotPublisherForTest: ((publish: () => void) => void) | undefined;
 
-function publishRuntimeSnapshotsAfterCommit(publish: (() => void) | undefined): boolean {
-  if (!publish) {
+type RuntimeSnapshotPublication = {
+  agentDir?: string;
+  databasePath: string;
+  publish: () => boolean;
+};
+
+function publishRuntimeSnapshotsAfterCommit(
+  publication: RuntimeSnapshotPublication | undefined,
+): boolean {
+  if (!publication) {
     return true;
   }
+  // A committed write can no longer roll back, so publication failure must
+  // evict only the exact derived owner that could now be stale.
   try {
+    let converged = false;
+    const publish = () => {
+      converged = publication.publish();
+    };
     if (runtimeSnapshotPublisherForTest) {
       runtimeSnapshotPublisherForTest(publish);
     } else {
       publish();
     }
-    return true;
+    return converged;
   } catch (err) {
-    clearRuntimeAuthProfileStoreSnapshots();
+    clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+      publication.databasePath,
+      publication.agentDir,
+    );
     authProfilesLog.warn("auth profile store committed but runtime snapshot publication failed", {
       err,
     });
@@ -273,7 +315,6 @@ function publishRuntimeSnapshotsAfterCommit(publish: (() => void) | undefined): 
 }
 
 const testing = {
-  publishRuntimeSnapshotsAfterCommit,
   resetRuntimeSnapshotPublisherForTest(): void {
     runtimeSnapshotPublisherForTest = undefined;
   },
@@ -300,14 +341,23 @@ function resolvePersistedLoadOptions(
 function loadPersistedAuthProfileStores(
   agentDir?: string,
   database?: AuthProfileDatabase,
+  owner?: AuthProfileStoreOwner,
 ): PersistedAuthProfileStores {
   const localStore = loadPersistedAuthProfileStore(agentDir, database ? { database } : undefined);
-  const localAuthPath = agentDir ? resolveAgentAuthPath(agentDir) : resolveSharedAuthPath();
-  const isMainStore = localAuthPath === resolveSharedAuthPath();
+  const localAuthPath =
+    owner?.databasePath ?? (agentDir ? resolveAgentAuthPath(agentDir) : resolveSharedAuthPath());
+  const isMainStore = localAuthPath === (owner?.sharedDatabasePath ?? resolveSharedAuthPath());
   return {
     isMainStore,
     localStore,
-    mainStore: isMainStore ? localStore : loadPersistedAuthProfileStore(),
+    mainStore: isMainStore
+      ? localStore
+      : owner
+        ? loadPersistedAuthProfileStoreAtDatabasePath(
+            owner.sharedDatabasePath,
+            owner.location === "state-db" ? "shared-state" : "agent",
+          )
+        : loadPersistedAuthProfileStore(),
   };
 }
 
@@ -464,45 +514,50 @@ function maybeSyncPersistedExternalCliAuthProfiles(params: {
 
   // External CLI sync writes only profiles that still match the loaded
   // baseline, avoiding overwrite of concurrent local auth changes.
-  let publishRuntimeSnapshots: (() => void) | undefined;
+  let publishRuntimeSnapshots: RuntimeSnapshotPublication | undefined;
   let result: ExternalCliSyncResult;
   try {
-    result = runAuthProfileWriteTransaction(params.agentDir, (database) => {
-      const latestStore = loadPersistedAuthProfileStore(params.agentDir, {
-        ...resolvePersistedLoadOptions(params.options),
-        database,
-      }) ?? {
-        version: AUTH_STORE_VERSION,
-        profiles: {},
-      };
-      let changed = false;
-      for (const [profileId, credential] of changedProfiles) {
-        const previous = params.store.profiles[profileId];
-        const latest = latestStore.profiles[profileId];
-        if (!isDeepStrictEqual(latest, previous)) {
-          authProfilesLog.debug(
-            "skipped persisted external cli auth sync for concurrently changed profile",
-            {
-              profileId,
-            },
-          );
-          continue;
-        }
-        latestStore.profiles[profileId] = credential;
-        changed = true;
-      }
-      if (changed) {
-        publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
-          latestStore,
-          params.agentDir,
-          {
-            filterExternalAuthProfiles: false,
-          },
+    result = runAuthProfileWriteTransaction(
+      params.agentDir,
+      (database, owner) => {
+        const latestStore = loadPersistedAuthProfileStore(params.agentDir, {
+          ...resolvePersistedLoadOptions(params.options),
           database,
-        );
-      }
-      return { store: latestStore, cacheable: true };
-    });
+        }) ?? {
+          version: AUTH_STORE_VERSION,
+          profiles: {},
+        };
+        let changed = false;
+        for (const [profileId, credential] of changedProfiles) {
+          const previous = params.store.profiles[profileId];
+          const latest = latestStore.profiles[profileId];
+          if (!isDeepStrictEqual(latest, previous)) {
+            authProfilesLog.debug(
+              "skipped persisted external cli auth sync for concurrently changed profile",
+              {
+                profileId,
+              },
+            );
+            continue;
+          }
+          latestStore.profiles[profileId] = credential;
+          changed = true;
+        }
+        if (changed) {
+          publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
+            latestStore,
+            params.agentDir,
+            {
+              filterExternalAuthProfiles: false,
+            },
+            database,
+            owner,
+          );
+        }
+        return { store: latestStore, cacheable: true };
+      },
+      { env: getScopedAuthProfileEnv() },
+    );
   } catch (err) {
     authProfilesLog.warn(
       "skipped persisted external cli auth sync because auth store write failed",
@@ -518,6 +573,7 @@ function maybeSyncPersistedExternalCliAuthProfiles(params: {
 }
 
 function shouldKeepProfileInLocalStore(params: {
+  owner: AuthProfileStoreOwner;
   store: AuthProfileStore;
   profileId: string;
   credential: AuthProfileStore["profiles"][string];
@@ -564,9 +620,9 @@ function shouldKeepProfileInLocalStore(params: {
         profiles: params.externalProfiles(),
       });
     }
-    const runtimeCredential = getRuntimeAuthProfileStoreSnapshot(params.agentDir)?.profiles[
-      params.profileId
-    ];
+    const runtimeCredential = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+      params.owner.databasePath,
+    )?.profiles[params.profileId];
     if (!runtimeCredential || isDeepStrictEqual(runtimeCredential, params.credential)) {
       return false;
     }
@@ -633,6 +689,7 @@ function pruneAuthProfileStoreReferences(
 }
 
 function buildLocalAuthProfileStoreForSave(params: {
+  owner: AuthProfileStoreOwner;
   store: AuthProfileStore;
   agentDir?: string;
   options?: SaveAuthProfileStoreOptions;
@@ -648,6 +705,7 @@ function buildLocalAuthProfileStoreForSave(params: {
   localStore.profiles = Object.fromEntries(
     Object.entries(localStore.profiles).filter(([profileId, credential]) =>
       shouldKeepProfileInLocalStore({
+        owner: params.owner,
         store: params.store,
         profileId,
         credential,
@@ -719,30 +777,8 @@ function buildAuthProfileStoreWithoutExternalProfiles(params: {
   return stripRuntimeExternalProfileMetadata(mergeAuthProfileStores(persistedStore, localStore));
 }
 
-function stripRuntimeExternalProfileMetadata(store: AuthProfileStore): AuthProfileStore {
-  const stripped = { ...store };
-  delete stripped.runtimeExternalProfileIds;
-  delete stripped.runtimeExternalProfileIdsAuthoritative;
-  setRuntimeExternalCliProfileIds(stripped, []);
-  return stripped;
-}
-
-function markRuntimePersistedProfiles(
-  store: AuthProfileStore,
-  persistedStore: AuthProfileStore = store,
-): AuthProfileStore {
-  const profileIds = Object.entries(persistedStore.profiles)
-    .flatMap(([profileId, credential]) =>
-      isDeepStrictEqual(store.profiles[profileId], credential) ? [profileId] : [],
-    )
-    .toSorted();
-  return {
-    ...store,
-    runtimePersistedProfileIds: profileIds.length > 0 ? profileIds : undefined,
-  };
-}
-
 function buildRuntimeAuthProfileStoreForSave(params: {
+  owner: AuthProfileStoreOwner;
   store: AuthProfileStore;
   agentDir?: string;
   options?: SaveAuthProfileStoreOptions;
@@ -757,46 +793,20 @@ function buildRuntimeAuthProfileStoreForSave(params: {
   });
 }
 
-function setRuntimeLocalProfileMetadata(
-  store: AuthProfileStore,
-  localProfileIds: Iterable<string>,
-  runtimeInheritsMainState = false,
-): RuntimeAuthProfileStore {
-  return {
-    ...store,
-    runtimeLocalProfileIds: [...new Set(localProfileIds)].toSorted(),
-    ...(runtimeInheritsMainState ? { runtimeInheritsMainState: true } : {}),
-  };
-}
-
-function runtimeStoreInheritsMainState(
-  store: AuthProfileStore,
-  localStore: AuthProfileStore,
+function convergeRuntimeAuthProfileStoreSnapshot(
+  databasePath: string,
+  agentDir: string | undefined,
+  operation: () => void,
 ): boolean {
-  const state = ({ order, lastGood, usageStats }: AuthProfileStore) => ({
-    order,
-    lastGood,
-    usageStats,
-  });
-  return !isDeepStrictEqual(state(store), state(localStore));
-}
-
-function listRuntimeLocalProfileIds(
-  store: RuntimeAuthProfileStore,
-  mainStore?: AuthProfileStore,
-): string[] {
-  if (store.runtimeLocalProfileIds) {
-    return store.runtimeLocalProfileIds;
+  try {
+    operation();
+    return true;
+  } catch (err) {
+    // A refused owner must not interrupt convergence of healthy sibling snapshots.
+    clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath, agentDir);
+    authProfilesLog.warn("auth profile snapshot convergence failed", { err });
+    return false;
   }
-  return Object.entries(store.profiles).flatMap(([profileId, credential]) =>
-    mainStore &&
-    shouldUseMainOwnerForLocalOAuthCredential({
-      local: credential,
-      main: mainStore.profiles[profileId],
-    })
-      ? []
-      : [profileId],
-  );
 }
 
 function setRuntimeExternalProfileMetadata(params: {
@@ -844,6 +854,16 @@ export function preserveResolvedSecretBackedCredentials(params: {
     }
   }
   return next;
+}
+
+function materializeRuntimeAuthProfileStoreSnapshot(
+  next: AuthProfileStore,
+  existing: AuthProfileStore,
+): AuthProfileStore {
+  return mergeRuntimeExternalProfileReferences({
+    next: preserveResolvedSecretBackedCredentials({ next, existing }),
+    existing,
+  });
 }
 
 function mergeRuntimeExternalProfileState(params: {
@@ -942,17 +962,21 @@ export async function updateAuthProfileStoreWithLock(params: {
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
   const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
-  let publishRuntimeSnapshots: (() => void) | undefined;
+  let publishRuntimeSnapshots: RuntimeSnapshotPublication | undefined;
   let store: AuthProfileStore;
   try {
     store = runAuthProfileWriteTransaction(
       agentDir,
-      (database) => {
-        const loadedStore = loadAuthProfileStoreForAgent(agentDir, {
-          database,
-          readOnly: true,
-          syncExternalCli: false,
-        });
+      (database, owner) => {
+        const loadedStore = loadAuthProfileStoreForAgent(
+          agentDir,
+          {
+            database,
+            readOnly: true,
+            syncExternalCli: false,
+          },
+          owner.env,
+        );
         const shouldSave = params.updater(loadedStore);
         if (shouldSave) {
           publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
@@ -960,11 +984,16 @@ export async function updateAuthProfileStoreWithLock(params: {
             agentDir,
             params.saveOptions,
             database,
+            owner,
           );
         }
         return loadedStore;
       },
-      { sharedStoreWrite: params.sharedStoreWrite, stateDir: params.stateDir },
+      {
+        sharedStoreWrite: params.sharedStoreWrite,
+        stateDir: params.stateDir,
+        env: params.stateDir ? undefined : getScopedAuthProfileEnv(),
+      },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -997,40 +1026,57 @@ export function loadAuthProfileStore(): AuthProfileStore {
 function loadAuthProfileStoreForAgent(
   agentDir?: string,
   options?: LoadAuthProfileStoreOptions,
+  env?: NodeJS.ProcessEnv,
 ): AuthProfileStore {
   if (isEnvOnlyAuthProfileRuntime()) {
     return createEmptyAuthProfileStore();
   }
   const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   const effectiveOptions = resolveRuntimeAuthProfileLoadOptions(options);
-  assertAuthProfileMigrationReady(effectiveAgentDir);
-  const store = loadPersistedAuthProfileStore(
-    effectiveAgentDir,
-    resolvePersistedLoadOptions(effectiveOptions),
-  );
+  assertAuthProfileMigrationReady(effectiveAgentDir, env);
+  const store =
+    !effectiveAgentDir && env && !effectiveOptions?.database
+      ? loadPersistedSharedAuthProfileStore(env)
+      : loadPersistedAuthProfileStore(
+          effectiveAgentDir,
+          resolvePersistedLoadOptions(effectiveOptions),
+        );
   if (
     !store &&
-    inspectPersistedAuthProfileStoreRaw(effectiveAgentDir, effectiveOptions?.database).status !==
-      "missing"
+    (!effectiveAgentDir && env && !effectiveOptions?.database
+      ? inspectPersistedSharedAuthProfileStoreRaw(env)
+      : inspectPersistedAuthProfileStoreRaw(effectiveAgentDir, effectiveOptions?.database)
+    ).status !== "missing"
   ) {
-    throw new AuthProfileStoreUnreadableError(effectiveAgentDir);
+    throw new AuthProfileStoreUnreadableError(
+      effectiveOptions?.database?.path ??
+        (effectiveAgentDir ? resolveAgentAuthPath(effectiveAgentDir) : resolveSharedAuthPath(env)),
+    );
   }
-  const legacySources = listLegacyAuthProfileSources({ agentDir: effectiveAgentDir });
+  const legacySources = listLegacyAuthProfileSources({
+    agentDir: effectiveAgentDir,
+    env,
+  });
   const credentialSources = legacySources.filter((source) => source.kind !== "auth-state");
   // A populated canonical store owns credentials; retired files beside it are
   // unarchived bytes. An empty or absent store still requires migration.
   if (credentialSources.length > 0 && (!store || Object.keys(store.profiles).length === 0)) {
     const migrationError = new AuthProfileMigrationRequiredError({
       agentDir: effectiveAgentDir,
+      env,
       sources: credentialSources,
     });
     if (store) {
-      markAuthProfileMigrationRequired(effectiveAgentDir, migrationError);
+      markAuthProfileMigrationRequired(effectiveAgentDir, migrationError, env);
     }
     throw migrationError;
   }
-  warnLegacyAuthProfileSourcesIgnored({ agentDir: effectiveAgentDir, sources: legacySources });
-  clearAuthProfileMigrationRequired(effectiveAgentDir);
+  warnLegacyAuthProfileSourcesIgnored({
+    agentDir: effectiveAgentDir,
+    env,
+    sources: legacySources,
+  });
+  clearAuthProfileMigrationRequired(effectiveAgentDir, env);
   const synced = maybeSyncPersistedExternalCliAuthProfiles({
     store: store ?? createEmptyAuthProfileStore(),
     agentDir: effectiveAgentDir,
@@ -1132,14 +1178,7 @@ export function loadAuthProfileStoreWithoutExternalProfiles(
   }
 
   const mainStore = loadAuthProfileStoreForAgent(options.inheritedAuthDir, options);
-  const mergedStore = mergeAuthProfileStores(mainStore, store, {
-    preserveBaseRuntimeExternalProfiles: true,
-  });
-  return setRuntimeLocalProfileMetadata(
-    stripRuntimeExternalProfileMetadata(mergedStore),
-    listRuntimeLocalProfileIds(store, mainStore),
-    runtimeStoreInheritsMainState(mergedStore, store),
-  );
+  return mergeLocalAuthProfileStoreWithInheritedStore(store, mainStore);
 }
 
 /** Ensure an auth store is available, including runtime/external profile overlays. */
@@ -1186,7 +1225,7 @@ export function ensureAuthProfileStore(
     // model and chat metadata generations converge without reopening credential sources.
     const materialized = mergeRuntimeExternalProfileState({ next: store, existing: runtimeStore });
     if (!isDeepStrictEqual(materialized, runtimeStore)) {
-      setRuntimeAuthProfileStoreSnapshot(materialized, effectiveAgentDir);
+      updateRuntimeAuthProfileStoreSnapshot(materialized, effectiveAgentDir);
     }
     return store;
   }
@@ -1243,6 +1282,17 @@ export function ensureAuthProfileStoreWithoutExternalProfiles(
   );
 }
 
+/** Whether an agent dir resolves to the shared main auth-profile owner. */
+export function isSharedMainAuthProfileAgentDir(agentDir?: string): boolean {
+  const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
+  if (!effectiveAgentDir) {
+    return true;
+  }
+  const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
+  const mainPath = mainAgentDir ? resolveAgentAuthPath(mainAgentDir) : resolveSharedAuthPath();
+  return resolveAgentAuthPath(effectiveAgentDir) === mainPath;
+}
+
 /** Find a persisted credential in the scoped store, falling back to the main store. */
 export function findPersistedAuthProfileCredential(params: {
   agentDir?: string;
@@ -1262,10 +1312,7 @@ export function findPersistedAuthProfileCredential(params: {
     return requestedProfile;
   }
 
-  const requestedPath = resolveAgentAuthPath(agentDir);
-  const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
-  const mainPath = mainAgentDir ? resolveAgentAuthPath(mainAgentDir) : resolveSharedAuthPath();
-  if (requestedPath === mainPath) {
+  if (isSharedMainAuthProfileAgentDir(agentDir)) {
     return requestedProfile;
   }
 
@@ -1287,13 +1334,11 @@ export function resolvePersistedAuthProfileOwnerAgentDir(params: {
     return undefined;
   }
   const requestedStore = loadPersistedAuthProfileStore(agentDir);
-  const requestedPath = resolveAgentAuthPath(agentDir);
-  const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
-  const mainPath = mainAgentDir ? resolveAgentAuthPath(mainAgentDir) : resolveSharedAuthPath();
-  if (requestedPath === mainPath) {
+  if (isSharedMainAuthProfileAgentDir(agentDir)) {
     return undefined;
   }
 
+  const mainAgentDir = resolveRuntimeAuthProfileAgentDir();
   const mainStore = loadPersistedAuthProfileStore(mainAgentDir);
   const requestedProfile = requestedStore?.profiles[params.profileId];
   if (requestedProfile) {
@@ -1367,17 +1412,20 @@ function saveAuthProfileStoreInTransaction(
   agentDir: string | undefined,
   options: SaveAuthProfileStoreOptions | undefined,
   database: AuthProfileDatabase,
+  owner: AuthProfileStoreOwner | PreparedAuthProfileStoreOwner,
   publishFromSuppliedStore = false,
-): () => void {
+): RuntimeSnapshotPublication {
   // Shared-state rows are global: never scope their persistence or runtime snapshots to an
   // agent, or shared credentials are published and cached as agent-local state.
   const persistenceAgentDir = "agentId" in database ? agentDir : undefined;
-  const savedAuthPath = persistenceAgentDir
-    ? resolveAgentAuthPath(persistenceAgentDir)
-    : database.path;
-  const mainAuthPath = persistenceAgentDir ? resolveSharedAuthPath() : database.path;
+  const savedAuthPath = owner.databasePath;
+  const mainAuthPath = owner.sharedDatabasePath;
   const savesMainStore = savedAuthPath === mainAuthPath;
-  const loadedPersistedStores = loadPersistedAuthProfileStores(persistenceAgentDir, database);
+  const loadedPersistedStores = loadPersistedAuthProfileStores(
+    persistenceAgentDir,
+    database,
+    owner,
+  );
   const persistedStores: PersistedAuthProfileStores = {
     ...loadedPersistedStores,
     localStore: loadedPersistedStores.localStore ?? {
@@ -1387,6 +1435,7 @@ function saveAuthProfileStoreInTransaction(
     },
   };
   const localStore = buildLocalAuthProfileStoreForSave({
+    owner,
     store,
     agentDir: persistenceAgentDir,
     options,
@@ -1417,6 +1466,7 @@ function saveAuthProfileStoreInTransaction(
   const suppliedRuntimeStore = publishFromSuppliedStore
     ? markRuntimePersistedProfiles(
         buildRuntimeAuthProfileStoreForSave({
+          owner,
           store,
           agentDir: persistenceAgentDir,
           options,
@@ -1431,65 +1481,92 @@ function saveAuthProfileStoreInTransaction(
   if (stateChanged) {
     writePersistedAuthProfileStateRaw(statePayload, persistenceAgentDir, database);
   }
+  const committedSharedStore = savesMainStore
+    ? setRuntimeLocalProfileMetadata(
+        markRuntimePersistedProfiles(localStore),
+        listRuntimeLocalProfileIds(localStore),
+      )
+    : undefined;
   const publishRuntimeSnapshots = () => {
     // Main-store publication invalidates derived stores. Capture the latest
     // overlays at the publication edge so post-commit refreshes are retained.
     const derivedSnapshots = savesMainStore
-      ? listRuntimeAuthProfileStoreSnapshots().filter(
-          (entry) => entry.databasePath !== mainAuthPath,
-        )
+      ? listRuntimeAuthProfileStoreSnapshotsForSharedOwner(owner)
       : [];
     if (credentialsChanged || stateChanged) {
-      noteRuntimeAuthProfileStorePersistedMutation(persistenceAgentDir, {
-        credentialsChanged,
-        profileSetChanged,
-        stateChanged,
-        profileIds: changedProfileIds,
-      });
-    }
-    if (suppliedRuntimeStore) {
-      const existing = getRuntimeAuthProfileStoreSnapshot(persistenceAgentDir);
-      if (existing) {
-        const materialized = preserveResolvedSecretBackedCredentials({
-          next: suppliedRuntimeStore,
-          existing,
-        });
-        setRuntimeAuthProfileStoreSnapshot(
-          mergeRuntimeExternalProfileReferences({ next: materialized, existing }),
-          persistenceAgentDir,
-        );
-      }
-      if (savesMainStore && (credentialsChanged || stateChanged)) {
-        for (const derived of derivedSnapshots) {
-          const refreshed = loadAuthProfileStoreWithoutExternalProfiles(derived.agentDir);
-          const materialized = preserveResolvedSecretBackedCredentials({
-            next: refreshed,
-            existing: derived.store,
-          });
-          setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-            mergeRuntimeExternalProfileReferences({ next: materialized, existing: derived.store }),
-            derived.databasePath,
-            derived.agentDir,
-          );
-        }
-      }
-      return;
-    }
-    refreshRuntimeAuthProfileStoreSnapshot(persistenceAgentDir);
-    for (const derived of derivedSnapshots) {
-      const refreshed = loadAuthProfileStoreWithoutExternalProfiles(derived.agentDir);
-      const materialized = preserveResolvedSecretBackedCredentials({
-        next: refreshed,
-        existing: derived.store,
-      });
-      setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-        mergeRuntimeExternalProfileReferences({ next: materialized, existing: derived.store }),
-        derived.databasePath,
-        derived.agentDir,
+      noteRuntimeAuthProfileStorePersistedMutation(
+        persistenceAgentDir,
+        {
+          credentialsChanged,
+          profileSetChanged,
+          stateChanged,
+          profileIds: changedProfileIds,
+        },
+        owner,
       );
     }
+    try {
+      assertAuthProfileMigrationStateAtDatabasePath(savedAuthPath);
+    } catch (error) {
+      // A refused materialization does not undo committed mutation facts. State-only
+      // writes need explicit eviction too; credential mutation already invalidates them.
+      for (const derived of derivedSnapshots) {
+        clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(derived.databasePath, derived.agentDir);
+      }
+      throw error;
+    }
+    if (suppliedRuntimeStore) {
+      const existing = getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(savedAuthPath);
+      if (existing) {
+        const materialized = runtimeAuthProfileSnapshotSharesOwner(existing.owner, owner)
+          ? materializeRuntimeAuthProfileStoreSnapshot(suppliedRuntimeStore, existing.store)
+          : suppliedRuntimeStore;
+        setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+          materialized,
+          savedAuthPath,
+          persistenceAgentDir,
+          owner,
+        );
+      }
+      if (!credentialsChanged && !stateChanged) {
+        return true;
+      }
+    } else if (savesMainStore) {
+      const existing = getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(savedAuthPath);
+      if (existing) {
+        setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+          runtimeAuthProfileSnapshotSharesOwner(existing.owner, owner)
+            ? materializeRuntimeAuthProfileStoreSnapshot(committedSharedStore!, existing.store)
+            : committedSharedStore!,
+          savedAuthPath,
+          persistenceAgentDir,
+          owner,
+        );
+      }
+    } else {
+      refreshRuntimeAuthProfileStoreSnapshot(persistenceAgentDir, owner);
+    }
+    let converged = true;
+    for (const derived of derivedSnapshots) {
+      converged =
+        convergeRuntimeAuthProfileStoreSnapshot(derived.databasePath, derived.agentDir, () =>
+          rebuildRuntimeAuthProfileStoreSnapshot(
+            derived.agentDir,
+            derived,
+            { ...owner, databasePath: derived.databasePath },
+            undefined,
+            committedSharedStore,
+            derived.store.runtimeLocalProfileIds,
+          ),
+        ) && converged;
+    }
+    return converged;
   };
-  return publishRuntimeSnapshots;
+  return {
+    ...(persistenceAgentDir ? { agentDir: persistenceAgentDir } : {}),
+    databasePath: savedAuthPath,
+    publish: publishRuntimeSnapshots,
+  };
 }
 
 /** Save the auth profile store plus sidecar state, preserving runtime overlay metadata. */
@@ -1501,52 +1578,69 @@ export function saveAuthProfileStore(
 ): void {
   const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   if (database) {
-    const publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
+    // Retain a prepared transaction owner, or use a shared connection's canonical identity.
+    saveAuthProfileStoreWithPreparedOwner(
       store,
       effectiveAgentDir,
       options,
       database,
-      true,
+      resolveAuthProfileStoreOwner(database, getScopedAuthProfileEnv()),
     );
-    const publishAfterCommit = () => {
-      publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
-    };
-    if (!deferAuthProfilePostCommitPublication(database, publishAfterCommit)) {
-      // A supplied connection outside the transaction wrapper autocommits each write.
-      publishAfterCommit();
-    }
     return;
   }
-  let publishRuntimeSnapshots: (() => void) | undefined;
+  let publishRuntimeSnapshots: RuntimeSnapshotPublication | undefined;
   runAuthProfileWriteTransaction(
     effectiveAgentDir,
-    (transactionDatabase) => {
+    (transactionDatabase, owner) => {
       publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
         store,
         effectiveAgentDir,
         options,
         transactionDatabase,
+        owner,
       );
     },
-    { sharedStoreWrite: options?.sharedStoreWrite },
+    { sharedStoreWrite: options?.sharedStoreWrite, env: getScopedAuthProfileEnv() },
   );
   publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
 }
 
+/** Core transaction callers carry the owner already selected before opening SQLite. */
+export function saveAuthProfileStoreWithPreparedOwner(
+  store: AuthProfileStore,
+  agentDir: string | undefined,
+  options: SaveAuthProfileStoreOptions | undefined,
+  database: AuthProfileDatabase,
+  owner: AuthProfileStoreOwner | PreparedAuthProfileStoreOwner,
+): void {
+  const publish = saveAuthProfileStoreInTransaction(
+    store,
+    agentDir,
+    options,
+    database,
+    owner,
+    true,
+  );
+  const publishAfterCommit = () => {
+    publishRuntimeSnapshotsAfterCommit(publish);
+  };
+  if (!deferAuthProfilePostCommitPublication(database, publishAfterCommit)) {
+    publishAfterCommit();
+  }
+}
+
 type AuthProfileStorePersistenceSnapshot = {
+  owner: PreparedAuthProfileStoreOwner;
   credentialsRaw: unknown;
   stateRaw: unknown;
   runtimeCaptured: boolean;
   runtimeRevision?: number;
   runtimeRevisionAtSaveEdge?: number;
   runtimeRevisionBeforePublication?: number;
-  runtimeStore?: AuthProfileStore;
-  derivedRuntimeStores?: Array<{
-    databasePath: string;
-    agentDir: string;
-    store: AuthProfileStore;
-    runtimeRevision?: number;
-  }>;
+  runtimeEntry?: OwnedRuntimeAuthProfileStoreSnapshotEntry;
+  derivedRuntimeStores?: Array<
+    OwnedRuntimeAuthProfileStoreSnapshotEntry & { runtimeRevision: number }
+  >;
   derivedRuntimeRevisionsAtSaveEdge?: Array<{
     databasePath: string;
     agentDir: string;
@@ -1564,34 +1658,45 @@ type CommittedAuthProfileStoreSave = {
   publishRuntimeSnapshots: () => boolean;
 };
 
+function assertAuthProfilePersistenceOwner(
+  owner: PreparedAuthProfileStoreOwner,
+  agentDir: string | undefined,
+  stateDir?: string,
+): void {
+  if (
+    stateDir &&
+    path.resolve(resolveStateDir({ ...owner.env, OPENCLAW_STATE_DIR: stateDir })) !==
+      path.resolve(resolveStateDir(owner.env))
+  ) {
+    throw new Error("explicit auth state directory does not match the captured owner");
+  }
+  const requestedPath = agentDir ? resolveAgentAuthPath(agentDir) : owner.sharedDatabasePath;
+  if (requestedPath !== owner.databasePath) {
+    throw new Error("auth profile persistence snapshot belongs to another owner");
+  }
+}
+
 function captureRuntimeAuthProfileStorePersistenceSnapshot(
-  agentDir?: string,
-  canonicalDatabasePath?: string,
+  owner: AuthProfileStoreOwner,
 ): Pick<
   AuthProfileStorePersistenceSnapshot,
-  "runtimeCaptured" | "runtimeRevision" | "runtimeStore" | "derivedRuntimeStores"
+  "runtimeCaptured" | "runtimeRevision" | "runtimeEntry" | "derivedRuntimeStores"
 > {
-  const capturedAuthPath =
-    canonicalDatabasePath ?? (agentDir ? resolveAgentAuthPath(agentDir) : resolveSharedAuthPath());
-  const mainAuthPath =
-    agentDir === undefined && canonicalDatabasePath
-      ? canonicalDatabasePath
-      : resolveSharedAuthPath();
+  const capturedAuthPath = owner.databasePath;
+  const mainAuthPath = owner.sharedDatabasePath;
   return {
     runtimeCaptured: true,
     runtimeRevision: getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(capturedAuthPath),
-    runtimeStore: getRuntimeAuthProfileStoreSnapshot(agentDir),
+    runtimeEntry: getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(capturedAuthPath),
     derivedRuntimeStores:
       capturedAuthPath === mainAuthPath
-        ? listRuntimeAuthProfileStoreSnapshots()
-            .filter((entry) => entry.databasePath !== mainAuthPath)
-            .map(({ agentDir: derivedAgentDir, databasePath, store }) => ({
-              databasePath,
-              agentDir: derivedAgentDir,
-              store,
-              runtimeRevision:
-                getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath),
-            }))
+        ? listRuntimeAuthProfileStoreSnapshotsForSharedOwner(owner).map((entry) =>
+            Object.assign(entry, {
+              runtimeRevision: getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(
+                entry.databasePath,
+              ),
+            }),
+          )
         : [],
   };
 }
@@ -1606,8 +1711,8 @@ function recordRuntimeAuthProfileStoreOwnership(
   if (runtime.runtimeRevision !== undefined) {
     owned.runtimeRevision = runtime.runtimeRevision;
   }
-  if (runtime.runtimeStore !== undefined) {
-    owned.runtimeStore = runtime.runtimeStore;
+  if (runtime.runtimeEntry !== undefined) {
+    owned.runtimeEntry = runtime.runtimeEntry;
   }
   if (runtime.derivedRuntimeStores !== undefined) {
     owned.derivedRuntimeStores = runtime.derivedRuntimeStores;
@@ -1638,37 +1743,83 @@ function recordRuntimeAuthProfileStorePublicationEdge(
 }
 
 function replaceRuntimeAuthProfileStoreSnapshot(
-  store: AuthProfileStore | undefined,
+  entry: OwnedRuntimeAuthProfileStoreSnapshotEntry | undefined,
   agentDir: string | undefined,
-  databasePath: string,
+  owner: AuthProfileStoreOwner,
 ): void {
-  if (store) {
-    setRuntimeAuthProfileStoreSnapshotAtDatabasePath(store, databasePath, agentDir);
+  if (entry) {
+    assertAuthProfileMigrationStateAtDatabasePath(entry.databasePath);
+    if (entry.owner.kind === "resolved") {
+      assertAuthProfileMigrationStateAtDatabasePath(entry.owner.sharedDatabasePath);
+    }
+    restoreOwnedRuntimeAuthProfileStoreSnapshot(entry, agentDir);
     return;
   }
-  replaceRuntimeAuthProfileStoreSnapshots(
-    listRuntimeAuthProfileStoreSnapshots().filter((entry) => entry.databasePath !== databasePath),
-  );
+  clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(owner.databasePath, agentDir);
 }
 
-function refreshRuntimeAuthProfileStoreSnapshot(agentDir?: string): void {
-  const existing = getRuntimeAuthProfileStoreSnapshot(agentDir);
+function refreshRuntimeAuthProfileStoreSnapshot(
+  agentDir: string | undefined,
+  owner: AuthProfileStoreOwner,
+): void {
+  const existing = getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(owner.databasePath);
   if (!existing) {
     return;
   }
-  rebuildRuntimeAuthProfileStoreSnapshot(agentDir, existing);
+  rebuildRuntimeAuthProfileStoreSnapshot(agentDir, existing, owner);
 }
 
 function rebuildRuntimeAuthProfileStoreSnapshot(
   agentDir: string | undefined,
-  existing: AuthProfileStore,
+  existing: OwnedRuntimeAuthProfileStoreSnapshotEntry,
+  owner: AuthProfileStoreOwner | PreparedAuthProfileStoreOwner,
   predecessor?: AuthProfileStore,
-  databasePath?: string,
+  inheritedStore?: AuthProfileStore,
+  capturedLocalProfileIds?: Iterable<string>,
 ): void {
-  const refreshed = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const isShared = owner.databasePath === owner.sharedDatabasePath;
+  const candidates =
+    "env" in owner
+      ? captureRuntimeAuthProfileLegacyCandidates(isShared ? undefined : agentDir, owner.env)
+      : runtimeAuthProfileSnapshotSharesOwner(existing.owner, owner)
+        ? existing.legacyCandidates
+        : undefined;
+  let refreshed: AuthProfileStore;
+  try {
+    // Publication reads the complete canonical owner, never a bounded run's
+    // portable-only view or a shared base selected from the current environment.
+    refreshed = loadRuntimeAuthProfileOwnerSnapshot(owner, { candidates, inheritedStore });
+  } catch (err) {
+    if (!inheritedStore || err instanceof AuthProfileMigrationRequiredError) {
+      throw err;
+    }
+    // Preserve only proven local rows when the committed shared store cannot be reread.
+    const localProfileIds = new Set(capturedLocalProfileIds);
+    const localStore = cloneAuthProfileStore(existing.store);
+    localStore.profiles = Object.fromEntries(
+      Object.entries(localStore.profiles).filter(([profileId]) => localProfileIds.has(profileId)),
+    );
+    pruneAuthProfileStoreReferences(localStore, localProfileIds);
+    refreshed = mergeLocalAuthProfileStoreWithInheritedStore(localStore, inheritedStore);
+    authProfilesLog.warn(
+      "derived auth profile snapshot refresh failed; preserving captured local profiles",
+      { err },
+    );
+  }
+  if (!runtimeAuthProfileSnapshotSharesOwner(existing.owner, owner)) {
+    // Resolved secrets and external profiles belong to their producer, not just a matching ref.
+    setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+      refreshed,
+      owner.databasePath,
+      agentDir,
+      owner,
+      candidates,
+    );
+    return;
+  }
   const currentMaterialized = preserveResolvedSecretBackedCredentials({
     next: refreshed,
-    existing,
+    existing: existing.store,
   });
   const materialized = predecessor
     ? preserveResolvedSecretBackedCredentials({
@@ -1676,30 +1827,36 @@ function rebuildRuntimeAuthProfileStoreSnapshot(
         existing: predecessor,
       })
     : currentMaterialized;
-  const rebuilt = mergeRuntimeExternalProfileReferences({ next: materialized, existing });
-  if (databasePath) {
-    setRuntimeAuthProfileStoreSnapshotAtDatabasePath(rebuilt, databasePath, agentDir);
-  } else {
-    setRuntimeAuthProfileStoreSnapshot(rebuilt, agentDir);
-  }
+  const rebuilt = mergeRuntimeExternalProfileReferences({
+    next: materialized,
+    existing: existing.store,
+  });
+  setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+    rebuilt,
+    owner.databasePath,
+    agentDir,
+    owner,
+    candidates,
+  );
 }
 
 /** Capture both persisted auth rows under one database lock. */
 export function captureAuthProfileStorePersistenceSnapshot(
   agentDir?: string,
-  options: { stateDir?: string } = {},
+  options: { stateDir?: string; env?: NodeJS.ProcessEnv } = {},
 ): AuthProfileStorePersistenceSnapshot {
   const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   return runAuthProfileWriteTransaction(
     effectiveAgentDir,
-    (database) => {
+    (database, owner) => {
       return {
+        owner,
         credentialsRaw: readPersistedAuthProfileStoreRaw(effectiveAgentDir, database),
         stateRaw: readPersistedAuthProfileStateRaw(effectiveAgentDir, database),
-        ...captureRuntimeAuthProfileStorePersistenceSnapshot(effectiveAgentDir, database.path),
+        ...captureRuntimeAuthProfileStorePersistenceSnapshot(owner),
       };
     },
-    options,
+    { ...options, env: options.env ?? (options.stateDir ? undefined : getScopedAuthProfileEnv()) },
   );
 }
 
@@ -1715,15 +1872,14 @@ export function saveAuthProfileStoreIfPersistenceSnapshotMatches(params: {
   stateDir?: string;
 }): CommittedAuthProfileStoreSave {
   const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
-  let publishRuntimeSnapshots: (() => void) | undefined;
-  const owned: AuthProfileStorePersistenceSnapshot = {
-    credentialsRaw: null,
-    stateRaw: null,
-    runtimeCaptured: false,
-  };
-  runAuthProfileWriteTransaction(
+  assertAuthProfilePersistenceOwner(params.snapshot.owner, agentDir, params.stateDir);
+  let publishRuntimeSnapshots: RuntimeSnapshotPublication | undefined;
+  const owned = runAuthProfileWriteTransaction(
     agentDir,
-    (database) => {
+    (database, owner) => {
+      if (params.snapshot.owner.databasePath !== database.path) {
+        throw new Error("auth profile persistence snapshot belongs to another database");
+      }
       const currentCredentials = readPersistedAuthProfileStoreRaw(agentDir, database);
       const currentState = readPersistedAuthProfileStateRaw(agentDir, database);
       if (
@@ -1732,12 +1888,8 @@ export function saveAuthProfileStoreIfPersistenceSnapshotMatches(params: {
       ) {
         throw new Error("auth profile store changed after secrets apply captured it");
       }
-      const runtimeAtSaveEdge = captureRuntimeAuthProfileStorePersistenceSnapshot(
-        agentDir,
-        database.path,
-      );
-      owned.runtimeRevisionAtSaveEdge = runtimeAtSaveEdge.runtimeRevision;
-      owned.derivedRuntimeRevisionsAtSaveEdge = runtimeAtSaveEdge.derivedRuntimeStores?.flatMap(
+      const runtimeAtSaveEdge = captureRuntimeAuthProfileStorePersistenceSnapshot(owner);
+      const derivedRuntimeRevisionsAtSaveEdge = runtimeAtSaveEdge.derivedRuntimeStores?.flatMap(
         (entry) =>
           typeof entry.runtimeRevision === "number"
             ? [
@@ -1754,40 +1906,48 @@ export function saveAuthProfileStoreIfPersistenceSnapshotMatches(params: {
         agentDir,
         params.options,
         database,
+        owner,
       );
-      owned.credentialsRaw = readPersistedAuthProfileStoreRaw(agentDir, database);
-      owned.stateRaw = readPersistedAuthProfileStateRaw(agentDir, database);
+      return {
+        owner,
+        credentialsRaw: readPersistedAuthProfileStoreRaw(agentDir, database),
+        stateRaw: readPersistedAuthProfileStateRaw(agentDir, database),
+        runtimeCaptured: false,
+        runtimeRevisionAtSaveEdge: runtimeAtSaveEdge.runtimeRevision,
+        derivedRuntimeRevisionsAtSaveEdge,
+      } satisfies AuthProfileStorePersistenceSnapshot;
     },
-    params.stateDir ? { stateDir: params.stateDir } : {},
+    { env: params.snapshot.owner.env },
   );
   return {
     owned,
-    publishRuntimeSnapshots: () =>
-      publishRuntimeSnapshotsAfterCommit(() => {
-        recordRuntimeAuthProfileStorePublicationEdge(
-          owned,
-          captureRuntimeAuthProfileStorePersistenceSnapshot(
-            agentDir,
-            params.stateDir && agentDir === undefined
-              ? resolveSharedAuthPath({ ...process.env, OPENCLAW_STATE_DIR: params.stateDir })
-              : undefined,
-          ),
-        );
-        publishRuntimeSnapshots?.();
-        recordRuntimeAuthProfileStoreOwnership(
-          owned,
-          captureRuntimeAuthProfileStorePersistenceSnapshot(
-            params.agentDir,
-            params.stateDir && params.agentDir === undefined
-              ? resolveSharedAuthPath({ ...process.env, OPENCLAW_STATE_DIR: params.stateDir })
-              : undefined,
-          ),
-        );
-      }),
+    publishRuntimeSnapshots: () => {
+      if (!publishRuntimeSnapshots) {
+        return true;
+      }
+      const publication = publishRuntimeSnapshots;
+      return publishRuntimeSnapshotsAfterCommit({
+        ...publication,
+        publish: () => {
+          const owner = owned.owner;
+          recordRuntimeAuthProfileStorePublicationEdge(
+            owned,
+            captureRuntimeAuthProfileStorePersistenceSnapshot(owner),
+          );
+          const converged = publication.publish();
+          recordRuntimeAuthProfileStoreOwnership(
+            owned,
+            captureRuntimeAuthProfileStorePersistenceSnapshot(owner),
+          );
+          return converged;
+        },
+      });
+    },
   };
 }
 
 function reconcileRuntimeAuthProfileStorePersistenceSnapshot(params: {
+  owner: AuthProfileStoreOwner;
   snapshot: AuthProfileStorePersistenceSnapshot;
   owned: AuthProfileStorePersistenceSnapshot;
   agentDir?: string;
@@ -1795,69 +1955,94 @@ function reconcileRuntimeAuthProfileStorePersistenceSnapshot(params: {
   stateOwned: boolean;
   credentialsRestored: boolean;
   stateRestored: boolean;
-  currentRuntimeStores: Array<{
-    databasePath: string;
-    agentDir: string;
-    store: AuthProfileStore;
-    runtimeRevision: number;
-  }>;
+  currentRuntimeStores: Array<
+    OwnedRuntimeAuthProfileStoreSnapshotEntry & { runtimeRevision: number }
+  >;
   currentRuntimeRevision: number;
-}): void {
+}): boolean {
   if (!params.snapshot.runtimeCaptured || !params.owned.runtimeCaptured) {
-    return;
+    return true;
   }
   const rowsFullyOwned = params.credentialsOwned && params.stateOwned;
   const rowsRestored = params.credentialsRestored || params.stateRestored;
   const reconcileOne = (
     databasePath: string,
     agentDir: string | undefined,
-    snapshotStore: AuthProfileStore | undefined,
+    snapshotEntry: OwnedRuntimeAuthProfileStoreSnapshotEntry | undefined,
     snapshotRuntimeRevision: number | undefined,
     runtimeRevisionAtSaveEdge: number | undefined,
     runtimeRevisionBeforePublication: number | undefined,
-    ownedStore: AuthProfileStore | undefined,
+    ownedEntry: OwnedRuntimeAuthProfileStoreSnapshotEntry | undefined,
     ownedRuntimeRevision: number | undefined,
-    currentStore: AuthProfileStore | undefined,
+    currentEntry: OwnedRuntimeAuthProfileStoreSnapshotEntry | undefined,
     currentRuntimeRevision: number,
-  ) => {
-    const runtimeGenerationOwned =
-      typeof snapshotRuntimeRevision === "number" &&
-      typeof runtimeRevisionAtSaveEdge === "number" &&
-      typeof runtimeRevisionBeforePublication === "number" &&
-      typeof ownedRuntimeRevision === "number" &&
-      snapshotRuntimeRevision === runtimeRevisionAtSaveEdge &&
-      runtimeRevisionAtSaveEdge === runtimeRevisionBeforePublication &&
-      currentRuntimeRevision === ownedRuntimeRevision;
-    if (rowsFullyOwned && runtimeGenerationOwned && isDeepStrictEqual(currentStore, ownedStore)) {
-      replaceRuntimeAuthProfileStoreSnapshot(snapshotStore, agentDir, databasePath);
-    } else if (rowsRestored && currentStore) {
-      // Current overlays win, while the predecessor can still supply materialized
-      // values for final keyRefs that the candidate temporarily removed.
-      rebuildRuntimeAuthProfileStoreSnapshot(agentDir, currentStore, snapshotStore, databasePath);
-    }
-  };
+  ) =>
+    convergeRuntimeAuthProfileStoreSnapshot(databasePath, agentDir, () => {
+      const runtimeGenerationOwned =
+        typeof snapshotRuntimeRevision === "number" &&
+        typeof runtimeRevisionAtSaveEdge === "number" &&
+        typeof runtimeRevisionBeforePublication === "number" &&
+        typeof ownedRuntimeRevision === "number" &&
+        snapshotRuntimeRevision === runtimeRevisionAtSaveEdge &&
+        runtimeRevisionAtSaveEdge === runtimeRevisionBeforePublication &&
+        currentRuntimeRevision === ownedRuntimeRevision;
+      if (
+        rowsFullyOwned &&
+        runtimeGenerationOwned &&
+        isDeepStrictEqual(currentEntry?.store, ownedEntry?.store) &&
+        isDeepStrictEqual(currentEntry?.owner, ownedEntry?.owner)
+      ) {
+        replaceRuntimeAuthProfileStoreSnapshot(snapshotEntry, agentDir, {
+          ...params.owner,
+          databasePath,
+        });
+      } else if (rowsRestored && currentEntry) {
+        // Current overlays win, while the predecessor can still supply materialized
+        // values. A newer runtime owner is independent of the transaction being undone.
+        const runtimeOwner =
+          currentEntry.owner.kind === "resolved"
+            ? currentEntry.owner
+            : runtimeAuthProfileSnapshotSharesOwner(currentEntry.owner, params.owner)
+              ? params.owner
+              : undefined;
+        if (!runtimeOwner) {
+          return;
+        }
+        const owner = {
+          databasePath,
+          sharedDatabasePath: runtimeOwner.sharedDatabasePath,
+          location: runtimeOwner.location,
+        };
+        rebuildRuntimeAuthProfileStoreSnapshot(
+          agentDir,
+          currentEntry,
+          owner,
+          snapshotEntry && runtimeAuthProfileSnapshotSharesOwner(snapshotEntry.owner, runtimeOwner)
+            ? snapshotEntry.store
+            : undefined,
+        );
+      }
+    });
 
-  const restoredAuthPath = params.agentDir
-    ? resolveAgentAuthPath(params.agentDir)
-    : resolveSharedAuthPath();
-  const mainAuthPath = resolveSharedAuthPath();
+  const restoredAuthPath = params.owner.databasePath;
+  const mainAuthPath = params.owner.sharedDatabasePath;
   const currentRuntimeStores = new Map(
     params.currentRuntimeStores.map((entry) => [entry.databasePath, entry]),
   );
-  reconcileOne(
+  let converged = reconcileOne(
     restoredAuthPath,
     params.agentDir,
-    params.snapshot.runtimeStore,
+    params.snapshot.runtimeEntry,
     params.snapshot.runtimeRevision,
     params.owned.runtimeRevisionAtSaveEdge,
     params.owned.runtimeRevisionBeforePublication,
-    params.owned.runtimeStore,
+    params.owned.runtimeEntry,
     params.owned.runtimeRevision,
-    currentRuntimeStores.get(restoredAuthPath)?.store,
+    currentRuntimeStores.get(restoredAuthPath),
     params.currentRuntimeRevision,
   );
   if (restoredAuthPath !== mainAuthPath) {
-    return;
+    return converged;
   }
   const snapshotDerived = new Map(
     (params.snapshot.derivedRuntimeStores ?? []).map((entry) => [entry.databasePath, entry]),
@@ -1883,19 +2068,21 @@ function reconcileRuntimeAuthProfileStorePersistenceSnapshot(params: {
     }
     const snapshotEntry = snapshotDerived.get(pathname);
     const ownedEntry = ownedDerived.get(pathname);
-    reconcileOne(
-      pathname,
-      currentEntry.agentDir,
-      snapshotEntry?.store,
-      snapshotEntry?.runtimeRevision,
-      saveEdgeDerivedRevisions.get(pathname),
-      publicationEdgeDerivedRevisions.get(pathname),
-      ownedEntry?.store,
-      ownedEntry?.runtimeRevision,
-      currentEntry.store,
-      currentEntry.runtimeRevision,
-    );
+    converged =
+      reconcileOne(
+        pathname,
+        currentEntry.agentDir,
+        snapshotEntry,
+        snapshotEntry?.runtimeRevision,
+        saveEdgeDerivedRevisions.get(pathname),
+        publicationEdgeDerivedRevisions.get(pathname),
+        ownedEntry,
+        ownedEntry?.runtimeRevision,
+        currentEntry,
+        currentEntry.runtimeRevision,
+      ) && converged;
   }
+  return converged;
 }
 
 /** Restore each persisted row and runtime snapshot only while apply still owns it. */
@@ -1905,14 +2092,24 @@ export function restoreAuthProfileStorePersistenceSnapshot(
   agentDir?: string,
   options: { stateDir?: string } = {},
 ): void {
+  assertAuthProfilePersistenceOwner(owned.owner, agentDir, options.stateDir);
+  if (
+    snapshot.owner.databasePath !== owned.owner.databasePath ||
+    snapshot.owner.sharedDatabasePath !== owned.owner.sharedDatabasePath
+  ) {
+    throw new Error("auth profile rollback snapshots belong to different owners");
+  }
   let credentialsOwned = false;
   let stateOwned = false;
   let credentialsRestored = false;
   let stateRestored = false;
-  let publishRuntimeSnapshots: (() => void) | undefined;
+  let publishRuntimeSnapshots: RuntimeSnapshotPublication | undefined;
   runAuthProfileWriteTransaction(
     agentDir,
-    (database) => {
+    (database, owner) => {
+      if (owned.owner.databasePath !== database.path) {
+        throw new Error("auth profile rollback belongs to another database");
+      }
       const existingRaw = readPersistedAuthProfileStoreRaw(agentDir, database);
       const existingState = readPersistedAuthProfileStateRaw(agentDir, database);
       credentialsOwned = isDeepStrictEqual(existingRaw, owned.credentialsRaw);
@@ -1946,42 +2143,57 @@ export function restoreAuthProfileStorePersistenceSnapshot(
       if (stateRestored) {
         writePersistedAuthProfileStateRaw(snapshot.stateRaw, agentDir, database);
       }
-      publishRuntimeSnapshots = () => {
-        // Main credential mutation lineage invalidates derived snapshots. Capture
-        // them first so exact-owned entries can restore and newer entries rebuild.
-        const currentRuntimeStores = listRuntimeAuthProfileStoreSnapshots().map(
-          ({ agentDir: runtimeAgentDir, databasePath, store }) => ({
-            databasePath,
-            agentDir: runtimeAgentDir,
-            store,
-            runtimeRevision: getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath),
-          }),
-        );
-        const currentRuntimePath = agentDir ? resolveAgentAuthPath(agentDir) : database.path;
-        const currentRuntimeRevision =
-          getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(currentRuntimePath);
-        if (credentialsRestored || stateRestored) {
-          noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-            credentialsChanged: credentialsRestored,
-            profileSetChanged: credentialsRestored && profileSetChanged,
-            stateChanged: stateRestored,
-            profileIds: credentialsRestored ? changedProfileIds : [],
+      publishRuntimeSnapshots = {
+        ...(agentDir ? { agentDir } : {}),
+        databasePath: owner.databasePath,
+        publish: () => {
+          // Main credential mutation lineage invalidates derived snapshots. Capture
+          // them first so exact-owned entries can restore and newer entries rebuild.
+          const currentRuntimeStores = [
+            ...listOwnedRuntimeAuthProfileStoreSnapshots().filter(
+              (entry) => entry.databasePath === owner.databasePath,
+            ),
+            ...(owner.databasePath === owner.sharedDatabasePath
+              ? listRuntimeAuthProfileStoreSnapshotsForSharedOwner(owner)
+              : []),
+          ].map((entry) =>
+            Object.assign(entry, {
+              runtimeRevision: getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(
+                entry.databasePath,
+              ),
+            }),
+          );
+          const currentRuntimePath = owner.databasePath;
+          const currentRuntimeRevision =
+            getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(currentRuntimePath);
+          if (credentialsRestored || stateRestored) {
+            noteRuntimeAuthProfileStorePersistedMutation(
+              agentDir,
+              {
+                credentialsChanged: credentialsRestored,
+                profileSetChanged: credentialsRestored && profileSetChanged,
+                stateChanged: stateRestored,
+                profileIds: credentialsRestored ? changedProfileIds : [],
+              },
+              owner,
+            );
+          }
+          return reconcileRuntimeAuthProfileStorePersistenceSnapshot({
+            owner,
+            snapshot,
+            owned,
+            agentDir,
+            credentialsOwned,
+            stateOwned,
+            credentialsRestored,
+            stateRestored,
+            currentRuntimeStores,
+            currentRuntimeRevision,
           });
-        }
-        reconcileRuntimeAuthProfileStorePersistenceSnapshot({
-          snapshot,
-          owned,
-          agentDir,
-          credentialsOwned,
-          stateOwned,
-          credentialsRestored,
-          stateRestored,
-          currentRuntimeStores,
-          currentRuntimeRevision,
-        });
+        },
       };
     },
-    options,
+    { env: owned.owner.env },
   );
   publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
 }

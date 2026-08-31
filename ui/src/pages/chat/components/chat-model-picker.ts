@@ -32,7 +32,6 @@ type ChatModelPickerParams = {
   defaultModelLabel: string;
   disabled: boolean;
   disabledReason?: string;
-  mobileSecondary?: { disabled: boolean; label: string; value: string };
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
   modelOptions: ChatModelPickerOption[];
@@ -109,6 +108,7 @@ function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined
 function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElement[]): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-shortcut]").forEach((shortcut) => {
     shortcut.hidden = true;
+    shortcut.removeAttribute("data-shortcut");
     shortcut.removeAttribute("data-chat-model-shortcut-number");
   });
   rows.slice(0, 9).forEach((row, index) => {
@@ -117,6 +117,7 @@ function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElemen
       return;
     }
     shortcut.hidden = false;
+    shortcut.setAttribute("data-shortcut", String(index + 1));
     shortcut.setAttribute("data-chat-model-shortcut-number", String(index + 1));
   });
 }
@@ -350,31 +351,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       highlightModelRow(menu, row);
     }
   };
-  const openEffortPicker = (event: MouseEvent) => {
-    event.stopPropagation();
-    if (params.mobileSecondary?.disabled !== false) {
-      return;
-    }
-    // SAFETY: Lit binds this handler directly to the effort button rendered below.
-    const modelPicker = (event.currentTarget as HTMLElement).closest<HTMLDetailsElement>(
-      ".chat-controls__model-picker",
-    );
-    const effortPicker = modelPicker?.parentElement?.querySelector<HTMLDetailsElement>(
-      ".chat-controls__effort-picker",
-    );
-    if (!modelPicker || !effortPicker) {
-      return;
-    }
-    effortPicker.setAttribute("data-chat-focus-panel", "");
-    modelPicker.open = false;
-    effortPicker.open = true;
-  };
-  const settingsLabel = params.mobileSecondary
-    ? `${t("chat.selectors.model")}: ${triggerTitle}; ${params.mobileSecondary.label}: ${params.mobileSecondary.value}`
-    : `${t("chat.selectors.model")}: ${triggerTitle}`;
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
+      data-chat-autotype-shortcuts
       ?open=${params.open === true}
       @keydown=${handleModelPickerKeydown}
       @toggle=${(event: Event) => {
@@ -400,11 +380,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           ? "chat-controls__model-trigger--loading"
           : ""} ${params.disabled ? "chat-controls__inline-select-trigger--disabled" : ""}"
         data-chat-model-select="true"
-        data-chat-model-settings="true"
         data-chat-model-locked=${params.modelSelectionLocked ? "true" : "false"}
         data-chat-select-value=${params.selectedModelValue}
         data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
-        aria-label=${settingsLabel}
+        aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}`}
         aria-busy=${params.triggerLoading ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
         title=${params.disabledReason ?? triggerTitle}
@@ -416,9 +395,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           (event.currentTarget as HTMLElement).focus({ preventScroll: true });
         }}
       >
-        <span class="chat-controls__model-settings-icon" aria-hidden="true"
-          >${icons.slidersHorizontal}</span
-        >
         ${modelToolsUnavailable
           ? html`
               <openclaw-tooltip .content=${t("chat.modelControls.chatOnlyHelp")}>
@@ -457,19 +433,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           class="chat-controls__inline-select-menu chat-controls__model-menu"
           aria-label=${t("chat.selectors.model")}
         >
-          ${params.mobileSecondary
-            ? html`
-                <button
-                  class="chat-controls__inline-select-option chat-controls__mobile-effort-option"
-                  type="button"
-                  ?disabled=${params.mobileSecondary.disabled}
-                  @click=${openEffortPicker}
-                >
-                  <span>${params.mobileSecondary.label}</span>
-                  <span>${params.mobileSecondary.value}</span>
-                </button>
-              `
-            : nothing}
           ${params.modelSelectionLocked
             ? html`
                 <div

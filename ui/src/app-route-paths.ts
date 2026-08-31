@@ -1,4 +1,7 @@
-import { inferControlUiFocusBasePath } from "@openclaw/session-url-contract";
+import {
+  inferControlUiFocusBasePath,
+  matchControlUiCatalogSharePath,
+} from "@openclaw/session-url-contract";
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
@@ -212,6 +215,19 @@ export function isSessionRouteId(routeId: string | null | undefined): routeId is
   return routeId === "chat" || routeId === "dashboard";
 }
 
+function exactRouteIdFromPath(routePath: string): RouteId | null {
+  const routePathKey = routePath.toLowerCase();
+  for (const routeId of APP_ROUTE_IDS) {
+    const definition = APP_ROUTE_DEFINITIONS[routeId];
+    const paths: readonly string[] =
+      "aliases" in definition ? [definition.path, ...definition.aliases] : [definition.path];
+    if (paths.some((candidate) => normalizePath(candidate) === routePathKey)) {
+      return routeId;
+    }
+  }
+  return null;
+}
+
 export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): BoardFace | null {
   const normalizedPath = normalizePath(pathname);
   const normalizedBasePath = normalizeBasePath(basePath);
@@ -223,11 +239,18 @@ export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): 
     return null;
   }
   const routePath = normalizedPath.slice(normalizedBasePath.length);
-  return routePath.startsWith("/chat/")
-    ? "chat"
-    : routePath.startsWith("/dashboard/")
-      ? "dashboard"
-      : null;
+  if (routePath.startsWith("/chat/")) {
+    return "chat";
+  }
+  if (routePath.startsWith("/dashboard/")) {
+    return "dashboard";
+  }
+  // The shared matcher reserves every built-in route and document namespace.
+  const catalogShare = matchControlUiCatalogSharePath({
+    pathname: normalizedPath,
+    basePath: normalizedBasePath,
+  });
+  return catalogShare ? "chat" : null;
 }
 
 export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
@@ -274,23 +297,14 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   if (pluginsHubTabFromPath(normalizedPath, normalizedBasePath)) {
     return "plugins";
   }
-  const sessionNamespace = sessionRouteNamespaceFromPath(normalizedPath, normalizedBasePath);
-  if (sessionNamespace) {
-    return sessionNamespace;
-  }
   // uirouter matches static paths case-insensitively (pathKey lowercases), so
   // this pre-gate must too — otherwise /Usage is rewritten to /chat before the
   // router, which would have matched it, ever starts.
-  const routePathKey = routePath.toLowerCase();
-  for (const routeId of APP_ROUTE_IDS) {
-    const definition = APP_ROUTE_DEFINITIONS[routeId];
-    const paths: readonly string[] =
-      "aliases" in definition ? [definition.path, ...definition.aliases] : [definition.path];
-    if (paths.some((candidate) => normalizePath(candidate) === routePathKey)) {
-      return routeId;
-    }
+  const exactRouteId = exactRouteIdFromPath(routePath);
+  if (exactRouteId) {
+    return exactRouteId;
   }
-  return null;
+  return sessionRouteNamespaceFromPath(normalizedPath, normalizedBasePath);
 }
 
 function collectRoutePaths(): string[] {

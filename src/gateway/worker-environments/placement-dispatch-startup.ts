@@ -13,6 +13,7 @@ import type {
   WorkerDispatchPlacementStore,
   WorkerProvisioningDispatchPlacement,
 } from "./placement-dispatch-failure.js";
+import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementDispatchRequest,
@@ -185,11 +186,13 @@ export function createWorkerPlacementDispatchStartup(options: {
       ownerEpoch,
     });
     const gitAuthor = options.resolveGitAuthor?.(request.agentId);
+    const project = readWorkerProjectSnapshot(params.environment.profileSnapshot.project);
     const synced = await tunnel.syncWorkspace({
       localPath: params.localPath,
       sessionId: request.sessionId,
       generation: placement.generation,
       ...(gitAuthor ? { gitAuthor } : {}),
+      ...(project ? { projectKey: project.key } : {}),
     });
     placement = placements.transition({
       sessionId: request.sessionId,

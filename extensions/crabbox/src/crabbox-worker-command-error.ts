@@ -1,5 +1,4 @@
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -29,11 +28,4 @@ export function crabboxCommandError(action: string, result: SpawnResult): Error 
   return new Error(
     `Crabbox ${action} failed with exit code ${exitCode}${crabboxCommandDetail(result)}`,
   );
-}
-
-export function permanentCrabboxCommandError(
-  action: string,
-  result: SpawnResult,
-): WorkerProviderError {
-  return new WorkerProviderError(crabboxCommandError(action, result).message);
 }

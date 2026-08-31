@@ -2,10 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   ensureProfileForTailscaleIdentity,
+  getUserProfileDisplay,
   getUserProfileListItem,
+  setDisplayName,
   syncGitHubIdentity,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import { ControlUiGitHubError } from "./control-ui-github-api.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 
@@ -37,6 +40,7 @@ function cloudflareSync(params: {
   assertion?: string;
   userHeader?: string;
   requiredHeaders?: string[];
+  preferCachedIdentity?: boolean;
 }) {
   return createAuthenticatedGitHubIdentitySync({
     authResult: {
@@ -56,6 +60,7 @@ function cloudflareSync(params: {
       "cf-access-jwt-assertion":
         params.assertion ?? accessAssertion("https://team.cloudflareaccess.com"),
     },
+    preferCachedIdentity: params.preferCachedIdentity,
   });
 }
 
@@ -65,6 +70,71 @@ afterEach(() => {
 });
 
 describe("authenticated GitHub identity sync", () => {
+  describe.each(["tailscale", "access"] as const)("%s display names", (provider) => {
+    it.each([
+      { label: "GitHub only", name: "  Ada Lovelace  ", expected: "Ada Lovelace" },
+      {
+        label: "GitHub priority",
+        name: "Ada Lovelace",
+        initial: "Provider Ada",
+        expected: "Ada Lovelace",
+      },
+      { label: "absent GitHub name", initial: "Provider Ada", expected: "Provider Ada" },
+      { label: "null GitHub name", name: null, initial: "Provider Ada", expected: "Provider Ada" },
+      {
+        label: "blank GitHub name",
+        name: " \t ",
+        initial: "Provider Ada",
+        expected: "Provider Ada",
+      },
+      {
+        label: "non-string GitHub name",
+        name: 123,
+        initial: "Provider Ada",
+        expected: "Provider Ada",
+      },
+      { label: "no names", expected: null },
+    ])("adopts $label without extra requests", async ({ name, initial, expected }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const fetchMock = vi.spyOn(globalThis, "fetch");
+        if (provider === "access") {
+          fetchMock.mockResolvedValueOnce(
+            githubResponse({
+              id: 583231,
+              email: "ada@example.com",
+              name: initial,
+              idp: { type: "github" },
+            }),
+          );
+        }
+        fetchMock.mockResolvedValueOnce(githubResponse({ id: 583231, login: "Ada", name }));
+        const sync =
+          provider === "access"
+            ? cloudflareSync({})
+            : createAuthenticatedGitHubIdentitySync({
+                authResult: {
+                  ok: true,
+                  method: "tailscale",
+                  user: "ada@github",
+                  tailscaleIdentity: { login: "ada@github", name: initial ?? "" },
+                },
+              });
+        const result = await sync!();
+        const display = getUserProfileDisplay(result.profileId);
+        expect(display.displayName).toBe(expected);
+        const presenceUser = buildAuthenticatedPresenceUser({
+          authenticatedUserId: provider === "access" ? "ada@example.com" : "ada@github",
+          authenticatedUserIsTailscaleProvider: provider === "tailscale",
+          authenticatedUserProfile: { profileId: display.id, ...display },
+        });
+        expect(presenceUser?.name).toBe(expected ?? undefined);
+        expect(presenceUser?.id).toBe(result.profileId);
+        await sync!();
+        expect(fetchMock).toHaveBeenCalledTimes(provider === "access" ? 2 : 1);
+      });
+    });
+  });
+
   it("resolves the canonical public account without authentication", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForTailscaleIdentity({ login: "octocat@github" });
@@ -148,9 +218,10 @@ describe("authenticated GitHub identity sync", () => {
     });
   });
 
-  it("deduplicates concurrent authenticated profile sync", async () => {
+  it("deduplicates concurrent sync and preserves a custom edit during the lookup", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForTailscaleIdentity({ login: "ada@github" });
+      setDisplayName(profile.id, "Ada");
       let resolveLookup: ((response: Response) => void) | undefined;
       const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce(
         async () =>
@@ -171,10 +242,12 @@ describe("authenticated GitHub identity sync", () => {
       const second = sync?.();
       expect(second).toBe(first);
       await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-      resolveLookup?.(githubResponse({ id: 583231, login: "Ada" }));
+      setDisplayName(profile.id, "User Chosen");
+      resolveLookup?.(githubResponse({ id: 583231, login: "Ada", name: "Ada Lovelace" }));
 
       await expect(first).resolves.toMatchObject({ profileId: profile.id });
       expect(getUserProfileListItem(profile.id).githubIdentity).toMatchObject({ login: "Ada" });
+      expect(getUserProfileDisplay(profile.id).displayName).toBe("User Chosen");
       expect(fetchMock).toHaveBeenCalledOnce();
     });
   });
@@ -281,6 +354,85 @@ describe("authenticated GitHub identity sync", () => {
       expect(fetchMock).toHaveBeenCalledTimes(4);
     });
   });
+
+  it.each([true, false])(
+    "reuses an exact Access identity before GitHub refresh only when requested: %s",
+    async (preferCachedIdentity) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = syncGitHubIdentity({
+          identity: { accountId: 58493, login: "ada" },
+          authenticationAlias: { kind: "email", email: "ada@example.com" },
+        });
+        setDisplayName(profile.id, "User Chosen");
+        const fetchMock = vi
+          .spyOn(globalThis, "fetch")
+          .mockResolvedValueOnce(
+            githubResponse({
+              id: 58493,
+              email: "ada@example.com",
+              idp: { type: "github" },
+            }),
+          )
+          .mockResolvedValueOnce(githubResponse({ id: 58493, login: "ada-renamed" }));
+
+        const result = await cloudflareSync({
+          principal: "ADA@Example.COM",
+          preferCachedIdentity,
+        })?.();
+
+        expect(result?.profileId).toBe(profile.id);
+        expect(fetchMock).toHaveBeenCalledTimes(preferCachedIdentity ? 1 : 2);
+        expect(fetchMock.mock.calls[0]?.[0]).toBe(
+          "https://team.cloudflareaccess.com/cdn-cgi/access/get-identity",
+        );
+        expect(getUserProfileListItem(profile.id)).toMatchObject({
+          displayName: "User Chosen",
+          githubIdentity: { login: preferCachedIdentity ? "ada" : "ada-renamed" },
+        });
+      });
+    },
+  );
+
+  it.each([
+    { name: "missing binding", seedCache: false },
+    { name: "different account", accountId: 99999 },
+    { name: "different email", principal: "other@example.com" },
+    { name: "account and email on different profiles", accountId: 99999, otherProfile: true },
+  ])(
+    "requires GitHub verification for a $name even when cached identity is preferred",
+    async ({ seedCache, accountId, principal, otherProfile }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        if (seedCache !== false) {
+          syncGitHubIdentity({
+            identity: { accountId: 58493, login: "ada" },
+            authenticationAlias: { kind: "email", email: "ada@example.com" },
+          });
+        }
+        if (otherProfile) {
+          syncGitHubIdentity({
+            identity: { accountId: 99999, login: "other" },
+            authenticationAlias: { kind: "email", email: "other@example.com" },
+          });
+        }
+        const authenticatedEmail = principal ?? "ada@example.com";
+        const fetchMock = vi
+          .spyOn(globalThis, "fetch")
+          .mockResolvedValueOnce(
+            githubResponse({
+              id: accountId ?? 58493,
+              email: authenticatedEmail,
+              idp: { type: "github" },
+            }),
+          )
+          .mockResolvedValueOnce(githubResponse({}, 503));
+
+        await expect(
+          cloudflareSync({ principal: authenticatedEmail, preferCachedIdentity: true })?.(),
+        ).rejects.toMatchObject({ statusCode: 502 });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
 
   it.each([
     { name: "malformed JWT", assertion: "not-a-jwt" },
