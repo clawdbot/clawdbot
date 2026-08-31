@@ -27,6 +27,7 @@ export function createStatusSessionStoreReader(
         for (const row of readEntries({
           ...(agentId ? { agentId } : {}),
           storePath,
+          projection: "list",
         })) {
           // The accessor validates canonical keys; only global/unknown buckets lack an agent.
           const owner = parseAgentSessionKey(row.sessionKey)?.agentId;
