@@ -534,8 +534,9 @@ describe("runDoctorConfigPreflight", () => {
     },
   );
 
-  it("migrates a readable active config before considering last-known-good", async () => {
+  it("migrates readable active config after preserving its state locators", async () => {
     await withTempHome(async (home) => {
+      const storePath = path.join(home, "custom-cron", "jobs.json");
       const configPath = await writeOpenClawConfig(home, {
         gateway: { mode: "local", port: 19091 },
       });
@@ -545,6 +546,7 @@ describe("runDoctorConfigPreflight", () => {
         `${JSON.stringify(
           {
             gateway: { mode: "local", port: 19092 },
+            cron: { store: storePath },
             session: { idleMinutes: 45 },
             channels: {
               discord: {
@@ -560,7 +562,7 @@ describe("runDoctorConfigPreflight", () => {
 
       const repaired = await withEnvOverride({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, () =>
         runDoctorConfigPreflight({
-          migrateState: false,
+          migrateState: true,
           migrateLegacyConfig: false,
           repairPrefixedConfig: true,
           invalidConfigNote: false,
@@ -574,6 +576,7 @@ describe("runDoctorConfigPreflight", () => {
         "channels.discord.guilds.100.channels.general.enabled",
         true,
       );
+      expect(readConfigMachineState("cron.store")).toBe(storePath);
       const migratedRaw = await fs.readFile(configPath, "utf-8");
       const entries = await fs.readdir(path.dirname(configPath));
       expect(entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."))).toEqual([]);

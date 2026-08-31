@@ -324,10 +324,11 @@ export async function runDoctorConfigPreflight(
     }
 
     let snapshot = configSnapshotRead.snapshot;
+    let activeConfigRepair: ReturnType<typeof planAutomaticConfigRepair> = null;
     if (options.repairPrefixedConfig === true && snapshot.exists && !snapshot.valid) {
       // Migrate readable active bytes before rollback; otherwise one retired key can discard
       // newer valid settings that the canonical Doctor migration would preserve.
-      const activeConfigRepair =
+      activeConfigRepair =
         typeof snapshot.raw === "string" && parseConfigJson5(snapshot.raw).ok
           ? runWithPluginMetadataSnapshot(
               { config: snapshot.sourceConfig ?? snapshot.config ?? {} },
@@ -335,21 +336,15 @@ export async function runDoctorConfigPreflight(
             )
           : null;
       let configRepaired = false;
-      if (activeConfigRepair) {
-        await commitAutomaticConfigRepair(activeConfigRepair, snapshot);
-        note(
-          `Migrated legacy config keys in the active openclaw.json:\n${activeConfigRepair.changes.map((entry) => `- ${entry}`).join("\n")}`,
-          "Doctor changes",
-        );
-        configRepaired = true;
-      } else if (await recoverConfigFromJsonRootSuffix(snapshot)) {
+      if (!activeConfigRepair && (await recoverConfigFromJsonRootSuffix(snapshot))) {
         note(
           "Removed non-JSON prefix from openclaw.json; original saved as .clobbered.*.",
           "Config",
         );
         configRepaired = true;
       } else if (
-        await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" })
+        !activeConfigRepair &&
+        (await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" }))
       ) {
         note(
           "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
@@ -377,6 +372,7 @@ export async function runDoctorConfigPreflight(
       invalidConfigNote &&
       snapshot.exists &&
       !snapshot.valid &&
+      !activeConfigRepair &&
       snapshot.legacyIssues.length === 0
     ) {
       note(invalidConfigNote, "Config");
@@ -394,14 +390,15 @@ export async function runDoctorConfigPreflight(
     }
 
     let baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
-    const automaticStartupRepair =
-      gatewayStartupCheckpointRequired &&
+    const automaticConfigRepair =
+      activeConfigRepair ??
+      (gatewayStartupCheckpointRequired &&
       !snapshot.valid &&
       !shouldSkipPluginValidationForDoctorConfigPreflight()
         ? runWithPluginMetadataSnapshot({ config: baseConfig }, () =>
             planAutomaticConfigRepair(snapshot),
           )
-        : null;
+        : null);
     const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
     if (migrationCheckpoint) {
       migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
@@ -447,7 +444,7 @@ export async function runDoctorConfigPreflight(
           ),
         );
       }
-      if (gatewayStartupCheckpointRequired && (snapshot.valid || automaticStartupRepair)) {
+      if (gatewayStartupCheckpointRequired && (snapshot.valid || automaticConfigRepair)) {
         if (!startupMigrationLease) {
           throw new Error("Startup plugin host-link repair requires the startup migration lease.");
         }
@@ -600,15 +597,14 @@ export async function runDoctorConfigPreflight(
       );
     }
     // State migrations must consume retired locators before the config write removes them.
-    // Keep them on disk on failure or interruption so the next startup can retry safely.
+    // Explicit Doctor repair commits after that attempt; startup still requires clean migration.
     if (
-      automaticStartupRepair &&
-      migrationCheckpoint &&
+      automaticConfigRepair &&
       stateMigrationsAllowed &&
       freshConfigGuardAllowed &&
-      startupMigrationWarnings.length === 0
+      (activeConfigRepair || startupMigrationWarnings.length === 0)
     ) {
-      if (!startupMigrationLease) {
+      if (gatewayStartupCheckpointRequired && !startupMigrationLease) {
         throw new Error("Automatic startup config repair requires the startup migration lease.");
       }
       // No snapshot argument: the guard re-reads the config from disk, so an external
@@ -621,14 +617,14 @@ export async function runDoctorConfigPreflight(
       if (!configRepairAllowed) {
         throwStartupMigrationGuardRejected();
       }
-      startupMigrationLease.heartbeat();
-      await measurePreflightStep("startup-config-repair", () =>
-        runWithPluginMetadataSnapshot({ config: automaticStartupRepair.config }, () =>
-          commitAutomaticConfigRepair(automaticStartupRepair, snapshot),
+      startupMigrationLease?.heartbeat();
+      await measurePreflightStep("automatic-config-repair", () =>
+        runWithPluginMetadataSnapshot({ config: automaticConfigRepair.config }, () =>
+          commitAutomaticConfigRepair(automaticConfigRepair, snapshot),
         ),
       );
       note(
-        `Migrated legacy config keys at startup:\n${automaticStartupRepair.changes.map((entry) => `- ${entry}`).join("\n")}`,
+        `Migrated legacy config keys${activeConfigRepair ? " in the active openclaw.json" : " at startup"}:\n${automaticConfigRepair.changes.map((entry) => `- ${entry}`).join("\n")}`,
         "Doctor changes",
       );
       configSnapshotRead = await readConfigSnapshotForPreflight(false);
@@ -642,7 +638,9 @@ export async function runDoctorConfigPreflight(
       ) {
         throwStartupMigrationGuardRejected();
       }
-      refreshMigrationCheckpoint(migrationCheckpoint, configSnapshotRead);
+      if (migrationCheckpoint) {
+        refreshMigrationCheckpoint(migrationCheckpoint, configSnapshotRead);
+      }
     }
     if (
       migrationCheckpoint &&
