@@ -162,10 +162,38 @@ gate modes retain the `--completion ci-run` wait.
 Missing prepare artifacts or rejected hosted evidence stop merge verification;
 a saved mode or JSON report is not proof. Inspect `.local/gates-hosted-checks.log`,
 resolve the reported failure, and rerun prepare when its artifacts need refreshing.
-For missing CI, follow the verifier's `scripts/pr ci-dispatch <pr-number>` recovery
-guidance when available. Malformed required-check evidence and cancelled required
-checks also stop verification. Server-enforced publisher binding and the final
-pinned-head merge request remain intact. Hosted mode adds no bypass.
+Malformed required-check evidence and cancelled required checks also stop
+verification. Server-enforced publisher binding and the final pinned-head merge
+request remain intact. Hosted mode adds no bypass.
+
+### Recover an existing PR run first
+
+For an existing terminal PR run with a diagnosed infrastructure failure or
+cancellation, prefer one failed-job retry over a new full-CI dispatch:
+
+```bash
+gh run rerun <original-run-id> --failed --repo openclaw/openclaw
+```
+
+Before cancelling a run stuck solely on unassigned jobs, verify that it is the
+exact run you own for the unchanged PR head, no jobs are actively executing, and
+the remaining jobs have no assigned runner or executed steps. Do not cancel
+active work merely because it is slow. Wait for the run to become terminal
+before retrying it.
+
+Read back the new attempt and selected jobs: confirm the head is unchanged and
+the intended failed or cancelled jobs were selected. Do not infer selection from
+the command's success alone. Previously successful jobs can appear in the new
+attempt with new job IDs and their original runner details; that does not mean
+they executed again. Wait for the selected jobs and aggregate gate, then recheck
+`gh pr checks <pr-number> --required --json name,bucket,state,link`.
+
+For genuinely missing or unrecoverable attached CI, follow the verifier's
+`scripts/pr ci-dispatch <pr-number>` recovery guidance when available. Its
+separate manual run can supply hosted preparation proof, but a successful check
+in that suite does not replace the required PR check GitHub selects. If the
+original required check remains failed or cancelled, recover that run; do not
+bypass it or dispatch another full suite hoping to replace its status.
 
 ## PR context and evidence
 
@@ -448,6 +476,12 @@ The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend
 | `hybrid`              | Critical-path and control jobs use Blacksmith on attempt 1; remaining light lanes stay hosted | Blacksmith on attempt 1; GitHub-hosted on `github.run_attempt > 1`     | Rerunning a failed or stuck Blacksmith job automatically moves it to hosted capacity |
 
 Heavy lanes are `build-artifacts`, `check-sqlite-session-lifecycle`, `android`, `macos-swift`, `ios-build`, and `ios-screenshot-shard`. The focused `macos-node` lane uses the existing GitHub-hosted `macos-15` image in hybrid mode, with the same test inventory and two-worker limit. Hybrid also sends `preflight`, `security-fast`, and `openclaw/ci-gate` to the existing 4-vCPU Blacksmith runner on attempt 1. Their hosted queues delayed startup and final failure reporting by 11–20 minutes while execution took seconds. This route adds three registrations per eligible run; contributor trust, manual and untrusted-author fallbacks, hosted retries, and the `github` override remain unchanged. Hybrid sends the compact Node matrix, up to 96 compact rows plus separately appended plugin fallback rows, fourteen-row hosted-planner `checks-ui-e2e` matrix, the `checks-ui-e2e-real-gateway` lane that shares its serial Chromium workload, six-row QA Smoke matrix, the two-part Windows matrix, `checks-ui`, `check-lint`, `check-test-types`, the five `check-test-types-core-*` stripes, `check-dependencies`, `check-additional-extension-package-boundary`, `check-additional-runtime-topology-architecture`, and `report-plugin-sdk-api-diff` to Blacksmith on attempt 1. Compact-small rows use `blacksmith-4vcpu-ubuntu-2404`, compact-large rows use `blacksmith-8vcpu-ubuntu-2404`, and the planner's measured small queue-tail promotions retain their 8-vCPU labels. Every other configurable `ci.yml` lane stays hosted in hybrid, including the five core-lint stripes, the remaining lint/check rows, docs, and Python skills. Separate Opengrep workflows remain GitHub-hosted.
+
+Screenshot shards are an exception to the default backend's retry behavior:
+`ios-screenshot-shard` uses GitHub-hosted `macos-26` whenever `github.run_attempt > 1`,
+including when the backend is unset or `blacksmith`. Recover the original run as
+described [above](/ci#recover-an-existing-pr-run-first); changing the repository
+backend or dispatching a separate full suite is not needed for this route.
 
 Hybrid is the normal degraded-capacity mode. If Blacksmith is down: rerun the failed or stuck heavy job; it lands on hosted automatically. During a full Blacksmith outage, `github` remains the repository-wide circuit breaker:
 
