@@ -715,6 +715,15 @@ export function ensureOpenClawAgentDatabaseSchema(
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
   if (readSqliteUserVersion(db) === AGENT_MEDIA_SCHEMA_VERSION) {
     assertAgentDatabaseMaintenanceAuthority();
+    // Same-version writers may predate the additive session projections
+    // (route_context_json and its invalidation trigger, entry_valid, and the
+    // session_key_contract table). Converge them before the index-repair
+    // assertion below, which validates the canonical schema shape those
+    // additive objects belong to; otherwise a schema-17 database missing
+    // them fails the repair callback and is never migrated (#134163).
+    ensureSessionAdditiveColumns(db);
+    ensureSessionEntryValidityProjection(db);
+    ensureSessionKeyContractSchemaInTransaction(db);
     const legacySql = withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL);
     // Keep canonical index recovery reachable before rebuilding the v17 identity table.
     verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {

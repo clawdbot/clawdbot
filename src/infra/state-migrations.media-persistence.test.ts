@@ -8,6 +8,7 @@ import {
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
+import { AGENT_MEDIA_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -529,6 +530,66 @@ describe("legacy media persistence doctor migration", () => {
         expect.objectContaining({ path: "/media/b.pdf", contentType: "application/pdf" }),
       ],
     });
+  });
+
+  it("converges additive session objects before the schema-17 index repair assertion", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-v17-route-context-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = createLegacyDatabaseFixture({
+      env,
+      schemaVersion: AGENT_MEDIA_SCHEMA_VERSION,
+      eventsBySession: {
+        legacy: [
+          createEvent({
+            id: "event-1",
+            parentId: null,
+            timestamp: 1000,
+            message: { role: "user", content: "legacy", MediaPath: "/media/a.png" },
+          }),
+        ],
+      },
+    });
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    try {
+      // The beta.2 lineage stamped user_version 17 without the route-context
+      // additive column/trigger; a missing canonical index also forces the
+      // v17 index-repair callback to run before the additive convergence.
+      database.exec(`
+        DROP TRIGGER session_conversations_route_context_invalidate_after_update;
+        ALTER TABLE session_conversations DROP COLUMN route_context_json;
+        DROP INDEX idx_agent_transcript_event_parent;
+      `);
+    } finally {
+      database.close();
+    }
+
+    const result = await migrateLegacyMediaPersistence({ env });
+    expect(result.warnings).toEqual([]);
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(after.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM pragma_table_info('session_conversations') WHERE name = 'route_context_json'",
+          )
+          .get(),
+      ).toEqual({ name: "route_context_json" });
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = 'session_conversations_route_context_invalidate_after_update'",
+          )
+          .get(),
+      ).toEqual({
+        name: "session_conversations_route_context_invalidate_after_update",
+      });
+    } finally {
+      after.close();
+    }
   });
 
   it("repairs a missing canonical v15 index before the media cutover", async () => {
