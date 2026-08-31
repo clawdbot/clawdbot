@@ -1,6 +1,10 @@
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
 
+function isInlineDataUrl(value: string): boolean {
+  return classifyMediaReferenceSource(value.trim()).isDataUrl;
+}
+
 // Every supported input shape writes the same top-level omission fact so
 // stored-history consumers never need to rediscover which nested payload was removed.
 export function redactResponsesInputImage(entry: Record<string, unknown>): boolean {
@@ -10,7 +14,7 @@ export function redactResponsesInputImage(entry: Record<string, unknown>): boole
   let changed = false;
   if (
     typeof entry.image_url === "string" &&
-    classifyMediaReferenceSource(entry.image_url).isDataUrl
+    isInlineDataUrl(entry.image_url)
   ) {
     const imageUrl = entry.image_url;
     delete entry.image_url;
@@ -21,7 +25,7 @@ export function redactResponsesInputImage(entry: Record<string, unknown>): boole
   const imageUrl = readRecord(entry.image_url);
   if (imageUrl && typeof imageUrl.url === "string") {
     const url = imageUrl.url;
-    if (classifyMediaReferenceSource(url).isDataUrl) {
+    if (isInlineDataUrl(url)) {
       const projectedImageUrl = { ...imageUrl };
       delete projectedImageUrl.url;
       entry.image_url = projectedImageUrl;
@@ -31,14 +35,23 @@ export function redactResponsesInputImage(entry: Record<string, unknown>): boole
     }
   }
   const source = readRecord(entry.source);
-  if (source && typeof source.data === "string") {
-    const data = source.data;
+  if (source) {
     const projectedSource = { ...source };
-    delete projectedSource.data;
-    entry.source = projectedSource;
-    entry.omitted = true;
-    entry.bytes = Buffer.byteLength(data, "utf8");
-    changed = true;
+    let omittedBytes = 0;
+    if (typeof source.url === "string" && isInlineDataUrl(source.url)) {
+      omittedBytes += Buffer.byteLength(source.url, "utf8");
+      delete projectedSource.url;
+    }
+    if (typeof source.data === "string") {
+      omittedBytes += Buffer.byteLength(source.data, "utf8");
+      delete projectedSource.data;
+    }
+    if (omittedBytes > 0) {
+      entry.source = projectedSource;
+      entry.omitted = true;
+      entry.bytes = omittedBytes;
+      changed = true;
+    }
   }
   return changed;
 }

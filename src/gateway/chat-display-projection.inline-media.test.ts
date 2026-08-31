@@ -4,8 +4,9 @@ import { projectChatDisplayMessages } from "./chat-display-projection.js";
 
 describe("chat display inline media projection", () => {
   it("redacts Responses input_image data URLs only for stored history", () => {
-    const imageUrl = "DATA:image/png;BASE64,cG5n";
-    const nestedImageUrl = "data:image/jpeg;base64,anBn";
+    const imageUrl = " \tDATA:image/png;BASE64,cG5n";
+    const nestedImageUrl = "\n data:image/jpeg;base64,anBn";
+    const sourceUrl = "  data:image/webp;base64,d2VicA==";
     const sourceData = "raw-inline-image";
     const message = {
       role: "assistant",
@@ -13,6 +14,7 @@ describe("chat display inline media projection", () => {
       content: [
         { type: "input_image", image_url: imageUrl },
         { type: "input_image", image_url: { detail: "high", url: nestedImageUrl } },
+        { type: "input_image", source: { url: sourceUrl, media_type: "image/webp" } },
         { type: "input_image", source: { data: sourceData, media_type: "image/png" } },
         { type: "input_image", image_url: "https://example.test/image.png" },
       ],
@@ -42,6 +44,14 @@ describe("chat display inline media projection", () => {
           {
             type: "input_image",
             omitted: true,
+            bytes: Buffer.byteLength(sourceUrl, "utf8"),
+            source: {
+              media_type: "image/webp",
+            },
+          },
+          {
+            type: "input_image",
+            omitted: true,
             bytes: Buffer.byteLength(sourceData, "utf8"),
             source: {
               media_type: "image/png",
@@ -53,6 +63,7 @@ describe("chat display inline media projection", () => {
     ]);
     expect(JSON.stringify(stored)).not.toContain(imageUrl);
     expect(JSON.stringify(stored)).not.toContain(nestedImageUrl);
+    expect(JSON.stringify(stored)).not.toContain(sourceUrl);
     expect(JSON.stringify(stored)).not.toContain(sourceData);
   });
 
