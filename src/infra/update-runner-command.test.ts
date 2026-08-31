@@ -1,18 +1,23 @@
-// Covers package-update recovery metadata for blocking Doctor and verify.
+// Covers package-update recovery metadata for blocking Doctor, verify, and lifecycle.
 import { describe, expect, it } from "vitest";
 import { PACKAGE_POST_INSTALL_DOCTOR_ADVISORY } from "./update-doctor-result.js";
 import { resolvePackageUpdateRecovery } from "./update-runner-command.js";
 
 describe("resolvePackageUpdateRecovery", () => {
-  it.each([{ name: "openclaw doctor" }, { name: "acp doctor" }, { name: "global install verify" }])(
-    "marks a blocking $name failure unsafe to restart",
-    ({ name }) => {
-      expect(resolvePackageUpdateRecovery({ name })).toEqual({
-        serviceRestartSafe: false,
-        reason: "runtime-verification-failed",
-      });
-    },
-  );
+  it.each([
+    { name: "openclaw doctor" },
+    { name: "acp doctor" },
+    { name: "global install verify" },
+    { name: "pnpm package lifecycle marker" },
+    { name: "pnpm package preinstall" },
+    { name: "pnpm package postinstall" },
+    { name: "pnpm package lifecycle finalize" },
+  ])("marks a blocking $name failure unsafe to restart", ({ name }) => {
+    expect(resolvePackageUpdateRecovery({ name })).toEqual({
+      serviceRestartSafe: false,
+      reason: "runtime-verification-failed",
+    });
+  });
 
   it("does not treat an advisory doctor result as unsafe recovery", () => {
     expect(

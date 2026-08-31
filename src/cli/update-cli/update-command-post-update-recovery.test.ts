@@ -273,6 +273,39 @@ describe("failed package update recovery provenance", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
   });
 
+  it("does not start an incomplete pnpm lifecycle candidate after replacement", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await finishUpdate({
+      result: {
+        status: "error",
+        mode: "pnpm",
+        reason: "global-install-failed",
+        steps: [
+          { name: "global update", command: "pnpm", cwd: "/", durationMs: 1, exitCode: 0 },
+          {
+            name: "pnpm package postinstall",
+            command: "postinstall",
+            cwd: "/",
+            durationMs: 1,
+            exitCode: 1,
+          },
+        ],
+        packageReplacementVerified: true,
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        durationMs: 1,
+      },
+      opts: {},
+      showProgress: false,
+      startedAt: Date.now(),
+      preManagedServiceStop: { stopped: true, serviceEnv: {} },
+      controlPlaneUpdateSentinelMeta: undefined,
+    } as unknown as FinishUpdateParams);
+
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
+  });
+
   it("does not start a Doctor-rejected candidate even after a verified swap", async () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
 

@@ -84,10 +84,30 @@ export function normalizeFallbackFailureReason(
   }
 }
 
+function isUnsafePackageUpdateFailure(stepName: string): boolean {
+  // CLI names this `$cliName doctor`; the shared runner uses `openclaw doctor`.
+  if (
+    stepName === "global install verify" ||
+    stepName === "openclaw doctor" ||
+    stepName.endsWith(" doctor")
+  ) {
+    return true;
+  }
+  switch (stepName) {
+    case "pnpm package lifecycle marker":
+    case "pnpm package preinstall":
+    case "pnpm package postinstall":
+    case "pnpm package lifecycle finalize":
+      return true;
+    default:
+      return false;
+  }
+}
+
 /**
- * Blocking post-install Doctor or packaged-install verification is runtime
- * rejection, not package-swap provenance. Without this, failed-update
- * recovery can start a candidate the verifier already refused.
+ * Blocking post-install Doctor, packaged-install verification, or unfinished
+ * pnpm lifecycle work is runtime rejection, not package-swap provenance.
+ * Without this, failed-update recovery can start a still-unusable candidate.
  */
 export function resolvePackageUpdateRecovery(
   failedStep: { name: string; advisory?: UpdateStepAdvisory } | null | undefined,
@@ -95,12 +115,7 @@ export function resolvePackageUpdateRecovery(
   if (!failedStep || failedStep.advisory !== undefined) {
     return undefined;
   }
-  // CLI names this `$cliName doctor`; the shared runner uses `openclaw doctor`.
-  if (
-    failedStep.name !== "global install verify" &&
-    failedStep.name !== "openclaw doctor" &&
-    !failedStep.name.endsWith(" doctor")
-  ) {
+  if (!isUnsafePackageUpdateFailure(failedStep.name)) {
     return undefined;
   }
   return { serviceRestartSafe: false, reason: "runtime-verification-failed" };
