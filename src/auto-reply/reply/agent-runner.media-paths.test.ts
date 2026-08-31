@@ -11,6 +11,7 @@ import {
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TemplateContext } from "../templating.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   createReplyOperation as createRegisteredReplyOperation,
@@ -167,56 +168,6 @@ vi.mock("../../agents/sandbox.js", async (importOriginal) => {
     ensureSandboxWorkspaceForSession: async () => null,
   };
 });
-
-vi.mock("./agent-runner-payloads.js", () => ({
-  buildReplyPayloads: async (params: {
-    payloads: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
-    didLogHeartbeatStrip: boolean;
-    blockStreamingEnabled?: boolean;
-    blockReplyPipeline?: { didStream?: () => boolean; isAborted?: () => boolean } | null;
-    normalizeMediaPaths?: (payload: {
-      text?: string;
-      mediaUrl?: string;
-      mediaUrls?: string[];
-    }) => Promise<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
-  }) => {
-    if (
-      params.blockStreamingEnabled &&
-      params.blockReplyPipeline?.didStream?.() === true &&
-      params.blockReplyPipeline?.isAborted?.() !== true
-    ) {
-      return { replyPayloads: [], didLogHeartbeatStrip: params.didLogHeartbeatStrip };
-    }
-    const replyPayloads = [];
-    for (const payload of params.payloads) {
-      const mediaUrls = [...(payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []))];
-      const textLines = [];
-      for (const line of (payload.text ?? "").split("\n")) {
-        const media = line
-          .trim()
-          .match(/^MEDIA:(.+)$/)?.[1]
-          ?.trim();
-        if (media) {
-          mediaUrls.push(media);
-        } else {
-          textLines.push(line);
-        }
-      }
-      const nextPayload = {
-        ...payload,
-        text: textLines.join("\n").trim() || undefined,
-        mediaUrl: mediaUrls[0],
-        mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
-      };
-      replyPayloads.push(
-        params.normalizeMediaPaths && nextPayload.mediaUrls
-          ? await params.normalizeMediaPaths(nextPayload)
-          : nextPayload,
-      );
-    }
-    return { replyPayloads, didLogHeartbeatStrip: params.didLogHeartbeatStrip };
-  },
-}));
 
 vi.mock("./session-updates.js", () => ({
   incrementCompactionCount: async () => undefined,
@@ -738,19 +689,22 @@ describe("runReplyAgent media path normalization", () => {
   async function runAgentTurnWithSessionContext(
     sessionCtx: TemplateContext,
     prompt = "describe this image",
-  ): Promise<void> {
+    overrides: Partial<AgentTurnParams> = {},
+  ) {
     const { executeAgentTurn } = await import("./agent-runner-execution.js");
-    await executeAgentTurn({
+    return await executeAgentTurn({
       commandBody: prompt,
-      followupRun: createMockFollowupRun({
-        prompt,
-        run: {
-          provider: "ollama",
-          model: "gemma4:latest",
-          workspaceDir: testWorkspaceDir,
-          config: {},
-        },
-      }),
+      followupRun:
+        overrides.followupRun ??
+        createMockFollowupRun({
+          prompt,
+          run: {
+            provider: "ollama",
+            model: "gemma4:latest",
+            workspaceDir: testWorkspaceDir,
+            config: {},
+          },
+        }),
       sessionCtx,
       typingSignals: {
         mode: "instant",
@@ -779,6 +733,7 @@ describe("runReplyAgent media path normalization", () => {
       replyMediaContext: {
         normalizePayload: async (payload) => payload,
       },
+      ...overrides,
     });
   }
 
@@ -799,7 +754,6 @@ describe("runReplyAgent media path normalization", () => {
         },
       });
 
-      const { executeAgentTurn } = await import("./agent-runner-execution.js");
       const followupRun = createMockFollowupRun({
         prompt: "generate",
         run: {
@@ -812,47 +766,27 @@ describe("runReplyAgent media path normalization", () => {
         },
       });
       setRuntimeConfigSnapshot(followupRun.run.config, followupRun.run.config);
-      const result = await executeAgentTurn({
-        commandBody: "generate",
-        followupRun,
-        sessionCtx: {
+      const result = await runAgentTurnWithSessionContext(
+        {
           Provider: "telegram",
           Surface: "telegram",
           To: "chat-1",
           OriginatingTo: "chat-1",
           AccountId: "default",
           MessageSid: "msg-1",
-        } as unknown as TemplateContext,
-        typingSignals: {
-          mode: "instant",
-          shouldStartImmediately: true,
-          shouldStartOnMessageStart: false,
-          shouldStartOnText: true,
-          shouldStartOnReasoning: false,
-          signalRunStart: async () => {},
-          signalMessageStart: async () => {},
-          signalTextDelta: async () => {},
-          signalReasoningDelta: async () => {},
-          signalToolStart: async () => {},
         },
-        blockReplyPipeline: null,
-        blockStreamingEnabled: true,
-        resolvedBlockStreamingBreak: "message_end",
-        applyReplyToMode: (payload) => payload,
-        shouldEmitToolResult: () => false,
-        shouldEmitToolOutput: () => false,
-        pendingToolTasks: new Set(),
-        resetSessionAfterRoleOrderingConflict: async () => false,
-        isHeartbeat: false,
-        sessionKey: "global",
-        getActiveSessionEntry: () => undefined,
-        resolvedVerboseLevel: "off",
-        replyMediaContext: providedContext
-          ? {
-              normalizePayload: async (payload) => payload,
-            }
-          : undefined,
-      });
+        "generate",
+        {
+          followupRun,
+          blockStreamingEnabled: true,
+          sessionKey: "global",
+          replyMediaContext: providedContext
+            ? {
+                normalizePayload: async (payload) => payload,
+              }
+            : undefined,
+        },
+      );
 
       // The .runtime import is only used by agent-runner-execution.ts. This path
       // should never create its own media context when the caller provides one.

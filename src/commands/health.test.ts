@@ -49,12 +49,14 @@ const createMainAgentSummary = (sessions = defaultSessions) => ({
   sessions,
 });
 
-const createHealthSummary = (params: {
-  channels: HealthSummary["channels"];
-  channelOrder: string[];
-  channelLabels: HealthSummary["channelLabels"];
-  sessions?: HealthSummary["sessions"];
-}): HealthSummary => {
+const createHealthSummary = (
+  params: {
+    channels: HealthSummary["channels"];
+    channelOrder: string[];
+    channelLabels: HealthSummary["channelLabels"];
+    sessions?: HealthSummary["sessions"];
+  } = { channels: {}, channelOrder: [], channelLabels: {} },
+): HealthSummary => {
   const sessions = params.sessions ?? defaultSessions;
   return {
     ok: true,
@@ -240,11 +242,7 @@ describe("healthCommand", () => {
   });
 
   it("prints the gateway probe duration in text output", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
     await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
@@ -252,6 +250,60 @@ describe("healthCommand", () => {
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
     expect(output).toContain("Gateway probe duration: 5ms");
   });
+
+  it.each([
+    { configured: true, available: false },
+    { configured: undefined, available: false },
+    { configured: true, available: true },
+  ])(
+    "keeps local diagnostic metadata separate from identity logging (configured=$configured, available=$available)",
+    async ({ configured, available }) => {
+      const account = {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        token: "resolved-token",
+      };
+      const resolveAccount = vi.fn(() => account);
+      const logSelfId = vi.fn();
+      listReadOnlyChannelPluginsForConfigMock.mockReturnValueOnce([
+        {
+          id: "diagnostic-fixture",
+          meta: { label: "Diagnostic" },
+          config: {
+            listAccountIds: () => ["default"],
+            inspectAccount: () => ({
+              accountId: "default",
+              enabled: true,
+              configured,
+              tokenSource: "secretref",
+              tokenStatus: available ? "available" : "configured_unavailable",
+            }),
+            resolveAccount,
+          },
+          status: { logSelfId },
+        },
+      ]);
+      callGatewayMock.mockResolvedValueOnce(
+        createHealthSummary({
+          channels: { "diagnostic-fixture": { accountId: "default", configured, linked: true } },
+          channelOrder: ["diagnostic-fixture"],
+          channelLabels: { "diagnostic-fixture": "Diagnostic" },
+        }),
+      );
+
+      await healthCommand({ config: { diagnostics: { flags: ["health"] } } }, runtime as never);
+
+      const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+      expect(output).toContain(`configured=${configured ?? "unknown"} tokenSource=secretref`);
+      if (available) {
+        expect(logSelfId).toHaveBeenCalledWith(expect.objectContaining({ account }));
+      } else {
+        expect(logSelfId).not.toHaveBeenCalled();
+        expect(resolveAccount).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("surfaces unhealthy secondary accounts without an explicit account binding", async () => {
     const primary = {
@@ -322,11 +374,7 @@ describe("healthCommand", () => {
           agentId,
           isDefault: false,
         });
-        const { agents: _agents, ...snapshot } = createHealthSummary({
-          channels: {},
-          channelOrder: [],
-          channelLabels: {},
-        });
+        const { agents: _agents, ...snapshot } = createHealthSummary();
         callGatewayMock.mockResolvedValueOnce({
           ...snapshot,
           defaultAgentId: undefined,
@@ -366,7 +414,7 @@ describe("healthCommand", () => {
 
   it("prints persistent event-loop degradation duration in text output", async () => {
     const snapshot = {
-      ...createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} }),
+      ...createHealthSummary(),
       eventLoop: {
         degraded: true,
         degradedSinceMs: 180_000,
@@ -388,11 +436,7 @@ describe("healthCommand", () => {
   });
 
   it("omits the probe duration for legacy gateway snapshots", async () => {
-    const { durationMs, ...legacySnapshot } = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const { durationMs, ...legacySnapshot } = createHealthSummary();
     expect(durationMs).toBe(5);
     callGatewayMock.mockResolvedValueOnce(legacySnapshot);
 
@@ -403,11 +447,7 @@ describe("healthCommand", () => {
   });
 
   it("prints the delivery queue warning line when the gateway reports dead-letters", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     snapshot.deliveryQueues = {
       failed: [{ queueName: "outbound", count: 2, oldestFailedAt: Date.now() - 7_200_000 }],
     };
@@ -423,11 +463,7 @@ describe("healthCommand", () => {
   });
 
   it("surfaces a disabled config hot-reload watcher in JSON output", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     snapshot.configReload = { hotReloadStatus: "disabled" };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
@@ -438,11 +474,7 @@ describe("healthCommand", () => {
   });
 
   it("prints the config hot-reload disabled line in text output", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     snapshot.configReload = { hotReloadStatus: "disabled" };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
@@ -453,11 +485,7 @@ describe("healthCommand", () => {
   });
 
   it("omits the config hot-reload line in text output when the reloader is active", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     snapshot.configReload = { hotReloadStatus: "active" };
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
@@ -518,11 +546,7 @@ describe("healthCommand", () => {
   });
 
   it("passes explicit gateway credentials through to the gateway call", async () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const snapshot = createHealthSummary();
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
     await healthCommand(
@@ -871,11 +895,7 @@ describe("healthCommand", () => {
 
 describe("formatContextEngineHealthLine", () => {
   it("summarizes quarantined context engines", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
     summary.contextEngines = {
       quarantined: [
         {
@@ -896,11 +916,7 @@ describe("formatContextEngineHealthLine", () => {
 
 describe("formatDeliveryQueueHealthLine", () => {
   it("summarizes dead-lettered delivery queue entries with the oldest age", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
     summary.deliveryQueues = {
       failed: [
         { queueName: "outbound", count: 3, oldestFailedAt: 90_000 },
@@ -914,11 +930,7 @@ describe("formatDeliveryQueueHealthLine", () => {
   });
 
   it("summarizes dead-lettered ingress entries per channel account", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
     summary.deliveryQueues = {
       failed: [],
       ingressFailed: [
@@ -933,11 +945,7 @@ describe("formatDeliveryQueueHealthLine", () => {
   });
 
   it("summarizes ingress pressure per channel account", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
     summary.deliveryQueues = {
       failed: [],
       ingressPressure: [
@@ -959,11 +967,7 @@ describe("formatDeliveryQueueHealthLine", () => {
   });
 
   it("summarizes dead letters and ingress pressure together", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
     summary.deliveryQueues = {
       failed: [{ queueName: "outbound", count: 2, oldestFailedAt: 90_000 }],
       ingressPressure: [
@@ -985,11 +989,7 @@ describe("formatDeliveryQueueHealthLine", () => {
   });
 
   it("returns null when no dead-lettered entries are reported", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
 
     expect(formatDeliveryQueueHealthLine(summary)).toBeNull();
   });
@@ -997,11 +997,7 @@ describe("formatDeliveryQueueHealthLine", () => {
 
 describe("formatConfigReloadHealthLine", () => {
   it("reports a disabled config hot-reload watcher", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
     summary.configReload = { hotReloadStatus: "disabled" };
 
     expect(formatConfigReloadHealthLine(summary)).toBe(
@@ -1010,22 +1006,14 @@ describe("formatConfigReloadHealthLine", () => {
   });
 
   it("stays silent while the config hot-reload watcher is active", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
     summary.configReload = { hotReloadStatus: "active" };
 
     expect(formatConfigReloadHealthLine(summary)).toBeNull();
   });
 
   it("stays silent when no config reloader is running", () => {
-    const summary = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
+    const summary = createHealthSummary();
 
     expect(formatConfigReloadHealthLine(summary)).toBeNull();
   });

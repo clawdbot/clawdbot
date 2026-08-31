@@ -201,32 +201,28 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
   const setTimer = deps.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer = deps.clearTimer ?? clearTimeout;
 
-  const arm = (sessionKey: string, pending: PendingExperienceReview, delayMs: number) => {
+  const arm = (key: string, pending: PendingExperienceReview, delayMs: number) => {
     if (pending.timer) {
       clearTimer(pending.timer);
     }
     const generation = ++pending.generation;
     const timerCallback = () => {
-      if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
+      if (pendingBySession.get(key) !== pending || pending.generation !== generation) {
         return;
       }
       pending.timer = undefined;
       void Promise.resolve(deps.isSystemActive())
         .then(async (active) => {
-          if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
+          if (pendingBySession.get(key) !== pending || pending.generation !== generation) {
             return;
           }
-          if (active) {
-            arm(sessionKey, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
-            return;
-          }
-          if (reviewInFlight) {
-            arm(sessionKey, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
+          if (active || reviewInFlight) {
+            arm(key, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
             return;
           }
           reviewInFlight = true;
           try {
-            pendingBySession.delete(sessionKey);
+            pendingBySession.delete(key);
             const candidate = deps.prepareReview
               ? await deps.prepareReview(pending.candidate)
               : pending.candidate;
@@ -240,8 +236,8 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         })
         .catch((error: unknown) => {
           log.warn(`skill experience review failed: ${String(error)}`);
-          if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
-            pendingBySession.delete(sessionKey);
+          if (pendingBySession.get(key) === pending && pending.generation === generation) {
+            pendingBySession.delete(key);
           }
         });
     };
@@ -260,7 +256,9 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       if (!sessionKey) {
         return;
       }
-      const existing = pendingBySession.get(sessionKey);
+      // Unqualified keys such as global still belong to one foreground agent.
+      const key = JSON.stringify([params.ctx.foregroundPromptContext.agentId, sessionKey]);
+      const existing = pendingBySession.get(key);
       // Errored completions (provider/prompt failures) are transient environment
       // noise, not learnable evidence, and a same-model review would likely hit
       // the same failure. User aborts carry no error and stay eligible: deep
@@ -275,13 +273,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         if (existing.timer) {
           clearTimer(existing.timer);
         }
-        pendingBySession.delete(sessionKey);
+        pendingBySession.delete(key);
         return;
       }
       // Quiet time follows all later foreground work in the session. Candidate
       // eligibility only decides whether that completion can replace the evidence.
       if (existing) {
-        arm(sessionKey, existing, EXPERIENCE_REVIEW_IDLE_MS);
+        arm(key, existing, EXPERIENCE_REVIEW_IDLE_MS);
       }
       if (errored) {
         log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
@@ -349,8 +347,8 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         };
         const pending = existing ?? { candidate, generation: 0 };
         pending.candidate = candidate;
-        pendingBySession.set(sessionKey, pending);
-        arm(sessionKey, pending, EXPERIENCE_REVIEW_IDLE_MS);
+        pendingBySession.set(key, pending);
+        arm(key, pending, EXPERIENCE_REVIEW_IDLE_MS);
         log.debug(
           `experience review scheduled: session=${sessionKey} iterations=${modelIterations} aborted=${!params.event.success}`,
         );

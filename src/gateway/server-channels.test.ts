@@ -17,6 +17,7 @@ import type {
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
 import { formatGatewayChannelsStatusLines } from "../commands/channels/status.runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
 import {
@@ -2939,10 +2940,69 @@ describe("server-channels auto restart", () => {
     expect(succeedingStart).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves plugin diagnostics recorded at startup when inspecting account metadata", async () => {
+    const recorded = {
+      application: { intents: { messageContent: "disabled" } },
+      bot: { id: "synthetic-bot", username: "Cached bot" },
+    };
+    const plugin = createTestPlugin({
+      startAccount: async ({ setStatus, abortSignal }) => {
+        setStatus({ accountId: DEFAULT_ACCOUNT_ID, ...recorded });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    });
+    plugin.config.inspectAccount = () => ({ enabled: true, configured: true });
+    installTestRegistry(plugin);
+    const manager = createManager();
+
+    await manager.startChannels();
+
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject(recorded);
+  });
+
+  it("inspects disabled accounts without resolving inactive credentials", () => {
+    const resolveAccount = vi.fn(() => {
+      throw new Error("inactive credential must not resolve");
+    });
+    const describeAccount = vi.fn(() => {
+      throw new Error("runtime descriptor must not receive an inspection");
+    });
+    const plugin = createTestPlugin({ resolveAccount, describeAccount });
+    plugin.config.inspectAccount = () => ({
+      enabled: false,
+      configured: true,
+      tokenStatus: "configured_unavailable",
+      name: "Disabled account",
+      mode: "webhook",
+    });
+    installTestRegistry(plugin);
+    const manager = createManager();
+
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject({
+      accountId: "default",
+      name: "Disabled account",
+      mode: "webhook",
+      enabled: false,
+      configured: true,
+      running: false,
+      tokenStatus: "configured_unavailable",
+      stateReason: "disabled",
+    });
+    expect(resolveAccount).not.toHaveBeenCalled();
+    expect(describeAccount).not.toHaveBeenCalled();
+  });
+
   it("keeps only the degraded channel account cold", async () => {
     const discordStart = vi.fn(async (_context: ChannelGatewayContext<TestAccount>) => {});
     const slackStart = vi.fn(async () => {});
-    const discordResolve = vi.fn(() => ({ enabled: true, configured: true }));
+    const discordResolve = vi.fn((_cfg: OpenClawConfig, accountId?: string | null) => {
+      if (accountId === "broken") {
+        throw new Error("unresolved operational credential");
+      }
+      return { enabled: true, configured: true };
+    });
     installTestRegistry(
       createTestPlugin({
         id: "discord",
@@ -2972,10 +3032,17 @@ describe("server-channels auto restart", () => {
     expect(discordResolve).toHaveBeenCalledWith(expect.anything(), "healthy");
     expect(slackStart).toHaveBeenCalledTimes(1);
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.broken).toMatchObject({
+      enabled: true,
+      configured: true,
       running: false,
+      lifecycle: "blocked",
       lastError:
         "Secret owner account:discord:broken is configured but unavailable (secret reference was not found).",
     });
+    expect(discordResolve).not.toHaveBeenCalledWith(expect.anything(), "broken");
+    await expect(manager.startChannel("discord", "broken", { manual: true })).rejects.toThrow(
+      "Secret owner account:discord:broken is configured but unavailable",
+    );
   });
 
   it.each([false, true])(

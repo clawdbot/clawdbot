@@ -2,6 +2,7 @@
 // Starts, stops, restarts, and snapshots plugin channel account runtimes.
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
+import { buildChannelAccountSnapshotFromInspection } from "../channels/account-summary.js";
 import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
@@ -14,6 +15,7 @@ import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js
 import {
   applyChannelAccountState,
   resolveChannelAccountState,
+  resolveUnavailableChannelAccountSnapshot,
 } from "../channels/status/account-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
@@ -1392,12 +1394,30 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       });
       const accounts: Record<string, ChannelAccountSnapshot> = {};
       for (const id of accountIds) {
+        const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
+        const unavailable = resolveUnavailableChannelAccountSnapshot({
+          channelId: plugin.id,
+          accountId: id,
+          runtime: current,
+        });
+        if (unavailable) {
+          accounts[id] = unavailable;
+          continue;
+        }
+        const inspected = plugin.config.inspectAccount?.(cfg, id);
+        if (inspected) {
+          accounts[id] = buildChannelAccountSnapshotFromInspection({
+            account: inspected,
+            accountId: id,
+            runtime: current,
+          });
+          continue;
+        }
         const account = plugin.config.resolveAccount(cfg, id);
         const enabled = plugin.config.isEnabled
           ? plugin.config.isEnabled(account, cfg)
           : isAccountEnabled(account);
         const described = plugin.config.describeAccount?.(account, cfg);
-        const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
         const configured = described?.configured ?? current.configured ?? true;
         const state = resolveChannelAccountState({
           enabled,
