@@ -22,7 +22,7 @@ type DraftRepositoryCallbacks = {
   persistPreference: (patch: NewSessionPreference) => void;
 };
 
-type RepositoryRestore = { worktree: boolean; baseRef: string; baseRefEditGeneration: number };
+type RepositoryRestore = { baseRef: string; baseRefEditGeneration: number };
 type ResolvedRepository = Exclude<DraftRepositoryState, { kind: "checking" }>;
 
 function planRepositoryDiscovery(
@@ -96,13 +96,11 @@ export class DraftRepositoryController {
     this.preferredBaseRefRestore = preference?.baseRef ?? "";
     this.worktreeNameValue = preference?.worktreeName ?? "";
     this.detailsSelectedByUser = false;
-    if (
-      this.matchesCurrentRepo() &&
-      this.repositoryValue.kind !== "checking" &&
-      this.repositoryValue.kind !== "idle"
-    ) {
+    if (!this.matchesCurrentRepo()) {
+      // Retire the old folder's RPC before it can consume the new preference.
+      this.invalidate();
+    } else if (this.repositoryValue.kind !== "checking" && this.repositoryValue.kind !== "idle") {
       this.adoptResolvedRepository(this.repositoryValue, {
-        worktree: this.preferredWorktreeRestore,
         baseRef: this.preferredBaseRefRestore,
         baseRefEditGeneration: this.baseRefEditGeneration,
       });
@@ -212,7 +210,6 @@ export class DraftRepositoryController {
   load() {
     const requestId = ++this.requestToken;
     const restore = {
-      worktree: this.preferredWorktreeRestore && !this.worktreeSelectedByUser,
       baseRef: this.preferredBaseRefRestore,
       baseRefEditGeneration: this.baseRefEditGeneration,
     };
@@ -261,11 +258,12 @@ export class DraftRepositoryController {
 
   private adoptResolvedRepository(state: ResolvedRepository, restore: RepositoryRestore) {
     // Discovery owns restore/rejection for both immediate and RPC results;
-    // placement and user edits may have changed while an RPC was pending.
+    // Read the current preference: group defaults and user edits can arrive
+    // while an RPC is pending.
     this.repositoryValue = state;
     if (state.kind === "direct") {
       if (!this.read().remotePlacement) {
-        const rejectedWorktree = this.worktreeValue || restore.worktree;
+        const rejectedWorktree = this.worktreeValue || this.preferredWorktreeRestore;
         this.worktreeValue = false;
         if (rejectedWorktree) {
           this.callbacks.persistPreference({ worktree: false });
@@ -273,7 +271,7 @@ export class DraftRepositoryController {
       }
     } else if (
       state.kind !== "idle" &&
-      restore.worktree &&
+      this.preferredWorktreeRestore &&
       !this.worktreeSelectedByUser &&
       this.available()
     ) {
