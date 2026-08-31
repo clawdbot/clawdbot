@@ -1163,7 +1163,7 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
                 },
               })
             : runNodeStepsInParallel([
-                { label: "blocked", args, timeoutMs: 100 },
+                { label: "blocked", args, timeoutMs: 100, abortKillGraceMs: 100 },
                 {
                   label: "primary",
                   args: [
