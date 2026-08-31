@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -51,7 +52,7 @@ function formatPluginRegistryDifferences(
     )
     .map(
       (difference) =>
-        `${difference.pluginId} (persisted source: ${JSON.stringify(difference.persistedSource)}; derived source: ${JSON.stringify(difference.derivedSource)})`,
+        `${sanitizeTerminalText(difference.pluginId)} (persisted source: ${JSON.stringify(difference.persistedSource)}; derived source: ${JSON.stringify(difference.derivedSource)})`,
     )
     .join(", ");
 }
