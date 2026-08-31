@@ -15,13 +15,16 @@ import {
   type PluginInstallTransaction,
 } from "../../../plugins/install-transaction.js";
 import type { PluginNpmInstallArtifactPrecommitHandler } from "../../../plugins/install-types.js";
-import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../../plugins/installed-plugin-index-records.js";
 import {
   clearRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "../../../plugins/managed-npm-retention.js";
 import { ManagedPluginLifecycleError } from "../../../plugins/management-lifecycle-error.js";
-import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
+import {
+  type PluginLifecycleLeaseContext,
+  withPluginLifecycleLease,
+} from "../../../plugins/plugin-lifecycle-lease.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
@@ -153,11 +156,15 @@ async function repairMissingPluginInstalls(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<RepairMissingPluginInstallsResult> {
   // Baseline, awaited review, package publication, and the index write share one generation.
-  return await withPluginLifecycleLease({ env: params.env }, async () => {
+  return await withPluginLifecycleLease({ env: params.env }, async (lease) => {
     const pendingInstallTransactions: PluginInstallTransaction[] = [];
     let result: RepairMissingPluginInstallsResult;
     try {
-      result = await repairMissingPluginInstallsWithLease(params, pendingInstallTransactions);
+      result = await repairMissingPluginInstallsWithLease(
+        params,
+        pendingInstallTransactions,
+        lease,
+      );
     } catch (error) {
       try {
         await settlePluginInstallTransactions(pendingInstallTransactions, "rollback");
@@ -171,6 +178,9 @@ async function repairMissingPluginInstalls(params: {
       }
       throw error;
     }
+    // The index already names the active payload. Losing ownership here must
+    // retain its rollback backup rather than settle either side under a stale lease.
+    lease.assertOwned();
     await settlePluginInstallTransactions(pendingInstallTransactions, "commit").catch(() => {
       const warning = "Plugin install committed, but backup cleanup failed. Restart is required.";
       if (!result.warnings.includes(warning)) {
@@ -184,6 +194,7 @@ async function repairMissingPluginInstalls(params: {
 async function repairMissingPluginInstallsWithLease(
   params: Parameters<typeof repairMissingPluginInstalls>[0],
   pendingInstallTransactions: PluginInstallTransaction[],
+  lease: PluginLifecycleLeaseContext,
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
   const {
@@ -670,16 +681,22 @@ async function repairMissingPluginInstallsWithLease(
     }
   }
 
-  const persistedIndexOptions = { config: params.cfg, env };
+  const persistedIndexOptions = { config: params.cfg, env, lease };
   if (nextRecords !== records) {
-    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
+    await writePersistedInstalledPluginIndexInstallRecordsWithLease(
+      nextRecords,
+      persistedIndexOptions,
+    );
   } else if (params.baselineRecords) {
     // The caller seeded us from in-memory state that may not yet have been
     // persisted (e.g. earlier sync/npm record mutations). Even if repair
     // itself made no further changes, persist the baseline so the disk
     // matches what we are about to return — otherwise the next reader gets
     // a stale snapshot.
-    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
+    await writePersistedInstalledPluginIndexInstallRecordsWithLease(
+      nextRecords,
+      persistedIndexOptions,
+    );
   }
   const pluginInventoryChanged = nextRecords !== records || repairedPluginIds.size > 0;
   return {
