@@ -556,38 +556,39 @@ describe("fresh compiled subprocess invocation", () => {
 
   it("uses the prepared Anthropic failover hook in a fresh process without global activation", (context) =>
     fixtureLifetime.run(async () => {
-      const { node } = createFixtureCommands(context);
-      const probe = writeFixture(
-        fixtureDirectory(),
-        "anthropic-hook.mts",
-        `
-          import assert from 'node:assert/strict';
-          import {coerceToFailoverError} from ${JSON.stringify(pathToFileURL(path.join(root, "src/agents/failover-error.ts")).href)};
-          import {getActivePluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime.ts")).href)};
-          import {loadPluginRegistryHandle} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/loader.ts")).href)};
-          import {withPluginRuntimeRegistryScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/gateway-request-scope.ts")).href)};
-          assert.equal(getActivePluginRegistry(), null);
-          const classify = () => coerceToFailoverError(
-            {code: 'API_ERROR', message: 'provider failure'}, {provider: 'anthropic'},
-          );
-          assert.equal(classify(), null, 'error handling must not discover a provider');
-          const registry = loadPluginRegistryHandle({
-            config: {plugins:{entries:{anthropic:{enabled:true}}}},
-            onlyPluginIds: ['anthropic'],
-          });
-          assert.ok(registry.providers.some(entry=>entry.provider.id==='anthropic'));
-          const result = withPluginRuntimeRegistryScope(registry,classify);
-          assert.equal(result?.reason, 'server_error');
-          assert.equal(result?.provider, 'anthropic');
-          assert.equal(getActivePluginRegistry(), null);
-        `,
-      );
-      const result = await node(resolveRuntimeWorkerArgv(pathToFileURL(probe)), root, {
-        ...process.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "extensions"),
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      });
-      expect(result.code, result.stderr + result.stdout).toBe(0);
+      const { node, prepareWorkers } = createFixtureCommands(context);
+      const owner = createVitestWorkerRun();
+      try {
+        const manifest = await prepareWorkers(owner);
+        const directory = fixtureDirectory();
+        const bundled = path.join(directory, "bundled");
+        const pluginRoot = path.join(bundled, "anthropic");
+        writeFixture(
+          pluginRoot,
+          "openclaw.plugin.json",
+          fs.readFileSync(path.join(root, "extensions/anthropic/openclaw.plugin.json"), "utf8"),
+        );
+        writeFixture(
+          pluginRoot,
+          "index.mjs",
+          `export {default} from ${JSON.stringify(pathToFileURL(path.join(owner.descriptor.directory, "dist/extensions/anthropic/index.js")).href)};`,
+        );
+        const result = await node(
+          [path.join(owner.descriptor.directory, "dist/test-support/anthropic-preparation.js")],
+          root,
+          {
+            ...process.env,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: bundled,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          },
+        );
+        console.log(JSON.stringify({ preparationMs: manifest.durationMs }));
+        console.log(result.stdout);
+        expect(result.code, result.stderr + result.stdout).toBe(0);
+      } finally {
+        await owner.dispose();
+      }
+      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
     }));
 
   it("preserves scoped and prepared provider hooks in source and compiled TUI payloads", (context) =>
