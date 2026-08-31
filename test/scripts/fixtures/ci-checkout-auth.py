@@ -46,10 +46,20 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
     source = root / "source"
     checked(git, "init", "--initial-branch=main", str(source))
     (source / "payload.txt").write_text("checkout must hydrate this promised blob\n")
-    checked(git, "add", "payload.txt", cwd=source)
+    setup_action = source / ".github/actions/setup-node-env/action.yml"
+    setup_action.parent.mkdir(parents=True)
+    setup_action.write_text("name: fixture\n")
+    checked(git, "add", ".", cwd=source)
     checked(git, "-c", "user.name=Checkout Fixture", "-c", "user.email=fixture@example.invalid",
             "commit", "-m", "fixture", cwd=source)
     revision = checked(git, "rev-parse", "HEAD", cwd=source)
+    historical_revision = revision
+    if mode == "historical":
+        (source / "payload.txt").write_text("current checkout\n")
+        checked(git, "add", "payload.txt", cwd=source)
+        checked(git, "-c", "user.name=Checkout Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "-m", "current", cwd=source)
+        revision = checked(git, "rev-parse", "HEAD", cwd=source)
     blob = checked(git, "rev-parse", "HEAD:payload.txt", cwd=source)
     bare = root / "repo.git"
     checked(git, "clone", "--bare", str(source), str(bare))
@@ -175,6 +185,37 @@ elif phase == "redirect":
                         raise RuntimeError("checkout owner did not finish cancellation cleanup")
                     raise
                 return subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
+
+        if mode == "historical":
+            env["GIT_CONFIG_GLOBAL"] = str(home / ".gitconfig")
+            policy.write_text('''import ci_git_owner as owner
+import json, os, sys
+from pathlib import Path
+remote, token, phase = sys.argv[3:]
+owner.kind, owner.reset = "linux-node", True
+owner.workspace, owner.remote = os.getcwd(), remote
+owner.checkout_environment = owner.git_auth_environment(remote, token)
+try:
+    owner.checkout()
+finally:
+    owner.checkout_environment.clear()
+historical = json.loads(os.environ["CHECKOUT_GIT_COMMITS_JSON"])[0]
+owner.run_git(os.getcwd(), "cat-file", "-e", historical + "^{commit}")
+reader = str(Path.cwd().parent / "historical-reader")
+owner.run_git(os.getcwd(), "worktree", "add", "--detach", reader, historical)
+assert Path(reader, "payload.txt").read_text() == "checkout must hydrate this promised blob\\n"
+owner.run_git(os.getcwd(), "worktree", "remove", reader)
+''')
+            env.update(CHECKOUT_SHA=revision, WORKFLOW_SHA=revision,
+                       CHECKOUT_GIT_COMMITS_JSON=json.dumps([historical_revision]))
+            result = owned("historical")
+            assert result.returncode == 0, result.stderr
+            assert requests and all(item["authenticated"] for item in requests)
+            config = (workspace / ".git/config").read_text()
+            assert token not in config and encoded not in config and "extraheader" not in config.lower()
+            assert checked(git, "rev-parse", "HEAD", cwd=workspace) == revision
+            print(json.dumps({"historicalReaderPrepared": True, "credentialPersisted": False}))
+            raise SystemExit(0)
 
         fetched = owned("fetch-only" if mode == "fetch-only" else "fetch")
         assert fetched.returncode == 0, fetched.stderr

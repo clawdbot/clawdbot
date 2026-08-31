@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import gitPrerequisites from "../../.github/actions/git-owner/test-prerequisites.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -30,7 +31,7 @@ import {
 } from "./message-delivery-progress-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const PINNED_PRE_C04_READER_SHA = "5dc4cf602bc5e263e83cd16a12bb1e100544f4c3";
+const PINNED_PRE_C04_READER_SHA = gitPrerequisites.outboundMessageTerminalReader.commit;
 const OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT = 1_024;
 
 function ensurePinnedReaderCommit(repositoryRoot: string): void {

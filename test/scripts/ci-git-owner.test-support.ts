@@ -48,6 +48,7 @@ const defaults: Record<string, string> = {
   CHECKOUT_FALLBACK_REF: candidate,
   CHECKOUT_EVENT_REF: "refs/heads/main",
   WORKFLOW_SHA: harness,
+  CHECKOUT_GIT_COMMITS_JSON: "null",
   GITHUB_EVENT_NAME: "push",
   GITHUB_REPOSITORY: "fixture/checkout",
   DEFAULT_BRANCH: "main",
