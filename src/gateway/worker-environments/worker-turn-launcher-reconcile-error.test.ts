@@ -92,6 +92,7 @@ describe("worker turn recovery after environment reconciliation errors", () => {
         reportWorkspaceResultConflict: async () => {},
         resolveWorkspaceResultConflict: async () => undefined,
       }),
+      (_request, run) => run(),
     );
     const uninstall = installWorkerPlacementReconcileGuard({
       placements,
