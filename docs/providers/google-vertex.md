@@ -69,7 +69,7 @@ project and model, and confirm Gemini responds through Vertex AI.
           --member="serviceAccount:openclaw-vertex@your-project-id.iam.gserviceaccount.com" \
           --role="roles/aiplatform.user"
 
-        gcloud iam service-accounts keys create ~/openclaw-vertex-key.json \
+        gcloud iam service-accounts keys create /path/to/openclaw-vertex-key.json \
           --iam-account="openclaw-vertex@your-project-id.iam.gserviceaccount.com"
         ```
 
@@ -105,7 +105,7 @@ project and model, and confirm Gemini responds through Vertex AI.
     GOOGLE_CLOUD_LOCATION=global
 
     # If using a service account: uncomment and set the absolute key path
-    # GOOGLE_APPLICATION_CREDENTIALS=/home/username/openclaw-vertex-key.json
+    # GOOGLE_APPLICATION_CREDENTIALS=/path/to/openclaw-vertex-key.json
     ```
 
   </Step>
