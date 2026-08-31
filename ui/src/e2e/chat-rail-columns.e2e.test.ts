@@ -1013,14 +1013,9 @@ suite.define(() => {
         await companion
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
-        const companionActions = sidePanel(page).getByRole("button", {
-          name: "More companion actions",
-        });
-        await companionActions.click();
         await sidePanel(page)
-          .locator('wa-dropdown-item[value="clear"]')
-          .waitFor({ state: "visible" });
-        await page.keyboard.press("Escape");
+          .getByRole("button", { name: "Clear side chat", exact: true })
+          .waitFor();
         await captureRichPanel(page, "rails-side-chat-mobile-light");
 
         await sidePanel(page).getByRole("button", { name: "Expand side panel" }).click();
