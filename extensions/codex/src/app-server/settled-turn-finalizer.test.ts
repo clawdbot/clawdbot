@@ -337,12 +337,16 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 
-  it.each(["missing", "foreign"])(
-    "rejects a %s context before starting the isolated turn",
+  it.each(["missing", "foreign", "unavailable"])(
+    "rejects %s context before starting the isolated turn",
     async (kind) => {
       const settledAttempt = createSettledAttempt();
       settledAttempt.settledTurnFinalizationContext =
-        kind === "missing" ? undefined : { source: "harness", data: [] };
+        kind === "missing"
+          ? undefined
+          : kind === "foreign"
+            ? { source: "harness", data: [] }
+            : { source: "unavailable" };
       await expect(
         runCodexSettledTurnFinalization({ attempt: createAttempt(), settledAttempt }, {}),
       ).rejects.toThrow("finalization context is unavailable");

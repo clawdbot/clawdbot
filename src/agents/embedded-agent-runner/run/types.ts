@@ -296,10 +296,11 @@ export type EmbeddedRunAttemptResult = {
   /** Exact provider-response count when the harness can observe model iterations directly. */
   modelIterations?: number;
   messagesSnapshot: AgentMessage[];
-  /** Complete settled evidence, frozen as transcript messages or an owning harness's bounded projection. */
+  /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
   settledTurnFinalizationContext?:
     | { readonly source: "openclaw-transcript"; readonly messages: readonly AgentMessage[] }
-    | { readonly source: "harness"; readonly data: unknown };
+    | { readonly source: "harness"; readonly data: unknown }
+    | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
   latestMcpAppChannelView?: McpAppChannelView;

@@ -778,13 +778,25 @@ not a substitute for removing the native capability surface.
 A projection-backed harness must capture the active branch after the settled
 turn is mirrored and prove that the current prompt and every current tool
 call/result are present through that boundary. Put the frozen evidence on
-`settledAttempt.settledTurnFinalizationContext` as either:
+`settledAttempt.settledTurnFinalizationContext` as one of:
 
 - `source: "openclaw-transcript"` with `messages`: the complete application
   transcript through the boundary.
 - `source: "harness"` with `data`: an immutable, bounded projection interpreted
   only by the owning harness. Core passes this opaque value through; the
   finalizer must verify its own context type before using it.
+- `source: "unavailable"`: the harness permits finalization for this settled
+  turn, but safe replay evidence could not be captured. The finalizer must
+  reject this state before provider or native I/O; core can still use its
+  existing host-owned fallback without repeating tools.
+
+The unavailable state records eligibility, not validated history. Eligible
+capture failures, including missing, drifting, or oversized evidence, can reach
+that no-model fallback. Do not emit it for failures the harness excludes from
+finalization, such as authentication or usage-limit errors. Command-only
+harnesses must retain the attributed assistant tool-call entry in
+`messagesSnapshot`; the host fallback can use that settled-batch identity when
+visible-assistant fields are absent.
 
 Enforce projection limits while acquiring messages, rather than cloning the
 whole transcript before checking its size. Successful capture must finish all

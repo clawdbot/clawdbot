@@ -4775,35 +4775,39 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it.each([
-    { label: "completed turn", failure: undefined, expectedContext: true },
-    {
-      label: "provider overload after the tool result",
-      failure: {
-        message: "Selected model is at capacity. Please try a different model.",
-        codexErrorInfo: "serverOverloaded",
+  it.each(
+    [
+      { label: "completed turn", failure: undefined, expectedContext: true },
+      {
+        label: "provider overload after the tool result",
+        failure: {
+          message: "Selected model is at capacity. Please try a different model.",
+          codexErrorInfo: "serverOverloaded",
+        },
+        expectedContext: true,
       },
-      expectedContext: true,
-    },
-    {
-      label: "usage limit after the tool result",
-      failure: {
-        message: "Usage limit exceeded.",
-        codexErrorInfo: "usageLimitExceeded",
+      {
+        label: "usage limit after the tool result",
+        failure: {
+          message: "Usage limit exceeded.",
+          codexErrorInfo: "usageLimitExceeded",
+        },
+        expectedContext: false,
       },
-      expectedContext: false,
-    },
-    {
-      label: "unauthorized response after the tool result",
-      failure: {
-        message: "Unauthorized.",
-        codexErrorInfo: "unauthorized",
+      {
+        label: "unauthorized response after the tool result",
+        failure: {
+          message: "Unauthorized.",
+          codexErrorInfo: "unauthorized",
+        },
+        expectedContext: false,
       },
-      expectedContext: false,
-    },
-  ])(
-    "captures the complete mirrored branch through a settled tool-result boundary for a $label",
-    async ({ failure, expectedContext }) => {
+    ].flatMap((scenario) =>
+      [false, true].map((oversizedHistory) => ({ scenario, oversizedHistory })),
+    ),
+  )(
+    "preserves settled finalization eligibility for a $scenario.label (oversized history: $oversizedHistory)",
+    async ({ scenario: { failure, expectedContext }, oversizedHistory }) => {
       const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
       const sessionId = "session-settled-finalization-context";
       const sessionFile = `agent:main:${sessionId}`;
@@ -4811,9 +4815,20 @@ describe("runCodexAppServerAttempt", () => {
       const harness = createStartedThreadHarness();
       const params = createParams(sessionFile, workspaceDir);
       await attachSqliteSessionTarget(params, storePath, sessionId);
+      if (oversizedHistory) {
+        for (let index = 0; index < 201; index += 1) {
+          await appendSqliteHistoryMessage(
+            params,
+            userMessage(`Prior message ${index}`, index + 1),
+          );
+        }
+      }
       params.prompt = "Send the update to Alice.";
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
+      const emptyAssistant = { type: "agentMessage", id: "empty-assistant", text: "" };
+      await harness.notify(itemNotification("item/started", emptyAssistant));
+      await harness.notify(itemNotification("item/completed", emptyAssistant));
       await harness.notify(
         itemNotification("item/started", {
           type: "commandExecution",
@@ -4852,7 +4867,20 @@ describe("runCodexAppServerAttempt", () => {
       const result = await run;
       expect(Boolean(readAttemptTerminal(result).promptError)).toBe(Boolean(failure));
       expect(Boolean(result.settledTurnFinalizationContext)).toBe(expectedContext);
-      if (result.settledTurnFinalizationContext) {
+      expect(result.currentAttemptAssistant).toBeDefined();
+      expect(result.replayMetadata).toMatchObject({
+        hadPotentialSideEffects: true,
+        replaySafe: false,
+      });
+      expect(result.itemLifecycle).toMatchObject({
+        startedCount: 2,
+        completedCount: 2,
+        activeCount: 0,
+      });
+      if (expectedContext && oversizedHistory) {
+        expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
+        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
+      } else if (result.settledTurnFinalizationContext) {
         expect(result.settledTurnFinalizationContext).toMatchObject({
           source: "harness",
           data: [
