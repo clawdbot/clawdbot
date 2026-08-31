@@ -267,9 +267,8 @@ describe("subagent registry persistence resume", () => {
   });
 
   it("persists completion-time all-recipient authority selection on the authoritative run", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    const stateDir = tempStateDir;
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    await withRegistryState(stateDir, async () => {
       const childSessionKey = "agent:main:subagent:all-authority";
       await writeSubagentSessionEntry({
         stateDir,
@@ -330,9 +329,8 @@ describe("subagent registry persistence resume", () => {
   });
 
   it("prunes orphan runs before resuming an announce retry", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    const stateDir = tempStateDir;
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    await withRegistryState(stateDir, async () => {
       const runId = "run-orphan-resume-guard";
       const childSessionKey = "agent:main:subagent:ghost-resume";
       const now = Date.now();

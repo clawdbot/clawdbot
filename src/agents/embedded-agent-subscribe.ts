@@ -20,10 +20,7 @@ import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createCompactionRetryTracker } from "./embedded-agent-subscribe.compaction-retry.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import {
-  cleanupRunToolStartData,
-  createEmbeddedToolLifecycle,
-} from "./embedded-agent-subscribe.handlers.tools.js";
+import { cleanupRunToolStartData } from "./embedded-agent-subscribe.handlers.tools.js";
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
@@ -32,6 +29,7 @@ import { resolveEmbeddedAgentSessionLogger } from "./embedded-agent-subscribe.lo
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
+import { createEmbeddedToolLifecycleRunner } from "./embedded-agent-subscribe.tool-lifecycle.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import {
   extractToolResultMediaArtifact,
@@ -543,7 +541,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
-  const runToolLifecycle = createEmbeddedToolLifecycle(ctx);
+  const runToolLifecycle = createEmbeddedToolLifecycleRunner(ctx);
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedAgentSessionEventHandler(ctx));
   setSessionModelUsageSink(params.session.sessionManager, recordModelUsage);
 

@@ -173,6 +173,7 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
     setRuntimeConfigSnapshot(makeConfig() as never);
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:continuation-child",
       runId: "run-continuation-child",
     });
@@ -279,6 +280,7 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
     failSharedDelegateDispatchOnce();
     spawnSpy.mockResolvedValue({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:stale-child",
       runId: "run-stale-child",
       rollbackAccepted,

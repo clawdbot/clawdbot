@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";
@@ -20,7 +21,7 @@ import {
   mockedResolveContextWindowInfo,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetRunOverflowCompactionHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
@@ -28,6 +29,8 @@ import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harnes
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let overflowBaseRunParams: ReturnType<typeof createOverflowRunParams>;
 
 describe("runEmbeddedAgent continuation model routing", () => {
   beforeAll(async () => {
@@ -35,6 +38,9 @@ describe("runEmbeddedAgent continuation model routing", () => {
   });
 
   beforeEach(() => {
+    overflowBaseRunParams = createOverflowRunParams({
+      workspaceDir: tempDirs.make("openclaw-continuation-model-routing-"),
+    });
     resetAgentEventsForTest();
     resetRunOverflowCompactionHarnessMocks();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);

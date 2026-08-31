@@ -340,7 +340,7 @@ describe("conversation registry", () => {
     { entry_json: JSON.stringify({ sessionId: "wrong-session", updatedAt: 100 }) },
   ])("does not bind an invalid current entry to its primary address: %j", async (invalid) => {
     const scope = { agentId: "main", sessionKey: "agent:main:reef:direct:peer-a", storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "peer-a-session",
       updatedAt: 100,
       chatType: "direct",

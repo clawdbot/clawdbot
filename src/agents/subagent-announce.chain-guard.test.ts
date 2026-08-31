@@ -215,6 +215,7 @@ describe("announce-side chain guard (maxChainLength enforcement)", () => {
     setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:chain-next",
       runId: "run-chain-next",
     });
@@ -426,6 +427,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
     setRuntimeConfigSnapshot(makeConfig({ maxChainLength: 10 }));
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:tool-chain-next",
       runId: "run-tool-chain-next",
     });
@@ -642,6 +644,7 @@ describe("announce-path post-compaction routing (stage at seam, skip spawn)", ()
     setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:should-not-spawn",
       runId: "run-should-not-spawn",
     });

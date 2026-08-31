@@ -16,7 +16,6 @@ import {
   patchSessionEntryCore,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
@@ -291,11 +290,7 @@ export async function incrementCompactionCount(params: {
       patch.sessionId = params.newSessionId;
       patch.usageFamilyKey = current.usageFamilyKey ?? sessionKey;
       patch.usageFamilySessionIds = Array.from(
-        new Set([
-          ...(current.usageFamilySessionIds ?? []),
-          current.sessionId,
-          params.newSessionId,
-        ]),
+        new Set([...(current.usageFamilySessionIds ?? []), current.sessionId, params.newSessionId]),
       );
     }
     if (tokensAfter !== undefined) {

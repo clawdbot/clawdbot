@@ -475,7 +475,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
-    hasBillableUsageBuckets,
     internalBracketTraceparent,
     modelUsed,
     payloadArray,

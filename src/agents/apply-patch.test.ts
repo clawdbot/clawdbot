@@ -42,7 +42,7 @@ function buildAddFilePatch(targetPath: string): string {
 }
 
 it("fences apply_patch after a file read when permissions change", async () => {
-  await withTempDir(async (dir) => {
+  await withTestDir(async (dir) => {
     const target = path.join(dir, "permission.txt");
     await fs.writeFile(target, "original\n");
     const generation = new AbortController();

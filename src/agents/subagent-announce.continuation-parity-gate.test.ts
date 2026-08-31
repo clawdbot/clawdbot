@@ -199,6 +199,7 @@ describe("announce-path bracket delegate exactly-once dispatch", () => {
     setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:parity-next",
       runId: "run-parity-next",
     });
@@ -398,6 +399,7 @@ describe("announce path is the sole dispatch route (no-double-fire guard)", () =
     setRuntimeConfigSnapshot(makeConfig());
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:double-fire-check",
       runId: "run-double-fire-check",
     });

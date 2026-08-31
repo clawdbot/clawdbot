@@ -114,7 +114,7 @@ export async function handleToolExecutionEnd(
     options?.deliveryGeneration === undefined ||
     options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
   if (!isCurrentDeliveryGeneration()) {
-    return { status: "stale" };
+    return { status: "stale" as const };
   }
   const { toolName: rawToolName, toolCallId, isError, result } = evt;
   const toolName = normalizeToolPolicyName(rawToolName);
@@ -686,18 +686,18 @@ export async function handleToolExecutionEnd(
     deliveryGeneration: options?.deliveryGeneration,
   });
   if (!isCurrentDeliveryGeneration()) {
-    return { status: "stale" };
+    return { status: "stale" as const };
   }
   await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
   if (!isCurrentDeliveryGeneration()) {
-    return { status: "stale" };
+    return { status: "stale" as const };
   }
   terminal.executedArguments ??= startArgs;
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (!isCurrentDeliveryGeneration()) {
-    return { status: "stale" };
+    return { status: "stale" as const };
   }
   scheduleEmbeddedAfterToolCallHook({
     ctx,
@@ -713,7 +713,7 @@ export async function handleToolExecutionEnd(
   const { executionStarted: terminalExecutionStarted, effectReceipt } = terminal;
   return {
     ...terminal,
-    status: "completed",
+    status: "completed" as const,
     isError: observerIsError,
     executionStarted: terminalExecutionStarted,
     effectReceipt,

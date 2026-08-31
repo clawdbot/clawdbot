@@ -2799,7 +2799,7 @@ describe("scheduleRestartSentinelWake", () => {
     async (invalidation) => {
       const invalidationSlug = invalidation.replaceAll(" ", "-");
       const sessionKey = `agent:main:revoked-${invalidationSlug}`;
-      const ownerA = { type: "human" as const, id: "owner-a" };
+      const ownerA = { type: "human" as const, id: "owner-a", source: "unknown" as const };
       const authorityScope = {
         agentId: "main",
         env: testState.env,

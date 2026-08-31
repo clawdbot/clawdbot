@@ -3,10 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 describe("incrementCompactionCount canonical-primitives fix", () => {

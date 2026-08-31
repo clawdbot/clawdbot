@@ -19,7 +19,6 @@ import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
 } from "../config/sessions/session-entry-runtime.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";

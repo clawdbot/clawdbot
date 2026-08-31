@@ -26,6 +26,7 @@ import {
   settleSubagentRegistryPersistenceWork,
   createSubagentRegistryTestDeps,
   writeSubagentSessionEntry,
+  removeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
 import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
 import {
@@ -1101,7 +1102,11 @@ describe("subagent registry persistence", () => {
       suppressAnnounceReason: "steer-restart",
       cleanupHandled: false,
     });
-    await removeChildSessionEntry(childSessionKey);
+    await removeSubagentSessionEntry({
+      stateDir: tempStateDir,
+      agentId: "main",
+      sessionKey: childSessionKey,
+    });
 
     resumeSubagentRun(runId);
     await flushQueuedRegistryWork();

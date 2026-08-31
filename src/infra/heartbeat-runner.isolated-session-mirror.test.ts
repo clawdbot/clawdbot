@@ -429,6 +429,7 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
         );
         systemEventsCleared = clearSessionResetRuntimeState([targetSessionKey], {
           agentId: "main",
+          reason: "reset",
         }).systemEventsCleared;
       } finally {
         releaseCompletion.resolve();

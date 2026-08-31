@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
 import { callNativeSubagentGateway } from "./subagent-spawn-gateway.js";
 
 vi.mock("./subagent-spawn.runtime.js", async () => {
@@ -24,18 +23,18 @@ vi.mock("./subagent-spawn.runtime.js", async () => {
 
 vi.mock("../../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 
-afterEach(() => setSubagentSpawnDepsForTest());
+const callGatewayMock = vi.mocked((await import("./subagent-spawn.runtime.js")).callGateway);
+
+afterEach(() => callGatewayMock.mockReset());
 
 describe("native subagent Gateway transport ownership", () => {
   it.each(["caller", "captured", "scoped"])(
     "rejects a retired %s binding without opening a socket",
     async (binding) => {
       const callGateway = vi.fn<() => void>();
-      setSubagentSpawnDepsForTest({
-        callGateway: async <T>() => {
-          callGateway();
-          return { runId: "wrong-gateway", status: "accepted" } as T;
-        },
+      callGatewayMock.mockImplementation(async <T>() => {
+        callGateway();
+        return { runId: "wrong-gateway", status: "accepted" } as T;
       });
       const resolver = () => undefined;
       const launch = () =>
@@ -67,11 +66,9 @@ describe("native subagent Gateway transport ownership", () => {
 
   it("keeps socket dispatch available when no Gateway owner was bound", async () => {
     const callGateway = vi.fn<() => void>();
-    setSubagentSpawnDepsForTest({
-      callGateway: async <T>() => {
-        callGateway();
-        return { runId: "remote-run", status: "accepted" } as T;
-      },
+    callGatewayMock.mockImplementation(async <T>() => {
+      callGateway();
+      return { runId: "remote-run", status: "accepted" } as T;
     });
 
     await expect(

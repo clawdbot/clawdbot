@@ -522,8 +522,7 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
   // Stub keeps storePath undefined to avoid file IO; cfg undefined to skip
   // lifecycle hooks. Only the count-arithmetic path is exercised.
   it("producer-coupling: incrementCompactionCount return value flows to compaction.id attr", async () => {
-    const { incrementCompactionCount } =
-      await import("../auto-reply/reply/session-updates.js");
+    const { incrementCompactionCount } = await import("../auto-reply/reply/session-updates.js");
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
 

@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import type { AgentHarness } from "../harness/types.js";
 import {
@@ -18,7 +19,7 @@ import {
   mockedGetApiKeyForModel,
   mockedResolveModelAsync,
   mockedResolveProviderEntryApiKeyProfileReference,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
@@ -26,6 +27,8 @@ import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let overflowBaseRunParams: ReturnType<typeof createOverflowRunParams>;
 
 describe("runEmbeddedAgent Codex auth bootstrap continuation", () => {
   beforeAll(async () => {
@@ -33,6 +36,9 @@ describe("runEmbeddedAgent Codex auth bootstrap continuation", () => {
   });
 
   beforeEach(() => {
+    overflowBaseRunParams = createOverflowRunParams({
+      workspaceDir: tempDirs.make("openclaw-continuation-codex-auth-bootstrap-"),
+    });
     resetAgentEventsForTest();
     resetRunOverflowCompactionHarnessMocks();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);

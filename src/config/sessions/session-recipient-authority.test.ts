@@ -141,7 +141,7 @@ describe("session recipient authority", () => {
         env: state.env,
         sessionKey: "agent:main:revocation",
       };
-      const ownerA = { type: "human" as const, id: "owner-a" };
+      const ownerA = { type: "human" as const, id: "owner-a", source: "unknown" as const };
       const initialAuthority = captureSessionRecipientAuthority(scope);
       await upsertSessionEntryCore(scope, {
         sessionId: "session-revocation",

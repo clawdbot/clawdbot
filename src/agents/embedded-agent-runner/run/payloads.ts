@@ -289,56 +289,6 @@ export function buildEmbeddedRunPayloads(params: {
     : "";
   const fallbackRawAnswerParts = resolveRawAssistantAnswerParts(assistantForPayload);
   const fallbackRawAnswerText = normalizeOptionalString(fallbackRawAnswerParts.join("\n")) ?? "";
-  const shouldSuppressRawErrorText = (text: string) => {
-    if (!lastAssistantNeedsErrorSurface) {
-      return false;
-    }
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return false;
-    }
-    if (errorText) {
-      const normalized = normalizeTextForComparison(trimmed);
-      if (normalized && normalizedErrorText && normalized === normalizedErrorText) {
-        return true;
-      }
-      if (trimmed === genericErrorText) {
-        return true;
-      }
-      if (
-        normalized &&
-        normalizedGenericBillingErrorText &&
-        normalized === normalizedGenericBillingErrorText
-      ) {
-        return true;
-      }
-    }
-    if (rawErrorMessage && trimmed === rawErrorMessage) {
-      return true;
-    }
-    if (formattedRawErrorMessage && trimmed === formattedRawErrorMessage) {
-      return true;
-    }
-    if (normalizedRawErrorText) {
-      const normalized = normalizeTextForComparison(trimmed);
-      if (normalized && normalized === normalizedRawErrorText) {
-        return true;
-      }
-    }
-    if (normalizedFormattedRawErrorMessage) {
-      const normalized = normalizeTextForComparison(trimmed);
-      if (normalized && normalized === normalizedFormattedRawErrorMessage) {
-        return true;
-      }
-    }
-    if (rawErrorFingerprint) {
-      const fingerprint = getApiErrorPayloadFingerprint(trimmed);
-      if (fingerprint && fingerprint === rawErrorFingerprint) {
-        return true;
-      }
-    }
-    return isRawApiErrorPayload(trimmed);
-  };
   const rawAnswerDirectiveState = fallbackRawAnswerText
     ? parseReplyDirectives(fallbackRawAnswerText)
     : null;
@@ -393,16 +343,15 @@ export function buildEmbeddedRunPayloads(params: {
   const answerTexts =
     suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
       ? []
-      : (shouldUseCanonicalFinalAnswer
-          ? canonicalFinalAnswerTexts
-          : shouldPreferRawAnswerText && fallbackRawAnswerText
-            ? [fallbackRawAnswerText]
-            : hasAssistantTextPayload
-              ? nonEmptyAssistantTexts
-              : fallbackAnswerText
-                ? [fallbackAnswerText]
-                : []
-        ).filter((text) => !shouldSuppressRawErrorText(text));
+      : shouldUseCanonicalFinalAnswer
+        ? canonicalFinalAnswerTexts
+        : shouldPreferRawAnswerText && fallbackRawAnswerText
+          ? [fallbackRawAnswerText]
+          : hasAssistantTextPayload
+            ? nonEmptyAssistantTexts
+            : fallbackAnswerText
+              ? [fallbackAnswerText]
+              : [];
   const preparedAnswerDirectives =
     shouldUseCanonicalFinalAnswer || shouldPreferRawAnswerText || !hasAssistantTextPayload
       ? fallbackAnswerDirectiveState

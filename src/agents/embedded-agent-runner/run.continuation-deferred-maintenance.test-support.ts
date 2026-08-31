@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { waitForRunEvent } from "./run.continuation-fixture.test-support.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -6,12 +7,14 @@ import {
   mockedBuildEmbeddedRunPayloads,
   mockedRunEmbeddedAttempt,
   mockedWaitForDeferredTurnMaintenanceForSession,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let overflowBaseRunParams: ReturnType<typeof createOverflowRunParams>;
 
 describe("runEmbeddedAgent deferred maintenance composition", () => {
   beforeAll(async () => {
@@ -19,6 +22,9 @@ describe("runEmbeddedAgent deferred maintenance composition", () => {
   });
 
   beforeEach(() => {
+    overflowBaseRunParams = createOverflowRunParams({
+      workspaceDir: tempDirs.make("openclaw-continuation-deferred-maintenance-"),
+    });
     resetAgentEventsForTest();
     resetRunOverflowCompactionHarnessMocks();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);

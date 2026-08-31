@@ -230,6 +230,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
           admission: owned,
           context,
           error: new Error("pre-ACK reply context failed"),
+          markTerminalBroadcasted: vi.fn(),
           respond: vi.fn(),
           session: { agentId: "main", clientRunId: runId, sessionKey: target.sessionKey },
           terminalizeRestartSafeAdmission: vi.fn(async () => false),

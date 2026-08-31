@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import type { AgentHarness } from "../harness/types.js";
 import {
@@ -18,12 +19,14 @@ import {
   mockedPrepareProviderRuntimeAuth,
   mockedResolveAuthProfileOrder,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let overflowBaseRunParams: ReturnType<typeof createOverflowRunParams>;
 
 describe("runEmbeddedAgent continuation auth overlays", () => {
   beforeAll(async () => {
@@ -31,6 +34,9 @@ describe("runEmbeddedAgent continuation auth overlays", () => {
   });
 
   beforeEach(() => {
+    overflowBaseRunParams = createOverflowRunParams({
+      workspaceDir: tempDirs.make("openclaw-continuation-auth-overlay-"),
+    });
     resetAgentEventsForTest();
     resetRunOverflowCompactionHarnessMocks();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);

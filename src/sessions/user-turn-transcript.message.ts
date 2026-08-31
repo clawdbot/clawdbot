@@ -174,7 +174,7 @@ export function buildLateResolvedMediaMessage(params: {
 }
 
 function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
-  const marker = readOpenClawMessageMeta(message)?.beforeAgentRunBlocked;
+  const marker = readUserTurnMessageMeta(message)?.beforeAgentRunBlocked;
   return marker !== undefined;
 }
 

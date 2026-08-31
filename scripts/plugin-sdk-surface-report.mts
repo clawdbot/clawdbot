@@ -330,7 +330,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      4374,
+      // Net merge: upstream cleanup and continuation exports settle at the current surface.
+      4370,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -437,7 +438,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      2598,
+      // Net merge: upstream cleanup and continuation callables settle at the current surface.
+      2596,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

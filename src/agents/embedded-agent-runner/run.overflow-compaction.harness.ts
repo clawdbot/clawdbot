@@ -20,8 +20,8 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import type { markAuthProfileSuccess } from "../auth-profiles.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { markAuthProfileSuccess } from "../auth-profiles.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { extractObservedOverflowTokenCount } from "../embedded-agent-helpers/context-overflow-observation.js";
 import type { FailoverReason } from "../failover/signal.js";

@@ -1,11 +1,12 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetRunOverflowCompactionHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
@@ -33,6 +34,8 @@ vi.mock("../../auto-reply/continuation/delegate-turn-admission.js", async (impor
 // survive the trip to the attempt layer.
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let overflowBaseRunParams: ReturnType<typeof createOverflowRunParams>;
 
 describe("runEmbeddedAgent continuation opts forwarding", () => {
   beforeAll(async () => {
@@ -40,6 +43,9 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
   });
 
   beforeEach(() => {
+    overflowBaseRunParams = createOverflowRunParams({
+      workspaceDir: tempDirs.make("openclaw-continuation-opts-forward-"),
+    });
     resetRunOverflowCompactionHarnessMocks();
     useOpenAIPlatformAuthFixture();
     resetContinueDelegateTurnBudgetMock.mockReset();

@@ -756,5 +756,4 @@ describe("provider-catalog-live-runtime", () => {
     expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledTimes(1);
   });
-
 });

@@ -184,7 +184,7 @@ function runCandidate(
     },
     timing: createAgentTurnTimingTracker(),
     onLifecycleBackstop: vi.fn(),
-    onCompactionCount,
+    onCompactionFacts: ({ accounting }) => onCompactionCount(accounting?.count ?? 0),
   });
 }
 

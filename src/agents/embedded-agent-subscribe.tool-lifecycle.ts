@@ -84,6 +84,9 @@ async function finishToolLifecycle(
     result: outcome.result,
     hideFromChannelProgress: toolParams.hideFromChannelProgress,
   } as never); // SAFETY: internal nested lifecycle event uses the handler's closed shape.
+  if (terminal.status === "stale") {
+    throw new Error("Nested tool lifecycle closed before terminal observation");
+  }
   return {
     result: outcome.result,
     isError: terminal.isError,

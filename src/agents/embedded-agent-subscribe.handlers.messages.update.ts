@@ -46,7 +46,6 @@ import {
   resolveStreamingReplyText,
   resolveTextAppendDelta,
   scopeAssistantMessageToStreamBlock,
-  shouldSuppressAssistantVisibleOutput,
   shouldSuppressDeterministicApprovalOutput,
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type {
@@ -110,7 +109,7 @@ export function handleMessageUpdate(
   const isAnthropicTextEvent =
     isAnthropicAssistantMessage(eventAssistantMessage) &&
     (evtType === "text_start" || evtType === "text_delta" || evtType === "text_end");
-  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
+  const suppressVisibleAssistantOutput = resolveAssistantMessagePhase(msg) === "commentary";
   if (suppressVisibleAssistantOutput && !isResponsesTextEvent && !isAnthropicTextEvent) {
     const rawCommentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
     appendRawStream(() => ({

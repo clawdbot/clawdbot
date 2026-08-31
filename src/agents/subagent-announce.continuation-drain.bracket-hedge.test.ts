@@ -95,6 +95,7 @@ const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: u
 const spawnSubagentDirectMock = vi.fn(
   async (_params: Record<string, unknown>, _ctx: unknown): Promise<SpawnSubagentResult> => ({
     status: "accepted",
+    context: "isolated",
     childSessionKey: "agent:main:subagent:grandchild",
     runId: "run-grandchild",
   }),
@@ -377,6 +378,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     stagePostCompactionDelegateMock.mockReset().mockReturnValue({ status: "queued" });
     spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:grandchild",
       runId: "run-grandchild",
     });
@@ -415,6 +417,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     consumePendingDelegatesMock.mockReturnValue([toolDelegate]);
     spawnSubagentDirectMock.mockResolvedValueOnce({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:tool-after-bracket-reject",
       runId: "run-tool-after-bracket-reject",
     });
@@ -644,6 +647,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     spawnSubagentDirectMock
       .mockResolvedValueOnce({
         status: "accepted",
+        context: "isolated",
         childSessionKey: "agent:main:subagent:accepted-tool-before-delay",
         runId: "run-accepted-tool-before-delay",
       })

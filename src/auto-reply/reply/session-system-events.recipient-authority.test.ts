@@ -38,7 +38,7 @@ type AuthorityScope = {
   sessionKey: string;
 };
 
-const ownerA = { type: "human" as const, id: "owner-a" };
+const ownerA = { type: "human" as const, source: "unknown" as const, id: "owner-a" };
 
 async function applyInvalidation(params: {
   invalidation: Invalidation;

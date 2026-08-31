@@ -44,6 +44,7 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import type { AgentEventHandlerOptions } from "./server-chat.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
 import { registerTaskTerminalSubscriptionTests } from "./server-runtime-subscriptions.task-terminals.test-harness.js";
 

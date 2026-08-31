@@ -147,7 +147,7 @@ describe("doctor transcript owner repair", () => {
       insertLegacySession({
         agentId: "main",
         entry: {
-          createdActor: { type: "human", id: "canonical-owner" },
+          createdActor: { type: "human", source: "unknown", id: "canonical-owner" },
           sandbox: "required",
           sessionId: "canonical-session",
           updatedAt: 10,
@@ -159,7 +159,7 @@ describe("doctor transcript owner repair", () => {
       insertLegacySession({
         agentId: "main",
         entry: {
-          createdActor: { type: "human", id: "winner-owner" },
+          createdActor: { type: "human", source: "unknown", id: "winner-owner" },
           sessionId: "winner-session",
           updatedAt: 20,
         },
@@ -236,7 +236,7 @@ describe("doctor transcript owner repair", () => {
         insertLegacySession({
           agentId: "main",
           entry: {
-            createdActor: { type: "human", id: "owner-before" },
+            createdActor: { type: "human", source: "unknown", id: "owner-before" },
             sessionId: "canonical-session",
             updatedAt: 10,
           },
@@ -247,7 +247,7 @@ describe("doctor transcript owner repair", () => {
         insertLegacySession({
           agentId: sourceAgentId,
           entry: {
-            createdActor: { type: "human", id: "owner-after" },
+            createdActor: { type: "human", source: "unknown", id: "owner-after" },
             sessionId: "alias-session",
             updatedAt: 20,
           },

@@ -171,6 +171,7 @@ describe("announce-path post-compaction routing", () => {
     stageMock.mockClear();
     spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
       status: "accepted",
+      context: "isolated",
       childSessionKey: "agent:main:subagent:chain-next",
       runId: "run-chain-next",
     });

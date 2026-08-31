@@ -84,7 +84,7 @@ describe("remote sandbox fs bridge", () => {
   it.runIf(process.platform !== "win32")(
     "preserves binary payloads, quoted paths, empty files, and exclusive creates without a host mirror",
     async () => {
-      await withTempDir("openclaw-remote-fs-payload-", async (stateDir) => {
+      await withTestDir("openclaw-remote-fs-payload-", async (stateDir) => {
         const workspaceDir = path.join(await fs.realpath(stateDir), "host-workspace");
         const remoteWorkspaceDir = path.join(await fs.realpath(stateDir), "remote 'workspace'");
         await fs.mkdir(workspaceDir);

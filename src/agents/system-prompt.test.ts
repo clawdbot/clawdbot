@@ -2414,7 +2414,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("teaches tool-primary continuation when continue_delegate is in toolNames", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "chain task",
       childDepth: 1,
       maxSpawnDepth: 3,
       toolNames: ["continue_delegate"],
@@ -2436,7 +2435,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("teaches bracket-only continuation when continue_delegate is NOT in toolNames", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "chain task",
       childDepth: 1,
       maxSpawnDepth: 3,
       toolNames: [],
@@ -2456,7 +2454,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("teaches bracket-only continuation when toolNames is undefined", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "chain task",
       childDepth: 1,
       maxSpawnDepth: 3,
       continuationEnabled: true,
@@ -2469,7 +2466,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("omits continuation chaining for leaf agents even with toolNames", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc:subagent:def",
-      task: "leaf task",
       childDepth: 2,
       maxSpawnDepth: 2,
       toolNames: ["continue_delegate"],

@@ -217,7 +217,8 @@ function createDeliveryDeps(params: {
     if (params.spawnError) {
       throw params.spawnError;
     }
-    return { status: params.spawnStatus ?? "accepted" };
+    const status = params.spawnStatus ?? "accepted";
+    return status === "accepted" ? { status, context: "isolated" as const } : { status };
   });
   const markPendingDelegateSpawnAccepted = vi.fn(() => true);
   const failReleasedPostCompactionDelegate = vi.fn(() => true);
