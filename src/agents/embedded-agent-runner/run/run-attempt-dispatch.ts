@@ -251,7 +251,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
       })) ??
       (await resolveSandboxContext({
         config: params.config,
-        agentId: sandboxSessionKey === sessionKey ? runtime.agentId : undefined,
+        agentId:
+          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? runtime.agentId : undefined),
         sessionKey: sandboxSessionKey,
         workspaceDir: runtime.workspaceDir,
       })))
@@ -292,6 +293,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
     sandboxSessionKey: params.sandboxSessionKey,
+    sandboxAgentId: params.sandboxAgentId,
     trigger: params.trigger,
     memoryFlushWritePath: params.memoryFlushWritePath,
     messageChannel: params.messageChannel,
