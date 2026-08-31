@@ -139,7 +139,7 @@ describe("buildAttemptSystemPrompt", () => {
         effectiveCwd: workspaceDir,
         effectiveTools: [],
         effectiveWorkspace: workspaceDir,
-        getProviderRuntimeHandle: () => ({ provider: "openai" }),
+        getProviderRuntimeHandle: () => ({ provider: "openai", modelId: "gpt-5.5" }),
         isRawModelRun: true,
         markStage: vi.fn(),
         modelToolsEnabled: false,
