@@ -40,7 +40,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 type ConversationCapabilityScope = "direct" | "shared" | "unknown";
 
-function resolveManifestToolProfileNames(
+export function resolveManifestToolProfileNames(
   snapshot: Pick<PluginMetadataSnapshot, "plugins"> | undefined,
   profile: string | undefined,
 ): string[] {

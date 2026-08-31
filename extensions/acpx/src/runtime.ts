@@ -71,6 +71,7 @@ type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
 const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
+const OPENCLAW_TOOLS_MCP_MODEL_REF_ENV = "OPENCLAW_TOOLS_MCP_MODEL_REF";
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
 };
@@ -763,6 +764,7 @@ function withManagedToolsMcpSessionEnv(params: {
   openclawToolsEnabled: boolean;
   mcpServers: AcpRuntimeOptions["mcpServers"];
   sessionKey: string;
+  model?: string;
 }): AcpRuntimeOptions["mcpServers"] {
   const sessionKey = params.sessionKey.trim();
   if (
@@ -782,12 +784,19 @@ function withManagedToolsMcpSessionEnv(params: {
       return server;
     }
     changed = true;
+    const managedEnvNames = new Set([
+      OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
+      ...(isManagedPluginTools ? [OPENCLAW_TOOLS_MCP_MODEL_REF_ENV] : []),
+    ]);
     const env = [
-      ...server.env.filter((entry) => entry.name !== OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV),
+      ...server.env.filter((entry) => !managedEnvNames.has(entry.name)),
       {
         name: OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
         value: sessionKey,
       },
+      ...(isManagedPluginTools && params.model?.trim()
+        ? [{ name: OPENCLAW_TOOLS_MCP_MODEL_REF_ENV, value: params.model.trim() }]
+        : []),
     ];
     return { ...server, env };
   });
@@ -876,14 +885,18 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private resolveDelegateForSession(params: {
     command: string | undefined;
     sessionKey: string;
+    model?: string;
   }): BaseAcpxRuntime {
     if (shouldUseBridgeSafeDelegateForCommand(params.command)) {
       return this.bridgeSafeDelegate;
     }
-    return this.resolveManagedToolsDelegateForSession(params.sessionKey);
+    return this.resolveManagedToolsDelegateForSession(params.sessionKey, params.model);
   }
 
-  private resolveManagedToolsDelegateForSession(sessionKey: string): BaseAcpxRuntime {
+  private resolveManagedToolsDelegateForSession(
+    sessionKey: string,
+    model?: string,
+  ): BaseAcpxRuntime {
     if (!this.managedToolsMcpBridgeEnabled) {
       return this.delegate;
     }
@@ -906,6 +919,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           openclawToolsEnabled: this.openclawToolsMcpBridgeEnabled,
           mcpServers: this.delegateOptions.mcpServers,
           sessionKey: normalizedSessionKey,
+          model,
         }),
       },
       this.delegateTestOptions,
@@ -1503,7 +1517,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       agentName: input.agent,
       agentRegistry: this.agentRegistry,
     });
-    const delegate = this.resolveDelegateForSession({ command, sessionKey: input.sessionKey });
+    const requestedModel = input.model?.trim();
     const isCodexAcp =
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command);
     const claudeModelOverride = isClaudeAcpCommand(command)
@@ -1523,7 +1537,20 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       classifiedCodexOverride && Object.keys(classifiedCodexOverride).length > 0
         ? classifiedCodexOverride
         : undefined;
-    const requestedModel = input.model?.trim();
+    // The managed MCP child must receive the model the adapter will actually use.
+    // Unsupported inherited Codex defaults are dropped, so never project them as policy identity.
+    const managedToolsModelRef = isCodexAcp
+      ? codexModelOverride?.model
+        ? `openai/${codexModelOverride.model}`
+        : undefined
+      : requestedModel?.includes("/")
+        ? requestedModel
+        : undefined;
+    const delegate = this.resolveDelegateForSession({
+      command,
+      sessionKey: input.sessionKey,
+      model: managedToolsModelRef,
+    });
     const appliedModel: OpenClawRuntimeHandle["appliedModel"] =
       isCodexAcp && requestedModel
         ? codexModelOverride?.model

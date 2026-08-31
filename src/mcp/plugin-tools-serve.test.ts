@@ -30,6 +30,7 @@ const connectToolsMcpServerToStdioMock = vi.hoisted(() => vi.fn());
 const createToolsMcpServerMock = vi.hoisted(() => vi.fn(() => ({ close: vi.fn() })));
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled: true } })));
 const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() => vi.fn());
+const loadManifestContractSnapshotMock = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
 const tempDirs = createTempDirTracker();
@@ -59,6 +60,10 @@ vi.mock("../plugins/tools.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestContractSnapshot: loadManifestContractSnapshotMock,
+}));
+
 vi.mock("./tools-stdio-server.js", () => ({
   connectToolsMcpServerToStdio: connectToolsMcpServerToStdioMock,
   createToolsMcpServer: createToolsMcpServerMock,
@@ -70,6 +75,8 @@ afterEach(() => {
   connectToolsMcpServerToStdioMock.mockReset();
   createToolsMcpServerMock.mockClear();
   ensureStandalonePluginToolRegistryLoadedMock.mockReset();
+  loadManifestContractSnapshotMock.mockReset();
+  loadManifestContractSnapshotMock.mockReturnValue({ plugins: [] });
   getRuntimeConfigMock.mockClear();
   resolvePluginToolsMock.mockReset();
   resolvePluginToolsMock.mockReturnValue([]);
@@ -213,6 +220,56 @@ describe("plugin tools MCP server", () => {
     expect(resolvePolicy.toolAllowlist).toEqual(["dangerous_plugin_tool", "benign_plugin_tool"]);
     expect(resolvePolicy.toolDenylist).toEqual(["memory_forget", "dangerous_plugin_tool"]);
     expect(tools.map((tool) => tool.name)).toEqual(["benign_plugin_tool"]);
+  });
+
+  it("applies provider policy and manifest profile grants for the managed ACP model", async () => {
+    loadManifestContractSnapshotMock.mockReturnValue({
+      plugins: [
+        {
+          contracts: { tools: ["profile_plugin_tool"] },
+          toolMetadata: { profile_plugin_tool: { profiles: ["coding"] } },
+        },
+      ],
+    });
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "profile_plugin_tool",
+        description: "Profile tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+      {
+        name: "provider_denied_tool",
+        description: "Provider-denied tool",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      },
+    ] as unknown as AnyAgentTool[]);
+    const config = {
+      plugins: { enabled: true },
+      tools: { profile: "coding" },
+      agents: {
+        list: [
+          {
+            id: "research",
+            tools: { byProvider: { "openai/gpt-5.6": { deny: ["provider_denied_tool"] } } },
+          },
+        ],
+      },
+    } as never;
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    const tools = resolvePluginToolsForMcp({
+      config,
+      agentSessionKey: "agent:research:acp:session-1",
+      modelRef: "openai/gpt-5.6",
+    });
+
+    expect(loadManifestContractSnapshotMock).toHaveBeenCalledWith({ config });
+    const loadPolicy = requireToolPolicyParams(ensureStandalonePluginToolRegistryLoadedMock);
+    expect(loadPolicy.toolAllowlist).toContain("profile_plugin_tool");
+    expect(loadPolicy.toolDenylist).toContain("provider_denied_tool");
+    expect(tools.map((tool) => tool.name)).toEqual(["profile_plugin_tool"]);
   });
 
   it("applies stored ACP session caps after configured agent policy", async () => {

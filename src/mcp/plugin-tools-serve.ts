@@ -9,6 +9,7 @@
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
+import { resolveManifestToolProfileNames } from "../agents/conversation-capability-profile.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import {
@@ -28,12 +29,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { loadManifestContractSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataManifestView } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
+  parseToolsMcpModelRef,
   resolveToolsMcpAgentSessionKey,
+  resolveToolsMcpModelRef,
 } from "./agent-session-env.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
@@ -41,6 +46,9 @@ function resolvePluginToolPolicy(params: {
   config: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  modelProvider?: string;
+  modelId?: string;
+  pluginMetadataSnapshot?: PluginMetadataManifestView;
 }): {
   toolAllowlist?: string[];
   toolDenylist?: string[];
@@ -49,7 +57,13 @@ function resolvePluginToolPolicy(params: {
   if (!params.agentId) {
     const profilePolicy = mergeAlsoAllowPolicy(
       resolveToolProfilePolicy(params.config.tools?.profile),
-      params.config.tools?.alsoAllow,
+      [
+        ...resolveManifestToolProfileNames(
+          params.pluginMetadataSnapshot,
+          params.config.tools?.profile,
+        ),
+        ...(params.config.tools?.alsoAllow ?? []),
+      ],
     );
     const globalPolicy = pickSandboxToolPolicy(params.config.tools);
     const toolAllowlist = collectExplicitAllowlist([profilePolicy, globalPolicy]);
@@ -63,14 +77,23 @@ function resolvePluginToolPolicy(params: {
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
   });
   const profile = effective.profile;
-  const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(profile),
-    effective.profileAlsoAllow,
-  );
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
+    ...resolveManifestToolProfileNames(params.pluginMetadataSnapshot, profile),
+    ...(effective.profileAlsoAllow ?? []),
+  ]);
+  const providerProfile = effective.providerProfile;
+  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
+    ...resolveManifestToolProfileNames(params.pluginMetadataSnapshot, providerProfile),
+    ...(effective.providerProfileAlsoAllow ?? []),
+  ]);
   const globalPolicy = effective.globalPolicy;
+  const globalProviderPolicy = effective.globalProviderPolicy;
   const agentPolicy = effective.agentPolicy;
+  const agentProviderPolicy = effective.agentProviderPolicy;
   const { subagentPolicy, inheritedToolPolicy } = resolveRequesterToolPolicies({
     config: params.config,
     agentId: effective.agentId,
@@ -78,7 +101,16 @@ function resolvePluginToolPolicy(params: {
     subagentSessionKey: params.sessionKey,
     senderPolicyMode: "never",
   });
-  const policies = [profilePolicy, globalPolicy, agentPolicy, subagentPolicy, inheritedToolPolicy];
+  const policies = [
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+  ];
   const toolAllowlist = collectExplicitAllowlist(policies);
   const toolDenylist = collectExplicitDenylist(policies);
   return {
@@ -88,19 +120,24 @@ function resolvePluginToolPolicy(params: {
       ...buildDefaultToolPolicyPipelineSteps({
         profilePolicy,
         profile,
+        providerProfilePolicy,
+        providerProfile,
         globalPolicy,
+        globalProviderPolicy,
         agentPolicy,
+        agentProviderPolicy,
         agentId: effective.agentId,
       }),
       { policy: subagentPolicy, label: "subagent tools.allow" },
       { policy: inheritedToolPolicy, label: "inherited tools" },
-    ].map((step) => ({ ...step, suppressUnavailableCoreToolWarning: true })),
+    ].map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true })),
   };
 }
 
 export function resolvePluginToolsForMcp(params: {
   config: OpenClawConfig;
   agentSessionKey?: string;
+  modelRef?: string;
 }): AnyAgentTool[] {
   const agentSessionKey = (params.agentSessionKey ?? resolveToolsMcpAgentSessionKey())?.trim();
   const parsedSession = agentSessionKey ? parseAgentSessionKey(agentSessionKey) : undefined;
@@ -109,6 +146,8 @@ export function resolvePluginToolsForMcp(params: {
       `${OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV} must be a canonical agent session key`,
     );
   }
+  const model = parseToolsMcpModelRef(params.modelRef ?? resolveToolsMcpModelRef());
+  const pluginMetadataSnapshot = loadManifestContractSnapshot({ config: params.config });
   const context = {
     config: params.config,
     ...(parsedSession ? { agentId: parsedSession.agentId, sessionKey: agentSessionKey } : {}),
@@ -116,6 +155,8 @@ export function resolvePluginToolsForMcp(params: {
   const { steps, ...pluginToolPolicy } = resolvePluginToolPolicy({
     config: params.config,
     ...(parsedSession ? { agentId: parsedSession.agentId, sessionKey: agentSessionKey } : {}),
+    ...(model ? { modelProvider: model.provider, modelId: model.modelId } : {}),
+    pluginMetadataSnapshot,
   });
   const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
     context,

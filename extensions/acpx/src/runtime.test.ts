@@ -270,7 +270,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     }
   });
 
-  it("adds the OpenClaw session key to both managed tools MCP bridges", () => {
+  it("adds session identity to both bridges and model identity to plugin tools", () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -294,12 +294,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ],
     });
 
-    const readScopedMcpEnv = (sessionKey: string, serverName: string) => {
+    const readScopedMcpEnv = (sessionKey: string, serverName: string, model?: string) => {
       const delegate = (
         runtime as unknown as {
-          resolveManagedToolsDelegateForSession(sessionKey: string): unknown;
+          resolveManagedToolsDelegateForSession(sessionKey: string, model?: string): unknown;
         }
-      ).resolveManagedToolsDelegateForSession(sessionKey) as {
+      ).resolveManagedToolsDelegateForSession(sessionKey, model) as {
         options: {
           mcpServers?: Array<{
             env?: Array<{ name: string; value: string }>;
@@ -310,14 +310,26 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       return delegate.options.mcpServers?.find((server) => server.name === serverName)?.env;
     };
 
-    expect(readScopedMcpEnv("agent:worker:main", "openclaw-plugin-tools")).toContainEqual({
+    const pluginEnv = readScopedMcpEnv(
+      "agent:worker:main",
+      "openclaw-plugin-tools",
+      "openai/gpt-5.6",
+    );
+    expect(pluginEnv).toContainEqual({
       name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
       value: "agent:worker:main",
+    });
+    expect(pluginEnv).toContainEqual({
+      name: "OPENCLAW_TOOLS_MCP_MODEL_REF",
+      value: "openai/gpt-5.6",
     });
     expect(readScopedMcpEnv("agent:research:main", "openclaw-tools")).toContainEqual({
       name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
       value: "agent:research:main",
     });
+    expect(readScopedMcpEnv("agent:research:main", "openclaw-tools")).not.toContainEqual(
+      expect.objectContaining({ name: "OPENCLAW_TOOLS_MCP_MODEL_REF" }),
+    );
   });
 
   it("keeps managed OpenClaw tools MCP delegates reachable for fresh sessions", async () => {
