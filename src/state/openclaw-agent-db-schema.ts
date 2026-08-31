@@ -536,15 +536,13 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
       validateAfterRepair: () =>
         assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
     });
+    assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
   } else {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
   }
   // Current-version convergence runs atomically in ensureAgentSchema below.
   // Validating here would make same-version repair unreachable after an update.
-  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
-    assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
-  }
   return hasPendingCurrentVersionMigration;
 }
 
