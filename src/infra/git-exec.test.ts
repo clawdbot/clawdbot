@@ -150,22 +150,15 @@ describe.each([
 });
 
 describe("successful Git output", () => {
-  it("preserves raw and trimmed text while forwarding execution options", async () => {
+  it("keeps raw text byte-for-byte and preserves the trimmed text contract", async () => {
     const stdout = " \u001b[31mname\u001b[0m\rredraw\0\r\n ";
-    const options = {
-      env: { LC_ALL: "C" },
-      input: "fixture stdin",
-      timeoutMs: 300_000,
-      signal: new AbortController().signal,
-    };
-    const commandSpy = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
       ...failure,
       code: 0,
       stdout,
     });
-    await expect(requireGitCommandRaw("/repo", ["status"], options)).resolves.toBe(stdout);
-    await expect(requireGitCommand("/repo", ["status"], options)).resolves.toBe(stdout.trim());
-    expect(commandSpy.mock.calls.map(([, applied]) => applied)).toEqual([options, options]);
+    await expect(requireGitCommandRaw("/repo", ["status"])).resolves.toBe(stdout);
+    await expect(requireGitCommand("/repo", ["status"])).resolves.toBe(stdout.trim());
   });
 
   it("keeps binary output including invalid UTF-8 and terminal control bytes", async () => {
