@@ -30,7 +30,11 @@ extension OnboardingAISetupModel {
         }
 
         var isManual: Bool {
-            if case .manual = self { true } else { false }
+            if case .manual = self {
+                true
+            } else {
+                false
+            }
         }
 
         var tryNextOnFailure: Bool {
