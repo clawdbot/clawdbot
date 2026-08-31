@@ -52,6 +52,10 @@ if (args[0] === "config") {
       auth: { mode: "token", token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" } },
       reload: { mode: "off" } },
   });
+  for (const relative of ["identity/device.json", "identity/device-auth.json", "devices/paired.json", "devices/pending.json"]) {
+    assert.equal(fs.existsSync(path.join(state, relative)), false,
+      "synthetic legacy auth state must not exist during baseline bootstrap: " + relative);
+  }
   assert.equal(fs.existsSync(path.join(state, "sessions", "sessions.json")), false,
     "legacy session specimens must not exist during baseline bootstrap");
   assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false,

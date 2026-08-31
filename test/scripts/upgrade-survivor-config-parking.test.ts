@@ -65,7 +65,6 @@ process.exit(Number(process.env.FIXTURE_INSTALL_STATUS));
         `${source.slice(0, source.indexOf("phase storage-preflight"))}
 trap - EXIT ERR INT TERM
 install_update_restart_systemctl_shim() { :; }
-seed_update_restart_probe_device_auth() { :; }
 openclaw_e2e_wait_gateway_ready() { :; }
 assert_prepublish_fixture_idle() { :; }
 assert_baseline_state() { cmp "$OPENCLAW_CONFIG_PATH" "$FIXTURE_AUTHORED_PATH"; }
