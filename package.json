@@ -35,6 +35,7 @@
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "dist/",
+    ".openclaw-lifecycle-pending",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
     "!dist/**/*.app",
@@ -387,6 +388,7 @@
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/guard-inventory-utils.mjs",
     "scripts/lib/package-dist-imports.mjs",
+    "scripts/lib/package-lifecycle-marker.mjs",
     "scripts/lib/recommended-tool-installs.json",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"

@@ -1,53 +1,45 @@
 // Concurrency runner tests cover bounded parallel task execution.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runTasksWithConcurrency } from "./run-with-concurrency.js";
-
-function createDeferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 describe("runTasksWithConcurrency", () => {
   it("preserves task order with bounded worker count", async () => {
     let running = 0;
     let peak = 0;
-    const resolvers: Array<(() => void) | undefined> = [];
-    const tasks = [0, 1, 2, 3].map((index) => async (): Promise<number> => {
-      running += 1;
-      peak = Math.max(peak, running);
-      await new Promise<void>((resolve) => {
-        resolvers[index] = resolve;
-      });
-      running -= 1;
-      return index + 1;
-    });
+    function createTask(index: number) {
+      const started = createDeferred();
+      const release = createDeferred();
+      return {
+        started: started.promise,
+        release: release.resolve,
+        run: async () => {
+          running += 1;
+          peak = Math.max(peak, running);
+          started.resolve();
+          await release.promise;
+          running -= 1;
+          return index + 1;
+        },
+      };
+    }
+    const first = createTask(0);
+    const second = createTask(1);
+    const third = createTask(2);
+    const fourth = createTask(3);
+    const tasks = [first, second, third, fourth].map((task) => task.run);
 
     const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
-    const takeResolver = async (index: number): Promise<() => void> => {
-      await vi.waitFor(() => {
-        expect(resolvers[index]).toBeTypeOf("function");
-      });
-      const resolver = resolvers[index];
-      if (!resolver) {
-        throw new Error(`expected task ${index} to be running`);
-      }
-      return resolver;
-    };
+    await Promise.all([first.started, second.started]);
 
-    const resolveFirst = await takeResolver(0);
-    const resolveSecond = await takeResolver(1);
+    second.release();
+    await third.started;
 
-    resolveSecond();
-    const resolveThird = await takeResolver(2);
+    first.release();
+    await fourth.started;
 
-    resolveFirst();
-    const resolveFourth = await takeResolver(3);
-
-    resolveThird();
-    resolveFourth();
+    third.release();
+    fourth.release();
 
     const result = await resultPromise;
     expect(result.hasError).toBe(false);

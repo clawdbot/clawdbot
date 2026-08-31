@@ -3071,7 +3071,7 @@ printf 'core_failed=%s\n' "$failed"
     expect(npm12Step.run).toContain("bash scripts/install.sh");
     expect(npm12Step.run).toContain("scripts/docker/install-sh-common/version-parse.sh");
     expect(npm12Step.run).toContain("extract_openclaw_semver");
-    expect(npm12Step.run).toContain("openclaw-install-guard");
+    expect(npm12Step.run).toContain(".openclaw-lifecycle-pending");
     expect(JSON.stringify(npm12Job)).not.toContain("secrets.");
   });
 
