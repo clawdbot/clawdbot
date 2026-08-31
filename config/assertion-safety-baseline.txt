@@ -2219,7 +2219,6 @@ src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	2
 src/canvas/serve.runtime.ts	1
 src/canvas/widget-tool.ts	2
-src/channels/account-inspection.ts	2
 src/channels/account-snapshot-fields.ts	1
 src/channels/allowlist-match.ts	1
 src/channels/allowlists/resolve-utils.ts	3
@@ -2278,7 +2277,6 @@ src/channels/plugins/setup-registry.ts	2
 src/channels/plugins/setup-wizard-helpers.ts	13
 src/channels/plugins/setup-wizard-proxy.ts	1
 src/channels/plugins/setup-wizard.ts	5
-src/channels/plugins/status.ts	2
 src/channels/plugins/threading-helpers.ts	1
 src/channels/read-only-account-inspect.ts	1
 src/channels/registry-lookup.ts	1
@@ -2582,7 +2580,7 @@ src/commands/promos/claim.ts	2
 src/commands/sessions-compact.ts	1
 src/commands/sessions-lifecycle.ts	3
 src/commands/setup.ts	1
-src/commands/status-all/channels.ts	3
+src/commands/status-all/channels.ts	2
 src/commands/status-all/diagnosis.ts	1
 src/commands/status-all/gateway.ts	1
 src/commands/status.command.ts	1
@@ -3073,7 +3071,7 @@ src/infra/backup-volatile-stat-cache.ts	1
 src/infra/bonjour-discovery.ts	5
 src/infra/boundary-file-read.ts	1
 src/infra/channel-runtime-context.ts	1
-src/infra/channel-summary.ts	2
+src/infra/channel-summary.ts	1
 src/infra/channels-status-issues.ts	2
 src/infra/clawhub-client.ts	2
 src/infra/clawhub-install-trust.ts	2
@@ -3733,7 +3731,6 @@ src/state/openclaw-state-ownership.ts	1
 src/state/openclaw-state-snapshot-sanitizer.ts	1
 src/state/user-profiles-tailscale-avatar.ts	2
 src/state/user-profiles.ts	1
-src/status/link-channel.ts	1
 src/status/status-message.ts	3
 src/status/status-text.ts	3
 src/status/summary.runtime.ts	1

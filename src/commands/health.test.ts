@@ -253,6 +253,60 @@ describe("healthCommand", () => {
     expect(output).toContain("Gateway probe duration: 5ms");
   });
 
+  it.each([
+    { configured: true, available: false },
+    { configured: undefined, available: false },
+    { configured: true, available: true },
+  ])(
+    "keeps local diagnostic metadata separate from identity logging (configured=$configured, available=$available)",
+    async ({ configured, available }) => {
+      const account = {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        token: "resolved-token",
+      };
+      const resolveAccount = vi.fn(() => account);
+      const logSelfId = vi.fn();
+      listReadOnlyChannelPluginsForConfigMock.mockReturnValueOnce([
+        {
+          id: "diagnostic-fixture",
+          meta: { label: "Diagnostic" },
+          config: {
+            listAccountIds: () => ["default"],
+            inspectAccount: () => ({
+              accountId: "default",
+              enabled: true,
+              configured,
+              tokenSource: "secretref",
+              tokenStatus: available ? "available" : "configured_unavailable",
+            }),
+            resolveAccount,
+          },
+          status: { logSelfId },
+        },
+      ]);
+      callGatewayMock.mockResolvedValueOnce(
+        createHealthSummary({
+          channels: { "diagnostic-fixture": { accountId: "default", configured, linked: true } },
+          channelOrder: ["diagnostic-fixture"],
+          channelLabels: { "diagnostic-fixture": "Diagnostic" },
+        }),
+      );
+
+      await healthCommand({ config: { diagnostics: { flags: ["health"] } } }, runtime as never);
+
+      const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+      expect(output).toContain(`configured=${configured ?? "unknown"} tokenSource=secretref`);
+      if (available) {
+        expect(logSelfId).toHaveBeenCalledWith(expect.objectContaining({ account }));
+      } else {
+        expect(logSelfId).not.toHaveBeenCalled();
+        expect(resolveAccount).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("surfaces unhealthy secondary accounts without an explicit account binding", async () => {
     const primary = {
       accountId: "main",
