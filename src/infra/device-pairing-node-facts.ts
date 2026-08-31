@@ -1,7 +1,7 @@
+import { withDevicePairingLock } from "./device-pairing-state.js";
 import { updatePairedDeviceNodeSurfaceInTransaction } from "./device-pairing-store.js";
 import {
   resolveNodePairingGeneration,
-  withPairedDeviceRecords,
   type NodePairingGeneration,
   type PairedDevice,
 } from "./device-pairing.js";
@@ -15,8 +15,8 @@ async function updatePairedNodeGenerationSurface(params: {
   update: (surface: NodeSurface) => NodeSurface;
   baseDir?: string;
 }): Promise<boolean> {
-  return await withPairedDeviceRecords<boolean>(params.baseDir, () => {
-    const value = updatePairedDeviceNodeSurfaceInTransaction<boolean>(
+  return await withDevicePairingLock(async () => {
+    return updatePairedDeviceNodeSurfaceInTransaction<boolean>(
       params.nodeId,
       params.baseDir,
       (device) => {
@@ -36,9 +36,6 @@ async function updatePairedNodeGenerationSurface(params: {
         };
       },
     );
-    // The row transaction validates durable generation ownership; the shared
-    // lock also prevents a local full-snapshot writer from replaying old facts.
-    return { value, persist: false };
   });
 }
 

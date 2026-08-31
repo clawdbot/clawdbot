@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
+import { readPairedDeviceRecords, withDevicePairingLock } from "./device-pairing-state.js";
 import { updatePairedDeviceNodeSurfaceInTransaction } from "./device-pairing-store.js";
 import {
   clearNodePairingGenerationState,
@@ -347,12 +348,9 @@ export async function listNodePairing(
   baseDir?: string,
   options?: { includePairingGeneration?: boolean },
 ): Promise<NodePairingList | NodePairingListWithGeneration> {
-  return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
-    return {
-      value: projectNodePairing(Object.values(pairedByDeviceId), options),
-      persist: false,
-    };
-  });
+  return await readPairedDeviceRecords(baseDir, (pairedByDeviceId) =>
+    projectNodePairing(Object.values(pairedByDeviceId), options),
+  );
 }
 
 /** Project node pairing state from an already-loaded device pairing snapshot. */
@@ -384,15 +382,12 @@ export async function beginNodePairingConnect(
   pairedNode: PairedDeviceNode | null;
   cleanupClaim?: NodePairingCleanupClaim;
 }> {
-  return await withPairedDeviceRecords<{
-    pairedNode: PairedDeviceNode | null;
-    cleanupClaim?: NodePairingCleanupClaim;
-  }>(baseDir, (pairedByDeviceId) => {
+  return await readPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
     const device = nodeSurfaceDevice(pairedByDeviceId, nodeId);
     const pairedNode = device ? toPairedNode(device) : null;
     const pending = device?.pendingNodeSurface;
     if (!device || !pairedNode || !pending) {
-      return { value: { pairedNode }, persist: false };
+      return { pairedNode };
     }
     const claim: NodePairingCleanupClaim = {
       baseDir,
@@ -401,7 +396,7 @@ export async function beginNodePairingConnect(
       observed: toPendingSnapshot(device, pending),
     };
     addCleanupClaim(claim);
-    return { value: { pairedNode, cleanupClaim: claim }, persist: false };
+    return { pairedNode, cleanupClaim: claim };
   });
 }
 
@@ -493,7 +488,7 @@ export async function reusePendingNodePairingForReconnect(
   baseDir?: string,
 ): Promise<RequestNodePairingResult | null> {
   const nodeId = normalizeNodeId(req.nodeId);
-  return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
+  return await readPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
     const device = nodeSurfaceDevice(pairedByDeviceId, nodeId);
     const pending = device?.pendingNodeSurface;
     if (
@@ -508,15 +503,12 @@ export async function reusePendingNodePairingForReconnect(
         invalidateCleanupClaimsThrough(cleanupClaim, device, pending);
       }
       return {
-        value: {
-          status: "pending" as const,
-          request: toPublicPendingRequest(device, pending),
-          created: false,
-        },
-        persist: false,
+        status: "pending" as const,
+        request: toPublicPendingRequest(device, pending),
+        created: false,
       };
     }
-    return { value: null, persist: false };
+    return null;
   });
 }
 
@@ -629,12 +621,12 @@ export async function getPendingNodePairing(
   requestId: string,
   baseDir?: string,
 ): Promise<{ requestId: string; nodeId: string } | null> {
-  return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
+  return await readPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
     const device = findPendingNodePairingDevice(pairedByDeviceId, requestId);
     if (!device?.pendingNodeSurface) {
-      return { value: null, persist: false };
+      return null;
     }
-    return { value: { requestId, nodeId: device.deviceId }, persist: false };
+    return { requestId, nodeId: device.deviceId };
   });
 }
 
@@ -649,8 +641,8 @@ export async function recordPairedNodeConnection(
   baseDir?: string,
   expectedPairingGeneration?: NodePairingGeneration,
 ): Promise<RecordPairedNodeConnectionResult> {
-  return await withPairedDeviceRecords<RecordPairedNodeConnectionResult>(baseDir, () => {
-    const value = updatePairedDeviceNodeSurfaceInTransaction<RecordPairedNodeConnectionResult>(
+  return await withDevicePairingLock(async () => {
+    return updatePairedDeviceNodeSurfaceInTransaction<RecordPairedNodeConnectionResult>(
       nodeId,
       baseDir,
       (device) => {
@@ -685,10 +677,6 @@ export async function recordPairedNodeConnection(
         };
       },
     );
-    // The row-scoped transaction owns cross-process generation validation, while
-    // this outer shared lock prevents local full-snapshot writers from replaying
-    // node-surface state loaded before the connection metadata commit.
-    return { value, persist: false };
   });
 }
 
@@ -702,8 +690,8 @@ export async function recordPairedNodeDisconnection(params: {
   expectedPairingGeneration: NodePairingGeneration;
   baseDir?: string;
 }): Promise<RecordPairedNodeDisconnectionResult> {
-  return await withPairedDeviceRecords<RecordPairedNodeDisconnectionResult>(params.baseDir, () => {
-    const value = updatePairedDeviceNodeSurfaceInTransaction<RecordPairedNodeDisconnectionResult>(
+  return await withDevicePairingLock(async () => {
+    return updatePairedDeviceNodeSurfaceInTransaction<RecordPairedNodeDisconnectionResult>(
       params.nodeId,
       params.baseDir,
       (device) => {
@@ -730,9 +718,6 @@ export async function recordPairedNodeDisconnection(params: {
         };
       },
     );
-    // The row-scoped transaction owns cross-process generation and connection
-    // validation; the shared lock prevents stale full-snapshot replay.
-    return { value, persist: false };
   });
 }
 

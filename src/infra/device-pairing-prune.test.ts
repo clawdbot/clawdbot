@@ -3,11 +3,11 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import { pruneSupersededSilentPairedDevices } from "./device-pairing-prune.js";
 import {
   getPairedDevice,
   hasPairedCardRenderer,
   listDevicePairing,
-  pruneSupersededSilentPairedDevices,
   requestDevicePairing,
   withPairedDeviceRecords,
 } from "./device-pairing.js";

@@ -1,21 +1,25 @@
 // Covers device pairing, token, and role lifecycle behavior.
+import { DatabaseSync } from "node:sqlite";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
 import {
-  loadDevicePairingStoreState,
+  mutateDevicePairingStoreStateInTransaction,
   persistDeviceBootstrapTokenRecords,
-  persistDevicePairingStoreState,
 } from "./device-pairing-store.js";
+import { seedDevicePairingStoreState } from "./device-pairing-store.test-support.js";
 import {
   ensureDeviceToken,
   revokeDeviceToken,
@@ -176,10 +180,11 @@ function mutatePendingRequest(
   requestId: string,
   mutate: (pending: { ts: number; refreshedAtMs?: number; scopes?: string[] }) => void,
 ) {
-  const state = loadDevicePairingStoreState(baseDir);
-  const pending = requireValue(state.pendingById[requestId], "expected pending pairing request");
-  mutate(pending);
-  persistDevicePairingStoreState(state, baseDir, "pending");
+  mutateDevicePairingStoreStateInTransaction(baseDir, (state, persist) => {
+    const pending = requireValue(state.pendingById[requestId], "expected pending pairing request");
+    mutate(pending);
+    persist("pending");
+  });
 }
 
 async function clearPairedOperatorApprovalBaseline(baseDir: string) {
@@ -205,7 +210,7 @@ describe("device pairing tokens", () => {
   });
 
   beforeEach(() => {
-    persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, suiteBaseDir, "both");
+    seedDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, suiteBaseDir);
     persistDeviceBootstrapTokenRecords({}, suiteBaseDir);
   });
 
@@ -2413,6 +2418,39 @@ describe("device pairing tokens", () => {
       ),
     ).resolves.toBeNull();
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
+  });
+
+  test("full-snapshot persist keeps rows committed by another process mid-mutation", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+    });
+    const rival = new DatabaseSync(database.path);
+    let rivalWrite: "committed" | "rejected";
+    try {
+      rivalWrite = await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
+        let outcome: "committed" | "rejected";
+        try {
+          rival
+            .prepare(
+              "INSERT INTO device_pairing_paired (device_id, public_key, created_at_ms, approved_at_ms) VALUES (?, ?, ?, ?)",
+            )
+            .run("node-host", "public-key-node-host", 1, 1);
+          outcome = "committed";
+        } catch {
+          outcome = "rejected";
+        }
+        const device = requireValue(pairedByDeviceId["device-1"], "expected paired device");
+        device.lastSeenAtMs = 4_242;
+        return { value: outcome, persist: true };
+      });
+    } finally {
+      rival.close();
+    }
+    const survivor = await getPairedDevice("node-host", baseDir);
+    expect(rivalWrite === "committed" && survivor === null).toBe(false);
+    expect((await getPairedDevice("device-1", baseDir))?.lastSeenAtMs).toBe(4_242);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
