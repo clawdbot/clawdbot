@@ -70,7 +70,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **iMessage direct replies:** keep automatic replies and targetless native actions in the authoritative current conversation when the channel service is unset, and reject redacted peer markers before dispatch. (#133468)
 - **Subagent completion:** recognize visible final answers delivered to internal and nested parent sessions, preventing false delivery failures while preserving external channel delivery checks.
 - Codex/Linux: wait for a live app-server process to expose its startup command line within the existing inspection deadline, preserving process identity checks and preventing intermittent startup failures.
 - **Chat attachments:** protect prepared message-tool media from premature cleanup, attach it before publication, and complete interrupted attachment promotion on retries without duplicating the original reply.
