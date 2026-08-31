@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocket, type ClientOptions, type RawData } from "ws";
+import { WebSocket, type RawData } from "ws";
 import { parsePairingString } from "../../../chrome-extension/modules/relay-core.js";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import {
@@ -83,33 +83,21 @@ async function relayInventory(port: number): Promise<unknown> {
   }
 }
 
-function upgradeWithFrames(messages: object[]): {
-  bytes: number;
-  finishRequest: NonNullable<ClientOptions["finishRequest"]>;
-} {
-  const frames = messages.map((message) => {
-    const payload = Buffer.from(JSON.stringify(message));
-    const extended = payload.length >= 126;
-    const header = Buffer.alloc(extended ? 8 : 6);
-    header[0] = 0x81;
-    header[1] = 0x80 | (extended ? 126 : payload.length);
-    if (extended) {
-      header.writeUInt16BE(payload.length, 2);
-    }
-    // The fixed zero mask leaves these synthetic payload bytes unchanged.
-    return Buffer.concat([header, payload]);
-  });
-  const finishRequest: NonNullable<ClientOptions["finishRequest"]> = (request) => {
-    request.once("socket", (socket) => {
-      socket.once("connect", () => {
-        socket.cork();
-        request.end();
-        socket.write(Buffer.concat(frames));
-        socket.uncork();
-      });
-    });
-  };
-  return { bytes: frames.reduce((sum, frame) => sum + frame.byteLength, 0), finishRequest };
+function encodeUpgradeHead(messages: object[]): Buffer {
+  return Buffer.concat(
+    messages.map((message) => {
+      const payload = Buffer.from(JSON.stringify(message));
+      const extended = payload.length >= 126;
+      const header = Buffer.alloc(extended ? 8 : 6);
+      header[0] = 0x81;
+      header[1] = 0x80 | (extended ? 126 : payload.length);
+      if (extended) {
+        header.writeUInt16BE(payload.length, 2);
+      }
+      // The fixed zero mask leaves these synthetic payload bytes unchanged.
+      return Buffer.concat([header, payload]);
+    }),
+  );
 }
 
 function rawDataText(data: RawData): string {
@@ -219,14 +207,29 @@ describe.sequential("local Gateway extension relay wakeup", () => {
             OPENCLAW_GATEWAY_PORT: String(gatewayPort),
           },
           async () => {
+            const inventory = {
+              type: "tabs",
+              tabs: [
+                {
+                  tabId: 7,
+                  url: "https://example.test/initial",
+                  title: "Coalesced inventory",
+                  active: true,
+                },
+              ],
+            };
+            const coalesced =
+              legacy === "head" ? encodeUpgradeHead([EXTENSION_HELLO, inventory]) : undefined;
             const gatewayServer = http.createServer((_req, res) => {
               res.writeHead(426);
               res.end();
             });
             let upgradeHeadBytes = 0;
             gatewayServer.on("upgrade", (req, socket, head) => {
-              upgradeHeadBytes = head.byteLength;
-              void handleGatewayExtensionUpgrade(req, socket, head);
+              // TCP writes cannot guarantee Node's upgrade-head size; supply that exact boundary.
+              const initialHead = coalesced ?? head;
+              upgradeHeadBytes = initialHead.byteLength;
+              void handleGatewayExtensionUpgrade(req, socket, initialHead);
             });
             let extension: WebSocket | undefined;
             let daemon: Awaited<ReturnType<typeof runExtensionRelayDaemon>> | undefined;
@@ -261,22 +264,8 @@ describe.sequential("local Gateway extension relay wakeup", () => {
               const protocols = legacy
                 ? ["openclaw-extension-relay", `openclaw-extension-token.${RELAY_KEY}`]
                 : BROWSER_RELAY_EXTENSION_SUBPROTOCOL;
-              const inventory = {
-                type: "tabs",
-                tabs: [
-                  {
-                    tabId: 7,
-                    url: "https://example.test/initial",
-                    title: "Coalesced inventory",
-                    active: true,
-                  },
-                ],
-              };
-              const coalesced =
-                legacy === "head" ? upgradeWithFrames([EXTENSION_HELLO, inventory]) : undefined;
               extension = new WebSocket(parsed.relayUrl, protocols, {
                 origin: "chrome-extension://gateway-wakeup-integration",
-                finishRequest: coalesced?.finishRequest,
               });
               await once(extension, "open");
               if (!legacy) {
@@ -307,7 +296,7 @@ describe.sequential("local Gateway extension relay wakeup", () => {
                 expect(JSON.parse(rawDataText(okData))).toMatchObject({ type: "auth.ok", v: 2 });
               }
               if (legacy === "head") {
-                expect(upgradeHeadBytes).toBe(coalesced?.bytes);
+                expect(upgradeHeadBytes).toBe(coalesced?.byteLength);
               } else {
                 extension.send(JSON.stringify(EXTENSION_HELLO));
               }
