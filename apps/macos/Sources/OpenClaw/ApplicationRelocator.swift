@@ -1020,8 +1020,8 @@ extension ApplicationRelocator {
         fileManager: FileManager,
         processInfo: ProcessInfo) -> LaunchDisposition
     {
-        // Removing quarantine is safe only after the running Developer ID requirement
-        // binds the destination to this app's bundle and signing team.
+        // Keep validation, quarantine release, and launch bound to one filesystem
+        // object so a canonical-path replacement cannot receive the trusted write.
         guard let bundleIdentifier = bundle.bundleIdentifier,
               let runningIdentity = runningCodeIdentity(bundleIdentifier: bundleIdentifier),
               let installedApp = applicationOnDisk(at: destination),
@@ -1030,15 +1030,19 @@ extension ApplicationRelocator {
                   bundleURL: destination,
                   executableURL: installedApp.executableURL),
               let installedCodeDirectoryHash = trustedCodeDirectoryHash(
-                  at: destination,
-                  executableURL: installedApp.executableURL,
+                  at: launchReference.bundleURL,
+                  executableURL: launchReference.executableURL,
                   matching: runningIdentity.requirementData)
         else {
             return self.relaunchFailure()
         }
+        guard self.gatekeeperAllowsExecution(at: launchReference.bundleURL) else {
+            self.logger.error("Gatekeeper rejected installed app before quarantine release")
+            return self.relaunchFailure()
+        }
 
         do {
-            try self.releaseQuarantine(at: destination, fileManager: fileManager)
+            try self.releaseQuarantine(from: launchReference, fileManager: fileManager)
         } catch {
             self.logger.error(
                 "Could not release installed app from quarantine: \(error.localizedDescription, privacy: .public)")
@@ -1051,8 +1055,8 @@ extension ApplicationRelocator {
             bundleURL: destination,
             executableURL: installedApp.executableURL) == launchReference,
             self.trustedCodeDirectoryHash(
-                at: destination,
-                executableURL: installedApp.executableURL,
+                at: launchReference.bundleURL,
+                executableURL: launchReference.executableURL,
                 matching: runningIdentity.requirementData) == installedCodeDirectoryHash,
             let spawned = spawnReplacement(
                 launchReference: launchReference,
@@ -1081,10 +1085,40 @@ extension ApplicationRelocator {
         return .terminating
     }
 
+    private nonisolated static func gatekeeperAllowsExecution(at bundleURL: URL) -> Bool {
+        let flags = SecAssessmentFlags(kSecAssessmentFlagEnforce) |
+            SecAssessmentFlags(kSecAssessmentFlagIgnoreCache) |
+            SecAssessmentFlags(kSecAssessmentFlagNoCache)
+        let context = [
+            kSecAssessmentContextKeyOperation: kSecAssessmentOperationTypeExecute,
+        ] as CFDictionary
+        var assessmentError: Unmanaged<CFError>?
+        guard let assessment = SecAssessmentCreate(
+            bundleURL as CFURL,
+            flags,
+            context,
+            &assessmentError)
+        else {
+            _ = assessmentError?.takeRetainedValue()
+            return false
+        }
+        var resultError: Unmanaged<CFError>?
+        guard let result = SecAssessmentCopyResult(
+            assessment,
+            flags,
+            &resultError) as NSDictionary?
+        else {
+            _ = resultError?.takeRetainedValue()
+            return false
+        }
+        return result[kSecAssessmentAssessmentVerdict] as? Bool == true
+    }
+
     static func releaseQuarantine(
-        at rootURL: URL,
+        from launchReference: BundleFileReference,
         fileManager: FileManager = .default) throws
     {
+        let rootURL = launchReference.bundleURL
         try self.removeQuarantineAttribute(at: rootURL)
         var enumerationError: Error?
         guard let enumerator = fileManager.enumerator(

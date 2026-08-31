@@ -93,13 +93,18 @@ struct ApplicationRelocatorTests {
             withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try Data().write(to: nestedURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: nestedURL.path)
         try Data().write(to: outsideURL)
         try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: outsideURL)
         try setQuarantineAttribute(at: bundleURL)
         try setQuarantineAttribute(at: nestedURL)
         try setQuarantineAttribute(at: outsideURL)
+        let reference = try #require(ApplicationRelocator.bundleFileReference(
+            bundleURL: bundleURL,
+            executableURL: nestedURL
+        ))
 
-        try ApplicationRelocator.releaseQuarantine(at: bundleURL)
+        try ApplicationRelocator.releaseQuarantine(from: reference)
 
         #expect(!hasQuarantineAttribute(at: bundleURL))
         #expect(!hasQuarantineAttribute(at: nestedURL))
@@ -349,7 +354,7 @@ struct ApplicationRelocatorTests {
     }
 
     @Test
-    func `bundle file reference stays bound after canonical path replacement`() throws {
+    func `quarantine release stays bound after canonical path replacement`() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ApplicationRelocatorFileReferenceTests-\(UUID().uuidString)")
         let canonicalBundle = root.appendingPathComponent("OpenClaw.app", isDirectory: true)
@@ -364,6 +369,8 @@ struct ApplicationRelocatorTests {
 
         try Data("validated".utf8).write(to: canonicalExecutable)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: canonicalExecutable.path)
+        try setQuarantineAttribute(at: canonicalBundle)
+        try setQuarantineAttribute(at: canonicalExecutable)
         let reference = try #require(ApplicationRelocator.bundleFileReference(
             bundleURL: canonicalBundle,
             executableURL: canonicalExecutable
@@ -376,9 +383,17 @@ struct ApplicationRelocatorTests {
         )
         try Data("unvalidated".utf8).write(to: canonicalExecutable)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: canonicalExecutable.path)
+        try setQuarantineAttribute(at: canonicalBundle)
+        try setQuarantineAttribute(at: canonicalExecutable)
+
+        try ApplicationRelocator.releaseQuarantine(from: reference)
 
         #expect(try Data(contentsOf: reference.executableURL) == Data("validated".utf8))
         #expect(try Data(contentsOf: canonicalExecutable) == Data("unvalidated".utf8))
+        #expect(!hasQuarantineAttribute(at: reference.bundleURL))
+        #expect(!hasQuarantineAttribute(at: reference.executableURL))
+        #expect(hasQuarantineAttribute(at: canonicalBundle))
+        #expect(hasQuarantineAttribute(at: canonicalExecutable))
         #expect(ApplicationRelocator.bundleFileReference(
             bundleURL: canonicalBundle,
             executableURL: canonicalExecutable
