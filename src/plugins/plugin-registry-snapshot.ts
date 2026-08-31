@@ -325,6 +325,9 @@ function requiresDerivedRegistryValidation(
   hasStalePluginFiles: () => boolean,
 ): boolean {
   return (
+    // Capture file freshness before any other reason starts derived discovery.
+    // Otherwise that discovery can cache the old bytes and hide a concurrent replacement.
+    hasStalePluginFiles() ||
     hasInstalledPluginIndexWorkspaceScopeMismatch(index, params.workspaceDir) ||
     params.candidates !== undefined ||
     params.discovery !== undefined ||
@@ -339,7 +342,6 @@ function requiresDerivedRegistryValidation(
       Boolean(pluginId && source && path.isAbsolute(source) && !fs.existsSync(source)),
     ) ||
     hasMismatchedPersistedBundledRoot(index, env) ||
-    hasStalePluginFiles() ||
     hasRecoveredInstallRecordsMissingFromPersistedIndex(index, params, env) ||
     hasConfiguredGlobalSourcePluginMissingFromPersistedIndex(params, index, env)
   );

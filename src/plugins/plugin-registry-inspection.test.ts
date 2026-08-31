@@ -198,24 +198,40 @@ describe("plugin registry inspection", () => {
 
   it("inspects package changes with fresh file facts", async () => {
     const stateDir = makeTempDir();
-    const pluginDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "demo");
+    const sourceDir = makeTempDir();
+    fs.mkdirSync(pluginDir, { recursive: true });
     const candidate = createPackagedCandidate(pluginDir);
-    const env = hermeticEnv();
+    createPackagedCandidate(sourceDir);
+    const env = {
+      ...hermeticEnv(),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = { plugins: { entries: { demo: { enabled: true } } } };
     await refreshPluginRegistry({
       reason: "manual",
       stateDir,
-      candidates: [candidate],
+      config,
       env,
+      installRecords: {
+        demo: { source: "path", sourcePath: sourceDir, installPath: pluginDir, version: "1.0.0" },
+      },
     });
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify({ name: "demo", version: "2.0.0" }),
       "utf8",
     );
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({ name: "demo", version: "2.0.0" }),
+      "utf8",
+    );
 
     const inspection = await inspectPluginRegistry({
       stateDir,
-      candidates: [candidate],
+      config,
       env,
     });
 
