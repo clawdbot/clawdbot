@@ -73,6 +73,7 @@ Docs: https://docs.openclaw.ai
 
 - **Doctor recovery notes:** show interrupted auth-profile archive recovery failures and completions even when no further migration runs or another migration is declined. (#134009) Thanks @angeliti999.
 - Matrix lifecycle: drain in-flight monitor tasks without deadlocking shared-client retirement, and reject late acquisitions after their owning task closes.
+- Telegram/config types: accept the existing SecretRef form for bot tokens, matching the plugin schema and runtime credential contract. (#134038)
 - Provider error handling: reuse prepared or already loaded provider hooks instead of cold-loading plugins during error classification, avoiding long stalls in failure reporting and model fallback.
 - **Session settings:** restore merging of concurrent first writes after a startup optimization regressed lock ordering, preserving both global and project settings without adding filesystem side effects to missing-settings reads. Thanks @MrSwagatRathod, @obviyus, and @yetval for the original fix.
 - **Control UI startup and history:** reduce configuration-schema construction and skip full-text duplicate comparisons for distinct transcript messages, preserving plugin hints, redaction, and message identity.
