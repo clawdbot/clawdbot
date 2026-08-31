@@ -730,19 +730,24 @@ describe("worker spawn startup composition", () => {
           if (!service || !execute || !runtime.bindWorkerSessionDispatch) {
             throw new Error("worker session-tool runtime was not composed");
           }
-          const base = startup.store.createIntent({
+          startup.store.createIntent({
             environmentId: SOURCE.environmentId,
             providerId: "fake",
             profileId: "cloud-profile",
             profileSnapshot: { install: "bundle", settings: { region: "source" } },
             provisionOperationId: "source-provision",
           });
+          const base = service.get(SOURCE.environmentId);
+          if (!base) {
+            throw new Error("source environment fixture was not created");
+          }
           const getEnvironment = vi.spyOn(service, "get").mockImplementation((environmentId) => {
             const owner = environmentId === SOURCE.environmentId ? SOURCE : CHILD;
             return {
               ...base,
               environmentId,
               state: "attached",
+              leaseId: `lease-${environmentId}`,
               ownerEpoch: owner.ownerEpoch,
               attachedSessionIds: [owner.sessionId],
             };
