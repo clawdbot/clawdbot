@@ -7,7 +7,9 @@ const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
-const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
+const renderReplyPayloadsToMessagesMock = vi.hoisted(() =>
+  vi.fn<(typeof import("./messenger.js"))["renderReplyPayloadsToMessages"]>(() => []),
+);
 const sendMSTeamsMessagesMock = vi.hoisted(() =>
   vi.fn<(typeof import("./messenger.js"))["sendMSTeamsMessages"]>(async () => []),
 );
