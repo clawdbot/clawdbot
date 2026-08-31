@@ -234,6 +234,19 @@ describe("Zalo polling media replies", () => {
   });
 
   it("sends media replies directly when webhook hosting is not configured", async () => {
+    const caption = `${"a".repeat(1999)}🐱tail`;
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
+      async (params: {
+        dispatcherOptions: {
+          deliver: (payload: { text: string; mediaUrl: string }) => Promise<void>;
+        };
+      }) => {
+        await params.dispatcherOptions.deliver({
+          text: caption,
+          mediaUrl: "https://example.com/reply-image.png",
+        });
+      },
+    );
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
     getUpdatesMock
@@ -277,7 +290,7 @@ describe("Zalo polling media replies", () => {
         {
           chat_id: "dm-chat-2",
           photo: "https://example.com/reply-image.png",
-          caption: "caption text",
+          caption: "a".repeat(1999),
         },
         undefined,
       );

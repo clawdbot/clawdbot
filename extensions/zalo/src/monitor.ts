@@ -31,6 +31,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   canonicalizeWebhookRouteKey,
   registerPluginHttpRoute,
@@ -858,9 +859,10 @@ async function deliverZaloReply(params: {
                 proxyUrl,
               })
             : mediaUrl;
-        recordAcceptedSend(
-          await sendPhoto(token, { chat_id: chatId, photo: sendableMediaUrl, caption }, fetcher),
-        );
+        const boundedCaption =
+          caption === undefined ? undefined : truncateUtf16Safe(caption, ZALO_TEXT_LIMIT);
+        const photoPayload = { chat_id: chatId, photo: sendableMediaUrl, caption: boundedCaption };
+        recordAcceptedSend(await sendPhoto(token, photoPayload, fetcher));
       },
     });
   } catch (error) {
