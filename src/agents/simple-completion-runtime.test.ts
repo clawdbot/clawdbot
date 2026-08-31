@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
@@ -22,7 +23,10 @@ const hoisted = vi.hoisted(() => ({
   setRuntimeApiKeyMock: vi.fn(),
   prepareProviderRuntimeAuthMock: vi.fn(),
   ensureAuthProfileStoreMock: vi.fn(),
-  getCurrentPluginMetadataSnapshotMock: vi.fn(),
+  getCurrentPluginMetadataSnapshotMock:
+    vi.fn<
+      typeof import("../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
+    >(),
 }));
 
 vi.mock("./prepared-model-runtime.js", () => ({
@@ -98,7 +102,7 @@ beforeEach(() => {
       workspaceDir: "/tmp/runtime-workspace",
       config: {},
       authModes: {},
-      metadataSnapshot: { plugins: [], index: { plugins: [] } },
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [] },
       configuredRuntimeModels: [],
@@ -143,21 +147,23 @@ beforeEach(() => {
     },
   );
   hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
-  hoisted.getCurrentPluginMetadataSnapshotMock.mockReturnValue({
-    plugins: [
-      {
-        id: "openai",
-        modelCatalog: {
-          providers: {
-            openai: {
-              defaultUtilityModel: "gpt-5.5",
-              models: [{ id: "gpt-5.5" }],
+  hoisted.getCurrentPluginMetadataSnapshotMock.mockReturnValue(
+    createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "openai",
+          modelCatalog: {
+            providers: {
+              openai: {
+                defaultUtilityModel: "gpt-5.5",
+                models: [{ id: "gpt-5.5" }],
+              },
             },
           },
         },
-      },
-    ],
-  });
+      ],
+    }),
+  );
 });
 
 function expectPreparedModelResult(

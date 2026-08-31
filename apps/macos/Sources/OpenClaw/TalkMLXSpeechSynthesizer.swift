@@ -679,6 +679,8 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
         do {
             _ = try await process.waitUntilStarted()
         } catch {
+            // The detached launch can still spawn; reap it before closing inherited pipes.
+            await process.terminate(gracefully: false)
             output.readabilityHandler = nil
             continuation.finish()
             throw error

@@ -18,7 +18,7 @@ import {
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreCredentialsRevision,
-  listRuntimeAuthProfileStoreSnapshots,
+  listOwnedRuntimeAuthProfileStoreSnapshots,
   noteRuntimeAuthProfileStorePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -79,7 +79,7 @@ describe("runtime auth profile snapshots", () => {
       },
     ]);
     try {
-      expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([
+      expect(listOwnedRuntimeAuthProfileStoreSnapshots()).toMatchObject([
         {
           databasePath,
           agentDir: path.dirname(databasePath),

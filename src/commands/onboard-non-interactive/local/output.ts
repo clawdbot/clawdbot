@@ -119,7 +119,7 @@ export function classifyGatewayHealthFailure(params: {
     return "auth-mismatch";
   }
   if (
-    /\b(?:runtime[- ]deps?|runtime dependencies|cannot find module|sqlite-vec|loadextension)\b/i.test(
+    /\b(?:runtime[- ]deps?|runtime dependencies|cannot find (?:module|package)|(?:err_)?module_not_found|sqlite-vec|loadextension)\b/i.test(
       combined,
     )
   ) {

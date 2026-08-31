@@ -3,19 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
 type EnvValue = string | undefined | ((home: string) => string | undefined);
-
-type EnvSnapshot = {
-  home: string | undefined;
-  userProfile: string | undefined;
-  homeDrive: string | undefined;
-  homePath: string | undefined;
-  openclawHome: string | undefined;
-  stateDir: string | undefined;
-};
 
 type SharedHomeRootState = {
   rootPromise: Promise<string>;
@@ -23,51 +14,6 @@ type SharedHomeRootState = {
 };
 
 const SHARED_HOME_ROOTS = new Map<string, SharedHomeRootState>();
-
-function snapshotEnv(): EnvSnapshot {
-  return {
-    home: process.env.HOME,
-    userProfile: process.env.USERPROFILE,
-    homeDrive: process.env.HOMEDRIVE,
-    homePath: process.env.HOMEPATH,
-    openclawHome: process.env.OPENCLAW_HOME,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-  };
-}
-
-function restoreEnv(snapshot: EnvSnapshot) {
-  const restoreKey = (key: string, value: string | undefined) => {
-    if (value === undefined) {
-      deleteTestEnvValue(key);
-    } else {
-      setTestEnvValue(key, value);
-    }
-  };
-  restoreKey("HOME", snapshot.home);
-  restoreKey("USERPROFILE", snapshot.userProfile);
-  restoreKey("HOMEDRIVE", snapshot.homeDrive);
-  restoreKey("HOMEPATH", snapshot.homePath);
-  restoreKey("OPENCLAW_HOME", snapshot.openclawHome);
-  restoreKey("OPENCLAW_STATE_DIR", snapshot.stateDir);
-}
-
-function snapshotExtraEnv(keys: string[]): Record<string, string | undefined> {
-  const snapshot: Record<string, string | undefined> = {};
-  for (const key of keys) {
-    snapshot[key] = process.env[key];
-  }
-  return snapshot;
-}
-
-function restoreExtraEnv(snapshot: Record<string, string | undefined>) {
-  for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) {
-      deleteTestEnvValue(key);
-    } else {
-      setTestEnvValue(key, value);
-    }
-  }
-}
 
 function setTempHome(base: string) {
   setTestEnvValue("HOME", base);
@@ -91,15 +37,18 @@ async function allocateTempHomeBase(prefix: string): Promise<string> {
   let state = SHARED_HOME_ROOTS.get(prefix);
   if (!state) {
     state = {
-      rootPromise: fs.mkdtemp(path.join(os.tmpdir(), prefix)),
+      rootPromise: fs.mkdtemp(path.join(os.tmpdir(), prefix)).catch((error: unknown) => {
+        // Only the creator evicts a failed acquisition; current waiters keep its
+        // rejection and cannot evict a later caller's replacement root.
+        SHARED_HOME_ROOTS.delete(prefix);
+        throw error;
+      }),
       nextCaseId: 0,
     };
     SHARED_HOME_ROOTS.set(prefix, state);
   }
   const root = await state.rootPromise;
-  const base = path.join(root, `case-${state.nextCaseId++}`);
-  await fs.mkdir(base, { recursive: true });
-  return base;
+  return path.join(root, `case-${state.nextCaseId++}`);
 }
 
 export async function withTempHomeCore<T>(
@@ -111,31 +60,38 @@ export async function withTempHomeCore<T>(
     skipSessionCleanup?: boolean;
   } = {},
 ): Promise<T> {
-  const prefix = opts.prefix ?? "openclaw-test-home-";
-  const base = await allocateTempHomeBase(prefix);
-  const snapshot = snapshotEnv();
   const envKeys = Object.keys(opts.env ?? {});
   for (const key of envKeys) {
     if (key === "HOME" || key === "USERPROFILE" || key === "HOMEDRIVE" || key === "HOMEPATH") {
       throw new Error(`withTempHome: use built-in home env (got ${key})`);
     }
   }
-  const envSnapshot = snapshotExtraEnv(envKeys);
-
-  setTempHome(base);
-  await fs.mkdir(path.join(base, ".openclaw", "agents", "main", "sessions"), { recursive: true });
-  if (opts.env) {
-    for (const [key, raw] of Object.entries(opts.env)) {
-      const value = typeof raw === "function" ? raw(base) : raw;
-      if (value === undefined) {
-        deleteTestEnvValue(key);
-      } else {
-        setTestEnvValue(key, value);
+  const base = await allocateTempHomeBase(opts.prefix ?? "openclaw-test-home-");
+  const snapshot = captureEnv([
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+    ...envKeys,
+  ]);
+  let initialized = false;
+  try {
+    await fs.mkdir(base, { recursive: true });
+    setTempHome(base);
+    await fs.mkdir(path.join(base, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+    if (opts.env) {
+      for (const [key, raw] of Object.entries(opts.env)) {
+        const value = typeof raw === "function" ? raw(base) : raw;
+        if (value === undefined) {
+          deleteTestEnvValue(key);
+        } else {
+          setTestEnvValue(key, value);
+        }
       }
     }
-  }
-
-  try {
+    initialized = true;
     return await fn(base);
   } finally {
     if (!opts.skipSessionCleanup) {
@@ -143,9 +99,9 @@ export async function withTempHomeCore<T>(
         () => undefined,
       );
     }
-    restoreExtraEnv(envSnapshot);
-    restoreEnv(snapshot);
-    if (!opts.skipHomeCleanup) {
+    snapshot.restore();
+    // Retention belongs to the body; failed acquisition has no caller-owned home.
+    if (!initialized || !opts.skipHomeCleanup) {
       try {
         if (process.platform === "win32") {
           await fs.rm(base, {

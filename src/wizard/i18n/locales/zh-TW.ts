@@ -96,6 +96,12 @@ export const zh_TW = {
       tokenPromptGenerate: "Gateway 權杖（留空則產生）",
       tokenStoreProvisioned:
         "已產生 Gateway 權杖並以 {name} 存入 OpenClaw 祕密儲存。設定中只保留參照；可用 `openclaw secrets store list` 檢視。",
+      trustedProxyAllowLoopback: "允許回環可信代理驗證？",
+      trustedProxyLoopbackTitle: "回環代理安全警告",
+      trustedProxyLoopbackWarning:
+        "任何本機程序都可以向 Gateway 傳送身分標頭，冒充回環反向代理。\n僅當反向代理是接收使用者流量的唯一本機監聽服務、Gateway 的直接存取已受限且你信任本機程序時，才啟用此選項。\n代理必須驗證使用者身分，並移除或覆寫用戶端提供的身分標頭。",
+      trustedProxyLoopbackRefused:
+        "回環代理請求在執行時將被拒絕（trusted_proxy_loopback_source）。\n請使用非回環代理位址，或重新執行 Gateway 設定，在閱讀安全警告後明確允許回環。\n文件：https://docs.openclaw.ai/gateway/trusted-proxy-auth",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -250,7 +256,7 @@ export const zh_TW = {
       directAccessTitle: "直接遠端存取",
       enterUrlManually: "手動輸入 URL",
       foundGateways: "找到 {count} 個 Gateway",
-      fingerprintMissing: "未公布（連線不會固定指紋）",
+      fingerprintMissing: "未公布",
       gatewayPasswordStoredMessage: "這個 Gateway 密碼存在哪裡？",
       gatewayTokenStoredMessage: "這個 Gateway 權杖存在哪裡？",
       insecureRemoteUrl:
@@ -1104,8 +1110,6 @@ export const zh_TW = {
       gatewayServiceRestarted: "Gateway 服務已重新啟動。",
       gatewayServiceRestarting: "正在重新啟動 Gateway 服務...",
       gatewayServiceRestartScheduled: "Gateway 服務重新啟動已排程。",
-      gatewayServiceUninstalled: "Gateway 服務已解除安裝。",
-      gatewayServiceUninstalling: "正在解除安裝 Gateway 服務...",
       gatewayTokenGenerate: "產生權杖：{command}",
       gatewayTokenShared: "Gateway 權杖：Gateway 和 Control UI 的共享認證。",
       gatewayTokenStored:

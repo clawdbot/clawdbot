@@ -5,13 +5,17 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
   isGatewayWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
+import {
+  NODE_DESKTOP_ATTACH_PATH,
+  NODE_PORTAL_ATTACH_PATH,
+} from "../shared/node-desktop-stream.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "./auth.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
@@ -219,7 +223,7 @@ export function attachGatewayUpgradeHandler(opts: {
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), async () => {
+    const handleUpgrade = async () => {
       const configSnapshot = getRuntimeConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
@@ -410,10 +414,11 @@ export function attachGatewayUpgradeHandler(opts: {
         });
         return;
       }
-      if (requestPath === NODE_DESKTOP_ATTACH_PATH) {
+      if (requestPath === NODE_DESKTOP_ATTACH_PATH || requestPath === NODE_PORTAL_ATTACH_PATH) {
         const context = opts.getGatewayRequestContext?.();
         if (!opts.nodeDesktopStreamBroker || !context) {
-          writeGatewayUpgradeServiceUnavailable(socket, "node desktop attach unavailable");
+          const feature = requestPath === NODE_DESKTOP_ATTACH_PATH ? "desktop" : "portal";
+          writeGatewayUpgradeServiceUnavailable(socket, `node ${feature} attach unavailable`);
           socket.destroy();
           return;
         }
@@ -441,7 +446,12 @@ export function attachGatewayUpgradeHandler(opts: {
       } catch {
         throw new Error("gateway websocket upgrade failed");
       }
-    }).catch((err: unknown) => {
+    };
+    void runHttpConnectionRequest(
+      req,
+      () => runWithDiagnosticTraceContext(createDiagnosticTraceContext(), handleUpgrade),
+      "upgrade",
+    ).catch((err: unknown) => {
       const remoteAddress = (socket as { remoteAddress?: string }).remoteAddress ?? "unknown";
       const errorMessage = err instanceof Error ? err.message : String(err);
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);

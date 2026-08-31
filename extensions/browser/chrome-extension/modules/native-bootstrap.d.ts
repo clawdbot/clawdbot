@@ -52,6 +52,16 @@ type RetiredCopilotStorage = {
   };
 };
 
+export function requestRelayEnsure(
+  relayPort: number,
+  chromeApi?: {
+    runtime: {
+      connectNative(name: string): NativeMessagePort;
+      lastError?: { message?: string };
+    };
+  },
+): Promise<{ status: "spawned" | "running" | "skipped" | "unavailable" }>;
+
 export function prepareRetiredCopilotState(
   chromeApi?: RetiredCopilotStorage,
 ): Promise<{ blocked: boolean }>;

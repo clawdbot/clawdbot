@@ -97,6 +97,7 @@ type AgentHarnessLegacyAttemptResult = Omit<
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "admittedRunContext"
+  | "codeModeRecovery"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
@@ -160,6 +161,8 @@ type AgentHarnessIsolatedCompletionParams = {
   timeoutMs: number;
   abortSignal?: AbortSignal;
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
+  /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
+  outputTextPolicy?: "strict-visible";
   streamParams?: {
     maxTokens?: number;
     temperature?: number;
@@ -302,6 +305,8 @@ export type AgentHarnessSessionForkFailureCode =
 
 export type AgentHarnessSessionForkParams = {
   targetKey: string;
+  /** Creator-owned isolation floor resolved by the trusted Gateway request. */
+  sandbox?: "required";
   source: {
     agentId: string;
     sessionId: string;
@@ -424,8 +429,30 @@ type AgentHarnessCompactionCapability = {
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
 };
 
+export type AgentHarnessSessionDeletionParams = {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  /** Revalidate the captured registry, harness, and operation before each side effect. */
+  assertCurrent: () => void;
+};
+
+export type AgentHarnessSessionDeletionMutation = {
+  /** Synchronously remove only the prepared owner's state at the session commit edge. */
+  commit: () => void;
+  /** Restore only that removal when the authoritative session transaction rolls back. */
+  rollback: () => void;
+};
+
 type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  /** Prepare outside the session writer; release native resources after its commit completes. */
+  withSessionDeletion?<T>(
+    this: void,
+    params: AgentHarnessSessionDeletionParams,
+    run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
+  ): Promise<T>;
   dispose?(): Promise<void> | void;
 };
 
@@ -494,6 +521,14 @@ type AgentHarnessModelCatalogCapability = {
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,
   ): Promise<readonly import("../model-catalog.types.js").ModelCatalogEntry[]>;
+  /**
+   * Reads current, secret-free native account evidence for this exact catalog scope/model.
+   * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
+   * picker metadata only, never execution authorization or a host-route credential.
+   */
+  readModelCatalogReadiness?(
+    params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
+  ): { accountType: string } | undefined;
 };
 
 /**

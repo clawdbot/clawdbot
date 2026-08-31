@@ -532,12 +532,18 @@ describe("settings sidebar search", () => {
 
   it("shows the offline retry action without an online status", () => {
     const onRetryConnect = vi.fn();
-    const renderSidebar = (offline: boolean, lastError: string | null, queuedOutboxCount = 0) =>
+    const renderSidebar = (
+      offline: boolean,
+      lastError: string | null,
+      queuedOutboxCount = 0,
+      restartPending = false,
+    ) =>
       render(
         renderSettingsSidebar({
           basePath: "",
           activeRouteId: "appearance",
           offline,
+          restartPending,
           queuedOutboxCount,
           lastError,
           gatewayVersion: "1.0.0",
@@ -571,5 +577,11 @@ describe("settings sidebar search", () => {
     expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
     button?.click();
     expect(onRetryConnect).toHaveBeenCalledOnce();
+
+    renderSidebar(true, null, 3, true);
+    expect(container.querySelector(".sidebar-footer-bar__status--restarting")?.textContent).toBe(
+      "Restarting…",
+    );
+    expect(container.querySelector("button.sidebar-footer-bar__status")).toBeNull();
   });
 });

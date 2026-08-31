@@ -1,6 +1,7 @@
 {
   "$comment": "Gateway events each mobile client intentionally does not handle yet, with a one-line reason. Consumed by scripts/check-protocol-event-coverage.mjs (pnpm check:protocol-coverage). Adding a gateway event without a client handler requires either handling it or adding an entry here; the check also fails when an entry goes stale (event removed or now handled).",
   "ios": {
+    "chat.metadata.changed": "iOS has no model-availability auth gate; chat transport refreshes metadata capabilities during swarm bootstrap, while model choices load on demand.",
     "controlUi.sessionPullRequests.changed": "Sidebar PR indicators are a Control UI surface; native apps do not render session PR chips.",
     "cron": "Cron run activity is not surfaced in the iOS app.",
     "device.pair.changed": "Device label projection refresh is a Control UI surface; iOS does not render the Gateway Devices page.",
@@ -22,6 +23,7 @@
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
     "session.sharing": "Session visibility/membership management is a Control UI operator surface; iOS reads visibility/sharingRole from session rows and has no sharing editor.",
+    "session.sharing.evidence": "Principal-less sharing evidence is a Control UI operator surface; iOS refreshes canonical session rows through sessions.changed.",
     "session.suggestion": "The suggestion queue is a Control UI collaboration surface; iOS does not render or resolve session suggestions.",
     "session.tool": "Session tool stream is not rendered by the iOS chat surface yet.",
     "session.typing": "Collaborative typing state is a Control UI-only ephemeral indicator; iOS does not render it.",
@@ -58,6 +60,7 @@
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface.",
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
     "session.sharing": "Session visibility/membership management is a Control UI operator surface; Android reads visibility/sharingRole from session rows and has no sharing editor.",
+    "session.sharing.evidence": "Principal-less sharing evidence is a Control UI operator surface; Android refreshes canonical session rows through sessions.changed.",
     "session.suggestion": "The suggestion queue is a Control UI collaboration surface; Android does not render or resolve session suggestions.",
     "session.tool": "Session tool stream is not rendered by the Android chat surface yet.",
     "session.typing": "Collaborative typing state is a Control UI-only ephemeral indicator; Android does not render it.",

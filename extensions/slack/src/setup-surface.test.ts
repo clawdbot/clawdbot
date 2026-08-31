@@ -59,7 +59,24 @@ describe("slackSetupWizard.prepare", () => {
 
     expect(lines.join("\n")).not.toContain("Manifest (JSON):");
     expect(lines.join("\n")).not.toContain('"display_information"');
-    expect(lines).toContain("Manifest JSON follows as plain text for copy/paste.");
+    expect(lines).toContain("3) Socket Mode: enable it and create an app-level token (xapp-...)");
+  });
+
+  it("gives HTTP bot setup signing guidance without a Socket Mode manifest", async () => {
+    const plain = vi.fn<NonNullable<WizardPrompter["plain"]>>(async () => {});
+    const note = vi.fn(async () => {});
+
+    await runSetupWizardPrepare({
+      prepare: slackSetupWizard.prepare,
+      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      prompter: createTestWizardPrompter({ plain, note }),
+    });
+
+    const instructions = requireFirstStringArg(note, "Slack HTTP setup instructions");
+    expect(instructions).toContain("Signing Secret");
+    expect(instructions).toContain("public HTTPS Request URL");
+    expect(note).toHaveBeenCalledWith(instructions, "Channel setup");
+    expect(plain).not.toHaveBeenCalled();
   });
 
   it("prints the manifest as plain JSON when Slack is not configured", async () => {

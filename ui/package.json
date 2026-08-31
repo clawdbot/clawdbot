@@ -36,7 +36,7 @@
     "@panzoom/panzoom": "4.6.2",
     "@tanstack/lit-virtual": "3.13.37",
     "@tanstack/virtual-core": "3.17.8",
-    "dompurify": "3.4.13",
+    "dompurify": "3.4.14",
     "ghostty-web": "0.4.0",
     "highlight.js": "11.12.0",
     "json5": "2.2.3",
@@ -56,7 +56,7 @@
     "pako": "3.0.1",
     "playwright": "1.62.1",
     "postcss": "8.5.26",
-    "vite": "8.2.1",
+    "vite": "8.2.2",
     "vitest": "4.1.11"
   }
 }

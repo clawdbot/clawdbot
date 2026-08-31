@@ -119,6 +119,7 @@ openclaw [--dev] [--profile <name>] <command>
   config
     get
     set
+    patch
     unset
     file
     schema
@@ -130,6 +131,20 @@ openclaw [--dev] [--profile <name>] <command>
   backup
     create
     verify
+    restore
+    sqlite
+      create
+      list
+      verify
+      restore
+    git
+      init
+      create
+      log
+      verify
+      restore
+    enable
+    disable
   migrate
     list
     plan <provider>

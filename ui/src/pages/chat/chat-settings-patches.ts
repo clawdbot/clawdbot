@@ -24,9 +24,7 @@ type ChatCommandSettingsContext = {
   defaultAgentId?: string;
   agentId?: string;
 };
-type PendingPatchStore = WeakMap<SessionCapability, Map<string, Promise<boolean>>>;
-
-const pendingChatPickerPatches: PendingPatchStore = new WeakMap();
+const pendingChatPickerPatches = new WeakMap<SessionCapability, Map<string, Promise<boolean>>>();
 
 function resolveChatPickerPatchKey(
   host: ChatPickerPatchHost,
@@ -64,25 +62,24 @@ function resolveChatPickerPatchKey(
   return `agent:${normalizeAgentId(resolvedAgentId)}:${settingsKey}`;
 }
 
-function getPendingPatch(
-  store: PendingPatchStore,
+export function getPendingChatPickerPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   agentId?: string,
 ): Promise<boolean> | undefined {
   const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
-  return store.get(host.sessions)?.get(patchKey);
+  return pendingChatPickerPatches.get(host.sessions)?.get(patchKey);
 }
 
-function trackLatestPatch(
-  store: PendingPatchStore,
+function trackPendingChatSettingsPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   patchPromise: Promise<boolean>,
   agentId?: string,
 ): void {
-  const pendingBySession = store.get(host.sessions) ?? new Map<string, Promise<boolean>>();
-  store.set(host.sessions, pendingBySession);
+  const pendingBySession =
+    pendingChatPickerPatches.get(host.sessions) ?? new Map<string, Promise<boolean>>();
+  pendingChatPickerPatches.set(host.sessions, pendingBySession);
   const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
   pendingBySession.set(patchKey, patchPromise);
   void patchPromise.finally(() => {
@@ -92,30 +89,12 @@ function trackLatestPatch(
   });
 }
 
-export function getPendingChatPickerPatch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  agentId?: string,
-): Promise<boolean> | undefined {
-  return getPendingPatch(pendingChatPickerPatches, host, sessionKey, agentId);
-}
-
-function trackPendingChatSettingsPatch(
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  patchPromise: Promise<boolean>,
-  agentId?: string,
-): void {
-  trackLatestPatch(pendingChatPickerPatches, host, sessionKey, patchPromise, agentId);
-}
-
 export function patchChatSessionSettings(
   host: ChatPickerPatchHost,
   sessionKey: string,
   patch: SessionPatch,
   options: {
     agentId?: string;
-    deferModelOverride?: boolean;
     ownsModelOverride?: () => boolean;
     reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
   } = {},
@@ -127,7 +106,6 @@ export function patchChatSessionSettings(
     // redirect queued intent to a replacement Gateway.
     const result = await host.sessions.patch(sessionKey, patch, {
       agentId: options.agentId,
-      deferModelOverride: options.deferModelOverride,
       ownsModelOverride: options.ownsModelOverride,
       waitFor: previous,
     });
@@ -169,7 +147,6 @@ export async function patchChatCommandSessionSettings(
   sessionKey: string,
   patch: SessionPatch,
   options: {
-    deferModelOverride?: boolean;
     ownsModelOverride?: () => boolean;
     reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
   } = {},

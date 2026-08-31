@@ -32,6 +32,10 @@ type DoctorSqliteMaintenanceLockDeps = {
   lockOptions?: MaintenanceLockOptions;
 };
 
+export type DoctorSqliteMaintenanceAuthority = {
+  assertCurrent(): void;
+};
+
 export class DoctorSqliteMaintenanceLockUnavailableError extends Error {
   constructor(
     operation: string,
@@ -48,6 +52,7 @@ function assertMaintenancePathsOwnedByStateDir(
   env: NodeJS.ProcessEnv,
   operation: string,
   protectedPaths: readonly string[],
+  reconcileHardlink?: (filePath: string) => void,
 ): void {
   if (protectedPaths.length === 0) {
     return;
@@ -73,7 +78,12 @@ function assertMaintenancePathsOwnedByStateDir(
       );
     }
   }
-  assertDoctorSqliteMaintenancePathsNotAliased(operation, protectedPaths, [stateDir]);
+  assertDoctorSqliteMaintenancePathsNotAliased(
+    operation,
+    protectedPaths,
+    [stateDir],
+    reconcileHardlink,
+  );
 }
 
 /** Reject file aliases that destructive SQLite maintenance would mutate in place. */
@@ -81,6 +91,7 @@ export function assertDoctorSqliteMaintenancePathsNotAliased(
   operation: string,
   protectedPaths: readonly string[],
   ownershipRoots: readonly string[] = [],
+  reconcileHardlink?: (filePath: string) => void,
 ): void {
   const resolvedRoots = ownershipRoots.map((candidate) => path.resolve(candidate));
   for (const protectedPath of new Set(protectedPaths.map((candidate) => path.resolve(candidate)))) {
@@ -99,7 +110,14 @@ export function assertDoctorSqliteMaintenancePathsNotAliased(
         `Cannot run ${operation} for a symbolic-link path: ${protectedPath}. Replace the symbolic link with an owned regular file and retry.`,
       );
     }
-    if (stat.isFile() && stat.nlink > 1) {
+    if (stat.isFile() && stat.nlink > 1 && reconcileHardlink) {
+      // Owner reconciliation may remove only its recorded publication alias. Every path still
+      // passes the ordinary guard afterward; this is not permission to maintain aliased files.
+      reconcileHardlink(protectedPath);
+      assertPathComponentsNotSymbolicLinks(operation, protectedPath, resolvedRoots);
+      stat = fs.lstatSync(protectedPath);
+    }
+    if (stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1)) {
       throw new Error(
         `Cannot run ${operation} for a hard-linked path: ${protectedPath}. Remove the additional hard link and retry.`,
       );
@@ -147,7 +165,8 @@ export async function withDoctorSqliteMaintenanceLock<T>(
     env?: NodeJS.ProcessEnv;
     operation: string;
     protectedPaths?: readonly string[];
-    run: () => Promise<T> | T;
+    reconcileHardlink?: (filePath: string) => void;
+    run: (authority: DoctorSqliteMaintenanceAuthority) => Promise<T> | T;
   },
   deps: DoctorSqliteMaintenanceLockDeps = {},
 ): Promise<T> {
@@ -174,10 +193,23 @@ export async function withDoctorSqliteMaintenanceLock<T>(
     throw new Error(`Cannot run ${params.operation} without exclusive OpenClaw state ownership.`);
   }
 
+  let active = true;
   try {
-    assertMaintenancePathsOwnedByStateDir(env, params.operation, params.protectedPaths ?? []);
-    return await params.run();
+    assertMaintenancePathsOwnedByStateDir(
+      env,
+      params.operation,
+      params.protectedPaths ?? [],
+      params.reconcileHardlink,
+    );
+    return await params.run({
+      assertCurrent() {
+        if (!active) {
+          throw new Error("Doctor SQLite maintenance authority has expired.");
+        }
+      },
+    });
   } finally {
+    active = false;
     await lock.release();
   }
 }

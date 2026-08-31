@@ -600,6 +600,12 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     } satisfies MessagePresentation;
 
     const { segments } = resolveSlackReplyBlockResolution({
+      channelData: {
+        askUser: {
+          questionId: "ask_0123456789abcdef0123456789abcdef",
+          optionValues: ["Question", "Unused"],
+        },
+      },
       presentation,
       interactive: presentationToInteractiveControlsReply(presentation),
     });

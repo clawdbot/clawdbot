@@ -178,8 +178,13 @@ pairings continue to use the relay on the browser-node host, while explicit
 `--gateway-url` pairings remain direct-remote and manual-only.
 
 The advanced manual `extension pair` command without `--gateway-url` retains
-the host-local `/extension` relay URL. It does not wake Browser control, so the
-selected profile relay must already be running before the extension connects.
+the host-local `/extension` relay URL. With the native host installed,
+**Automatic local setup** enabled, and an extension build that supports relay
+wake-up, reconnecting can start a standalone relay on the saved pairing's
+configured port. This does not start Gateway browser control: authenticated CDP
+clients can use the standalone relay without a Gateway, but `openclaw browser`
+actions still require one. For source-checkout testing, load the managed unpacked
+copy from the same OpenClaw installation.
 
 `extension cdp --legacy-bearer` is a temporary migration escape hatch. It
 prints the old Bearer header with a warning only while
@@ -254,6 +259,10 @@ openclaw browser evaluate --fn 'const title = document.title; return title;'
 openclaw browser evaluate --timeout-ms 30000 --fn 'async () => { await window.ready; return true; }'
 ```
 
+`press` accepts named keys and shortcuts such as `Escape`, `Control+Shift+T`, and `Control++`; common `Esc`, `Return`, `Del`, `Ctrl`, and `Cmd` aliases are normalized.
+
+For managed browser profiles, `select` preserves option values exactly. Quote empty or whitespace-sensitive values, such as `openclaw browser select <ref> ""` or `openclaw browser select <ref> " padded "`.
+
 `evaluate --fn` accepts a function source, an expression, or a statement body. Statement bodies are wrapped as async functions, so use `return` for the value you want back. Use `--timeout-ms` when the page-side function may need longer than the default evaluate timeout. `browser.evaluateEnabled=false` (default: `true`) disables both `evaluate` and `wait --fn`.
 
 Action responses return the current raw `targetId` after action-triggered page replacement when OpenClaw can prove the replacement tab. Scripts should still store and pass `suggestedTargetId`/labels for long-lived workflows.
@@ -270,6 +279,8 @@ openclaw browser dialog --dismiss --dialog-id d1
 ```
 
 Managed Chrome profiles save ordinary click-triggered downloads into the OpenClaw downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp root). Use `waitfordownload` or `download` when the agent needs to wait for a specific file and return its path; those explicit waiters own the next download. Uploads accept files from the OpenClaw temp uploads root and OpenClaw-managed inbound media, including `media://inbound/<id>` and sandbox-relative `media/inbound/<id>` references. Nested media refs, traversal, and arbitrary local paths are rejected.
+
+If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
 
 When an action opens a modal dialog, the action response returns `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 

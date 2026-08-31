@@ -409,37 +409,30 @@ describe("buildModelsKeyboard", () => {
     const cases = [
       {
         name: "first page",
-        params: { currentPage: 1, models: ["model1", "model2"] },
+        currentPage: 1,
         expectedPagination: ["1/3", "Next ▶"],
       },
       {
         name: "middle page",
-        params: {
-          currentPage: 2,
-          models: ["model1", "model2", "model3", "model4", "model5", "model6"],
-        },
+        currentPage: 2,
         expectedPagination: ["◀ Prev", "2/3", "Next ▶"],
       },
       {
         name: "last page",
-        params: {
-          currentPage: 3,
-          models: ["model1", "model2", "model3", "model4", "model5", "model6"],
-        },
+        currentPage: 3,
         expectedPagination: ["◀ Prev", "3/3"],
       },
     ] as const;
+    const models = Array.from({ length: 24 }, (_, index) => `model${index + 1}`);
     for (const testCase of cases) {
       const result = buildModelsKeyboard({
         provider: "anthropic",
-        models: [...testCase.params.models],
-        currentPage: testCase.params.currentPage,
+        models,
+        currentPage: testCase.currentPage,
         totalPages: 3,
-        pageSize: 2,
       });
-      // 2 model rows + pagination row + back button
-      expect(result, testCase.name).toHaveLength(4);
-      expect(result[2]?.map((button) => button.text)).toEqual(testCase.expectedPagination);
+      expect(result, testCase.name).toHaveLength(10);
+      expect(result[8]?.map((button) => button.text)).toEqual(testCase.expectedPagination);
     }
   });
 
@@ -526,13 +519,11 @@ describe("buildBrowseProvidersButton", () => {
   });
 });
 
-describe("getModelsPageSize", () => {
-  it("returns default page size", () => {
+describe("model picker pagination contracts", () => {
+  it("keeps the default page size available to public plugin consumers", () => {
     expect(getModelsPageSize()).toBe(8);
   });
-});
 
-describe("calculateTotalPages", () => {
   it("calculates pages correctly", () => {
     expect(calculateTotalPages(0)).toBe(0);
     expect(calculateTotalPages(1)).toBe(1);
@@ -542,9 +533,18 @@ describe("calculateTotalPages", () => {
     expect(calculateTotalPages(17)).toBe(3);
   });
 
-  it("uses custom page size", () => {
+  it("preserves custom page sizes for public plugin consumers", () => {
     expect(calculateTotalPages(10, 5)).toBe(2);
     expect(calculateTotalPages(11, 5)).toBe(3);
+    expect(
+      buildModelsKeyboard({
+        provider: "openai",
+        models: ["first", "second", "third"],
+        currentPage: 2,
+        totalPages: 2,
+        pageSize: 2,
+      })[0]?.[0]?.text,
+    ).toBe("third");
   });
 });
 

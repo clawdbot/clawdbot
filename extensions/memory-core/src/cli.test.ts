@@ -6,7 +6,10 @@ import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -22,6 +25,7 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatMemoryIndexOutcome } from "./cli-runtime-common.js";
 import { openMemoryCoreStateStore } from "./dreaming-state.js";
+import type { MemoryForgetReport } from "./memory-forget-report.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
@@ -30,6 +34,7 @@ import {
 } from "./test-helpers.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const forgetMemoryEntries = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
@@ -50,12 +55,16 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
-async function seedCliBackfillTranscript(sessionId: string, days: string[]): Promise<void> {
+async function seedCliBackfillTranscript(
+  sessionId: string,
+  days: string[],
+  metadata: Partial<Parameters<typeof upsertSessionEntry>[0]["entry"]> = {},
+): Promise<void> {
   const agentId = "main";
   const sessionsDir = resolveTestSessionTranscriptsDirForAgent(agentId);
   const storePath = path.join(sessionsDir, "sessions.json");
   const sessionKey = `agent:${agentId}:cli-session-backfill:${sessionId}`;
-  const entry = { sessionId, updatedAt: Date.parse(`${days.at(-1)}T12:00:00.000Z`) };
+  const entry = { ...metadata, sessionId, updatedAt: Date.now() };
   await fs.mkdir(sessionsDir, { recursive: true });
   await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
   for (const day of days) {
@@ -75,11 +84,14 @@ async function seedCliBackfillTranscript(sessionId: string, days: string[]): Pro
   await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
 }
 
+vi.mock("./memory-forget.js", () => ({ forgetMemoryEntries }));
+
 vi.mock("./cli.host.runtime.js", async () => {
   const [
     {
       defaultRuntime,
       formatErrorMessage,
+      getMemoryEmbeddingCommandSecretTargetIds,
       setVerbose,
       shortenHomeInString,
       shortenHomePath,
@@ -98,6 +110,7 @@ vi.mock("./cli.host.runtime.js", async () => {
   return {
     defaultRuntime,
     formatErrorMessage,
+    getMemoryEmbeddingCommandSecretTargetIds,
     getMemorySearchManager,
     listMemoryFiles,
     getRuntimeConfig,
@@ -118,6 +131,7 @@ vi.mock("./cli.host.runtime.js", async () => {
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
 let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
+let getMemoryEmbeddingCommandSecretTargetIds: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").getMemoryEmbeddingCommandSecretTargetIds;
 let isVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").isVerbose;
 let setVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").setVerbose;
 let fixtureRoot = "";
@@ -129,10 +143,12 @@ beforeAll(async () => {
   ({ registerMemoryCli } = await import("./cli.js"));
   const {
     defaultRuntime: loadedDefaultRuntime,
+    getMemoryEmbeddingCommandSecretTargetIds: loadedGetMemoryEmbeddingCommandSecretTargetIds,
     isVerbose: loadedIsVerbose,
     setVerbose: loadedSetVerbose,
   } = await import("openclaw/plugin-sdk/memory-core-host-runtime-cli");
   defaultRuntime = loadedDefaultRuntime;
+  getMemoryEmbeddingCommandSecretTargetIds = loadedGetMemoryEmbeddingCommandSecretTargetIds;
   isVerbose = loadedIsVerbose;
   setVerbose = loadedSetVerbose;
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
@@ -142,6 +158,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   getMemorySearchManager.mockReset();
+  forgetMemoryEntries.mockReset();
   getRuntimeConfig.mockReset().mockReturnValue({});
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
@@ -321,6 +338,102 @@ describe("memory cli", () => {
     }));
   }
 
+  it("forwards repeated forget selectors and reports quoted lines and curated writes in both output formats", async () => {
+    getRuntimeConfig.mockReturnValue(configuredAgents);
+    const report: MemoryForgetReport = {
+      participantMatches: [
+        {
+          actorId: "person-one",
+          identities: [
+            { type: "profile", id: "person-one" },
+            { type: "agent", id: "person-one" },
+          ],
+        },
+      ],
+      agentId: "ops",
+      dryRun: true,
+      sessionIds: ["session-one", "session-two"],
+      sessionResolutions: [
+        { sessionId: "session-one", sessionKey: "agent:ops:one", source: "live" },
+        { sessionId: "session-two", source: "unresolved" },
+      ],
+      entryKeys: ["mixed-entry"],
+      mixedLineageEntryKeys: ["mixed-entry"],
+      untargetableEntryKeys: ["curated-entry"],
+      curatedWrites: [
+        { relativePath: "MEMORY.md", observedAt: Date.parse("2026-08-25T12:00:00Z") },
+      ],
+      artifacts: {
+        memoryFiles: 1,
+        memoryEntries: 1,
+        memoryLines: 2,
+        sessionCorpusFiles: 1,
+        sessionCorpusLines: 2,
+        indexChunks: 1,
+        indexSources: 0,
+        ftsRows: 1,
+        vectorRows: 1,
+        embeddingCacheRows: 1,
+        shortTermEntries: 1,
+        seenHashScopes: 2,
+        backups: 1,
+        originRows: 2,
+      },
+      refusals: [],
+    };
+    forgetMemoryEntries.mockResolvedValueOnce(report);
+    const json = spyRuntimeJson(defaultRuntime);
+
+    await runMemoryCli([
+      "forget",
+      "--session",
+      "session-one",
+      "--session",
+      "session-two",
+      "--hook-source",
+      "gmail",
+      "--hook-source",
+      "email",
+      "--participant",
+      "person-one",
+      "--participant",
+      "person-two",
+      "--since",
+      "2026-01-01",
+      "--agent",
+      "ops",
+      "--dry-run",
+      "--json",
+    ]);
+
+    expect(forgetMemoryEntries).toHaveBeenCalledWith({
+      cfg: configuredAgents,
+      agentId: "ops",
+      sessionIds: ["session-one", "session-two"],
+      hookSources: ["gmail", "email"],
+      participants: ["person-one", "person-two"],
+      since: "2026-01-01",
+      dryRun: true,
+    });
+    expect(firstWrittenJsonArg(json)).toEqual(report);
+
+    forgetMemoryEntries.mockResolvedValueOnce(report);
+    const logs = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["forget", "--session", "session-one", "--agent", "ops", "--dry-run"]);
+    const output = firstMockCallArg(logs, "memory forget output");
+    expect(output).toContain("Source transcripts retained: 2");
+    expect(output).toContain(
+      'Raw participant selector: person-one: {"type":"profile","id":"person-one"}, {"type":"agent","id":"person-one"}',
+    );
+    expect(output).toContain("Matches select whole sessions across identity namespaces.");
+    expect(output).toContain("Session resolution: session-one (live)");
+    expect(output).toContain("Session resolution: session-two (unresolved)");
+    expect(output).toContain("Memory artifacts: 1 files, 1 entries, 2 quoted lines");
+    expect(output).toContain("Curated write retained: MEMORY.md (2026-08-25T12:00:00.000Z)");
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["status", ["status", "--agent", "nope-zzz"]],
     ["index", ["index", "--agent", "nope-zzz"]],
@@ -378,12 +491,27 @@ describe("memory cli", () => {
     );
   });
 
-  it("drains session backfill in one apply command before preview", async () => {
+  it("drains admitted session backfill in one apply command before preview", async () => {
     const workspaceDir = path.join(workspaceFixtureRoot, `session-backfill-${workspaceCaseId++}`);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(workspaceDir, "openclaw.json"));
     await fs.mkdir(workspaceDir, { recursive: true });
     await seedCliBackfillTranscript("drain", ["2026-01-01", "2026-01-02", "2026-01-03"]);
+    await seedCliBackfillTranscript("excluded", ["2026-01-04"], {
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "channel:admission-fixture" },
+        origin: { provider: "discord", to: "channel:admission-fixture" },
+      }),
+    });
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: { memoryPolicy: { excludeSessions: { channels: ["discord"] } } },
+          },
+        },
+      },
+    });
 
     mockManager({ status: () => makeMemoryStatus({ workspaceDir }), close: vi.fn() });
     const applyJson = spyRuntimeJson(defaultRuntime);
@@ -857,9 +985,7 @@ describe("memory cli", () => {
     ) as { config?: unknown; commandName?: unknown; targetIds?: unknown; mode?: unknown };
     expect(secretRefsCall.config).toBe(config);
     expect(secretRefsCall.commandName).toBe("memory status");
-    expect(secretRefsCall.targetIds).toStrictEqual(
-      new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]),
-    );
+    expect(secretRefsCall.targetIds).toStrictEqual(getMemoryEmbeddingCommandSecretTargetIds());
     expect(secretRefsCall.mode).toBe("read_only_status");
   });
 
@@ -1950,7 +2076,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("warns before reporting no matches from a dirty index", async () => {
+  it("does not warn before reporting no matches from routine pending work", async () => {
     const close = vi.fn(async () => {});
     mockManager({
       search: vi.fn(async () => []),
@@ -1962,9 +2088,7 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["search", "hidden codeword"]);
 
-    expect(error).toHaveBeenCalledWith(
-      "Memory index is dirty. Search results may be incomplete. Run: openclaw memory status --index --agent main",
-    );
+    expect(error).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("No matches.");
   });
 

@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 describe("media persistence gateway lifecycle recovery", () => {
-  it("repairs repeated typed startup failures after a successful v14 migration", () => {
+  it("repairs repeated typed startup failures after a successful v14 migration", async () => {
     const stateDir = tempDirs.make("media-persistence-startup-recovery-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
@@ -31,6 +31,7 @@ describe("media persistence gateway lifecycle recovery", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
     database.exec(`
+      DROP TABLE session_participants;
       PRAGMA user_version = 14;
       UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
@@ -52,7 +53,7 @@ describe("media persistence gateway lifecycle recovery", () => {
     }
     expect(inspectGatewayCrashLoopBreaker(env, nowMs + 4).tripped).toBe(true);
 
-    const result = migrateLegacyMediaPersistence({ env });
+    const result = await migrateLegacyMediaPersistence({ env });
 
     expect(result.warnings).toEqual([]);
     expect(result.changes.join("\n")).toContain(

@@ -162,11 +162,14 @@ export function buildApiErrorObservationFields(
         ? redactIdentifier(rawFingerprint, { len: 12 })
         : undefined,
       httpCode: parsed?.httpCode,
-      providerRuntimeFailureKind: classifyProviderRuntimeFailureKind({
-        status: parsed?.httpCode ? Number(parsed.httpCode) : undefined,
-        message: trimmed,
-        provider: opts?.provider,
-      }),
+      providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(
+        {
+          status: parsed?.httpCode ? Number(parsed.httpCode) : undefined,
+          message: trimmed,
+          provider: opts?.provider,
+        },
+        { providerPlugin: null },
+      ),
       providerErrorType: parsed?.type,
       providerErrorMessagePreview: truncateForObservation(
         redactedProviderMessage,

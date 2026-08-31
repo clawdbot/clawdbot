@@ -129,8 +129,7 @@ export function resolveMatrixSharedDmContextNotice(params: {
 
     return [
       "This Matrix DM is sharing a session with another Matrix DM room.",
-      "Use /focus here for a one-off isolated thread session when thread bindings are enabled, or set",
-      "channels.matrix.dm.sessionScope to per-room to isolate each Matrix DM room.",
+      "Set channels.matrix.dm.sessionScope to per-room to isolate each Matrix DM room.",
     ].join(" ");
   } catch (err) {
     params.logVerboseMessage(
@@ -145,17 +144,14 @@ export function resolveMatrixPendingHistoryText(params: {
   content: RoomMessageEventContent;
   mediaUrl?: string;
 }): string {
-  if (params.mentionPrecheckText) {
-    return params.mentionPrecheckText;
-  }
   if (!params.mediaUrl) {
-    return "";
+    return params.mentionPrecheckText;
   }
   const body = typeof params.content.body === "string" ? params.content.body : undefined;
   const filename =
     typeof params.content.filename === "string" ? params.content.filename : undefined;
   const msgtype = typeof params.content.msgtype === "string" ? params.content.msgtype : undefined;
-  return formatMatrixMessageText({ body, filename, msgtype }) ?? "";
+  return formatMatrixMessageText({ body, filename, msgtype }) ?? params.mentionPrecheckText;
 }
 
 export function resolveMatrixInboundMediaContent(content: RoomMessageEventContent) {

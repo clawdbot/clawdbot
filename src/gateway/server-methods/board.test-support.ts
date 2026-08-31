@@ -84,6 +84,17 @@ export function createBoardHarness(
   };
   const broadcast = vi.fn();
   const handlers = createBoardHandlers(store, undefined, readCanvasHtml, mcpApp);
+  const context = {
+    broadcast,
+    getMcpAppSandboxPort: () => 18790,
+    getRuntimeConfig: () => ({
+      agents: { list: [{ id: "main" }] },
+      mcp: { apps: { enabled: true } },
+      tools: { exec: { mode: "ask" } },
+    }),
+    ...contextOverrides,
+  } as unknown as GatewayRequestContext;
+  context.resolveGatewayContext ??= () => context;
   const invoke = async (method: string, params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();
     await handlers[method]!({
@@ -92,18 +103,9 @@ export function createBoardHarness(
       client,
       isWebchatConnect: () => false,
       respond,
-      context: {
-        broadcast,
-        getMcpAppSandboxPort: () => 18790,
-        getRuntimeConfig: () => ({
-          agents: { list: [{ id: "main" }] },
-          mcp: { apps: { enabled: true } },
-          tools: { exec: { mode: "ask" } },
-        }),
-        ...contextOverrides,
-      } as unknown as GatewayRequestContext,
+      context,
     });
     return respond;
   };
-  return { store, broadcast, invoke, mcpApp };
+  return { store, broadcast, context, handlers, invoke, mcpApp };
 }

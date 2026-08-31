@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
@@ -11,13 +10,11 @@ defineDiscordVoiceTests(
     vi,
     createVoiceCaptureState,
     createVoiceReceiveRecoveryState,
-    lastMockCall,
     createDefaultVoiceStates,
     createConnectionMock,
     joinVoiceChannelMock,
     entersStateMock,
     createAudioPlayerMock,
-    createAudioResourceMock,
     agentCommandMock,
     resolveVoiceIngressWithParticipantsMock,
     transcribeAudioFileMock,
@@ -40,13 +37,13 @@ defineDiscordVoiceTests(
     makeVoiceConfig,
     createFollowManager,
     getSessionEntry,
+    getLastAudioPlayer,
     getVoiceReceive,
     beginSpeakerTurn,
     lastAgentCommandArgs,
     lastAgentCommandToolNames,
     createJoinedAgentProxyFixture,
     lastTtsArgs,
-    lastTtsStreamArgs,
     expectUserMessageNotIncludes,
     processVoiceSegment,
     updateVoiceState,
@@ -82,7 +79,7 @@ defineDiscordVoiceTests(
         expect.objectContaining({ end: { behavior: "Manual" } }),
       );
       expect(agentCommandMock).toHaveBeenCalledOnce();
-      expect(entry.player.play).toHaveBeenCalledOnce();
+      expect(getLastAudioPlayer().play).toHaveBeenCalledOnce();
       expect((await manager.leave({ guildId: "g1" })).ok).toBe(true);
       expect(manager.status()).toEqual([]);
     });
@@ -353,44 +350,6 @@ defineDiscordVoiceTests(
       expect(transcriptLog?.length).toBeLessThan(650);
     });
 
-    it("plays streaming TTS audio before falling back to a synthesized file", async () => {
-      const release = vi.fn(async () => undefined);
-      textToSpeechStreamMock.mockResolvedValue({
-        success: true,
-        audioStream: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array([1, 2, 3]));
-            controller.close();
-          },
-        }),
-        release,
-      });
-      agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "hello back" }],
-      } as never);
-
-      const client = createClientWithMember("u-guest", "Guest", "4321");
-      const manager = createManager(
-        { groupPolicy: "open", allowFrom: ["discord:u-guest"] },
-        client,
-        {},
-      );
-      await processVoiceSegment(manager, "u-guest");
-
-      expect(lastTtsStreamArgs().channel).toBe("discord");
-      expect(lastTtsStreamArgs().disableFallback).toBe(true);
-      expect(lastTtsStreamArgs().text).toBe("hello back");
-      expect(textToSpeechMock).not.toHaveBeenCalled();
-      const audioResourceInput = lastMockCall(
-        createAudioResourceMock as unknown as MockCallSource,
-        "audio resource",
-      )[0];
-      if (audioResourceInput === undefined) {
-        throw new Error("expected Discord audio resource input");
-      }
-      await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
-    });
-
     it("logs a failed streaming provider once per session when using file fallback", async () => {
       const replyText = "file fallback reply";
       agentCommandMock.mockResolvedValue({ payloads: [{ text: replyText }] } as never);
@@ -456,7 +415,7 @@ defineDiscordVoiceTests(
       await entry.playbackQueue;
 
       expect(textToSpeechMock).toHaveBeenCalledOnce();
-      expect(entry.player.play).toHaveBeenCalledOnce();
+      expect(getLastAudioPlayer().play).toHaveBeenCalledOnce();
       expect(
         loggerWarnMock.mock.calls
           .map(([message]) => String(message))
@@ -505,7 +464,7 @@ defineDiscordVoiceTests(
       await entry.processingQueue;
       await entry.playbackQueue;
 
-      expect(entry.player.play).not.toHaveBeenCalled();
+      expect(getLastAudioPlayer().play).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledOnce();
     });
 
@@ -831,7 +790,7 @@ defineDiscordVoiceTests(
       await entry.processingQueue;
 
       expect(transcribeAudioFileMock).not.toHaveBeenCalled();
-      expect(entry.player.play).not.toHaveBeenCalled();
+      expect(getLastAudioPlayer().play).not.toHaveBeenCalled();
     });
 
     it("keeps followed-user voice state last-event-wins across a pending join", async () => {

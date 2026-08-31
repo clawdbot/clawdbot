@@ -15,7 +15,7 @@ import {
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
   resolveWebSearchInstallCatalogEntries,
@@ -26,25 +26,18 @@ import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.j
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { t } from "../wizard/i18n/index.js";
+import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { FlowContribution, FlowOption } from "./types.js";
-import { sortFlowContributionsByLabel } from "./types.js";
+import { sortFlowContributionsByLabel, type FlowContribution } from "./types.js";
 
-type SearchProvider = NonNullable<
-  NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
->;
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
+type SearchProvider = NonNullable<SearchConfig["provider"]>;
 type MutableSearchConfig = SearchConfig & Record<string, unknown>;
-
-type SearchProviderSetupOption = FlowOption & {
-  value: SearchProvider;
-};
 
 type SearchProviderSetupContribution = FlowContribution & {
   kind: "search";
   surface: "setup";
   provider: PluginWebSearchProviderEntry;
-  option: SearchProviderSetupOption;
   source: "runtime" | "install-catalog";
 };
 
@@ -602,6 +595,30 @@ export async function runSearchSetupFlow(
     resolveSearchProviderEntry(config, choice) ?? providerOptions.find((e) => e.id === choice);
   if (!entry) {
     return { outcome: "kept-current", config, reason: "provider-unavailable", providerId: choice };
+  }
+  if (
+    entry.pluginId &&
+    !(SEARCH_INSTALL_CATALOG_ENTRY in entry) &&
+    (opts?.preserveDisabledSearchState === false || config.tools?.web?.search?.enabled !== false)
+  ) {
+    const enabled = await enablePluginWithCapabilityConsent(config, entry.pluginId, {
+      onCapabilityConsent: createPluginCapabilityConsentPrompter(
+        prompter,
+        opts?.beforePersistentEffect,
+      ),
+    });
+    if (!enabled.enabled) {
+      await prompter.note(
+        enabled.reason ?? "Plugin could not be enabled.",
+        "Web search unavailable",
+      );
+      return {
+        outcome: "install-failed",
+        config: enabled.config,
+        providerId: choice,
+        reason: "failed",
+      };
+    }
   }
   const finalizeSelection = (nextConfig: OpenClawConfig) =>
     finalizeSearchProviderSetup({

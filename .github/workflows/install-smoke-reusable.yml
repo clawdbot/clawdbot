@@ -706,9 +706,12 @@ jobs:
               package_args=(
                 --source-dir "$source_dir"
                 --output-dir /output
-                --pack-json /output/pack.json
+                --output-name candidate.tgz
               )
-              if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+              # The TypeScript implementation is the capability boundary for this
+              # newer option; frozen Node-native packers intentionally omit it.
+              if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]] && \
+                grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts; then
                 package_args+=(--allow-unreleased-changelog)
               fi
               node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"

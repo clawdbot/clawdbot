@@ -89,9 +89,9 @@ export function resolveNextSameModelRateLimitRetryCount(params: {
 }
 
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
-const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
+const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "[redacted]";
 
-// Avoid Anthropic's refusal test token poisoning session transcripts.
+// Keep the replacement neutral: naming the refusal trigger can itself prompt a refusal.
 function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
     return prompt;
@@ -227,7 +227,7 @@ export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
   latestUsage?: UsageSnapshot | null;
   lastRunPromptUsage: UsageSnapshot | undefined;
-}): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens"> {
+}): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens" | "costUsd"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
   const latestUsage = normalizeUsage(params.latestUsage as never);
   const lastCallUsage = hasNonzeroUsage(latestUsage)
@@ -242,6 +242,7 @@ export function buildUsageAgentMetaFields(params: {
     usage,
     lastCallUsage,
     promptTokens,
+    ...(usage?.cost ? { costUsd: usage.cost.total } : {}),
   };
 }
 
@@ -256,6 +257,7 @@ export function buildErrorAgentMeta(params: {
   sessionFile?: string;
   provider: string;
   model: string;
+  credentialSource?: EmbeddedAgentMeta["credentialSource"];
   contextTokens?: number;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
@@ -271,11 +273,13 @@ export function buildErrorAgentMeta(params: {
     ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
     provider: params.provider,
     model: params.model,
+    ...(params.credentialSource ? { credentialSource: params.credentialSource } : {}),
     ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
     ...(params.contextTokens ? { contextTokensSource: "resolved" as const } : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
+    ...(usageMeta.costUsd !== undefined ? { costUsd: usageMeta.costUsd } : {}),
   };
 }
 

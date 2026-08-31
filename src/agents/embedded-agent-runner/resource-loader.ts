@@ -1,34 +1,29 @@
-/**
- * Creates the resource loader used by embedded-agent sessions.
- */
-import { DefaultResourceLoader } from "../sessions/index.js";
+import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 
-/**
- * Resource-loader setup for embedded-agent sessions.
- *
- * Embedded runs receive explicit tools/resources from the runner, so discovery disables ambient
- * extensions, skills, prompt templates, themes, and context files.
- */
 type DefaultResourceLoaderInit = ConstructorParameters<typeof DefaultResourceLoader>[0];
 
-/** Discovery options that keep embedded sessions isolated from ambient local resources. */
-const EMBEDDED_AGENT_RESOURCE_LOADER_DISCOVERY_OPTIONS = {
-  noExtensions: true,
-  noSkills: true,
-  noPromptTemplates: true,
-  noThemes: true,
-  noContextFiles: true,
-} satisfies Partial<DefaultResourceLoaderInit>;
-
-/** Creates the constrained resource loader used by embedded-agent session construction. */
+/** Embedded sessions consume prepared resources, never ambient local discovery. */
 export function createEmbeddedAgentResourceLoader(
   options: Pick<
     DefaultResourceLoaderInit,
-    "cwd" | "agentDir" | "settingsManager" | "extensionFactories"
+    | "cwd"
+    | "agentDir"
+    | "settingsManager"
+    | "extensionFactories"
+    | "agentsFilesOverride"
+    | "appendSystemPromptTransform"
   >,
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     ...options,
-    ...EMBEDDED_AGENT_RESOURCE_LOADER_DISCOVERY_OPTIONS,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    // Explicit empty sources bypass SYSTEM.md/APPEND_SYSTEM.md discovery before any reads.
+    // Runtime-owned prompt text and bounded context are supplied by the caller.
+    systemPrompt: "",
+    appendSystemPrompt: [],
   });
 }

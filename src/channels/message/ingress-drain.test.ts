@@ -10,6 +10,7 @@ import {
 import {
   createTestIngressQueue,
   type IngressDrainTestPayload as Payload,
+  seedPendingBacklog,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
 
@@ -157,13 +158,13 @@ describe("channel ingress drain", () => {
       expect(await queue.listClaims()).toHaveLength(1);
       expect(await queue.listPending()).toEqual([]);
 
-      // Abandon loses ownership before delivery; replay must not spend an attempt.
+      // Abandon releases for retry (attempts increment).
       await expectDefined(capturedLifecycles[0], "deferred lifecycle").onAbandoned();
       await drain.waitForIdle();
       await vi.waitFor(async () => {
         const pending = await queue.listPending();
         expect(pending).toHaveLength(1);
-        expect(pending[0]?.attempts).toBe(0);
+        expect(pending[0]?.attempts).toBeGreaterThanOrEqual(1);
       });
       drain.dispose();
     });
@@ -461,7 +462,7 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("abandoned via turnAdoptionLifecycle releases claim without an attempt", async () => {
+  it("abandoned reply ownership releases claim with attempt increment", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-q", { text: "x" }, { laneKey: "l1" });
@@ -481,7 +482,7 @@ describe("channel ingress drain", () => {
       await vi.waitFor(async () => {
         const pending = await queue.listPending();
         expect(pending).toHaveLength(1);
-        expect(pending[0]?.attempts).toBe(0);
+        expect(pending[0]?.attempts).toBe(1);
         expect(pending[0]?.lastError).toBe("turn-abandoned");
       });
       drain.dispose();
@@ -680,7 +681,7 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("does not spend retry attempts on repeated abandonment", async () => {
+  it("keeps retry-accounted abandonment pending beyond the failure threshold", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;
       const queue = createTestIngressQueue(stateDir, { now: () => clock });
@@ -705,7 +706,7 @@ describe("channel ingress drain", () => {
       expect(await queue.listPending()).toEqual([
         expect.objectContaining({
           id: "abandoned",
-          attempts: 0,
+          attempts: 3,
           lastError: "turn-abandoned",
         }),
       ]);
@@ -1120,6 +1121,32 @@ describe("channel ingress drain", () => {
       const again = await queue.enqueue("old", { text: "old" });
       expect(again.kind).toBe("completed");
       drain.dispose();
+    });
+  });
+
+  it("continues draining a backlog above SQLite's bind-variable ceiling", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir, { now: () => 1_000 });
+      seedPendingBacklog(stateDir, 33_000);
+      const dispatches: string[] = [];
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => 1_000,
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatches.push(event.id);
+          await lifecycle.onAdopted();
+        },
+      });
+
+      try {
+        await expect(drain.drainOnce()).resolves.toEqual({ started: 32 });
+        await drain.waitForIdle();
+        await expect(drain.drainOnce()).resolves.toEqual({ started: 32 });
+        await drain.waitForIdle();
+        expect(dispatches).toEqual(Array.from({ length: 64 }, (_, index) => `evt-${index}`));
+      } finally {
+        drain.dispose();
+      }
     });
   });
 });

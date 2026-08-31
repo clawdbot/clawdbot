@@ -12,8 +12,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-const providerUsageArtifactDir = path.resolve(".artifacts/control-ui-e2e/provider-usage-outcomes");
-const usageFilterArtifactDir = path.resolve(".artifacts/control-ui-e2e/usage-filter-repair");
 
 const totals = {
   input: 1_200_000,
@@ -99,6 +97,90 @@ function emptyUsageResponses() {
 }
 
 suite.define(() => {
+  it.each(["recent-sort", "filtered", "recent-tab"])(
+    "selects the visible session range with Shift-click (%s)",
+    async (scenario) => {
+      const updatedAt = Date.now();
+      const sessions = [
+        { label: "Visible A", tokens: 400 },
+        { label: "Hidden", tokens: 300 },
+        { label: "Visible B", tokens: 100 },
+        { label: "Visible C", tokens: 200 },
+      ].map(({ label, tokens }, index) => ({
+        key: `agent:main:range-${index}`,
+        label,
+        agentId: "main",
+        updatedAt: updatedAt - index,
+        usage: { ...emptyTotals, input: tokens, totalTokens: tokens },
+      }));
+      const empty = emptyUsageResponses();
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 1_000, width: 1_440 } },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            methodResponses: {
+              ...empty,
+              "sessions.usage": { ...empty["sessions.usage"], sessions },
+              "sessions.usage.timeseries": { points: [] },
+              "sessions.usage.logs": { logs: [] },
+              "usage.status": { updatedAt, providers: [] },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}usage`);
+          const card = page.locator(".sessions-card");
+          let list = card.locator(".session-bars").first();
+          await expect
+            .poll(() => list.locator(".session-bar-title").allTextContents())
+            .toEqual(sessions.map((session) => session.label));
+          if (scenario === "filtered") {
+            await page.locator(".usage-query-input").fill("label:Visible");
+            await page.locator(".usage-query-input").press("Enter");
+            await expect.poll(() => list.locator(".session-bar-row").count()).toBe(3);
+          }
+          if (scenario === "recent-tab") {
+            for (const name of ["Visible C", "Visible A", "Visible B"]) {
+              await list.getByRole("button", { name, exact: true }).click();
+            }
+            await card.getByRole("button", { name: "Recently viewed", exact: true }).click();
+            list = card.locator(".session-bars--recent");
+            await expect
+              .poll(() => list.locator(".session-bar-title").allTextContents())
+              .toEqual(["Visible B", "Visible A", "Visible C"]);
+            await card.getByRole("button", { name: "Clear Selection", exact: true }).click();
+          }
+          const names = await list.locator(".session-bar-title").allTextContents();
+          await list.getByRole("button", { name: names[0], exact: true }).click();
+          await list
+            .getByRole("button", { name: "Visible C", exact: true })
+            .click({ modifiers: ["Shift"] });
+          if (recordVisuals) {
+            const artifactDir = path.join(suite.artifactDir, "usage-range-selection");
+            await card.screenshot({ path: path.join(artifactDir, `${scenario}.png`) });
+          }
+          await expect
+            .poll(async () =>
+              (
+                await list.locator('[aria-pressed="true"] .session-bar-title').allTextContents()
+              ).toSorted(),
+            )
+            .toEqual(names.toSorted());
+          if (scenario === "filtered") {
+            await page.locator(".usage-query-input").fill("");
+            await page.locator(".usage-query-input").press("Enter");
+            await expect.poll(() => list.locator(".session-bar-row").count()).toBe(4);
+            await expect
+              .poll(() =>
+                list
+                  .getByRole("button", { name: "Hidden", exact: true })
+                  .getAttribute("aria-pressed"),
+              )
+              .toBe("false");
+          }
+        },
+      );
+    },
+  );
+
   it("shows a visible provider usage warning when the usage status request fails", async () => {
     await suite.withPage(
       {
@@ -125,10 +207,13 @@ suite.define(() => {
           .poll(() => page.locator(".usage-page").textContent())
           .toContain("Provider usage is unavailable; the last request failed. Refresh to retry.");
         if (recordVisuals) {
-          await mkdir(providerUsageArtifactDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "provider-usage-outcomes"), { recursive: true });
           await page.locator(".usage-page").screenshot({
             animations: "disabled",
-            path: path.join(providerUsageArtifactDir, "usage-status-request-failed.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "provider-usage-outcomes"),
+              "usage-status-request-failed.png",
+            ),
           });
         }
       },
@@ -161,10 +246,13 @@ suite.define(() => {
             "Provider usage is unavailable; the last request failed. Refresh to retry.",
           );
         if (recordVisuals) {
-          await mkdir(providerUsageArtifactDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "provider-usage-outcomes"), { recursive: true });
           await page.locator(".usage-page").screenshot({
             animations: "disabled",
-            path: path.join(providerUsageArtifactDir, "usage-status-empty.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "provider-usage-outcomes"),
+              "usage-status-empty.png",
+            ),
           });
         }
       },
@@ -289,7 +377,7 @@ suite.define(() => {
     }));
     const empty = emptyUsageResponses();
     if (recordVisuals) {
-      await mkdir(usageFilterArtifactDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "usage-filter-repair"), { recursive: true });
     }
 
     await suite.withPage(
@@ -298,7 +386,12 @@ suite.define(() => {
         serviceWorkers: "block",
         viewport: { height: 1_000, width: 1_440 },
         ...(recordVisuals
-          ? { recordVideo: { dir: usageFilterArtifactDir, size: { height: 1_000, width: 1_440 } } }
+          ? {
+              recordVideo: {
+                dir: path.join(suite.artifactDir, "usage-filter-repair"),
+                size: { height: 1_000, width: 1_440 },
+              },
+            }
           : {}),
       },
       async ({ page }) => {
@@ -333,7 +426,10 @@ suite.define(() => {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(usageFilterArtifactDir, "01-provider-alternatives.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "usage-filter-repair"),
+              "01-provider-alternatives.png",
+            ),
           });
         }
 
@@ -345,7 +441,10 @@ suite.define(() => {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(usageFilterArtifactDir, "02-quoted-session-label.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "usage-filter-repair"),
+              "02-quoted-session-label.png",
+            ),
           });
         }
       },
@@ -671,13 +770,7 @@ suite.define(() => {
         await expect.poll(() => topProviders.textContent()).not.toContain("openai");
 
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const artifactDir = path.join(
-            process.cwd(),
-            ".artifacts",
-            "control-ui-e2e",
-            "provider-plans",
-          );
-          await mkdir(artifactDir, { recursive: true });
+          const artifactDir = path.join(suite.artifactDir, "provider-plans");
           await page.locator(".usage-page").screenshot({
             path: path.join(artifactDir, "after.png"),
           });

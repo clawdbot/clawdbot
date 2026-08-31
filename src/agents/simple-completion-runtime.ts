@@ -1,4 +1,7 @@
-import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
+import {
+  reasoningTagTextPolicy,
+  supportsOpenAIReasoningEffort,
+} from "@openclaw/ai/internal/openai";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import {
@@ -84,6 +87,7 @@ type SimpleCompletionModelOptions = {
   maxTokens?: number;
   temperature?: number;
   reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
+  strictReasoningTags?: boolean;
   signal?: AbortSignal;
 };
 
@@ -653,13 +657,17 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   if (runtime) {
     completionModel = bindModelLlmRuntime(completionModel, runtime);
   }
-  const { reasoning: rawReasoning, ...options } = params.options ?? {};
+  const { reasoning: rawReasoning, strictReasoningTags, ...options } = params.options ?? {};
   const reasoning = normalizeSimpleCompletionReasoning(rawReasoning, completionModel);
-  return await completeSimple(completionModel, params.context, {
+  const completionOptions = {
     ...options,
     ...(reasoning ? { reasoning } : {}),
     apiKey: params.auth.apiKey,
-  });
+  };
+  if (strictReasoningTags) {
+    reasoningTagTextPolicy.markStrict(completionOptions);
+  }
+  return await completeSimple(completionModel, params.context, completionOptions);
 }
 
 function normalizeSimpleCompletionReasoning(

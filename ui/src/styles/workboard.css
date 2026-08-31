@@ -246,24 +246,6 @@
   min-width: min(280px, 100%);
 }
 
-.workboard-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: var(--workboard-control-height);
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.workboard-toggle input {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-}
-
 .workboard-draft {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -1647,6 +1629,10 @@ openclaw-workboard-card-dashboard {
 }
 
 @media (max-width: 900px) {
+  .content--workboard {
+    overflow-y: auto;
+  }
+
   .workboard-draft {
     width: 100%;
     height: 100dvh;
@@ -1694,10 +1680,10 @@ openclaw-workboard-card-dashboard {
     grid-template-columns: 1fr;
   }
 
+  .workboard,
   .workboard-board--page {
     flex-direction: column;
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: visible;
     scroll-snap-type: none;
   }
 

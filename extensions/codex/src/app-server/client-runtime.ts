@@ -10,6 +10,7 @@ import { withTimeout } from "./timeout.js";
 type ClientRuntimeContext = Omit<CodexAppServerAuthProfileLookup, "agentDir"> & {
   agentDir: string;
   authMode?: "prepared-api-key" | "profile";
+  onAuthRefreshFailure?: () => void;
 };
 
 type ClientRuntime = {
@@ -26,7 +27,7 @@ type RetainedLiveThread = {
   configFingerprint?: string;
   serviceTier?: CodexServiceTier | null;
   expiresAt: number;
-  release: (threadId: string) => Promise<void>;
+  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
 };
 
 type ThreadReleaseTransition = {
@@ -38,7 +39,7 @@ type ThreadReleaseTransition = {
 export type CodexAppServerLiveThreadOwnership = {
   configFingerprint?: string;
   serviceTier?: CodexServiceTier | null;
-  release: (threadId: string) => Promise<void>;
+  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
 };
 
 /** Match Codex's native grace window without retaining inactive conversations indefinitely. */
@@ -111,23 +112,32 @@ export function ensureCodexAppServerClientRuntime(
       isJsonObject(request.params) && typeof request.params.previousAccountId === "string"
         ? request.params.previousAccountId.trim() || undefined
         : undefined;
-    const tokens = await withTimeout(
-      refreshCodexAppServerAuthTokens({
-        agentDir: runtime.context.agentDir,
-        authProfileId: runtime.context.authProfileId,
-        ...(previousAccountId ? { previousAccountId } : {}),
-        ...(runtime.context.authProfileStore
-          ? { authProfileStore: runtime.context.authProfileStore }
-          : {}),
-        config: runtime.context.config,
-      }),
-      CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
-      "Codex app-server ChatGPT token refresh timed out before its external-auth deadline",
-    );
-    if (previousAccountId && tokens.chatgptAccountId !== previousAccountId) {
-      throw new Error("ChatGPT workspace changed during Codex token refresh.");
+    try {
+      const tokens = await withTimeout(
+        refreshCodexAppServerAuthTokens({
+          agentDir: runtime.context.agentDir,
+          authProfileId: runtime.context.authProfileId,
+          ...(previousAccountId ? { previousAccountId } : {}),
+          ...(runtime.context.authProfileStore
+            ? { authProfileStore: runtime.context.authProfileStore }
+            : {}),
+          config: runtime.context.config,
+        }),
+        CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
+        "Codex app-server ChatGPT token refresh timed out before its external-auth deadline. Retry the request; if it persists, sign in again with OpenClaw.",
+      );
+      if (previousAccountId && tokens.chatgptAccountId !== previousAccountId) {
+        throw new Error(
+          "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
+        );
+      }
+      return { ...tokens };
+    } catch (error) {
+      // Failed refresh leaves Codex holding its old account. Detach the cached
+      // process before another acquisition; existing leases can finish safely.
+      runtime.context.onAuthRefreshFailure?.();
+      throw error;
     }
-    return { ...tokens };
   });
   client.addNotificationHandler((notification) => {
     if (notification.method === "account/rateLimits/updated") {
@@ -195,10 +205,12 @@ async function releaseRetainedThread(
   client: CodexAppServerClient,
   runtime: ClientRuntime,
   threadId: string,
+  assertCurrent?: () => void,
 ): Promise<boolean> {
   const pendingRelease = runtime.releasingThreads.get(threadId);
   if (pendingRelease) {
     await pendingRelease.completion;
+    assertCurrent?.();
     return false;
   }
   const retained = runtime.retainedThreads.get(threadId);
@@ -217,7 +229,10 @@ async function releaseRetainedThread(
   // Keep release ownership addressable until unsubscribe settles. Unrelated
   // conversations must stay reusable while only this thread transitions.
   const transition: ThreadReleaseTransition = {
-    completion: Promise.resolve().then(() => retained.release(threadId)),
+    completion: Promise.resolve().then(() => {
+      assertCurrent?.();
+      return assertCurrent ? retained.release(threadId, assertCurrent) : retained.release(threadId);
+    }),
   };
   runtime.releasingThreads.set(threadId, transition);
   try {
@@ -286,7 +301,7 @@ async function evictExcessIdleThreads(
 export async function retainCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
-  releaseThread?: (threadId: string) => Promise<void>,
+  releaseThread?: (threadId: string, assertCurrent?: () => void) => Promise<void>,
   configFingerprint?: string,
   serviceTier?: CodexServiceTier | null,
 ): Promise<boolean> {
@@ -306,14 +321,9 @@ export async function retainCodexAppServerLiveThread(
   const pendingRelease = runtime.releasingThreads.get(threadId);
   if (pendingRelease) {
     await pendingRelease.completion;
-    if (
-      runtime.closed ||
-      (claimed !== undefined && runtime.claimedThreads.get(threadId) !== claimed)
-    ) {
-      // The pending operation unsubscribed this exact active generation;
-      // publishing it again without thread/resume would invent ownership.
-      return false;
-    }
+    // The pending operation released this subscription. Publishing it again
+    // without a subsequent thread/resume would invent native ownership.
+    return false;
   }
   runtime.retainedThreads.delete(threadId);
   const retained: RetainedLiveThread = {
@@ -322,8 +332,8 @@ export async function retainCodexAppServerLiveThread(
     expiresAt: Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
     release:
       (releaseThread ? (physicalThreadReleases.get(releaseThread) ?? releaseThread) : undefined) ??
-      (async (releasedThreadId) => {
-        await unsubscribeCodexAppServerLiveThread(client, releasedThreadId, 5_000);
+      (async (releasedThreadId, assertCurrent) => {
+        await unsubscribeCodexAppServerLiveThread(client, releasedThreadId, 5_000, assertCurrent);
       }),
   };
   runtime.retainedThreads.set(threadId, retained);
@@ -400,8 +410,8 @@ export async function claimCodexAppServerLiveThread(
   }
   const retained = runtime.retainedThreads.get(threadId) ?? {
     expiresAt: Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
-    release: async (releasedThreadId: string) => {
-      await unsubscribeCodexAppServerLiveThread(client, releasedThreadId, 5_000);
+    release: async (releasedThreadId: string, assertCurrent?: () => void) => {
+      await unsubscribeCodexAppServerLiveThread(client, releasedThreadId, 5_000, assertCurrent);
     },
   };
   return claimCodexAppServerThreadOwnership(client, runtime, threadId, retained);
@@ -417,7 +427,7 @@ function claimCodexAppServerThreadOwnership(
   const claimed = Symbol(threadId);
   runtime.claimedThreads.set(threadId, claimed);
   scheduleRetainedThreadEviction(client, runtime);
-  const release = async (releasedThreadId: string): Promise<void> => {
+  const release = async (releasedThreadId: string, assertCurrent?: () => void): Promise<void> => {
     // Codex subscriptions have no generation identifier. An obsolete owner
     // must be rejected before it can unsubscribe a replacement's live turn.
     if (releasedThreadId !== threadId || runtime.claimedThreads.get(threadId) !== claimed) {
@@ -435,7 +445,10 @@ function claimCodexAppServerThreadOwnership(
         if (runtime.closed || runtime.claimedThreads.get(threadId) !== claimed) {
           return;
         }
-        await retained.release(releasedThreadId);
+        assertCurrent?.();
+        await (assertCurrent
+          ? retained.release(releasedThreadId, assertCurrent)
+          : retained.release(releasedThreadId));
       }),
     };
     runtime.releasingThreads.set(threadId, transition);
@@ -462,6 +475,20 @@ function claimCodexAppServerThreadOwnership(
 }
 
 /** Distinguish active claimed ownership from an already-evicted idle subscription. */
+export function hasCodexAppServerLiveThread(
+  client: CodexAppServerClient,
+  threadId: string,
+): boolean {
+  const runtime = configuredClients.get(client);
+  return (
+    runtime !== undefined &&
+    !runtime.closed &&
+    (runtime.retainedThreads.has(threadId) ||
+      runtime.releasingThreads.has(threadId) ||
+      runtime.claimedThreads.has(threadId))
+  );
+}
+
 export function isCodexAppServerLiveThreadClaimed(
   client: CodexAppServerClient,
   threadId: string,
@@ -470,24 +497,31 @@ export function isCodexAppServerLiveThreadClaimed(
   return runtime !== undefined && !runtime.closed && runtime.claimedThreads.has(threadId);
 }
 
-/** Release the exact physical subscription and finish only its observed claim generation. */
+/** Release the exact physical subscription and finish only its observed ownership generation. */
 export async function unsubscribeCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
   timeoutMs: number,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const runtime = configuredClients.get(client);
   const claimed = runtime?.claimedThreads.get(threadId);
+  const retained = runtime?.retainedThreads.get(threadId);
   let transition = runtime?.releasingThreads.get(threadId);
   if (transition?.physicalRelease) {
     await transition.physicalRelease;
+    assertCurrent?.();
     return;
   }
   const physicalRelease = Promise.resolve().then(async () => {
-    if (claimed !== undefined && runtime?.claimedThreads.get(threadId) !== claimed) {
+    if (
+      (claimed !== undefined && runtime?.claimedThreads.get(threadId) !== claimed) ||
+      (retained !== undefined && runtime?.retainedThreads.get(threadId) !== retained)
+    ) {
       return;
     }
-    await client.request("thread/unsubscribe", { threadId }, { timeoutMs });
+    assertCurrent?.();
+    await client.request("thread/unsubscribe", { threadId }, { timeoutMs, assertCurrent });
   });
   const ownsTransition = runtime !== undefined && transition === undefined;
   if (transition) {
@@ -500,8 +534,12 @@ export async function unsubscribeCodexAppServerLiveThread(
   }
   try {
     await physicalRelease;
-    // Warm/compaction/native-child cleanup can release directly. Their exact
-    // successful RPC ends only the claim generation observed before it began.
+    // Direct cleanup also owns idle entries; a successful RPC ends only the
+    // retained or claimed generation observed before it began.
+    if (retained !== undefined && runtime?.retainedThreads.get(threadId) === retained) {
+      runtime.retainedThreads.delete(threadId);
+      scheduleRetainedThreadEviction(client, runtime);
+    }
     if (claimed !== undefined && runtime?.claimedThreads.get(threadId) === claimed) {
       runtime.claimedThreads.delete(threadId);
     }
@@ -516,9 +554,10 @@ export async function unsubscribeCodexAppServerLiveThread(
 export async function releaseCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
+  assertCurrent?: () => void,
 ): Promise<boolean> {
   const runtime = configuredClients.get(client);
-  return runtime ? await releaseRetainedThread(client, runtime, threadId) : false;
+  return runtime ? await releaseRetainedThread(client, runtime, threadId, assertCurrent) : false;
 }
 
 /** Native child work pins its parent's subscription even after the foreground parent turn ends. */
@@ -548,11 +587,9 @@ export function protectCodexAppServerLiveThread(
       if (retained) {
         // A detached child is live activity, not parent idleness. Its terminal
         // delivery starts the parent's normal warm-session retention window.
+        retained.expiresAt = Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
         runtime.retainedThreads.delete(threadId);
-        runtime.retainedThreads.set(threadId, {
-          ...retained,
-          expiresAt: Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
-        });
+        runtime.retainedThreads.set(threadId, retained);
       }
     } else {
       runtime.protectedThreads.set(threadId, count - 1);

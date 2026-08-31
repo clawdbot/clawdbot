@@ -28,7 +28,7 @@ export function dashboardsRouteData(
 ): DashboardsRouteData {
   return {
     result: snapshot.result,
-    error: snapshot.result ? null : snapshot.error,
+    error: snapshot.error,
     basePath: context.basePath,
     fallbackAgentId: resolveSessionNavigationAgentId(context),
     mainKey: resolveUiConfiguredMainKey({

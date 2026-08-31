@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { GrammyError } from "grammy";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   createTelegramSpooledReplayDeferredParticipant,
@@ -336,10 +336,10 @@ describe("createTelegramIngressMonitor", () => {
             {
               id: eventId,
               attempts: 0,
-              lastError: "turn-abandoned",
             },
           ]),
         );
+        expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
         expect((await queue.enqueue(eventId, payload, { laneKey })).kind).not.toBe("completed");
       });
     },
@@ -378,9 +378,10 @@ describe("createTelegramIngressMonitor", () => {
 
       await vi.waitFor(async () =>
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          { id: eventId, attempts: 0, lastError: "turn-abandoned" },
+          { id: eventId, attempts: 0 },
         ]),
       );
+      expect((await queue.listPending({ limit: "all" }))[0]?.lastError).toBeUndefined();
       expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
     });
   });
@@ -396,6 +397,15 @@ describe("createTelegramIngressMonitor", () => {
       const payload = updatePayload(8);
       const laneKey = telegramSpooledUpdateLaneKey(payload.update);
       await queue.enqueue(eventId, payload, { laneKey });
+      const priorClaim = await queue.claim(eventId, { ownerId: "prior-owner" });
+      if (!priorClaim) {
+        throw new Error("Expected the prior Telegram ingress claim.");
+      }
+      const priorAttemptAt = Date.now() - 10_000;
+      await queue.release(priorClaim, {
+        releasedAt: priorAttemptAt,
+        lastError: "previous delivery failed",
+      });
       let finishDispatch!: () => void;
       const dispatchGate = new Promise<void>((resolve) => {
         finishDispatch = resolve;
@@ -426,8 +436,9 @@ describe("createTelegramIngressMonitor", () => {
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
           {
             id: eventId,
-            attempts: 0,
-            lastError: "turn-abandoned",
+            attempts: 1,
+            lastAttemptAt: priorAttemptAt,
+            lastError: "previous delivery failed",
           },
         ]),
       );

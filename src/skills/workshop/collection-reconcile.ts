@@ -127,11 +127,13 @@ export async function reconcileSkillCollection(params: {
   agentIds?: readonly string[];
   approvedSkillNamesByAgent?: readonly ReadonlySet<string>[];
   env?: NodeJS.ProcessEnv;
+  assertCurrent?: () => void;
 }): Promise<SkillCollectionReconcileResult> {
   const workspaceDir = canonicalSkillCollectionWorkspace(params.workspaceDir);
   const commit = await withSkillCollectionLock(
     workspaceDir,
     async () => {
+      params.assertCurrent?.();
       const current = listWritableSkillCollection(workspaceDir, {
         config: params.config,
         agentId: params.agentId,
@@ -166,6 +168,7 @@ export async function reconcileSkillCollection(params: {
         plannedNames,
         MAX_RECONCILED_SKILL_BYTES,
       );
+      params.assertCurrent?.();
       if (plan.length === 0) {
         const backupRoot = resolveSkillCollectionBackupRoot(workspaceDir, params.env);
         let backupId = await latestCommittedBackupId(backupRoot);
@@ -177,13 +180,16 @@ export async function reconcileSkillCollection(params: {
             env: params.env,
           });
           try {
+            params.assertCurrent?.();
             await commitCollectionBackup(workspaceDir, backup);
+            params.assertCurrent?.();
           } catch (error) {
             await discardPendingCollectionBackup(backup);
             throw error;
           }
           backupId = backup.manifest.id;
         }
+        params.assertCurrent?.();
         const result: SkillCollectionReconcileResult = { backupId, ...outcome };
         recordSkillCollectionReviewHistory(
           workspaceDir,
@@ -247,6 +253,7 @@ export async function reconcileSkillCollection(params: {
             plannedNames,
             prepared,
           );
+          params.assertCurrent?.();
         } catch (error) {
           await discardPendingCollectionBackup(backup);
           throw error;
@@ -271,17 +278,23 @@ export async function reconcileSkillCollection(params: {
         > = [];
         try {
           for (const mutation of prepared) {
+            params.assertCurrent?.();
             await applyWorkspaceSkillMutation(mutation);
             appliedWrites.push(mutation);
+            params.assertCurrent?.();
           }
           for (const entry of plan) {
+            params.assertCurrent?.();
             if (entry.action !== "drop") {
               continue;
             }
             const skill = currentByName.get(entry.name)!;
             droppedSkills.push(await stageSkillCollectionDrop({ ...skill, workspaceDir }));
+            params.assertCurrent?.();
           }
+          params.assertCurrent?.();
           await commitCollectionBackup(workspaceDir, backup);
+          params.assertCurrent?.();
         } catch (error) {
           try {
             await rollbackSkillCollectionMutation({

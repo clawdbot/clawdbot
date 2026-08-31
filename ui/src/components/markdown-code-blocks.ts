@@ -157,8 +157,10 @@ const codeBlockResizeObserver =
   typeof ResizeObserver === "undefined"
     ? null
     : new ResizeObserver((entries) => {
-        for (const entry of entries) {
-          const wrapper = entry.target.closest<HTMLElement>(".code-block-wrapper");
+        const wrappers = new Set(
+          entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
+        );
+        for (const wrapper of wrappers) {
           if (wrapper) {
             updateCodeBlockWidthOverflow(wrapper);
           }
@@ -204,7 +206,10 @@ function scanMarkdownCodeBlocks(root: ParentNode): void {
     }
     observeCodeBlockNode(viewport);
     observeCodeBlockNode(code);
-    updateCodeBlockWidthOverflow(wrapper);
+    // The observer owns initial geometry too, after the browser lays out new blocks.
+    if (!codeBlockResizeObserver) {
+      updateCodeBlockWidthOverflow(wrapper);
+    }
   }
 }
 

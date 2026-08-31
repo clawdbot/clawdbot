@@ -35,15 +35,21 @@ describe("owner-first session roster plan", () => {
       })),
     ];
     const request = vi.fn(
-      async (method: string, params?: { limit?: number; offset?: number; ownerId?: string }) => {
+      async (
+        method: string,
+        params?: { limit?: number; offset?: number; ownerFirst?: boolean },
+      ) => {
         if (method !== "sessions.list") {
           throw new Error(`Unexpected request: ${method}`);
         }
-        if (params?.ownerId === ownerId) {
-          return sessionsResult([ownerHead, ownerTail], 1);
-        }
         const offset = params?.offset ?? 0;
-        return sessionsResult(sharedRows.slice(offset, offset + (params?.limit ?? 50)), 2);
+        const shared = sharedRows.slice(offset, offset + (params?.limit ?? 50));
+        return sessionsResult(
+          params?.ownerFirst
+            ? [ownerHead, ownerTail, ...shared.filter((row) => row !== ownerHead)]
+            : shared,
+          2,
+        );
       },
     );
     const { sessions, emitEvent } = createSessionCapabilityHarness(
@@ -59,13 +65,11 @@ describe("owner-first session roster plan", () => {
       emitEvent(sessionChangedEvent(sharedRows[1]!.key));
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
-      expect(request.mock.calls).toHaveLength(5);
+      expect(request.mock.calls).toHaveLength(3);
       expect(request.mock.calls.map(([, params]) => params)).toEqual([
-        expect.objectContaining({ ownerId, limit: 60 }),
-        expect.objectContaining({ limit: 60 }),
+        expect.objectContaining({ ownerFirst: true, limit: 60 }),
         expect.objectContaining({ limit: 60, offset: 60 }),
-        expect.objectContaining({ ownerId, limit: 60 }),
-        expect.objectContaining({ limit: 120 }),
+        expect.objectContaining({ ownerFirst: true, limit: 120 }),
       ]);
       expect(sessions.state.result?.sessions).toHaveLength(121);
       expect(sessions.state.result?.sessions.map((row) => row.key)).toContain(ownerTail.key);
@@ -90,13 +94,11 @@ describe("owner-first session roster plan", () => {
       updatedAt: 1,
       createdActor: { type: "human" as const, id: "profile-bob" },
     };
-    const request = vi.fn(async (method: string, params?: { ownerId?: string }) => {
+    const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return params?.ownerId === ownerId
-        ? sessionsResult([ownRow], 1)
-        : sessionsResult([ownRow, foreignRow], 2);
+      return sessionsResult([ownRow, foreignRow], 2);
     });
     const { sessions, emitEvent } = createSessionCapabilityHarness(
       request as unknown as GatewayBrowserClient["request"],
@@ -117,8 +119,7 @@ describe("owner-first session roster plan", () => {
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       stop();
 
-      // Cold start fired owner + shared; the warm event refresh fired both again.
-      expect(request.mock.calls).toHaveLength(4);
+      expect(request.mock.calls).toHaveLength(2);
       expect(publishedKeySets.length).toBeGreaterThan(0);
       for (const keys of publishedKeySets) {
         expect(keys).toContain(foreignRow.key);
@@ -129,7 +130,7 @@ describe("owner-first session roster plan", () => {
     }
   });
 
-  it("keeps the previous roster when the shared phase of a warm refresh fails", async () => {
+  it("keeps the previous roster when a warm owner-first refresh fails", async () => {
     vi.useFakeTimers();
     const ownerId = "profile-ada";
     const ownRow = {
@@ -144,16 +145,13 @@ describe("owner-first session roster plan", () => {
       updatedAt: 1,
       createdActor: { type: "human" as const, id: "profile-bob" },
     };
-    let failShared = false;
-    const request = vi.fn(async (method: string, params?: { ownerId?: string }) => {
+    let failRefresh = false;
+    const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      if (params?.ownerId === ownerId) {
-        return sessionsResult([ownRow], 1);
-      }
-      if (failShared) {
-        throw new Error("shared roster unavailable");
+      if (failRefresh) {
+        throw new Error("session roster unavailable");
       }
       return sessionsResult([ownRow, foreignRow], 2);
     });
@@ -166,7 +164,7 @@ describe("owner-first session roster plan", () => {
       await sessions.refresh({ agentId: "main", limit: 60, force: true });
       expect(sessions.state.result?.sessions).toHaveLength(2);
 
-      failShared = true;
+      failRefresh = true;
       emitEvent(sessionChangedEvent(ownRow.key));
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 

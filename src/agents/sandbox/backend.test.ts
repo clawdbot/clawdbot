@@ -1,6 +1,6 @@
 // Sandbox backend registry tests cover pluggable backend factory and manager
 // lifecycle hooks.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   getSandboxBackendFactory,
   getSandboxBackendManager,
@@ -26,6 +26,75 @@ describe("sandbox backend registry", () => {
     expect(getSandboxBackendFactory("podman")).not.toBeNull();
     expect(getSandboxBackendManager("podman")).not.toBeNull();
     expect(getSandboxBackendWorkdirResolver("podman")).not.toBeNull();
+  });
+
+  it.each(["docker", "podman", "ssh"] as const)(
+    "preserves %s overrides through repeated module reloads and restores its defaults",
+    async (backendId) => {
+      const defaults = {
+        factory: getSandboxBackendFactory(backendId),
+        manager: getSandboxBackendManager(backendId),
+        resolveWorkdir: getSandboxBackendWorkdirResolver(backendId),
+      };
+      const registration = createGenerationRegistration(backendId);
+      const restore = registerSandboxBackend(backendId, registration);
+
+      try {
+        for (let reload = 0; reload < 2; reload++) {
+          vi.resetModules();
+          const fresh = await import("./backend.js");
+          expect(fresh.getSandboxBackendFactory(backendId)).toBe(registration.factory);
+          expect(fresh.getSandboxBackendManager(backendId)).toBe(registration.manager);
+          expect(fresh.getSandboxBackendWorkdirResolver(backendId)).toBe(
+            registration.resolveWorkdir,
+          );
+        }
+      } finally {
+        restore();
+      }
+
+      expect(getSandboxBackendFactory(backendId)).toBe(defaults.factory);
+      expect(getSandboxBackendManager(backendId)).toBe(defaults.manager);
+      expect(getSandboxBackendWorkdirResolver(backendId)).toBe(defaults.resolveWorkdir);
+
+      const fresh = await import("./backend.js");
+      const container = await import("./docker-backend.js");
+      const ssh = await import("./ssh-backend.js");
+      const { resolveSandboxConfigForAgent } = await import("./config.js");
+      const [factory, manager] = {
+        docker: [container.createDockerSandboxBackend, container.dockerSandboxBackendManager],
+        podman: [container.createPodmanSandboxBackend, container.podmanSandboxBackendManager],
+        ssh: [ssh.createSshSandboxBackend, ssh.sshSandboxBackendManager],
+      }[backendId];
+      expect(fresh.getSandboxBackendFactory(backendId)).toBe(factory);
+      expect(fresh.getSandboxBackendManager(backendId)).toBe(manager);
+      const cfg = resolveSandboxConfigForAgent();
+      const scopeKey = "agent:registry-test:main";
+      const workdir = fresh.getSandboxBackendWorkdirResolver(backendId)?.({
+        cfg,
+        sessionKey: scopeKey,
+        scopeKey,
+        workspaceDir: "/workspace",
+        agentWorkspaceDir: "/workspace",
+      });
+      expect(workdir).toBe(
+        backendId === "ssh"
+          ? ssh.resolveSshRuntimePaths(cfg.ssh.workspaceRoot, scopeKey).remoteWorkspaceDir
+          : cfg.docker.workdir,
+      );
+    },
+  );
+
+  it("does not inherit built-in management hooks for a factory-only override", () => {
+    const registration = createGenerationRegistration("docker");
+    const restore = registerSandboxBackend("docker", registration.factory);
+    try {
+      expect(getSandboxBackendFactory("docker")).toBe(registration.factory);
+      expect(getSandboxBackendManager("docker")).toBeNull();
+      expect(getSandboxBackendWorkdirResolver("docker")).toBeNull();
+    } finally {
+      restore();
+    }
   });
 
   it("registers and restores backend factories", () => {

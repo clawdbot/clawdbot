@@ -28,8 +28,9 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   if (!env) {
     return [];
   }
+  // An explicit empty NODE_OPTIONS blocks inherited supervisor preload/heap flags.
   const entries = Object.entries(env).filter(
-    ([, value]) => typeof value === "string" && value.trim(),
+    ([key, value]) => typeof value === "string" && (value.trim() || key === "NODE_OPTIONS"),
   );
   if (entries.length === 0) {
     return [];

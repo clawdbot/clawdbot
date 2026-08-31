@@ -113,6 +113,12 @@ describe("config schema", () => {
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
+    for (const path of [
+      "agents.defaults.models.*.codeMode",
+      "agents.entries.*.models.*.codeMode",
+    ]) {
+      expect(res.uiHints[path]).toMatchObject({ label: "Code Mode", placeholder: "Default" });
+    }
     expect(res.uiHints["security.installPolicy.exec.env.*"]?.sensitive).toBe(true);
     const groupPolicyLabel = res.uiHints["channels.defaults.groupPolicy"]?.label;
     expect(groupPolicyLabel).toBeTypeOf("string");
@@ -669,6 +675,31 @@ describe("config schema", () => {
       "Mattermost Progress Label",
     );
   });
+
+  it.each(["bundled", "extended"])(
+    "keeps core channel settings discoverable with %s metadata",
+    (metadata) => {
+      const schema = metadata === "bundled" ? baseSchema : buildConfigSchemaCore(mergedSchemaInput);
+      const channels = lookupConfigSchema(schema, "channels");
+      expect(channels?.children.map((child) => child.key)).toEqual(
+        expect.arrayContaining(["defaults", "modelByChannel", "matrix"]),
+      );
+      expect(channels?.children.map((child) => child.key)).not.toContain("*");
+      expect(lookupConfigSchema(schema, "channels.unknownChannel")).toBeNull();
+      expect(lookupConfigSchema(schema, "channels.defaults.groupPolicy")?.schema).toMatchObject({
+        enum: ["open", "disabled", "allowlist"],
+      });
+      expect(
+        lookupConfigSchema(schema, "channels.defaults.botLoopProtection.maxEventsPerWindow")
+          ?.schema,
+      ).toMatchObject({ type: "integer" });
+      expect(
+        lookupConfigSchema(schema, "channels.modelByChannel.matrix.room")?.schema,
+      ).toMatchObject({
+        type: "string",
+      });
+    },
+  );
 
   it("omits a single oversized plugin schema from the full schema response", () => {
     const res = buildConfigSchemaCore({

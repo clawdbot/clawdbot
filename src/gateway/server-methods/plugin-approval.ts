@@ -7,11 +7,13 @@ import {
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
+  exceedsApprovalTextLimit,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-} from "../../infra/exec-approval-command-display.js";
-import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+} from "../../infra/exec-approval-text-sanitize.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
 import type {
   PluginApprovalRequest,
@@ -88,12 +90,13 @@ export function createPluginApprovalHandlers(
         description: string;
         detail?: string | null;
         severity?: string | null;
+        scope?: ApprovalScope | null;
         toolName?: string | null;
         toolCallId?: string | null;
         allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
-        approvalReviewerDeviceIds?: string[];
+        approvalReviewerDeviceIds?: string[] | null;
         turnSourceChannel?: string | null;
         turnSourceTo?: string | null;
         turnSourceAccountId?: string | null;
@@ -163,8 +166,8 @@ export function createPluginApprovalHandlers(
       const sanitizedTitle = sanitizeExecApprovalDisplayText(p.title);
       const sanitizedDescription = sanitizeExecApprovalWarningText(p.description);
       if (
-        Array.from(sanitizedTitle).length > PLUGIN_APPROVAL_TITLE_MAX_LENGTH ||
-        Array.from(sanitizedDescription).length > PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH
+        exceedsApprovalTextLimit(sanitizedTitle, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+        exceedsApprovalTextLimit(sanitizedDescription, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
       ) {
         respond(
           false,
@@ -188,6 +191,7 @@ export function createPluginApprovalHandlers(
         pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
         description: sanitizedDescription,
+        scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
         detail:
           rawDetail === null
             ? null

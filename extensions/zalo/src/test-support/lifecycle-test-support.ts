@@ -4,8 +4,9 @@ import {
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { expect, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-support.js";
 import type { ResolvedZaloAccount } from "../types.js";
 
 type LifecycleMonitorSetupParams = {

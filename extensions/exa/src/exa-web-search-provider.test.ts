@@ -138,7 +138,7 @@ describe("exa web search provider", () => {
     expect(pluginEntry.enabled).toBe(true);
   });
 
-  it("keeps the lightweight contract surface aligned with provider metadata", () => {
+  it("keeps the contract export aligned with provider metadata", () => {
     const provider = createExaWebSearchProvider();
     const contractProvider = createContractExaWebSearchProvider();
     if (!contractProvider.applySelectionConfig) {
@@ -171,7 +171,13 @@ describe("exa web search provider", () => {
       autoDetectOrder: provider.autoDetectOrder,
       credentialPath: provider.credentialPath,
     });
-    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    try {
+      expect(contractProvider.createTool({ config: {}, searchConfig: {} })).not.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
     const pluginEntry = applied.plugins?.entries?.exa;
     if (!pluginEntry) {
       throw new Error("expected contract Exa plugin entry");
@@ -238,6 +244,58 @@ describe("exa web search provider", () => {
     ];
     expect(disabledKeys).not.toContain(defaultKey);
     expect(new Set(disabledKeys).size).toBe(disabledKeys.length);
+  });
+
+  it.each([0, 1])("honors the current cache TTL %s", async (cacheTtlMinutes) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    let requestCount = 0;
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({ results: [{ url: `https://example.com/result-${++requestCount}` }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      );
+    const provider = createExaWebSearchProvider();
+    const config = {
+      plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-test-key" } } } } },
+    };
+    const cachedTool = provider.createTool({ config, searchConfig: { cacheTtlMinutes: 15 } });
+    const currentTool = provider.createTool({ config, searchConfig: { cacheTtlMinutes } });
+    const args = { query: `exa cache TTL ${cacheTtlMinutes}` };
+
+    try {
+      if (!cachedTool || !currentTool) {
+        throw new Error("Expected tool definitions");
+      }
+      const original = await cachedTool.execute(args);
+      expect(original).toMatchObject({ results: [{ url: "https://example.com/result-1" }] });
+      expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      clock.mockReturnValue(now + 60_000);
+      const fresh = await currentTool.execute(args);
+      expect(fresh).toMatchObject({ results: [{ url: "https://example.com/result-2" }] });
+      expect(fresh).not.toHaveProperty("cached");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      if (cacheTtlMinutes === 0) {
+        expect(await currentTool.execute(args)).toMatchObject({
+          results: [{ url: "https://example.com/result-3" }],
+        });
+        expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+      } else {
+        expect(await currentTool.execute(args)).toEqual({ ...fresh, cached: true });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      clock.mockRestore();
+      fetchMock.mockRestore();
+    }
   });
 
   it("normalizes Exa result descriptions from highlights before text", () => {

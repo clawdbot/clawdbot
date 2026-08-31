@@ -14,7 +14,12 @@ function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSessio
     createdAt: Date.now() - 2 * 60 * 60_000,
     startedAt: Date.now() - 2 * 60 * 60_000,
     updatedAt: Date.now() - 5 * 60_000,
-    createdActor: { type: "human", id: "alice", label: "Alice Baker" },
+    createdActor: {
+      type: "human",
+      id: "alice",
+      identity: { type: "profile", id: "alice" },
+      label: "Alice Baker",
+    },
     subtitle: "openclaw ⎇ feature/session-hovercard",
     workContext: {
       kind: "project",
@@ -44,6 +49,21 @@ function progressCard(): ProgressCard {
 }
 
 describe("renderSessionHovercard", () => {
+  it.each(["purple", undefined, "default"])(
+    "reflects the session color %s without unset chrome",
+    (color) => {
+      const container = document.createElement("div");
+      render(renderSessionHovercard({ row: row({ color }) }), container);
+      const dot = container.querySelector(".session-color-dot");
+      if (color === "purple") {
+        expect(dot?.getAttribute("aria-label")).toBe("Session color: Purple");
+        expect(dot?.getAttribute("style")).toContain("--session-color-purple");
+      } else {
+        expect(dot).toBeNull();
+      }
+    },
+  );
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-17T12:00:00Z"));
@@ -79,6 +99,40 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-progress-card")).toBeNull();
     expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
   });
+
+  it.each([
+    { name: "dashboard", facts: { boardFace: "dashboard" }, labels: ["Opens as dashboard"] },
+    { name: "automation", facts: { hasAutomation: true }, labels: ["Automation attached"] },
+    {
+      name: "both",
+      facts: { boardFace: "dashboard", hasAutomation: true },
+      labels: ["Opens as dashboard", "Automation attached"],
+    },
+    { name: "absent", facts: {}, labels: [] },
+    { name: "disabled", facts: { boardFace: "chat", hasAutomation: false }, labels: [] },
+  ] satisfies { name: string; facts: Partial<SidebarRecentSession>; labels: string[] }[])(
+    "renders $name session facts without other metadata",
+    ({ facts, labels }) => {
+      const container = document.createElement("div");
+      render(
+        renderSessionHovercard({
+          row: row({ createdActor: undefined, workContext: undefined, ...facts }),
+        }),
+        container,
+      );
+
+      const metadata = container.querySelector(".session-hovercard__section--metadata");
+      expect(Boolean(metadata)).toBe(labels.length > 0);
+      const contextRows = [...container.querySelectorAll(".session-hovercard__context-row")];
+      expect(contextRows.map((context) => context.textContent?.trim())).toEqual(labels);
+      expect(contextRows.map((context) => context.getAttribute("aria-label"))).toEqual(labels);
+      for (const context of contextRows) {
+        expect(
+          context.querySelector('.session-hovercard__context-icon[aria-hidden="true"] svg'),
+        ).not.toBeNull();
+      }
+    },
+  );
 
   it("renders the channel avatar with gateway auth instead of an initials span", () => {
     const container = document.createElement("div");
@@ -131,6 +185,51 @@ describe("renderSessionHovercard", () => {
     });
     expect(avatar?.querySelector("img.channel-avatar")).toBeNull();
     expect(container.querySelector("openclaw-viewer-avatar")).toBeNull();
+  });
+
+  it("shows the PR author beside the number and omits it for a ghosted account", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        pullRequests: snapshot({
+          pullRequests: [
+            {
+              number: 201,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "feature",
+              title: "Authored",
+              url: "https://github.com/openclaw/openclaw/pull/201",
+              state: "open",
+              author: { login: "octocat" },
+            },
+            {
+              number: 202,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "feature",
+              title: "Ghosted",
+              url: "https://github.com/openclaw/openclaw/pull/202",
+              state: "merged",
+            },
+          ],
+        }),
+      }),
+      container,
+    );
+
+    const links = [...container.querySelectorAll<HTMLAnchorElement>(".session-hovercard__pr-row")];
+    expect(links[0]?.querySelector(".session-hovercard__pr-author")?.textContent?.trim()).toBe(
+      "octocat",
+    );
+    expect(links[0]?.getAttribute("aria-label")).toContain("Opened by octocat");
+    // A ghosted account keeps an empty author cell so the row geometry, and the
+    // flush-right diff column, match an authored row.
+    expect(links[1]?.querySelector(".session-hovercard__pr-author")?.textContent).toBe("");
+    expect(links[1]?.querySelector(".session-hovercard__pr-author")?.hasAttribute("title")).toBe(
+      false,
+    );
+    expect(links[1]?.getAttribute("aria-label")).not.toContain("Opened by");
   });
 
   it("renders bounded flat PR rows with accessible state, CI, and diff facts", () => {
@@ -274,6 +373,30 @@ describe("renderSessionHovercard", () => {
     expect(createLink?.href).toBe("https://github.com/openclaw/openclaw/pull/new/feature");
   });
 
+  it("omits the no-PR placeholder when the branch has no create URL", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        pullRequests: snapshot({
+          branch: {
+            owner: "openclaw",
+            repo: "openclaw",
+            branch: "local-only",
+            changedFiles: 2,
+            additions: 18,
+            deletions: 1,
+          },
+        }),
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".session-hovercard__branch-name")?.textContent).toBe(
+      "openclaw/openclaw · local-only",
+    );
+    expect(container.querySelector(".session-hovercard__no-pr")).toBeNull();
+  });
+
   it("renders the latest turn as plain text when progress is absent", () => {
     const container = document.createElement("div");
     render(
@@ -308,6 +431,23 @@ describe("renderSessionHovercard", () => {
     expect(container.textContent).not.toContain("This must not appear.");
   });
 
+  it("uses the session terminal status and endedAt for progress activity", () => {
+    const container = document.createElement("div");
+    const endedAt = Date.now() - 30_000;
+    render(
+      renderSessionHovercard({
+        row: row({ status: "failed", endedAt }),
+        progressCard: progressCard(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector("time")?.textContent).toBe("Failed just now");
+    expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
+      new Date(endedAt).toISOString(),
+    );
+  });
+
   it("deduplicates creator and self from the compact participant identity", () => {
     const container = document.createElement("div");
     render(
@@ -315,11 +455,11 @@ describe("renderSessionHovercard", () => {
         selfUserId: "self",
         row: row({
           participants: [
-            { type: "human", id: "alice", label: "Alice Baker" },
-            { type: "human", id: "self", label: "You" },
-            { type: "human", id: "mira", label: "Mira" },
-            { type: "human", id: "riley", label: "Riley" },
-            { type: "human", id: "mira", label: "Mira duplicate" },
+            { identity: { type: "profile", id: "alice" }, label: "Alice Baker" },
+            { identity: { type: "profile", id: "self" }, label: "You" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira" },
+            { identity: { type: "profile", id: "riley" }, label: "Riley" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira duplicate" },
           ],
           participantCount: 7,
         }),
@@ -369,9 +509,9 @@ describe("renderSessionHovercard", () => {
         selfUserId: "self",
         row: row({
           participants: [
-            { type: "human", id: "self", label: "You" },
-            { type: "human", id: "mira", label: "Mira" },
-            { type: "human", id: "riley", label: "Riley" },
+            { identity: { type: "profile", id: "self" }, label: "You" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira" },
+            { identity: { type: "profile", id: "riley" }, label: "Riley" },
           ],
           participantCount: 5,
         }),
@@ -415,10 +555,10 @@ describe("renderSessionHovercard", () => {
         selfUserId: "self",
         row: row({
           participants: [
-            { type: "human", id: "mira", label: "Mira" },
-            { type: "human", id: "riley", label: "Riley" },
-            { type: "human", id: "sam", label: "Sam" },
-            { type: "human", id: "lee", label: "Lee" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira" },
+            { identity: { type: "profile", id: "riley" }, label: "Riley" },
+            { identity: { type: "profile", id: "sam" }, label: "Sam" },
+            { identity: { type: "profile", id: "lee" }, label: "Lee" },
           ],
           participantCount: 5,
         }),

@@ -15,6 +15,78 @@ import { extractQueueDirective } from "./reply/queue/directive.js";
 import { extractReplyToTag } from "./reply/reply-tags.js";
 
 describe("directive parsing", () => {
+  it.each([
+    "  ordinary\t text\r\n    if ready:\r\n        run('a  b')  \r\n",
+    "\n    /thinkingish  /models\t /unknown\r\n",
+    " \t\r\n",
+  ])("preserves all bytes when no directive is recognized: %j", (body) => {
+    expect(parseInlineSessionDirectives(body).cleaned).toBe(body);
+  });
+
+  it.each([
+    "/think high",
+    "/verbose on",
+    "/trace on",
+    "/fast auto",
+    "/reasoning off",
+    "/elevated ask",
+    "/exec host=auto security=deny",
+    "/queue collect debounce:2s cap:5",
+    "/model example/model -s",
+    "/sample --runtime openclaw -s",
+    "/status:",
+  ])("preserves code and significant spacing around %s", (directive) => {
+    const code =
+      "\r\n```python\r\n    if ready:\r\n        run('a  b')\r\n\t\tfinish()  \r\n```\r\n";
+    const parsed = parseInlineSessionDirectives(`  Keep\t spacing ${directive} here  too${code}`, {
+      modelAliases: ["sample"],
+    });
+    expect(parsed.cleaned).toBe(`  Keep\t spacing here  too${code}`);
+  });
+
+  it.each([
+    "/think high",
+    "/verbose",
+    "/exec host=auto",
+    "/queue collect",
+    "/model sample -s",
+    "/sample",
+  ])("does not consume indentation after the last argument of %s", (directive) => {
+    const code = "    if ready:\r\n        run()  \r\n";
+    expect(
+      parseInlineSessionDirectives(`${directive}\r\n${code}`, {
+        modelAliases: ["sample"],
+      }).cleaned,
+    ).toBe(code);
+  });
+
+  it.each([
+    ["/exec\n host=auto\n security=deny\r\n", { execHost: "auto", execSecurity: "deny" }],
+    ["/queue\n collect\n cap:5\r\n", { queueMode: "collect", cap: 5 }],
+    ["/think\n high\r\n", { thinkLevel: "high" }],
+    [
+      "/model\n example/model\n -s\r\n",
+      { rawModelDirective: "example/model", modelScope: "session" },
+    ],
+  ])(
+    "keeps cross-line argument grammar without consuming the following code: %j",
+    (directive, fields) => {
+      const code = "    print('a  b')\r\n";
+      const parsed = parseInlineSessionDirectives(`${directive}${code}`);
+      expect(parsed).toMatchObject(fields);
+      expect(parsed.cleaned).toBe(code);
+    },
+  );
+
+  it("keeps first-match precedence while removing different directive kinds", () => {
+    const parsed = parseInlineSessionDirectives(
+      "/think high /think low /verbose on\r\n    code  here",
+    );
+    expect(parsed.thinkLevel).toBe("high");
+    expect(parsed.verboseLevel).toBe("on");
+    expect(parsed.cleaned).toBe("/think low\r\n    code  here");
+  });
+
   it("ignores verbose directive inside URL", () => {
     const body = "https://x.com/verioussmith/status/1997066835133669687";
     const res = extractVerboseDirective(body);
@@ -224,7 +296,7 @@ describe("directive parsing", () => {
     expect(model.cleaned).toBe("please sync now");
     expect(model.hasModelDirective).toBe(true);
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelSessionOnly).toBe(false);
+    expect(model.modelScope).toBeUndefined();
 
     const think = parseInlineSessionDirectives("please sync /think:high now");
     expect(think.cleaned).toBe("please sync now");
@@ -237,7 +309,7 @@ describe("directive parsing", () => {
     expect(model.cleaned).toBe("please sync now");
     expect(model.hasModelDirective).toBe(true);
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelSessionOnly).toBe(true);
+    expect(model.modelScope).toBe("session");
   });
 
   it("preserves the trailing /model --session scope for native slash commands", () => {
@@ -247,7 +319,7 @@ describe("directive parsing", () => {
 
     expect(model.cleaned).toBe("");
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelSessionOnly).toBe(true);
+    expect(model.modelScope).toBe("session");
     expect(model.nativeCommand).toEqual({ name: "model" });
   });
 
@@ -261,7 +333,7 @@ describe("directive parsing", () => {
       expect(model.cleaned).toBe("");
       expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
       expect(model.rawModelRuntime).toBe("codex");
-      expect(model.modelSessionOnly).toBe(true);
+      expect(model.modelScope).toBe("session");
       expect(model.nativeCommand).toEqual({ name: "model" });
     },
   );
@@ -274,7 +346,6 @@ describe("directive parsing", () => {
       );
 
       expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-      expect(model.modelSessionOnly).toBe(false);
       expect(model.cleaned).toBe(`please sync ${option} now`);
     },
   );
@@ -298,7 +369,7 @@ describe("directive parsing", () => {
     const model = parseInlineSessionDirectives("please sync /model openai/gpt-4.1-mini -s -s now");
 
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelSessionOnly).toBe(true);
+    expect(model.modelScopeConflict).toBe(true);
     expect(model.cleaned).toBe("please sync -s now");
   });
 
@@ -306,7 +377,20 @@ describe("directive parsing", () => {
     const model = parseInlineSessionDirectives("please /model here continue");
     expect(model.cleaned).toBe("please continue");
     expect(model.rawModelDirective).toBe("here");
-    expect(model.modelSessionOnly).toBe(false);
+  });
+
+  it.each([
+    ["-a", "agent"],
+    ["--agent", "agent"],
+    ["-g", "global"],
+    ["--global", "global"],
+  ] as const)("preserves explicit /model %s scope", (option, scope) => {
+    const model = parseInlineSessionDirectives(`/model openai/gpt-4.1-mini ${option}`, {
+      nativeCommand: "model",
+    });
+
+    expect(model.cleaned).toBe("");
+    expect(model.modelScope).toBe(scope);
   });
 
   it("keeps --persist as ordinary text for inline directives", () => {

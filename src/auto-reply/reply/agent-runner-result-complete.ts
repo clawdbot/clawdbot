@@ -8,7 +8,6 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import {
   buildInlinePluginStatusPayload,
@@ -37,7 +36,6 @@ import {
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
-import { incrementRunCompactionCount } from "./session-run-accounting.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
   resolveStrandedReplyRecovery,
@@ -61,7 +59,6 @@ export async function completeReplyAgentRun(input: {
     activeIsNewSession,
     activeSessionStore,
     cfg,
-    execution,
     followupRun,
     isHeartbeat,
     opts,
@@ -99,20 +96,8 @@ export async function completeReplyAgentRun(input: {
   }
 
   if (autoCompactionCount > 0) {
-    const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
-    const count = await incrementRunCompactionCount({
-      agentId: followupRun.run.agentId,
-      cfg,
-      sessionEntry: activeSessionEntry,
-      sessionStore: activeSessionStore,
-      sessionKey,
-      storePath,
-      amount: autoCompactionCount,
-      compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      contextTokensUsed,
-      newSessionId: runResult.meta?.agentMeta?.sessionId,
-    });
+    const previousSessionId = accounting.expectedSession.sessionId;
+    const count = accounting.compactionCount;
     const refreshedSessionEntry =
       sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
     if (refreshedSessionEntry) {
@@ -140,9 +125,6 @@ export async function completeReplyAgentRun(input: {
       const suffix = typeof count === "number" ? ` (count ${count})` : "";
       prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
     }
-  }
-  if (execution.abortReason) {
-    return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
   }
   const prefixPayloads = [...prefixNotices];
   const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";

@@ -5,6 +5,7 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   OpenBlobStoreOptions,
   OpenKeyedStoreOptions,
@@ -17,7 +18,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, vi } from "vitest";
-import type { PluginRuntime } from "./runtime-api.js";
 import { setMatrixRuntime } from "./runtime.js";
 
 const defaultStateDir = fs.realpathSync(

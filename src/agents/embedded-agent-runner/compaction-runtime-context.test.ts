@@ -137,6 +137,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       messageProvider: "slack",
       chatType: "channel",
       agentAccountId: "acct-1",
+      conversationRoutePeerId: "peer",
       currentChannelId: "C123",
       currentThreadTs: "thread-9",
       currentMessageId: "msg-42",
@@ -159,6 +160,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.messageProvider).toBe("slack");
     expect(result.chatType).toBe("channel");
     expect(result.agentAccountId).toBe("acct-1");
+    expect(result.conversationRoutePeerId).toBe("peer");
     expect(result.currentChannelId).toBe("C123");
     expect(result.currentThreadTs).toBe("thread-9");
     expect(result.currentMessageId).toBe("msg-42");
@@ -170,6 +172,18 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.senderId).toBe("user-123");
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-5.4");
+  });
+
+  it("preserves the finite tool allowlist for delegated compaction", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      toolsAllow: ["read"],
+    });
+
+    expect(result.toolsAllow).toEqual(["read"]);
   });
 
   it("normalizes nullable compaction routing fields to undefined", () => {

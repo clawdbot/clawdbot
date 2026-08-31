@@ -96,7 +96,7 @@ describe("operator role policy", () => {
     });
   });
 
-  it("requires sandboxing only for the trusted human creator's resolved role", async () => {
+  it("keeps human-derived sandbox restrictions separate from profile provenance", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("role-sandbox-creator@example.com");
       const cfg = roleConfig();
@@ -106,25 +106,29 @@ describe("operator role policy", () => {
       }
       guest.sandbox = "required";
 
-      expect(resolveCreatorSandbox(cfg, { actor: { type: "human", id: profile.id } })).toBe(
-        "required",
-      );
+      for (const source of ["profile", "channel", "unknown"] as const) {
+        expect(
+          resolveCreatorSandbox(cfg, { actor: { type: "human", source, id: profile.id } }),
+        ).toBe("required");
+      }
       expect(
         resolveCreatorSandbox(cfg, { actor: { type: "agent", id: profile.id } }),
       ).toBeUndefined();
       expect(
         resolveCreatorSandbox(cfg, { actor: { type: "system", id: profile.id } }),
       ).toBeUndefined();
-      expect(resolveCreatorSandbox(cfg, { actor: { type: "human" } })).toBeUndefined();
       expect(
-        resolveCreatorSandbox({}, { actor: { type: "human", id: profile.id } }),
+        resolveCreatorSandbox(cfg, { actor: { type: "human", source: "unknown" } }),
+      ).toBeUndefined();
+      expect(
+        resolveCreatorSandbox({}, { actor: { type: "human", source: "profile", id: profile.id } }),
       ).toBeUndefined();
 
       setUserProfileRole(profile.id, "maintainer");
       invalidateOperatorRolePolicy(profile.id);
 
       expect(
-        resolveCreatorSandbox(cfg, { actor: { type: "human", id: profile.id } }),
+        resolveCreatorSandbox(cfg, { actor: { type: "human", source: "profile", id: profile.id } }),
       ).toBeUndefined();
     });
   });

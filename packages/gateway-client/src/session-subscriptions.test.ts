@@ -165,36 +165,47 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     });
   });
 
-  it("coalesces distinct requested aliases before the first canonical acknowledgment", async () => {
-    const acknowledgement = deferred<unknown>();
-    const { client, request } = createClient(async (method) =>
-      method === "sessions.messages.subscribe" ? await acknowledgement.promise : {},
-    );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+  it.each([
+    { name: "default main", requestedKey: "main", canonicalKey: "agent:main:main" },
+    {
+      name: "configured main",
+      requestedKey: "agent:ops:main",
+      canonicalKey: "agent:ops:work",
+    },
+    { name: "global main", requestedKey: "agent:ops:main", canonicalKey: "global" },
+  ])(
+    "coalesces $name aliases before the first canonical acknowledgment",
+    async ({ requestedKey, canonicalKey }) => {
+      const acknowledgement = deferred<unknown>();
+      const { client, request } = createClient(async (method) =>
+        method === "sessions.messages.subscribe" ? await acknowledgement.promise : {},
+      );
+      const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
 
-    const requested = coordinator.acquire("main");
-    const canonical = coordinator.acquire("agent:main:main");
+      const requested = coordinator.acquire(requestedKey);
+      const canonical = coordinator.acquire(canonicalKey);
 
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
-      key: "main",
-    });
+      expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+        key: requestedKey,
+      });
 
-    acknowledgement.resolve({ key: "agent:main:main" });
-    const [first, second] = await Promise.all([requested, canonical]);
+      acknowledgement.resolve({ key: canonicalKey });
+      const [first, second] = await Promise.all([requested, canonical]);
 
-    expect(first).not.toBe(second);
-    expect(first).toEqual({ key: "agent:main:main", agentId: null });
-    expect(second).toEqual({ key: "agent:main:main", agentId: null });
-    expect(request).toHaveBeenCalledOnce();
+      expect(first).not.toBe(second);
+      expect(first).toEqual({ key: canonicalKey, agentId: null });
+      expect(second).toEqual({ key: canonicalKey, agentId: null });
+      expect(request).toHaveBeenCalledOnce();
 
-    await coordinator.release(first);
-    expect(request).toHaveBeenCalledOnce();
-    await coordinator.release(second);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      key: "agent:main:main",
-    });
-  });
+      await coordinator.release(first);
+      expect(request).toHaveBeenCalledOnce();
+      await coordinator.release(second);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+        key: canonicalKey,
+      });
+    },
+  );
 
   it("upgrades a provisional canonical alias without creating a competing plain observer", async () => {
     const acknowledgement = deferred<unknown>();
@@ -254,7 +265,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await expect(main).resolves.toEqual({ key: "global", agentId: "main" });
   });
 
-  it("releases another session after its agent's first subscription times out", async () => {
+  it("subscribes another session before its agent's stalled subscription times out", async () => {
     vi.useFakeTimers();
     const { client, request } = createStalledRequestClient(
       "sessions.messages.subscribe",
@@ -267,15 +278,22 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       failure = error;
     });
     const recovered = coordinator.acquire("healthy");
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "sessions.messages.subscribe",
+      { key: "healthy" },
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+    );
+    await expect(recovered).resolves.toEqual({ key: "healthy", agentId: null });
+    expect(failure).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
 
     expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
-    await expect(recovered).resolves.toEqual({ key: "healthy", agentId: null });
     expect(request).toHaveBeenCalledTimes(3);
     expect(request).toHaveBeenNthCalledWith(
-      2,
+      3,
       "sessions.messages.unsubscribe",
       { key: "stalled" },
       { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },

@@ -1,6 +1,7 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -92,18 +93,15 @@ type ScopedWindow = Window & {
   };
 };
 
-const metricsArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "stream-runtime-budgets",
-);
+let metricsArtifactDir: string;
+beforeEach(() => {
+  metricsArtifactDir = createControlUiE2eArtifactDir("stream-runtime-budgets");
+});
 
 async function recordBudgetMetrics(
   testName: string,
   metrics: Record<string, number>,
 ): Promise<void> {
-  await mkdir(metricsArtifactDir, { recursive: true });
   await appendFile(
     path.join(metricsArtifactDir, "metrics.jsonl"),
     `${JSON.stringify({ testName, metrics, recordedAt: new Date().toISOString() })}\n`,

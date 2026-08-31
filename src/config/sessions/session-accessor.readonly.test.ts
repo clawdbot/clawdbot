@@ -254,6 +254,32 @@ describe("session accessor readonly listing", () => {
     ]);
   });
 
+  it("does not prefer a main key when only a shared physical session identity is known", async () => {
+    const stateDir = autoTempDirs.make("openclaw-session-readonly-shared-identity-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "worker-1";
+    const sessionId = "shared-generation";
+    const mainKey = "agent:worker-1:main";
+    const otherKey = "agent:worker-1:other";
+    for (const sessionKey of [mainKey, otherKey]) {
+      await upsertSessionEntryCore({ agentId, env, sessionKey }, { sessionId, updatedAt: 1 });
+    }
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+    const probe = { agentId, env, sessionId, storePath };
+
+    expect(
+      readSessionIdentityEvidenceBatch([
+        probe,
+        { ...probe, sessionKey: mainKey },
+        { ...probe, sessionKey: otherKey },
+      ]),
+    ).toEqual([
+      { status: "unknown", reason: "ambiguous" },
+      { status: "current", sessionKey: mainKey },
+      { status: "current", sessionKey: otherKey },
+    ]);
+  });
+
   it("rejects stale valid projections for unreadable session identity evidence", async () => {
     const stateDir = autoTempDirs.make("openclaw-session-readonly-stale-valid-evidence-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

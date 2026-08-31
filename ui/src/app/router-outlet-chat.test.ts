@@ -248,7 +248,27 @@ describe("openclaw-router-outlet chat ownership", () => {
     router.stop();
   });
 
-  it("retains an unresolved route until an ambiguous result replaces it", async () => {
+  it.each([
+    {
+      label: "an ambiguous result",
+      result: {
+        kind: "ambiguous",
+        shortId: "12345678",
+        candidates: [],
+        truncated: false,
+        face: "chat",
+      } satisfies ChatRouteData,
+    },
+    {
+      label: "a missing-session result",
+      result: {
+        kind: "missing-session",
+        face: "chat",
+        currentSessionHref: "/chat/main",
+        sessionsHref: "/sessions",
+      } satisfies ChatRouteData,
+    },
+  ])("retains an unresolved route until $label replaces it", async ({ result }) => {
     const sessionKey = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
     const nextData = deferred<ChatRouteData>();
     let loadCount = 0;
@@ -275,13 +295,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     expect(outlet.querySelector("mcp-app-view")).toBe(firstView);
     expect(teardown).not.toHaveBeenCalled();
 
-    nextData.resolve({
-      kind: "ambiguous",
-      shortId: "12345678",
-      candidates: [],
-      truncated: false,
-      face: "chat",
-    });
+    nextData.resolve(result);
     await navigation;
     await settleOutlet(outlet);
     expect(outlet.querySelector('[data-testid="route-value"]')?.textContent).toBe("chooser");

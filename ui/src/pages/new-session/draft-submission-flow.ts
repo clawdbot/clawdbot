@@ -59,7 +59,7 @@ export class DraftSubmissionFlow {
   private messageValue = "";
   private submittingValue = false;
   private blockedSubmitGate: string | null = null;
-  private submissionOutcomeUnknownValue: SubmissionOutcomeReason | null = null;
+  submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
   error: string | null = null;
   private submitRequestToken = 0;
@@ -117,16 +117,12 @@ export class DraftSubmissionFlow {
     return this.submittingValue || this.sessionStartup.active;
   }
 
-  get submissionOutcomeUnknown(): SubmissionOutcomeReason | null {
-    return this.submissionOutcomeUnknownValue;
-  }
-
   resumeInterruptedSubmission() {
     const startup = this.sessionStartup.resume();
     if (startup.kind === "resume") {
       void this.submit(startup);
     } else if (startup.kind !== "wait") {
-      this.submissionOutcomeUnknownValue = "gateway-changed";
+      this.submissionOutcomeUnknown = "gateway-changed";
       this.callbacks.requestUpdate();
     }
   }
@@ -170,9 +166,7 @@ export class DraftSubmissionFlow {
   }
 
   setError(error: string | null) {
-    if (error === null && this.error === t("newSession.cloudRecoveryUnavailable")) {
-      this.error = null;
-    } else if (error !== null) {
+    if (error !== null || this.error === t("newSession.cloudRecoveryUnavailable")) {
       this.error = error;
     }
     this.callbacks.requestUpdate();
@@ -191,7 +185,7 @@ export class DraftSubmissionFlow {
 
   markPendingPlacementUnavailable(outcome: SubmissionOutcomeReason) {
     this.pendingPlacement.retryAllowed = false;
-    this.submissionOutcomeUnknownValue = outcome;
+    this.submissionOutcomeUnknown = outcome;
     this.callbacks.requestUpdate();
   }
 
@@ -204,10 +198,9 @@ export class DraftSubmissionFlow {
   /** Attempt-bound reason that retires when its transient gate lifts. */
   blockedSubmitNotice(): string | undefined {
     const block = this.blockedSubmitGate ? this.submitBlock() : undefined;
-    if (!block?.reason || block.gate !== this.blockedSubmitGate) {
-      return undefined;
-    }
-    return PAGE_RENDERED_GATES.has(block.gate) ? undefined : block.reason;
+    return block?.gate === this.blockedSubmitGate && !PAGE_RENDERED_GATES.has(block.gate)
+      ? block.reason
+      : undefined;
   }
 
   showStartInTerminal(): boolean {
@@ -226,30 +219,29 @@ export class DraftSubmissionFlow {
   }
 
   private buildDraftSessionCreateParams(
-    options: {
-      message?: string;
-      attachments?: SessionCreateParams["attachments"];
+    options: Partial<Pick<SessionCreateParams, "message" | "attachments">> & {
       visibility?: NewSessionVisibility;
     } = {},
   ): SessionCreateParams {
-    const snapshot = this.read();
     return assembleDraftSessionCreateParams({
       agentId: this.place.agentId,
       message: options.message ?? "",
       model: this.place.modelControl.selected,
       contextWindow: this.place.modelControl.contextWindow,
       thinkingLevel: this.place.modelControl.thinkingLevel,
+      fastMode: this.place.modelControl.fastMode,
       toolOverrides: this.capabilities.toolOverrides,
       permissionMode: this.permission.value,
       visibility: options.visibility ?? this.visibilityValue,
       attachments: options.attachments,
       projectId: this.place.browser.remoteProject?.projectId ?? this.place.browser.projectId,
+      projectGitUrl: this.place.browser.remoteProject?.cloneUrl,
       worktree: this.place.worktree,
       baseRef: this.place.baseRef,
       worktreeName: this.place.worktreeName,
       cwd: this.place.folder,
       workspace: this.place.workspacePath(),
-      catalogId: snapshot.data?.catalogId,
+      catalogId: this.read().data?.catalogId,
       category: this.gateway.resolvedGroupCategory(),
     });
   }
@@ -260,14 +252,18 @@ export class DraftSubmissionFlow {
   ): SessionMethodAccess {
     const gateway = this.read().context?.gateway.snapshot;
     const pendingPlacement = Boolean(this.pendingPlacement.sessionKey);
-    const remoteProject = this.place.browser.remoteProject;
+    const target = this.placement().target;
+    const hasInitialTurn = this.messageValue.trim() || this.attachmentDraft.attachments.length;
+    const remoteProject = target || !hasInitialTurn ? this.place.browser.remoteProject : null;
     if (!pendingPlacement && remoteProject && !remoteProject.projectId) {
-      return readSessionMethodAccess(gateway, {
+      const projectAccess = readSessionMethodAccess(gateway, {
         method: "projects.add",
         requiredScope: "operator.write",
       });
+      if (!projectAccess.allowed) {
+        return projectAccess;
+      }
     }
-    const target = this.placement().target;
     if (!target || !pendingPlacement || this.pendingPlacement.phase === "creating") {
       const createAccess = readSessionMethodAccess(gateway, {
         method: "sessions.create",
@@ -320,7 +316,7 @@ export class DraftSubmissionFlow {
         pendingPlacement: this.pendingPlacement,
         submitting: this.submittingValue,
         message: this.messageValue,
-        submissionOutcomeUnknown: this.submissionOutcomeUnknownValue,
+        submissionOutcomeUnknown: this.submissionOutcomeUnknown,
         pendingAttachmentReads: this.attachmentDraft.pendingReads,
         hasDraftAttachments: this.attachmentDraft.attachments.length > 0,
         hasCapabilityOverrides: this.capabilities.toolOverrides !== null,
@@ -366,7 +362,7 @@ export class DraftSubmissionFlow {
       (outcomeUnknown && this.submittingValue && !this.sessionStartup.interrupt()) ||
       this.sessionStartup.retireChangedOwner()
     ) {
-      this.submissionOutcomeUnknownValue = outcomeUnknown;
+      this.submissionOutcomeUnknown = outcomeUnknown;
     }
     this.submittingValue = false;
     this.callbacks.requestUpdate();
@@ -377,8 +373,8 @@ export class DraftSubmissionFlow {
     const preservePendingPlacement = Boolean(this.pendingPlacement.sessionKey);
     this.blockedSubmitGate = null;
     this.invalidate();
-    this.submissionOutcomeUnknownValue = preservePendingPlacement
-      ? (this.submissionOutcomeUnknownValue ?? "placement-interrupted")
+    this.submissionOutcomeUnknown = preservePendingPlacement
+      ? (this.submissionOutcomeUnknown ?? "placement-interrupted")
       : null;
     this.visibilityValue = "normal";
     this.capabilities.reset();
@@ -404,22 +400,21 @@ export class DraftSubmissionFlow {
 
   clearPendingPlacementRecovery() {
     this.pendingPlacement.clear();
-    this.submissionOutcomeUnknownValue = null;
+    this.submissionOutcomeUnknown = null;
     this.callbacks.requestUpdate();
   }
 
   releasePendingPlacementOwner() {
     this.pendingPlacement.reset();
-    this.submissionOutcomeUnknownValue = null;
+    this.submissionOutcomeUnknown = null;
     this.callbacks.requestUpdate();
   }
 
   restorePendingPlacementRecovery(gatewayUrl: string, recoveryScope: string) {
     const recovery = this.pendingPlacement.restore(gatewayUrl, recoveryScope);
-    if (!recovery) {
-      return;
+    if (recovery) {
+      this.applyRecoveryDraft(recovery);
     }
-    this.applyRecoveryDraft(recovery);
   }
 
   async submit(startup?: { params: SessionCreateParams; startedAt: number }) {
@@ -467,7 +462,12 @@ export class DraftSubmissionFlow {
         return;
       }
       this.startedSession.current = null;
-      const remoteProject = pendingPlacement || startup ? null : this.place.browser.remoteProject;
+      const placementTarget = startup ? null : this.placement().target;
+      const hasInitialTurn = message || apiAttachments?.length;
+      const remoteProject =
+        !startup && !pendingPlacement && (placementTarget || !hasInitialTurn)
+          ? this.place.browser.remoteProject
+          : null;
       if (remoteProject && !remoteProject.projectId && !this.place.browser.projectId) {
         const project = await submissionClient.request<ProjectsAddResult>(
           "projects.add",
@@ -479,7 +479,6 @@ export class DraftSubmissionFlow {
         }
         this.place.browser.recordRemoteProjectId(remoteProject.cloneUrl, project.id);
       }
-      const placementTarget = startup ? null : this.placement().target;
       const createParams =
         startup?.params ??
         this.buildDraftSessionCreateParams({
@@ -592,7 +591,7 @@ export class DraftSubmissionFlow {
         context.placementStartup.start({
           recovery,
           persistRecovery: this.pendingPlacement.persistent,
-          recovering: pendingPlacement,
+          recovering: submissionPlacementRecovery.phase !== "creating",
           createdAt: submittedAt,
         });
         const ownsStartedPlacement = () =>
@@ -634,7 +633,7 @@ export class DraftSubmissionFlow {
           result.key,
           { text: message, attachments, createdAt: submittedAt, ...(sender ? { sender } : {}) },
           submissionClient,
-          { runId: result.initialRun.runId, messageSeq: result.initialRun.messageSeq },
+          { runId: result.initialRun.runId },
         );
       }
       await this.draftPersistence.clearSubmittedDraft();

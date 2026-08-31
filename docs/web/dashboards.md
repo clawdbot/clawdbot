@@ -24,6 +24,8 @@ the most recently updated thread first. Open any row to go directly to that
 thread's `/dashboard/<agent>/<sessionRef>` URL. An open Dashboards page updates
 as threads are renamed, archived, deleted, or switched between Chat and
 Dashboard, including after a Gateway reconnect.
+If a refresh fails, the page keeps the last loaded dashboards visible with a
+stale-data warning. Choose **Retry** to load the list again.
 
 Use **Open dashboard in focus mode** on a row to open its board as a standalone
 browser document at `/focus/dashboard/<agent>/<sessionRef>`, with no sidebar,

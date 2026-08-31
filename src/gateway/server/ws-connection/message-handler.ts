@@ -13,6 +13,10 @@ import {
   validateConnectParams,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_RESTART_UNAVAILABLE_REASON,
+  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+} from "../../../../packages/gateway-protocol/src/restart-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import {
   releaseNodePairingCleanupClaim,
@@ -376,7 +380,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
         return;
       }
-      await authenticatedRequestDispatcher.dispatch(parsed, client);
+      await authenticatedRequestDispatcher.dispatch(parsed, client, rawDataByteLength(data));
     } catch (err) {
       await releasePendingNodePairingCleanup();
       logGateway.error(`parse/handle error: ${String(err)}`);
@@ -430,7 +434,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
 
     const restartDraining = isGatewayRestartDraining();
-    const reason = restartDraining ? "gateway-restarting" : "gateway-suspending";
+    const reason = restartDraining
+      ? GATEWAY_RESTART_UNAVAILABLE_REASON
+      : GATEWAY_SUSPEND_UNAVAILABLE_REASON;
     const operation = restartDraining ? "restart" : "suspension";
     const phase = getGatewaySuspendAdmissionPhase();
     setLastFrameMeta({ type: "req", method: "connect", id: parsed.id });

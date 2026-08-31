@@ -7,6 +7,7 @@ import {
   resolveHeartbeatPhaseMs,
   resolveHeartbeatSchedulerSeed,
 } from "../infra/heartbeat-schedule.js";
+import type { CronService } from "./service.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
 const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
@@ -20,6 +21,12 @@ export type HeartbeatMonitorChange =
 export type HeartbeatMonitorPlan = {
   specs: HeartbeatMonitorSpec[];
   changes: HeartbeatMonitorChange[];
+};
+
+type HeartbeatMonitorReconcileResult = {
+  ok: boolean;
+  applied: HeartbeatMonitorChange[];
+  failures: Array<{ change?: HeartbeatMonitorChange; error: unknown }>;
 };
 
 function heartbeatMonitorDeclarationKey(agentId: string): string {
@@ -136,4 +143,64 @@ export function resolveHeartbeatMonitorPlan(
     changes.push({ kind: "remove", agentId, job });
   }
   return { specs, changes };
+}
+
+/** Applies the canonical heartbeat monitor plan while isolating per-row failures. */
+export async function applyHeartbeatMonitorJobs(params: {
+  cron: Pick<CronService, "add" | "list" | "remove">;
+  cfg: OpenClawConfig;
+  schedulerSeed?: string;
+  logger?: { warn: (obj: unknown, msg?: string) => void };
+  commitGuard?: () => void;
+}): Promise<HeartbeatMonitorReconcileResult> {
+  let jobs: CronJob[];
+  try {
+    jobs = await params.cron.list({ includeDisabled: true });
+  } catch (error) {
+    params.logger?.warn({ err: String(error) }, "cron-heartbeat: monitor inventory failed");
+    return { ok: false, applied: [], failures: [{ error }] };
+  }
+  params.commitGuard?.();
+
+  const { changes } = resolveHeartbeatMonitorPlan(params.cfg, jobs, {
+    schedulerSeed: params.schedulerSeed,
+  });
+  const applied: HeartbeatMonitorChange[] = [];
+  const failures: HeartbeatMonitorReconcileResult["failures"] = [];
+  for (const change of changes) {
+    try {
+      if (change.kind === "remove") {
+        await params.cron.remove(change.job.id, {
+          systemOwned: true,
+          ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+        });
+      } else {
+        await params.cron.add(change.input, {
+          ...heartbeatMonitorAddOptions(change.agentId),
+          ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
+        });
+      }
+      applied.push(change);
+    } catch (error) {
+      params.commitGuard?.();
+      failures.push({ change, error });
+      params.logger?.warn(
+        { agentId: change.agentId, err: String(error) },
+        change.kind === "remove"
+          ? "cron-heartbeat: stale monitor cleanup failed"
+          : "cron-heartbeat: monitor convergence failed",
+      );
+    }
+  }
+  return { ok: failures.length === 0, applied, failures };
+}
+
+/** Gateway-facing reconciliation keeps the established compact result contract. */
+export async function reconcileHeartbeatMonitorJobs(
+  params: Parameters<typeof applyHeartbeatMonitorJobs>[0] & {
+    logger: { warn: (obj: unknown, msg?: string) => void };
+  },
+): Promise<{ ok: boolean }> {
+  const { ok } = await applyHeartbeatMonitorJobs(params);
+  return { ok };
 }

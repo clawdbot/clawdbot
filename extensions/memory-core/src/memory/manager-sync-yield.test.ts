@@ -76,13 +76,13 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
 });
 
 vi.mock("./embeddings.js", () => ({
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,
   createEmbeddingProvider: vi.fn(),
 }));
 
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
@@ -124,11 +124,10 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     pollIntervalMs: 0,
     timeoutMs: 0,
   };
-  protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
   protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected db = createDbMock();
+  protected publishedDatabase = new MemoryIndexDatabase(createDbMock());
 
   readonly indexedPaths: string[] = [];
   private corpusFiles: string[] = [];
@@ -200,11 +199,10 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 
 class EmbeddingCacheSeedHarness extends SessionSyncYieldHarness {
   protected override readonly cache = { enabled: true };
-  protected override db: DatabaseSync;
 
   constructor(db: DatabaseSync) {
     super(() => {});
-    this.db = db;
+    this.publishedDatabase = new MemoryIndexDatabase(db);
   }
 
   async seedCache(sourceDb: DatabaseSync): Promise<void> {

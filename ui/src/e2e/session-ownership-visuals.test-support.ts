@@ -1,4 +1,8 @@
+import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
+import { expect } from "vitest";
+
+export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 type AvatarFixture = {
   id: string;
@@ -47,4 +51,57 @@ export async function avatarLabelCenterDelta(row: Locator) {
       avatarBounds.top + avatarBounds.height / 2 - (labelBounds.top + labelBounds.height / 2),
     );
   });
+}
+
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(owner.artifactDir, "drafts-ux", fileName),
+  });
+}
+
+export async function captureSessionOwnerProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await page.locator(".sidebar-sessions").screenshot({
+    animations: "disabled",
+    path: path.join(owner.artifactDir, "session-owner-stack", fileName),
+  });
+}
+
+export async function captureSessionOwnerPageProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(owner.artifactDir, "session-owner-stack", fileName),
+  });
+}
+
+export async function openSidebarSortMenu(page: Page) {
+  const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+  await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
+  await filterAndSort.click();
+  const menu = page.locator(".sidebar-session-sort-menu");
+  await menu.waitFor();
+  return menu;
 }

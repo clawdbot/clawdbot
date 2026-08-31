@@ -234,7 +234,7 @@ describe("doctor command", () => {
     expect(warned).toBe(true);
   });
 
-  it("warns when a legacy Codex provider override shadows configured Codex OAuth", async () => {
+  it("migrates a legacy Codex provider before checking configured Codex OAuth", async () => {
     mockCodexProviderSnapshot({
       provider: {
         api: "openai-responses",
@@ -246,10 +246,13 @@ describe("doctor command", () => {
 
     await runDoctorNonInteractive();
 
-    expect(hasCodexOAuthWarning("models.providers.openai-codex")).toBe(true);
+    requireTerminalNote({
+      messageIncludes: "Moved models.providers.openai-codex → models.providers.openai.",
+    });
+    expect(hasCodexOAuthWarning()).toBe(false);
   });
 
-  it("warns when a legacy Codex provider override shadows stored Codex OAuth", async () => {
+  it("migrates a legacy Codex provider before checking stored Codex OAuth", async () => {
     mockCodexProviderSnapshot({
       provider: {
         api: "openai-responses",
@@ -262,10 +265,13 @@ describe("doctor command", () => {
 
     await runDoctorNonInteractive();
 
-    expect(hasCodexOAuthWarning("models.providers.openai-codex")).toBe(true);
+    requireTerminalNote({
+      messageIncludes: "Moved models.providers.openai-codex → models.providers.openai.",
+    });
+    expect(hasCodexOAuthWarning()).toBe(false);
   });
 
-  it("warns when an inline OpenAI model keeps the legacy OpenAI transport", async () => {
+  it("migrates an inline legacy OpenAI model before checking Codex OAuth", async () => {
     mockCodexProviderSnapshot({
       provider: {
         models: [
@@ -281,7 +287,10 @@ describe("doctor command", () => {
 
     await runDoctorNonInteractive();
 
-    expect(hasCodexOAuthWarning("legacy transport override")).toBe(true);
+    requireTerminalNote({
+      messageIncludes: "Moved models.providers.openai-codex → models.providers.openai.",
+    });
+    expect(hasCodexOAuthWarning()).toBe(false);
   });
 
   it("does not warn for a custom OpenAI proxy override", async () => {
