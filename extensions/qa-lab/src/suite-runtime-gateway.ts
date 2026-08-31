@@ -119,6 +119,8 @@ async function waitForConfigRestartSettle(
 }
 
 function formatGatewayPrimaryErrorText(error: unknown) {
+  // The persistent QA client flattens low-level closes and appends child logs,
+  // so the public one-shot gateway guards cannot recover a typed close here.
   const text = formatErrorMessage(error);
   const gatewayLogsIndex = text.indexOf("\nGateway logs:");
   return (gatewayLogsIndex >= 0 ? text.slice(0, gatewayLogsIndex) : text).trim();

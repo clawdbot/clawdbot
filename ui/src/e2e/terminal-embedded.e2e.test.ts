@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -13,6 +16,27 @@ const deadSessionScreenshotPath = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCR
 const deadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
 
 suite.define(() => {
+  it("returns from an unavailable focused terminal", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}dashboards`);
+      await page.locator("openclaw-app-shell").waitFor();
+      await page.goto(`${suite.server.baseUrl}?view=terminal`);
+
+      await page.waitForURL(`${suite.server.baseUrl}focus/terminal`);
+      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+      expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
+
+      await page
+        .getByText("The terminal is not available on this gateway.", { exact: true })
+        .waitFor();
+      const back = page.getByRole("button", { name: "Back", exact: true });
+      await back.waitFor();
+      await back.click();
+      await page.waitForURL(`${suite.server.baseUrl}dashboards`);
+    });
+  });
+
   it("fences an SW-less stale build before it can restore an ownerless terminal", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gatewayUrl = suite.server.baseUrl.replace(/^http/u, "ws");
@@ -27,7 +51,7 @@ suite.define(() => {
         };
       }, gatewayUrl);
       const gateway = await installMockGateway(page, {
-        featureMethods: ["terminal.open"],
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         serverBuildId: "replacement-build",
         terminalEnabled: true,
       });
@@ -67,7 +91,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         assistantAgentId: "main",
         controlUiBuildSource: "configured",
-        featureMethods: ["terminal.open"],
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         methodResponses: {
           "terminal.open": {
             agentId: "main",
@@ -113,7 +137,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         assistantAgentId: "main",
         defaultAgentId: "main",
-        featureMethods: ["terminal.open"],
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         methodResponses: {
           "agents.list": {
             agents: [
@@ -123,6 +147,21 @@ suite.define(() => {
             defaultId: "main",
             mainKey: "main",
             scope: "agent",
+          },
+          // The startup projection owns the roster when chat.startup is
+          // advertised, so the second agent must arrive through it.
+          "chat.startup": {
+            agentsList: {
+              agents: [
+                { id: "main", identity: { name: "Main" }, name: "Main" },
+                { id: "research", identity: { name: "Research" }, name: "Research" },
+              ],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            messages: [],
+            sessionId: "terminal-selection-e2e-session",
           },
           "terminal.open": {
             agentId: "research",
@@ -137,7 +176,7 @@ suite.define(() => {
 
       expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
       await gateway.waitForRequest("connect");
-      await gateway.waitForRequest("agents.list");
+      await gateway.waitForRequest("chat.startup");
       await page.waitForFunction(() => {
         const panel = document.querySelector("openclaw-terminal-panel") as
           | (HTMLElement & { available: boolean })
@@ -191,7 +230,7 @@ suite.define(() => {
       });
       const gateway = await installMockGateway(page, {
         deferredMethods: ["connect"],
-        featureMethods: ["terminal.open"],
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         methodResponses: {
           "terminal.list": { sessions: [] },
           "terminal.open": {
@@ -205,7 +244,7 @@ suite.define(() => {
         terminalEnabled: true,
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}?view=terminal`);
+      const response = await page.goto(`${suite.server.baseUrl}focus/terminal`);
       expect(response?.status()).toBe(200);
       const connect = await gateway.waitForRequest("connect");
 
@@ -219,23 +258,27 @@ suite.define(() => {
         cols: expect.any(Number),
         rows: expect.any(Number),
       });
-      const colorQueries = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\";
+      const colorQueries = "\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b]12;?\u001b\\";
       await gateway.emitGatewayEvent("terminal.data", {
         sessionId: "terminal-e2e",
         seq: colorQueries.length,
         data: colorQueries,
       });
-      await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(2);
-      expect((await gateway.getRequests("terminal.input")).map(({ params }) => params)).toEqual([
-        {
+      await expect.poll(async () => (await gateway.getRequests("terminal.input")).length).toBe(3);
+      const themeColors = await page.evaluate(() => {
+        const styles = getComputedStyle(document.documentElement);
+        return ["--text", "--bg", "--accent"].map((property) =>
+          styles.getPropertyValue(property).trim(),
+        );
+      });
+      expect((await gateway.getRequests("terminal.input")).map(({ params }) => params)).toEqual(
+        themeColors.map((color, index) => ({
           sessionId: "terminal-e2e",
-          data: "\u001b]10;rgb:1b1b/1e1e/2626\u001b\\",
-        },
-        {
-          sessionId: "terminal-e2e",
-          data: "\u001b]11;rgb:f7f7/f8f8/fafa\u001b\\",
-        },
-      ]);
+          data: `\u001b]${index + 10};rgb:${[1, 3, 5]
+            .map((offset) => color.slice(offset, offset + 2).repeat(2))
+            .join("/")}\u001b\\`,
+        })),
+      );
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
       expect(await page.locator("openclaw-terminal-panel").count()).toBe(1);
       const closeControlMetrics = await page
@@ -318,7 +361,7 @@ suite.define(() => {
         });
         const gateway = await installMockGateway(page, {
           deferredMethods: ["connect"],
-          featureMethods: ["terminal.open"],
+          featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
           methodResponses: {
             "terminal.list": { sessions: [] },
             "terminal.open": {
@@ -332,7 +375,7 @@ suite.define(() => {
           terminalEnabled: true,
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}?view=terminal`);
+        const response = await page.goto(`${suite.server.baseUrl}focus/terminal`);
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");

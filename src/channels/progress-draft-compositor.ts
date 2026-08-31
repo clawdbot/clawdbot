@@ -22,6 +22,7 @@ import {
   type AgentPlanStep,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftText,
+  isChannelProgressAttentionLine,
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
@@ -60,6 +61,8 @@ type ChannelProgressDraftUpdateOptions = {
 
 /** Creates a stateful compositor for one streaming channel reply. */
 export function createChannelProgressDraftCompositor(params: {
+  /** Show authored milestones and attention instead of a rolling tool log. */
+  presentation?: "summary";
   entry: StreamingCompatEntry | null | undefined;
   mode: ChannelProgressDraftMode;
   active: boolean;
@@ -180,6 +183,7 @@ export function createChannelProgressDraftCompositor(params: {
     const linesRenderedByChannel =
       params.rendersRollingLinesNatively === true && Boolean(narration || planSteps?.length);
     return formatChannelProgressDraftText({
+      presentation: params.presentation,
       entry: params.entry,
       lines: linesRenderedByChannel ? [] : draftLines,
       seed: params.seed,
@@ -286,6 +290,32 @@ export function createChannelProgressDraftCompositor(params: {
     clearTimeoutFn,
   });
 
+  const startAndRender = async (options?: { flush?: boolean }): Promise<boolean> => {
+    const alreadyStarted = gate.hasStarted;
+    if (!alreadyStarted) {
+      lastStartRendered = false;
+    }
+    await gate.startNow();
+    if (!gate.hasStarted) {
+      return false;
+    }
+    // Startup already rendered; preserve its acceptance without publishing twice.
+    return alreadyStarted ? await render(options) : lastStartRendered;
+  };
+
+  const renderAfterRetraction = async (): Promise<boolean> => {
+    if (!gate.hasStarted) {
+      return false;
+    }
+    const rendered = await render();
+    if (rendered || formatDraftText()) {
+      return rendered;
+    }
+    lastRenderedText = "";
+    await params.deleteCurrent?.();
+    return true;
+  };
+
   /**
    * Commentary line identity. An explicit item id owns its line. Without one,
    * providers stream cumulative snapshots ("Checking" → "Checking the
@@ -318,19 +348,19 @@ export function createChannelProgressDraftCompositor(params: {
   const clearLine = async (lineId: string) => {
     const nextLines = removeChannelProgressDraftLine(lines, lineId);
     if (nextLines === lines) {
-      return;
+      return false;
     }
     lines = nextLines;
     if (!gate.hasStarted) {
-      return;
+      return false;
     }
     const text = formatDraftText();
     if (text) {
-      await render();
-      return;
+      return await render();
     }
     lastRenderedText = "";
     await params.deleteCurrent?.();
+    return true;
   };
 
   const noteProgress = async (
@@ -354,7 +384,12 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     }
     const progressLine = typeof line === "object" && line !== undefined ? line : normalized;
-    const shouldStoreLine = previewToolProgressEnabled;
+    const summary = params.presentation === "summary";
+    const needsAttention = isChannelProgressAttentionLine(progressLine);
+    if (summary && !needsAttention && typeof line === "object" && line.id) {
+      lines = removeChannelProgressDraftLine(lines, line.id);
+    }
+    const shouldStoreLine = summary ? needsAttention : previewToolProgressEnabled;
     const nextLines = shouldStoreLine
       ? mergeChannelProgressDraftLine(lines, progressLine, {
           maxLines: resolveChannelProgressDraftMaxLines(params.entry),
@@ -368,10 +403,9 @@ export function createChannelProgressDraftCompositor(params: {
     if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender && !diffStatChanged) {
       return false;
     }
-    // A work line lands between reasoning bursts: commit the current thinking
-    // line so the next thought appends as its own line, interleaved with tools
-    // in arrival order, instead of replacing the prior thought.
-    if (shouldStoreLine && lineChanged) {
+    // Work delimits reasoning bursts even when summary presentation hides its
+    // row; otherwise unrelated thoughts are concatenated as one streamed delta.
+    if (summary || (shouldStoreLine && lineChanged)) {
       reasoningRawText = "";
       lastReasoningLine = undefined;
     }
@@ -390,16 +424,8 @@ export function createChannelProgressDraftCompositor(params: {
     if (params.mode !== "progress") {
       return shouldStoreLine ? await publish() : false;
     }
-    if (options?.startImmediately || params.shouldStartNow?.(line)) {
-      const alreadyStarted = gate.hasStarted;
-      if (!alreadyStarted) {
-        lastStartRendered = false;
-      }
-      await gate.startNow();
-      if (!gate.hasStarted) {
-        return false;
-      }
-      return alreadyStarted ? await render() : lastStartRendered;
+    if (options?.startImmediately || params.shouldStartNow?.(line) || (summary && needsAttention)) {
+      return await startAndRender(summary && needsAttention ? { flush: true } : undefined);
     }
     const alreadyStarted = gate.hasStarted;
     const progressActive = await gate.noteWork();
@@ -491,15 +517,8 @@ export function createChannelProgressDraftCompositor(params: {
         return false;
       }
       if (options?.startImmediately) {
-        const alreadyStarted = gate.hasStarted;
-        if (!alreadyStarted) {
-          lastStartRendered = false;
-        }
-        await gate.startNow();
-        if (!gate.hasStarted) {
-          return false;
-        }
-        return alreadyStarted ? await render({ flush: true }) : lastStartRendered;
+        // Explicit activity flushes even after startup; other updates can batch.
+        return await startAndRender({ flush: true });
       }
       const alreadyStarted = gate.hasStarted;
       const progressActive = await gate.noteWork();
@@ -510,6 +529,14 @@ export function createChannelProgressDraftCompositor(params: {
     },
     pushToolProgress: noteProgress,
     ...progressEventHandlers,
+    async pushApprovalEvent(
+      payload: Parameters<typeof progressEventHandlers.pushApprovalEvent>[0],
+    ) {
+      if (params.presentation === "summary" && payload.phase === "resolved" && payload.approvalId) {
+        return await clearLine(`approval:${payload.approvalId}`);
+      }
+      return await progressEventHandlers.pushApprovalEvent(payload);
+    },
     async pushPlanProgress(
       steps?: AgentPlanStep[],
       options?: { explanation?: string },
@@ -526,26 +553,9 @@ export function createChannelProgressDraftCompositor(params: {
       planSteps = steps && steps.length > 0 ? steps.map((entry) => ({ ...entry })) : undefined;
       planExplanation = options?.explanation?.replace(/\s+/g, " ").trim() ?? "";
       if (!planSteps && !planExplanation) {
-        if (!gate.hasStarted) {
-          return false;
-        }
-        const rendered = await render();
-        if (rendered || formatDraftText()) {
-          return rendered;
-        }
-        lastRenderedText = "";
-        await params.deleteCurrent?.();
-        return true;
+        return await renderAfterRetraction();
       }
-      const alreadyStarted = gate.hasStarted;
-      if (!alreadyStarted) {
-        lastStartRendered = false;
-      }
-      await gate.startNow();
-      if (!gate.hasStarted) {
-        return false;
-      }
-      return alreadyStarted ? await render() : lastStartRendered;
+      return await startAndRender();
     },
     async pushPreambleHeadline(text?: string, options?: { itemId?: string }) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {
@@ -577,16 +587,7 @@ export function createChannelProgressDraftCompositor(params: {
         preambleItemId = undefined;
         preambleAt = undefined;
         clearPreambleExpiryTimer();
-        if (!gate.hasStarted) {
-          return false;
-        }
-        const rendered = await render();
-        if (rendered || formatDraftText()) {
-          return rendered;
-        }
-        lastRenderedText = "";
-        await params.deleteCurrent?.();
-        return true;
+        return await renderAfterRetraction();
       }
       const isNewPreambleItem = Boolean(itemId && itemId !== preambleItemId);
       if (isNewPreambleItem) {
@@ -635,6 +636,7 @@ export function createChannelProgressDraftCompositor(params: {
         params.mode !== "progress" ||
         !text ||
         progressSuppressed ||
+        finalReplyStarted ||
         finalReplyDelivered ||
         !thinkingProgressEnabled
       ) {
@@ -654,13 +656,27 @@ export function createChannelProgressDraftCompositor(params: {
       const displayLine = `${reasoningLinePrefix}${compactLine}`;
       // Reasoning streams usually arrive as deltas. Replace the previous
       // reasoning line so the draft stays compact instead of appending noise.
-      const priorIndex =
-        lastReasoningLine === undefined ? -1 : lines.lastIndexOf(lastReasoningLine);
-      if (priorIndex >= 0) {
-        lines = [...lines];
-        lines[priorIndex] = displayLine;
+      if (params.presentation === "summary") {
+        lines = mergeChannelProgressDraftLine(
+          lines,
+          {
+            id: "reasoning",
+            kind: "item",
+            text: stripLaneItalics(compactLine),
+            label: "Reasoning",
+            prefix: false,
+          },
+          { maxLines: resolveChannelProgressDraftMaxLines(params.entry) },
+        );
       } else {
-        lines = [...lines, displayLine].slice(-resolveChannelProgressDraftMaxLines(params.entry));
+        const priorIndex =
+          lastReasoningLine === undefined ? -1 : lines.lastIndexOf(lastReasoningLine);
+        if (priorIndex >= 0) {
+          lines = [...lines];
+          lines[priorIndex] = displayLine;
+        } else {
+          lines = [...lines, displayLine].slice(-resolveChannelProgressDraftMaxLines(params.entry));
+        }
       }
       lastReasoningLine = displayLine;
       const progressActive = await gate.noteWork();
@@ -709,15 +725,7 @@ export function createChannelProgressDraftCompositor(params: {
         lastIdLessCommentaryId = lineId;
         lastIdLessCommentaryBare = bareNormalized;
       }
-      const alreadyStarted = gate.hasStarted;
-      if (!alreadyStarted) {
-        lastStartRendered = false;
-      }
-      await gate.startNow();
-      if (!gate.hasStarted) {
-        return false;
-      }
-      return alreadyStarted ? await render() : lastStartRendered;
+      return await startAndRender();
     },
   };
 }

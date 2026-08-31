@@ -154,7 +154,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       provider: "openai",
       model: "gpt-image-1",
       count: 1,
-      paths: ["/tmp/qa-lighthouse.png"],
       wakeResult: "generated",
     }));
 
@@ -201,19 +200,12 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     try {
       const scheduled: Array<() => Promise<void>> = [];
       let resolveRun:
-        | ((value: {
-            provider: string;
-            model: string;
-            count: number;
-            paths: string[];
-            wakeResult: string;
-          }) => void)
+        | ((value: { provider: string; model: string; count: number; wakeResult: string }) => void)
         | undefined;
       const runPromise = new Promise<{
         provider: string;
         model: string;
         count: number;
-        paths: string[];
         wakeResult: string;
       }>((resolve) => {
         resolveRun = resolve;
@@ -261,7 +253,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
       });
       await task;
@@ -318,7 +309,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
           provider: "openai",
           model: "gpt-image-1",
           count: 1,
-          paths: ["/tmp/proof.png"],
           wakeResult: "generated",
         };
       },
@@ -336,7 +326,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         count: 1,
-        paths: ["/tmp/proof.png"],
         terminalResult: undefined,
       }),
     );
@@ -365,14 +354,17 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
       }),
     });
 
     await scheduled[0]?.();
 
-    expect(detachedTaskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledOnce();
+    expect(detachedTaskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalSummary: "Generated 1 image with openai/gpt-image-1.",
+      }),
+    );
     expect(
       cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle,
     ).toHaveBeenCalledWith(sessionKey);
@@ -407,7 +399,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
         mediaUrls: ["/tmp/proof.png"],
       }),
@@ -458,7 +449,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
           provider: "openai",
           model: "gpt-image-1",
           count: 1,
-          paths: ["/tmp/proof.png"],
           wakeResult: "generated",
         }),
       });
@@ -519,7 +509,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
           provider: "openai",
           model: "gpt-image-1",
           count: 1,
-          paths: ["/tmp/proof.png"],
           wakeResult: "generated",
         }),
       });
@@ -572,7 +561,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
           provider: "openai",
           model: "gpt-image-1",
           count: 1,
-          paths: ["/tmp/proof.png"],
           wakeResult: "generated",
         }),
       });
@@ -625,7 +613,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
       }),
     });
@@ -642,7 +629,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         count: 1,
-        paths: ["/tmp/proof.png"],
         terminalResult: {
           terminalOutcome: "blocked",
           terminalSummary:
@@ -684,7 +670,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
       }),
     });
@@ -702,7 +687,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         count: 1,
-        paths: ["/tmp/proof.png"],
         terminalResult: {
           terminalOutcome: "blocked",
           terminalSummary:
@@ -747,7 +731,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
         mediaUrls: ["/tmp/proof.png"],
       }),
@@ -796,7 +779,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         provider: "openai",
         model: "gpt-image-1",
         count: 1,
-        paths: ["/tmp/proof.png"],
         wakeResult: "generated",
       }),
     });

@@ -13,6 +13,7 @@ function collectProviderApiKeyAssignment(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
   contract: Record<string, unknown>;
+  ownerId: string;
   active?: boolean;
   inactiveReason?: string;
 }): void {
@@ -26,7 +27,7 @@ function collectProviderApiKeyAssignment(params: {
     inactiveReason: params.inactiveReason,
     owner: {
       ownerKind: "capability",
-      ownerId: "tts",
+      ownerId: params.ownerId,
       requiredForGateway: false,
       disposition: "isolate",
       contract: params.contract,
@@ -37,10 +38,13 @@ function collectProviderApiKeyAssignment(params: {
   });
 }
 
-/** Collects provider API key SecretRefs from a TTS config block. */
+type ProviderSecretOwnerId = string | ((providerId: string) => string);
+
+/** Collects provider API key SecretRefs from a TTS-compatible provider config block. */
 export function collectTtsApiKeyAssignments(params: {
   tts: Record<string, unknown>;
   pathPrefix: string;
+  ownerId?: ProviderSecretOwnerId;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
   active?: boolean;
@@ -59,6 +63,10 @@ export function collectTtsApiKeyAssignments(params: {
         defaults: params.defaults,
         context: params.context,
         contract: params.tts,
+        ownerId:
+          typeof params.ownerId === "function"
+            ? params.ownerId(providerId)
+            : (params.ownerId ?? "tts"),
         active: params.active,
         inactiveReason: params.inactiveReason,
       });

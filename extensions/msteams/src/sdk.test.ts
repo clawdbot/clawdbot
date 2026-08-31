@@ -229,17 +229,58 @@ describe("createMSTeamsApp", () => {
     expect(readSecretFile).toHaveBeenCalledWith("/path/to/cert.pem", "Microsoft Teams certificate");
   });
 
+  it.each([
+    {
+      label: "certificate",
+      credentials: {
+        type: "federated" as const,
+        appId: "test-app-id",
+        tenantId: "test-tenant",
+        certificatePath: "/path/to/cert.pem",
+      },
+      expected: { clientId: "test-app-id", token: expect.any(Function) },
+    },
+    {
+      label: "managed identity",
+      credentials: {
+        type: "federated" as const,
+        appId: "test-app-id",
+        tenantId: "test-tenant",
+        useManagedIdentity: true,
+      },
+      expected: {
+        clientId: "test-app-id",
+        managedIdentityClientId: "system",
+        managedIdentityType: "system",
+      },
+    },
+  ])("prevents ambient CLIENT_SECRET from overriding $label authentication", async (mode) => {
+    vi.stubEnv("CLIENT_SECRET", "ambient-secret-must-not-win");
+
+    const app = await createMSTeamsApp(mode.credentials);
+    const credentials = (app as unknown as { credentials?: Record<string, unknown> }).credentials;
+
+    expect(credentials).toMatchObject(mode.expected);
+    expect(credentials).not.toHaveProperty("clientSecret");
+  });
+
   it("throws when certificate file is missing", async () => {
-    readSecretFile.mockRejectedValue(new Error("ENOENT: no such file"));
+    const certificatePath = "/private/msteams-race-sensitive-certificate.pem";
+    readSecretFile.mockRejectedValue(new Error(`ENOENT: no such file, open '${certificatePath}'`));
 
     const creds: MSTeamsFederatedCredentials = {
       type: "federated",
       appId: "test-app-id",
       tenantId: "test-tenant",
-      certificatePath: "/bad/path.pem",
+      certificatePath,
     };
 
-    await expect(createMSTeamsApp(creds)).rejects.toThrow("Failed to read certificate file");
+    const error = await createMSTeamsApp(creds).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    if (error instanceof Error) {
+      expect(error.message).toContain("Failed to read certificate file");
+      expect(error.message).not.toContain(certificatePath);
+    }
   });
 
   it("creates app with managed identity credentials", async () => {

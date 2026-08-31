@@ -1,0 +1,105 @@
+{
+  "id": "imap",
+  "name": "IMAP email trigger",
+  "description": "Watch IMAP mailboxes and dispatch authenticated incoming email to isolated agent sessions.",
+  "activation": { "onStartup": true },
+  "enabledByDefault": false,
+  "configContracts": {
+    "secretInputs": {
+      "bundledDefaultEnabled": false,
+      "paths": [
+        { "path": "accounts.*.password", "expected": "string", "ownerKind": "route" }
+      ]
+    },
+    "dangerousFlags": [
+      { "path": "accounts.*.senderAuth.acceptTrustedAuthservId", "equals": true },
+      { "path": "accounts.*.senderAuth.min", "equals": "unverified" },
+      { "path": "accounts.*.senderAuth.min", "equals": "mutable" }
+    ]
+  },
+  "uiHints": {
+    "accounts.*.password": { "label": "IMAP password", "sensitive": true },
+    "accounts.*.allowedSenders": {
+      "label": "Allowed senders",
+      "help": "Email addresses or @domain entries permitted to trigger the reader agent."
+    },
+    "accounts.*.agentId": { "label": "Restricted reader agent" },
+    "accounts.*.senderAuth.min": { "label": "Minimum sender authentication", "advanced": true }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "$defs": {
+      "secretRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": { "type": "string", "enum": ["env", "file", "exec", "store"] },
+          "provider": { "type": "string" },
+          "id": { "type": "string" }
+        },
+        "required": ["source", "provider", "id"]
+      },
+      "secretInput": {
+        "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
+      },
+      "senderAuth": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "min": { "type": "string", "enum": ["verified", "asserted", "unverified", "mutable"], "default": "verified" },
+          "trustedAuthservIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "acceptTrustedAuthservId": { "type": "boolean", "default": false }
+        }
+      },
+      "addressToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "token": { "type": "string", "minLength": 1 },
+          "senders": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
+        },
+        "required": ["token", "senders"]
+      },
+      "watch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": { "type": "string", "enum": ["auto", "idle", "interval"], "default": "auto" },
+          "pollSeconds": { "type": "integer", "minimum": 15, "default": 60 }
+        }
+      },
+      "account": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": { "type": "string", "minLength": 1 },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 993 },
+          "secure": { "type": "boolean", "default": true },
+          "user": { "type": "string", "minLength": 1 },
+          "password": { "$ref": "#/$defs/secretInput" },
+          "mailbox": { "type": "string", "minLength": 1, "default": "INBOX" },
+          "watch": { "$ref": "#/$defs/watch" },
+          "allowedSenders": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "senderAuth": { "$ref": "#/$defs/senderAuth" },
+          "addressTokens": { "type": "array", "items": { "$ref": "#/$defs/addressToken" } },
+          "agentId": { "type": "string", "minLength": 1 },
+          "deliver": { "type": "boolean", "default": false },
+          "includeBody": { "type": "boolean", "default": true },
+          "maxBytes": { "type": "integer", "minimum": 256, "maximum": 1048576, "default": 20000 },
+          "model": { "type": "string", "minLength": 1 },
+          "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"] },
+          "timeoutSeconds": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["host", "user", "password", "agentId"]
+      }
+    },
+    "properties": {
+      "accounts": {
+        "type": "object",
+        "propertyNames": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+        "additionalProperties": { "$ref": "#/$defs/account" }
+      }
+    }
+  }
+}

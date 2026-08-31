@@ -376,7 +376,7 @@ describe("Zalo polling media replies", () => {
     }
 
     const deliveryErrors: unknown[] = [];
-    let failedCounts: Record<"tool" | "block" | "final", number> | undefined;
+    let failedAfterSendCounts: Record<"tool" | "block" | "final", number> | undefined;
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
       async ({
         dispatcherOptions,
@@ -398,8 +398,14 @@ describe("Zalo polling media replies", () => {
           dispatcher.sendBlockReply(testCase.payload);
         }
         dispatcher.markComplete();
-        await dispatcher.waitForIdle();
-        failedCounts = dispatcher.getFailedCounts();
+        const receipt = await dispatcher.waitForIdle();
+        if (receipt) {
+          failedAfterSendCounts = {
+            tool: receipt.counts.tool.failedAfterSend,
+            block: receipt.counts.block.failedAfterSend,
+            final: receipt.counts.final.failedAfterSend,
+          };
+        }
         return {
           queuedFinal: testCase.kind === "final",
           counts: dispatcher.getQueuedCounts(),
@@ -441,7 +447,7 @@ describe("Zalo polling media replies", () => {
 
     try {
       await settleAsyncWork();
-      expect(failedCounts).toEqual({
+      expect(failedAfterSendCounts).toEqual({
         block: testCase.kind === "block" ? 1 : 0,
         tool: testCase.kind === "tool" ? 1 : 0,
         final: testCase.kind === "final" ? 1 : 0,

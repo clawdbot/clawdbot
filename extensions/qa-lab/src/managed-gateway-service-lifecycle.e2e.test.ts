@@ -1,7 +1,7 @@
 // QA Lab owns the real child/provider fixture used by the managed service proof.
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -27,10 +27,11 @@ describe("managed gateway service lifecycle product proof", () => {
       if (!provider) {
         throw new Error("mock OpenAI provider did not start");
       }
-      let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+      const gatewayOwner = createQaGatewayChild();
+      let gateway: QaGatewayChild | undefined;
       let proofFailure: Error | undefined;
       try {
-        gateway = await startQaGatewayChild({
+        gateway = await gatewayOwner.start({
           repoRoot,
           useRepoCli: true,
           providerBaseUrl: `${provider.baseUrl}/v1`,
@@ -52,7 +53,10 @@ describe("managed gateway service lifecycle product proof", () => {
       } catch (error) {
         proofFailure = error instanceof Error ? error : new Error(String(error));
       }
-      const cleanup = await Promise.allSettled([gateway?.stop(), provider.stop()]);
+      const cleanup = await Promise.allSettled([
+        gatewayOwner.stop().then(({ errors }) => expect(errors).toEqual([])),
+        provider.stop(),
+      ]);
       const cleanupFailures = cleanup.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );

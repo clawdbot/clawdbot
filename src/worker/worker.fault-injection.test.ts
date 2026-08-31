@@ -14,8 +14,10 @@ import {
   clearAgentRunContext,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { WorkerAdmissionError } from "./worker-connection-contract.js";
-import { WorkerConnectionStoppedError } from "./worker-connection.js";
+import {
+  WorkerAdmissionError,
+  WorkerConnectionStoppedError,
+} from "./worker-connection-contract.js";
 import {
   ComposedGatewayHarness,
   ENVIRONMENT_ID,
@@ -70,7 +72,7 @@ describe("cloud worker milestone 2 fault injection", () => {
   const clients: WorkerClients[] = [];
 
   beforeEach(async () => {
-    harness = await ComposedGatewayHarness.create(tempDirs.make("openclaw-worker-fault-"));
+    harness = await ComposedGatewayHarness.create(tempDirs.make("oc-wf-"));
     await harness.start();
   });
 
@@ -232,11 +234,11 @@ describe("cloud worker milestone 2 fault injection", () => {
     const commit = current.transcript.commit([transcriptMessage("restart transcript")]);
     const fencedCommit = expect(commit).rejects.toMatchObject({
       name: "WorkerAdmissionError",
-      reason: "placement-mismatch",
+      reason: "invalid-handshake",
     });
     const fencedInference = expect(inference).rejects.toMatchObject({
       name: "WorkerAdmissionError",
-      reason: "placement-mismatch",
+      reason: "invalid-handshake",
     });
     await commitEntered.promise;
     for (const delta of ["tail-a", "tail-b"]) {
@@ -258,7 +260,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       kind: "failed",
       error: expect.objectContaining({
         name: WorkerAdmissionError.name,
-        reason: "placement-mismatch",
+        reason: "invalid-handshake",
       }),
     });
     expect(harness.providerCalls).toBe(1);
@@ -361,7 +363,6 @@ describe("cloud worker milestone 2 fault injection", () => {
     const messages = SessionManager.open(harness.sessionTarget)
       .getEntries()
       .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-    expect(messages).toHaveLength(2);
     expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
     expect(harness.providerCalls).toBe(2);
     expect(

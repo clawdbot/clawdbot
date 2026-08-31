@@ -193,6 +193,7 @@ export function renderPanelTabStrip(params: {
   onNew: () => void;
   newLabel: string;
   newDisabled?: boolean;
+  newTabAction?: boolean;
   newControl?: TemplateResult | typeof nothing;
   separateTabs?: boolean;
   onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
@@ -209,6 +210,7 @@ export function renderPanelTabStrip(params: {
               slot=${slotted ? "nav" : nothing}
               class="rail-header__action tabstrip-new"
               type="button"
+              ?data-new-tab-action=${params.newTabAction}
               ?disabled=${params.newDisabled}
               title=${params.newLabel}
               aria-label=${params.newLabel}

@@ -4,7 +4,13 @@
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import {
+  calculateUsageCost,
+  normalizeModelCostConfig,
+  normalizeResolvedPricing,
+  type ModelCostConfig,
+  type RawModelCostConfig,
+} from "@openclaw/llm-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   listAgentEntries,
@@ -23,23 +29,8 @@ import {
   resolveCatalogModelPricing,
   resolveHostedModelPricing,
 } from "../model-catalog/pricing.js";
-import {
-  normalizeModelCostConfig,
-  normalizeResolvedPricing,
-  type ModelCostConfig,
-  type PricingTier,
-  type RawModelCostConfig,
-} from "./usage-format-pricing.js";
 export { formatTokenCount } from "./token-format.js";
-export type { ModelCostConfig } from "./usage-format-pricing.js";
-
-type UsageTotals = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
+export type { ModelCostConfig } from "@openclaw/llm-core";
 
 type ModelsJsonCostCache = {
   path: string;
@@ -76,7 +67,6 @@ let providerCostIndexByConfig = new WeakMap<
   ProviderCostIndexCacheEntry
 >();
 let modelKeyCache = new Map<string, string | null>();
-let sortedPricingTiersByInput = new WeakMap<PricingTier[], PricingTier[]>();
 
 /** Formats a USD amount for usage summaries, keeping tiny costs visible. */
 export function formatUsd(value?: number): string | undefined {
@@ -616,71 +606,9 @@ export function resolveModelCostConfig(params: {
   return hostedPricing ? normalizeResolvedPricing(hostedPricing) : undefined;
 }
 
-const toNumber = (value: number | undefined): number =>
-  typeof value === "number" && Number.isFinite(value) ? value : 0;
-
-function selectPricingTier(tiers: PricingTier[], input: number): PricingTier | undefined {
-  const sortedTiers = getSortedPricingTiers(tiers);
-  if (sortedTiers.length === 0) {
-    return undefined;
-  }
-  if (input <= 0) {
-    return sortedTiers[0];
-  }
-
-  for (const tier of sortedTiers) {
-    const [start, end] = tier.range;
-    if (input >= start && input < end) {
-      return tier;
-    }
-  }
-
-  for (let index = sortedTiers.length - 1; index >= 0; index -= 1) {
-    const tier = expectDefined(sortedTiers[index], "sorted tiers entry at index");
-    if (input >= tier.range[0]) {
-      return tier;
-    }
-  }
-
-  return sortedTiers[0];
-}
-
-function getSortedPricingTiers(tiers: PricingTier[]): PricingTier[] {
-  const cached = sortedPricingTiersByInput.get(tiers);
-  if (cached) {
-    return cached;
-  }
-  const sorted = tiers.toSorted((a, b) => a.range[0] - b.range[0]);
-  sortedPricingTiersByInput.set(tiers, sorted);
-  return sorted;
-}
-
-function computeTieredCost(
-  tiers: PricingTier[],
-  input: number,
-  output: number,
-  cacheRead: number,
-  cacheWrite: number,
-): number {
-  const tier = selectPricingTier(tiers, input);
-  if (!tier) {
-    return 0;
-  }
-
-  return (
-    input * tier.input +
-    output * tier.output +
-    cacheRead * tier.cacheRead +
-    cacheWrite * tier.cacheWrite
-  );
-}
-
-/**
- * Estimates USD usage cost from normalized token totals.
- * Tiered pricing selects one whole-request tier by input size; it does not blend tiers.
- */
+/** Estimates one call's USD cost; tier selection includes cached prompt tokens. */
 export function estimateUsageCost(params: {
-  usage?: NormalizedUsage | UsageTotals | null;
+  usage?: NormalizedUsage | null;
   cost?: ModelCostConfig;
 }): number | undefined {
   const usage = params.usage;
@@ -688,31 +616,31 @@ export function estimateUsageCost(params: {
   if (!usage || !cost) {
     return undefined;
   }
-  const input = toNumber(usage.input);
-  const output = toNumber(usage.output);
-  const cacheRead = toNumber(usage.cacheRead);
-  const cacheWrite = toNumber(usage.cacheWrite);
+  const total = calculateUsageCost(usage, cost).total;
+  return Number.isFinite(total) ? total : undefined;
+}
 
-  let total: number;
-  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
-    total = computeTieredCost(cost.tieredPricing, input, output, cacheRead, cacheWrite);
-  } else {
-    total =
-      input * cost.input +
-      output * cost.output +
-      cacheRead * cost.cacheRead +
-      cacheWrite * cost.cacheWrite;
+/** Preserve summed per-call costs; aggregate tokens cannot reconstruct request tiers. */
+export function estimateAggregateUsageCost(params: {
+  usage?: NormalizedUsage | null;
+  cost?: ModelCostConfig;
+}): number | undefined {
+  const usage = params.usage;
+  if (usage?.cost !== undefined) {
+    return usage.cost.total;
   }
-
-  if (!Number.isFinite(total)) {
-    return undefined;
-  }
-  return total / 1_000_000;
+  const hasBillableBuckets =
+    usage &&
+    [usage.input, usage.output, usage.cacheRead, usage.cacheWrite].some(
+      (value) => value !== undefined,
+    );
+  return !hasBillableBuckets || params.cost?.tieredPricing?.length
+    ? undefined
+    : estimateUsageCost(params);
 }
 
 export function resetUsageFormatCachesForTest(): void {
   modelsJsonCostCacheByAgentDir = new Map();
   providerCostIndexByConfig = new WeakMap();
   modelKeyCache = new Map();
-  sortedPricingTiersByInput = new WeakMap();
 }

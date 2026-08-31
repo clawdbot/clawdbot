@@ -1,13 +1,12 @@
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import type { ExecApprovalReplyDecision } from "../infra/exec-approval-reply.js";
 import type { MessagePresentation } from "../interactive/payload.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
-type ApprovalKind = "exec" | "plugin";
-
 /** Validated identity and decisions shared by typed approval delivery surfaces. */
 export type ApprovalReactionDeliveryBinding = {
   approvalId: string;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: ExecApprovalReplyDecision[];
   approvalSlug?: string;
 };

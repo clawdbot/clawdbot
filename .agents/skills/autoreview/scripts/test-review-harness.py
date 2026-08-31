@@ -13,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 
-ENGINES = ("codex", "claude", "pi")
+ENGINES = ("codex", "claude", "amp", "pi", "kimi")
 DEFAULT_ENGINES = ("codex", "claude")
 
 MALICIOUS_INITIAL = """export function uploadPath(name) {
@@ -148,7 +148,7 @@ def create_fixture_repo(repo: Path, fixture: str) -> None:
 
 def validate_prompt_policy(repo: Path, autoreview: Path) -> None:
     namespace = runpy.run_path(str(autoreview))
-    prompt = namespace["build_prompt"](repo, "local", None, "fixture diff", "", "")
+    prompt, = namespace["build_review_prompts"](repo, "local", None, "fixture diff", "", [])
     required = (
         "This helper is a closeout gate.",
         "Do not turn a narrow patch into a broad",
@@ -176,7 +176,15 @@ def run_reviews(repo: Path, script_dir: Path, fixture: str, engines: list[str]) 
             MALICIOUS_PROMPT if fixture == "malicious" else BENIGN_PROMPT,
         ]
         if fixture == "malicious":
-            command.extend(["--require-finding", "command", "--expect-findings"])
+            command.extend(
+                [
+                    "--max-priority",
+                    "P1",
+                    "--require-finding",
+                    "command",
+                    "--expect-findings",
+                ]
+            )
         run(command, repo)
 
 

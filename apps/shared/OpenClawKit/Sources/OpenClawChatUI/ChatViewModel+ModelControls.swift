@@ -60,6 +60,11 @@ extension OpenClawChatViewModel {
         return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true ? "on" : "off"
     }
 
+    public var fastModeIsEnabled: Bool {
+        guard let session = self.currentSessionEntry() else { return false }
+        return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true
+    }
+
     /// `models.list` currently has no fast-support capability field. Keep the
     /// control available and let the gateway validate the session patch.
     public var selectedModelSupportsFastMode: Bool {
@@ -85,6 +90,7 @@ extension OpenClawChatViewModel {
         guard clearsOverride ? baselineSessionLevel != nil : Self.normalizedVerboseLevel(baselineSessionLevel) != next
         else { return }
 
+        self.errorText = nil
         if self.acceptedVerboseLevelsByTarget[target] == nil {
             self.acceptedVerboseLevelsByTarget[target] = baselineSessionLevel.map(VerboseLevelState.value)
                 ?? VerboseLevelState.none
@@ -133,6 +139,7 @@ extension OpenClawChatViewModel {
                         self.acceptedVerboseLevelsByTarget[target]?.level,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
+                    if !state.exactMatchOnly { self.errorText = error.localizedDescription }
                 }
             }
         }
@@ -177,6 +184,7 @@ extension OpenClawChatViewModel {
         let baselineEffectiveFastMode = self.currentSessionEntry()?.effectiveFastMode
         guard baselineFastMode != next else { return }
 
+        self.errorText = nil
         if self.acceptedFastModesByTarget[target] == nil {
             self.acceptedFastModesByTarget[target] = FastModeState(
                 override: baselineFastMode,
@@ -225,6 +233,7 @@ extension OpenClawChatViewModel {
                         effective: accepted?.effective,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
+                    if !state.exactMatchOnly { self.errorText = error.localizedDescription }
                 }
             }
         }

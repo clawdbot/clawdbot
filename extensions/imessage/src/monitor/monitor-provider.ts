@@ -21,6 +21,7 @@ import {
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
+  ensureConfiguredBindingRouteReady,
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -56,6 +57,7 @@ import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
+import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
@@ -96,7 +98,6 @@ import {
   isStaleIMessageBacklog,
 } from "./inbound-dedupe.js";
 import {
-  buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
   mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
@@ -794,16 +795,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
 
     if (decision.kind === "drop") {
-      // Record echo/reflection drops so the rate limiter can detect sustained loops.
-      // Only loop-related drop reasons feed the counter; policy/mention/empty drops
-      // are normal and should not escalate. "from me" is excluded: every own-send
-      // (agent replies, multi-chunk sends, operator phone traffic) produces a
-      // from-me row, so counting it lets a normal outbound burst trip the limiter
-      // and silently suppress the next legitimate inbound message.
+      // Count reflected agent content, not ordinary own-send or self-chat dedupe
+      // rows: counting those benign drops mutes legitimate conversation bursts.
       const isLoopDrop =
-        decision.reason === "echo" ||
-        decision.reason === "self-chat echo" ||
-        decision.reason === "reflected assistant content";
+        decision.reason === "echo" || decision.reason === "reflected assistant content";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
       }
@@ -913,6 +908,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
+    if (decision.bindingResolution) {
+      const readiness = await ensureConfiguredBindingRouteReady({
+        cfg,
+        bindingResolution: decision.bindingResolution,
+      });
+      if (!readiness.ok) {
+        runtime.error?.(
+          `imessage: dropped inbound message; configured ACP binding unavailable for ${decision.bindingResolution.record.conversation.conversationId}: ${readiness.error}`,
+        );
+        return;
+      }
+    }
+
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
@@ -941,12 +949,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       sendPolicy !== "deny" &&
       (configuredTypingMode === undefined || configuredTypingMode === "instant");
     const shouldStartDirectTyping = supportsTyping && shouldUseDirectToolTypingOptions;
+    const earlyDirectTypingService =
+      resolveIMessageDirectChatService(imessageCfg.service, decision.chatGuid) ?? "auto";
     const earlyDirectTypingTarget = shouldStartDirectTyping
-      ? buildDirectIMessageReplyTarget({
-          cfg,
-          accountId: decision.route.accountId,
-          sender: decision.sender,
-        })
+      ? `${earlyDirectTypingService}:${decision.sender}`
       : undefined;
     let stopEarlyDirectTyping: (() => void) | undefined;
     if (earlyDirectTypingTarget) {
@@ -1047,8 +1053,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             logVerbose,
           })
         : undefined;
+    // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+    const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
     const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
       cfg,
+      accountService: imessageCfg.service,
       decision: contextDecision,
       message,
       previousTimestamp,
@@ -1056,8 +1065,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       historyLimit,
       groupHistories,
       dmHistory,
-      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-        .buildContext,
+      buildContext: pluginChannelRuntime?.inbound.buildContext,
       media: {
         facts: mediaAttachments,
       },
@@ -1080,13 +1088,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
+    // The read RPC has no service argument, so preserve the inbound direct
+    // conversation through its exact chat GUID instead of a bare handle.
+    const readTarget =
+      !decision.isGroup && decision.chatGuid ? `chat_guid:${decision.chatGuid}` : typingTarget;
 
-    if (supportsRead && sendReadReceipts && typingTarget) {
+    if (supportsRead && sendReadReceipts && readTarget) {
       // Read receipts are best-effort channel UI. Do not put them on the
       // critical path before model dispatch; slow private-API reads otherwise
       // make accepted iMessage turns feel stuck before the agent starts. Use
       // a short-lived client so a stuck read cannot block monitor-client typing.
-      void markIMessageChatRead(typingTarget, {
+      void markIMessageChatRead(readTarget, {
         cfg,
         accountId: accountInfo.accountId,
         cliPath,
@@ -1252,6 +1264,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             sessionKey: decision.route.sessionKey,
           },
           ctxPayload,
+          // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+          dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
           record: {
             updateLastRoute:
               !decision.isGroup && updateTarget

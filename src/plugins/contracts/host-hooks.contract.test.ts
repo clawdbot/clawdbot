@@ -936,6 +936,38 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
+  it("preserves cancellation while deriving a trusted policy rewrite", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("aborted during rewrite derivation");
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "rewrite-plugin",
+        source: "test",
+        policy: {
+          id: "rewrite-policy",
+          description: "rewrite",
+          evaluate: () => ({ params: { input: "rewritten" } }),
+        },
+      },
+    ];
+
+    await expect(
+      runTrustedToolPolicies(
+        { toolName: "apply_patch", params: { input: "original" } },
+        { toolName: "apply_patch", abortSignal: controller.signal },
+        {
+          registry,
+          deriveEvent: async () => {
+            controller.abort(abortError);
+            controller.signal.throwIfAborted();
+            return {};
+          },
+        },
+      ),
+    ).rejects.toBe(abortError);
+  });
+
   it("lets later trusted policy blocks override earlier approval requests", async () => {
     const registry = createEmptyPluginRegistry();
     registry.trustedToolPolicies = [

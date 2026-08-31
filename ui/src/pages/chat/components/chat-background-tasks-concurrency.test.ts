@@ -169,6 +169,29 @@ describe("background tasks concurrent snapshots", () => {
     expect(refresh.request).toHaveBeenCalledTimes(2);
   });
 
+  it("refetches after a hidden registry restore invalidates the initial snapshot", async () => {
+    const stale = [makeTask({ id: "task-before-restore" })];
+    const replacement = [makeTask({ id: "task-after-restore", updatedAt: 4_000 })];
+    const refresh = await refreshingHost(stale, true);
+    refresh.setFallbackTasks(replacement);
+
+    handleBackgroundTasksEvent(refresh.host, { action: "restored" }, false);
+    refresh.resolveActive({ tasks: stale });
+    refresh.resolveRecent({ tasks: stale });
+    await flushAsync();
+
+    expect(createBackgroundTasksProps(refresh.host, { presented: false }).tasks).toBeNull();
+    expect(refresh.request).toHaveBeenCalledTimes(2);
+
+    createBackgroundTasksProps(refresh.host);
+    await flushAsync();
+
+    expect(createBackgroundTasksProps(refresh.host).tasks?.map((task) => task.id)).toEqual([
+      "task-after-restore",
+    ]);
+    expect(refresh.request).toHaveBeenCalledTimes(4);
+  });
+
   it("preserves all ten unopened task completions after both stale pages resolve", async () => {
     const tasks = Array.from({ length: 10 }, (_, index) => makeTask({ id: `task-${index}` }));
     const refresh = await refreshingHost(tasks);

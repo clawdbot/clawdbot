@@ -155,12 +155,12 @@ export function resolveAgentId(
 ): string {
   const rawRequested = data?.agentId?.trim();
   if (!rawRequested) {
-    return normalizeAgentId(fallback);
+    return fallback && normalizeAgentId(fallback);
   }
   const requested = normalizeAgentId(rawRequested);
   return availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
     ? requested
-    : normalizeAgentId(fallback);
+    : fallback && normalizeAgentId(fallback);
 }
 
 export function allowsSelectedAgent(

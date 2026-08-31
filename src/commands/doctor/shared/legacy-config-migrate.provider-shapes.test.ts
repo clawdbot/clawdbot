@@ -23,12 +23,110 @@ function migrateLegacyConfig(raw: unknown): {
 }
 
 describe("legacy migrate provider-shaped config", () => {
+  const legacyTts = {
+    provider: "edge",
+    enabled: true,
+    providers: { custom: { voice: "legacy" } },
+  };
+  const voiceAndEnabledMigrations = ["tts.speaker-selection-keys", "tts.enabled-auto-mode"];
+
+  it.each<{ name: string; path: string; value: unknown; expected: string[] }>([
+    {
+      name: "root TTS",
+      path: "tts",
+      value: legacyTts,
+      expected: ["tts.providers-generic-shape", ...voiceAndEnabledMigrations],
+    },
+    {
+      name: "legacy agent list",
+      path: "agents",
+      value: { list: [{ tts: legacyTts }] },
+      expected: voiceAndEnabledMigrations,
+    },
+    {
+      name: "agent defaults and keyed entries",
+      path: "agents",
+      value: { defaults: { tts: legacyTts }, entries: { main: { tts: legacyTts } } },
+      expected: [],
+    },
+    {
+      name: "channel root",
+      path: "channels",
+      value: { slack: { tts: legacyTts } },
+      expected: voiceAndEnabledMigrations,
+    },
+    {
+      name: "channel accounts",
+      path: "channels",
+      value: { slack: { accounts: { work: { tts: legacyTts } } } },
+      expected: voiceAndEnabledMigrations,
+    },
+    {
+      name: "Discord root and account roots",
+      path: "channels",
+      value: { " Discord ": { tts: legacyTts, accounts: { work: { tts: legacyTts } } } },
+      expected: [],
+    },
+    {
+      name: "Discord voice",
+      path: "channels",
+      value: { discord: { voice: { tts: legacyTts } } },
+      expected: voiceAndEnabledMigrations,
+    },
+    {
+      name: "Discord account voice",
+      path: "channels",
+      value: {
+        discord: {
+          accounts: { work: { voice: { tts: legacyTts } } },
+        },
+      },
+      expected: voiceAndEnabledMigrations,
+    },
+    {
+      name: "blocked channel and account keys",
+      path: "channels",
+      value: {
+        constructor: { tts: legacyTts },
+        slack: { accounts: { prototype: { tts: legacyTts } } },
+      },
+      expected: [],
+    },
+    {
+      name: "voice-call plugin",
+      path: "plugins.entries",
+      value: { "voice-call": { config: { tts: legacyTts } } },
+      expected: ["tts.providers-generic-shape", ...voiceAndEnabledMigrations],
+    },
+    {
+      name: "other plugins",
+      path: "plugins.entries",
+      value: { custom: { config: { tts: legacyTts } } },
+      expected: [],
+    },
+    {
+      name: "malformed scopes",
+      path: "channels",
+      value: { slack: { tts: [], voice: false, accounts: { work: null } }, discord: 1 },
+      expected: [],
+    },
+  ])("previews only supported migrations for $name", ({ path, value, expected }) => {
+    const detected = LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS.filter((migration) =>
+      migration.legacyRules?.some(
+        (rule) => rule.path.join(".") === path && rule.match?.(value, {}),
+      ),
+    ).map((migration) => migration.id);
+
+    expect(detected).toEqual(expected);
+  });
+
   it("moves legacy realtime Talk selectors into talk.realtime without treating speech config as runtime fallback", () => {
     const changes: string[] = [];
     const migrated = normalizeLegacyTalkConfig(
       {
         talk: {
           provider: "openai",
+          voiceId: "legacy-voice",
           providers: {
             openai: {
               apiKey: "test-key",
@@ -40,6 +138,7 @@ describe("legacy migrate provider-shaped config", () => {
           brain: "agent-consult",
           model: "gpt-realtime",
           voice: "alloy",
+          unknown: "discarded",
         } as never,
       },
       changes,
@@ -51,6 +150,7 @@ describe("legacy migrate provider-shaped config", () => {
     ]);
     expect(migrated.talk).toEqual({
       provider: "openai",
+      voiceId: "legacy-voice",
       providers: {
         openai: {
           apiKey: "test-key",
@@ -72,6 +172,12 @@ describe("legacy migrate provider-shaped config", () => {
         speakerVoice: "alloy",
       },
     });
+    const conflicting = {
+      ...migrated,
+      talk: { ...migrated.talk, model: "obsolete", voice: "obsolete" },
+    } as OpenClawConfig;
+    expect(normalizeLegacyTalkConfig(conflicting, [])).toEqual(migrated);
+    expect(normalizeLegacyTalkConfig(migrated, [])).toBe(migrated);
   });
 
   it("does not copy plain Talk speech provider config into talk.realtime", () => {
@@ -180,6 +286,7 @@ describe("legacy migrate provider-shaped config", () => {
         },
       },
     });
+    expect(migrateLegacyConfig(res.config)).toEqual({ config: null, changes: [] });
   });
 
   it("routes legacy messages.tts.realtime voice to talk.realtime.speakerVoice", () => {

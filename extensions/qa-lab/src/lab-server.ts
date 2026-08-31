@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import {
   closeQaHttpServer,
+  dispatchQaHttpRequest,
   handleQaBusRequest,
   isQaMalformedJsonBodyError,
   readQaJsonBody,
@@ -309,11 +310,7 @@ export async function startQaLabServer(
   const scenarioCatalog = readQaBootstrapScenarioCatalog();
   const scorecardReport = readQaScorecardTaxonomyReport(scenarioCatalog.scenarios);
   const runnerChannels = [
-    ...new Set(
-      scenarioCatalog.scenarios
-        .map((scenario) => scenario.execution.channel)
-        .filter((channel): channel is string => Boolean(channel)),
-    ),
+    ...new Set(scenarioCatalog.scenarios.flatMap((scenario) => scenario.execution.channels ?? [])),
   ].toSorted();
   const bootstrapDefaults = createBootstrapDefaults(params?.autoKickoffTarget);
   let runnerModelOptions: QaRunnerModelOption[] = [];
@@ -449,7 +446,7 @@ export async function startQaLabServer(
   }
 
   const server = createServer((req, res) => {
-    void (async () => {
+    dispatchQaHttpRequest(res, async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
       if (await handleQaBusRequest({ req, res, state })) {
@@ -933,7 +930,7 @@ export async function startQaLabServer(
       } catch (error) {
         writeQaLabServerError(res, error);
       }
-    })();
+    });
   });
 
   const releaseCaptureStore = () => {

@@ -190,12 +190,12 @@ export type SessionThreadBindingsConfig = {
   enabled?: boolean;
   /**
    * Inactivity window for thread-bound sessions (hours).
-   * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
+   * Binding expires after this amount of idle time. Set to 0 to disable. Default: 24.
    */
   idleHours?: number;
   /**
    * Optional hard max age for thread-bound sessions (hours).
-   * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
+   * Binding expires once this age is reached even if active. Set to 0 to disable. Default: 0.
    */
   maxAgeHours?: number;
   /**
@@ -252,6 +252,8 @@ export type SessionMaintenanceConfig = {
   mode?: SessionMaintenanceMode;
   /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
   pruneAfter?: string | number;
+  /** Archive inactive dashboard sessions after this duration. Default: "7d"; false or 0 disables. */
+  archiveDashboardAfter?: string | number | false;
   /** Maximum total session entries to keep when protection permits. Default: 500. */
   maxEntries?: number;
   /** Protect interactive sessions active within this duration. Default and false: disabled. */

@@ -12,6 +12,7 @@ import {
   FAILOVER_REASONS,
   type FailoverReason,
 } from "../../packages/gateway-protocol/src/failover-reasons.js";
+import { resolveCronCompletionStatus } from "./completion-status.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
 import { normalizeCronRunDiagnosticsCore } from "./run-diagnostics-normalize.js";
 
@@ -25,6 +26,7 @@ type CronRunStatus = import("./types.js").CronRunStatus;
 const CRON_TASK_DETAIL_KIND = "cron-run";
 const CRON_FAILOVER_REASONS = new Set(FAILOVER_REASONS);
 const cronRunStatusSchema = z.enum(["ok", "error", "skipped"]);
+const cronCompletionStatusSchema = z.enum(["succeeded", "failed", "unknown"]);
 const cronDeliveryStatusSchema = z.enum(["delivered", "not-delivered", "unknown", "not-requested"]);
 const optionalCronStringSchema = z.string().optional().catch(undefined);
 const optionalNonBlankCronStringSchema = z
@@ -78,6 +80,7 @@ const cronRunLogEntrySchema = z.looseObject({
     .transform((value) => normalizeTimestamp(value))
     .pipe(z.number()),
   status: cronRunStatusSchema.optional().catch(undefined),
+  completionStatus: cronCompletionStatusSchema.optional().catch(undefined),
   error: optionalCronStringSchema,
   errorReason: z
     .custom<FailoverReason>(
@@ -101,6 +104,10 @@ const cronRunLogEntrySchema = z.looseObject({
   delivered: z.boolean().optional().catch(undefined),
   deliveryStatus: cronDeliveryStatusSchema.optional().catch(undefined),
   deliveryError: optionalCronStringSchema,
+  deliverySuppressionReason: z
+    .enum(["empty", "silent", "heartbeat", "channel_transform"])
+    .optional()
+    .catch(undefined),
   failureNotificationDelivery: cronFailureNotificationDeliverySchema,
   delivery: z.custom<{ [key: string]: JsonValue }>(isJsonObject).optional().catch(undefined),
   sessionId: optionalNonBlankCronStringSchema,
@@ -149,6 +156,13 @@ export function parseCronRunLogEntryObject(
     jobId: entryObj.jobId,
     action: "finished",
     status: entryObj.status,
+    completionStatus:
+      entryObj.completionStatus ??
+      resolveCronCompletionStatus({
+        status: entryObj.status,
+        delivered: entryObj.delivered,
+        deliveryStatus: entryObj.deliveryStatus,
+      }),
     error: entryObj.error,
     errorReason: entryObj.errorReason,
     summary: entryObj.summary,
@@ -171,6 +185,9 @@ export function parseCronRunLogEntryObject(
   if (entryObj.deliveryError !== undefined) {
     entry.deliveryError = entryObj.deliveryError;
   }
+  if (entryObj.deliverySuppressionReason !== undefined) {
+    entry.deliverySuppressionReason = entryObj.deliverySuppressionReason;
+  }
   if (entryObj.failureNotificationDelivery !== undefined) {
     entry.failureNotificationDelivery = entryObj.failureNotificationDelivery;
   }
@@ -186,7 +203,7 @@ export function parseCronRunLogEntryObject(
   return entry;
 }
 
-/** Encodes cron-only outcome fields; generic lifecycle fields stay on TaskRecord. */
+/** Encodes cron-owned outcome fields; the generic lifecycle projection stays on TaskRecord. */
 export function cronRunLogEntryToTaskDetail(
   entry: CronRunLogEntry,
   options: {
@@ -198,12 +215,16 @@ export function cronRunLogEntryToTaskDetail(
   const detail = toJsonValue({
     kind: CRON_TASK_DETAIL_KIND,
     status: entry.status,
+    completionStatus: entry.completionStatus,
+    error: entry.error ?? null,
+    summary: entry.summary ?? null,
     storeKey: options.storeKey,
     errorReason: entry.errorReason,
     diagnostics: entry.diagnostics,
     delivered: entry.delivered,
     deliveryStatus: entry.deliveryStatus,
     deliveryError: entry.deliveryError,
+    deliverySuppressionReason: entry.deliverySuppressionReason,
     failureNotificationDelivery: entry.failureNotificationDelivery,
     delivery: entry.delivery,
     sessionId: entry.sessionId,
@@ -294,7 +315,14 @@ export function cronRunStatusToTaskStatus(
   entry: Pick<CronRunLogEntry, "status" | "error"> & Partial<CronRunLogEntry>,
 ): Extract<TaskStatus, "succeeded" | "failed" | "timed_out"> {
   if (entry.status === "ok") {
-    return "succeeded";
+    const completionStatus =
+      entry.completionStatus ??
+      resolveCronCompletionStatus({
+        status: entry.status,
+        delivered: entry.delivered,
+        deliveryStatus: entry.deliveryStatus,
+      });
+    return completionStatus === "succeeded" ? "succeeded" : "failed";
   }
   return entry.status === "error" && isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
 }
@@ -312,13 +340,15 @@ export function cronTaskRecordToRunLogEntry(task: TaskRecord): CronRunLogEntry |
   // Task detail is canonical write-time state; history reads do not rederive error reasons.
   const entry = parseCronRunLogEntryObject(
     {
+      // Released rows stored these only on the generic task; current detail wins
+      // when task cancellation and the underlying execution have different outcomes.
+      error: task.error,
+      summary: task.terminalSummary,
       ...wireDetail,
       ts: resolveCronTaskRecordTimestamp(task),
       jobId: task.sourceId,
       action: "finished",
       status: isCronRunStatus(task.detail.status) ? task.detail.status : undefined,
-      error: task.error,
-      summary: task.terminalSummary,
       sessionKey: task.childSessionKey,
       runId: typeof task.detail.runId === "string" ? task.detail.runId : undefined,
     },

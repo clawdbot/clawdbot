@@ -4,6 +4,7 @@ import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/session
 import { appendExactAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { StopReason } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -33,6 +34,11 @@ export function buildCliHookUserMessage(prompt: string): unknown {
   };
 }
 
+/** Interrupted turns persist as aborted so replayed history never treats partial text as complete. */
+export function resolveCliAssistantStopReason(output: CliOutput): StopReason {
+  return output.terminalInterruption ? "aborted" : "stop";
+}
+
 export function buildCliHookAssistantMessage(params: {
   text: string;
   provider: string;
@@ -44,6 +50,7 @@ export function buildCliHookAssistantMessage(params: {
     cacheWrite?: number;
     total?: number;
   };
+  stopReason: StopReason;
 }): unknown {
   return {
     role: "assistant",
@@ -52,7 +59,7 @@ export function buildCliHookAssistantMessage(params: {
     provider: params.provider,
     model: params.model,
     ...(params.usage ? { usage: params.usage } : {}),
-    stopReason: "stop",
+    stopReason: params.stopReason,
     timestamp: Date.now(),
   };
 }
@@ -80,6 +87,7 @@ function buildCliContextEngineAssistantMessage(params: {
     cacheWrite?: number;
     total?: number;
   };
+  stopReason: StopReason;
 }): AgentMessage {
   return buildCliHookAssistantMessage(params) as AgentMessage;
 }
@@ -144,6 +152,7 @@ export async function persistCliAssistantTranscript(params: {
     cacheWrite?: number;
     total?: number;
   };
+  stopReason: StopReason;
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -182,7 +191,11 @@ export async function persistCliAssistantTranscript(params: {
       storePath: runParams.storePath,
       idempotencyKey,
       config: runParams.config,
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      beforeMessageWrite: (write) =>
+        runAgentHarnessBeforeMessageWriteHook({
+          ...write,
+          prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
+        }),
       message: buildAssistantMessage({
         model: {
           api: "cli",
@@ -190,7 +203,7 @@ export async function persistCliAssistantTranscript(params: {
           id: params.modelId,
         },
         content: [{ type: "text", text: params.text }],
-        stopReason: "stop",
+        stopReason: params.stopReason,
         usage: buildUsageWithNoCost({
           input: params.usage?.input,
           output: params.usage?.output,
@@ -359,6 +372,7 @@ export async function finalizeCliContextEngineTurn(params: {
         provider: runParams.provider,
         model: context.modelId,
         usage: params.output.usage,
+        stopReason: resolveCliAssistantStopReason(params.output),
       }),
     );
   }
@@ -376,10 +390,12 @@ export async function finalizeCliContextEngineTurn(params: {
     const result = await finalizeHarnessContextEngineTurn({
       contextEngine: context.contextEngine,
       promptError: false,
-      aborted: runParams.abortSignal?.aborted === true,
+      aborted:
+        params.output.terminalInterruption !== undefined || runParams.abortSignal?.aborted === true,
       yieldAborted: false,
       sessionIdUsed: runParams.sessionId,
       sessionKey: runParams.sessionKey,
+      sessionTarget: runParams.sessionTarget,
       sessionFile: runParams.sessionFile,
       isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       messagesSnapshot: transcript.messagesSnapshot,
@@ -413,7 +429,9 @@ export async function finalizeCliContextEngineTurn(params: {
         sessionTarget: runParams.sessionTarget,
         sessionFile: runParams.sessionFile,
         promptError: false,
-        aborted: runParams.abortSignal?.aborted === true,
+        aborted:
+          params.output.terminalInterruption !== undefined ||
+          runParams.abortSignal?.aborted === true,
         yieldAborted: false,
         contextEngineHostSupport,
         providerId: runParams.provider,

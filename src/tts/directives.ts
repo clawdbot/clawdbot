@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { extractTtsDirectiveFacts } from "./directive-facts.js";
+import { compareSpeechProviderOrder } from "./provider-registry-core.js";
 import { listSpeechProviders } from "./provider-registry.js";
 import type {
   SpeechModelOverridePolicy,
@@ -20,6 +21,10 @@ type ParseTtsDirectiveOptions = {
   preferredProviderId?: string;
 };
 
+// TRANSITIONAL(marker-retirement): the [[tts ...]] text DSL is a transitional
+// adapter for automatic-mode replies; structured voiceText/voiceProvider/voiceId
+// fields are canonical. Delete the DSL parse forms and this streaming cleaner
+// when the visibleReplies default flips to "message_tool".
 /** Streaming cleaner used to strip TTS tags before final text parsing is available. */
 type TtsDirectiveTextStreamCleaner = {
   push: (text: string) => string;
@@ -27,20 +32,9 @@ type TtsDirectiveTextStreamCleaner = {
   hasBufferedDirectiveText: () => boolean;
 };
 
-function buildProviderOrder(left: SpeechProviderPlugin, right: SpeechProviderPlugin): number {
-  const leftOrder = left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
-  const rightOrder = right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
-  if (leftOrder !== rightOrder) {
-    return leftOrder - rightOrder;
-  }
-  return left.id.localeCompare(right.id);
-}
-
 function resolveDirectiveProviders(options?: ParseTtsDirectiveOptions): SpeechProviderPlugin[] {
-  if (options?.providers) {
-    return [...options.providers].toSorted(buildProviderOrder);
-  }
-  return listSpeechProviders(options?.cfg).toSorted(buildProviderOrder);
+  const providers = options?.providers ?? listSpeechProviders(options?.cfg);
+  return providers.toSorted(compareSpeechProviderOrder);
 }
 
 function resolveDirectiveProviderConfig(

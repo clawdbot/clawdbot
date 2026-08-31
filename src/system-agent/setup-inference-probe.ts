@@ -1,4 +1,5 @@
-const SETUP_INFERENCE_TEST_MAX_TOKENS = 32;
+// Reasoning models need room to think before they can emit the requested "OK".
+const SETUP_INFERENCE_TEST_MAX_TOKENS = 256;
 
 /** Plugin and auto-selected harnesses may not support OpenClaw's request-scoped token cap. */
 export function resolveSetupInferenceProbeStreamParams(agentHarnessId?: string): {

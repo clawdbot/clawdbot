@@ -10,7 +10,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
-  createAlwaysConfiguredPluginConfig,
+  createActionHubPluginFixture,
   createGatewayActionPlugin,
   createPollForwardingPlugin,
   messageActionRunnerMocks as mocks,
@@ -72,70 +72,7 @@ describe("runMessageAction plugin dispatch", () => {
     resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        params,
-      }),
-    );
-
-    const actionHubPlugin: ChannelPlugin = {
-      id: "actionhub",
-      meta: {
-        id: "actionhub",
-        label: "Action Hub",
-        selectionLabel: "Action Hub",
-        docsPath: "/channels/actionhub",
-        blurb: "Action Hub action dispatch test plugin.",
-      },
-      capabilities: { chatTypes: ["direct", "channel"] },
-      config: createAlwaysConfiguredPluginConfig(),
-      messaging: {
-        targetPrefixes: ["actionhub", "actionhub-alias"],
-        normalizeTarget: (raw) => raw.replace(/^actionhub-alias:/i, "actionhub:"),
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      },
-      actions: {
-        describeMessageTool: () => ({
-          actions: [
-            "pin",
-            "unpin",
-            "list-pins",
-            "member-info",
-            "channel-info",
-            "edit",
-            "thread-create",
-            "thread-reply",
-          ],
-        }),
-        messageActionTargetAliases: {
-          edit: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          pin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          unpin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-        },
-        supportsAction: ({ action }) =>
-          action === "pin" ||
-          action === "unpin" ||
-          action === "list-pins" ||
-          action === "member-info" ||
-          action === "channel-info" ||
-          action === "edit" ||
-          action === "thread-create" ||
-          action === "thread-reply",
-        handleAction,
-      },
-    };
+    const { handleAction, plugin: actionHubPlugin } = createActionHubPluginFixture();
 
     beforeEach(() => {
       setTestPlugin(actionHubPlugin, "actionhub");
@@ -361,8 +298,8 @@ describe("runMessageAction plugin dispatch", () => {
         pluginId: "forumchat",
         label: "Forum Chat",
         blurb: "Forum chat threaded action dispatch test plugin.",
-        actions: ["sticker"],
-        gatewayActions: executionMode === "gateway" ? ["sticker"] : [],
+        actions: ["sticker", "download-file"],
+        gatewayActions: executionMode === "gateway" ? ["sticker", "download-file"] : [],
         capabilities: { chatTypes: ["channel"] },
         threading,
         handleAction,
@@ -421,6 +358,79 @@ describe("runMessageAction plugin dispatch", () => {
         expect(handleAction).toHaveBeenCalledTimes(executionMode === "local" ? 1 : 0);
       },
     );
+
+    it.each(["local", "gateway"] as const)(
+      "does not add an implicit thread scope to download-file before %s dispatch",
+      async (executionMode) => {
+        setTestPlugin(createThreadedPlugin(executionMode), "forumchat");
+        mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+
+        await runMessageAction({
+          cfg,
+          action: "download-file",
+          conversationReadOrigin: "direct-operator",
+          params: {
+            channel: "forumchat",
+            channelId: "forum:123",
+            fileId: "F123",
+          },
+          toolContext: {
+            currentChannelProvider: "forumchat",
+            currentChannelId: "forum:123",
+            currentThreadTs: "42",
+          },
+          gateway: executionMode === "gateway" ? { clientName: "cli", mode: "cli" } : undefined,
+          dryRun: false,
+        });
+
+        const dispatchedParams =
+          executionMode === "gateway"
+            ? readRecordField(
+                readRecordField(
+                  readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call"),
+                  "params",
+                  "gateway call params",
+                ),
+                "params",
+                "gateway action params",
+              )
+            : readRecordField(readFirstPluginCall(handleAction), "params", "plugin params");
+        expect(dispatchedParams.threadId).toBeUndefined();
+        expectRecordFields(
+          dispatchedParams,
+          { channelId: "forum:123", fileId: "F123" },
+          `${executionMode} download-file params`,
+        );
+      },
+    );
+
+    it("preserves an explicit download-file thread scope", async () => {
+      setTestPlugin(createThreadedPlugin("local"), "forumchat");
+
+      await runMessageAction({
+        cfg,
+        action: "download-file",
+        conversationReadOrigin: "direct-operator",
+        params: {
+          channel: "forumchat",
+          channelId: "forum:123",
+          fileId: "F123",
+          threadId: "99",
+        },
+        toolContext: {
+          currentChannelProvider: "forumchat",
+          currentChannelId: "forum:123",
+          currentThreadTs: "42",
+        },
+        dryRun: false,
+      });
+
+      expectRecordFields(
+        readRecordField(readFirstPluginCall(handleAction), "params", "plugin params"),
+        { channelId: "forum:123", fileId: "F123", threadId: "99" },
+        "local download-file params",
+      );
+    });
   });
   describe("poll plugin forwarding", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>

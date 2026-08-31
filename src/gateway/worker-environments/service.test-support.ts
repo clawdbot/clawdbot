@@ -6,6 +6,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type {
   WorkerDesktopEndpoint,
+  WorkerNodeEnrollment,
   WorkerProvider,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
@@ -19,7 +20,11 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
-import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
+import {
+  createWorkerEnvironmentStore,
+  type WorkerEnvironmentStore,
+  type WorkerEnvironmentTransitionPatch,
+} from "./store.js";
 
 export function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -52,6 +57,14 @@ export const DESKTOP: WorkerDesktopEndpoint = {
   ],
 };
 export const BUNDLE_HASH = "a".repeat(64);
+export const NODE_BOOTSTRAP: WorkerNodeEnrollment["nodeBootstrap"] = {
+  url: `https://gateway.example.test/__openclaw__/worker-bootstrap/artifacts/${"b".repeat(64)}`,
+  token: "t".repeat(43),
+  sha256: "b".repeat(64),
+  bytes: 1,
+  openclawVersion: "2026.8.1",
+  enabledPluginIds: ["runtime-plugin"],
+};
 export const BUNDLE_ARTIFACT: WorkerInstallationArtifact = {
   install: "bundle",
   bundleHash: BUNDLE_HASH,
@@ -152,6 +165,19 @@ export function getDevelopmentProfile() {
   );
 }
 
+export async function reopenWorkerEnvironmentStore() {
+  await testState.service?.stop();
+  testState.service = undefined;
+  closeOpenClawStateDatabaseForTest();
+  testState.stateDb = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: testState.root },
+  });
+  testState.store = createWorkerEnvironmentStore({
+    database: testState.stateDb,
+    now: () => testState.nowMs,
+  });
+}
+
 export function createService(
   provider: WorkerProvider,
   serviceOptions: Partial<
@@ -161,14 +187,24 @@ export function createService(
       | "bootstrapCallTimeoutMs"
       | "executeInference"
       | "executeSessionTool"
+      | "executeComputer"
       | "providerCallTimeoutMs"
+      | "projectNamespace"
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"
-      | "resolveWorkerGateway"
+      | "prepareNodeBootstrap"
+      | "prepareNodeRuntime"
+      | "closeNodeRuntime"
+      | "prepareNodeEnrollment"
+      | "closeNodeEnrollment"
+      | "retireNodeEnrollment"
+      | "stopNodeEnrollmentWaits"
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
+      | "now"
       | "nodeTunnelManager"
+      | "nodeDesktopCarrier"
       | "placementStore"
       | "workerCredentialTtlMs"
     >
@@ -182,7 +218,6 @@ export function createService(
     prepareInstallation: testState.prepareInstallation,
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
-    resolveWorkerGateway: () => ({ host: "127.0.0.1", port: 18_789 }),
     generateWorkerCredential: () => CREDENTIAL,
     executeInference: async () => ({
       type: "error",
@@ -203,6 +238,8 @@ export function createService(
 export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
   return {
     id: "fake",
+    supportedExecutionModes: ["remote-exec"],
+    resolveAllocation: async () => ({ leaseId: "lease-1", sharedHost: false }),
     provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
     inspect: async () => ({ status: "active" }),
     destroy: async () => {},
@@ -292,7 +329,40 @@ export function seedReadyDesktop(environmentId: string, desktop: WorkerDesktopEn
   });
 }
 
-export function readyPatch(environmentId: string, receipt = BOOTSTRAP_RECEIPT) {
+export function seedReadyNodeDesktop(
+  environmentId: string,
+  desktop: WorkerDesktopEndpoint = DESKTOP,
+) {
+  const intent = testState.store.createIntent({
+    environmentId,
+    providerId: "fake",
+    profileId: "development",
+    profileSnapshot: { settings: { region: "test", desktop: true } },
+    provisionOperationId: `provision:${environmentId}`,
+  });
+  const provisioning = testState.store.transition({
+    environmentId,
+    from: intent.state,
+    to: "provisioning",
+  });
+  return testState.store.transition({
+    environmentId,
+    from: provisioning.state,
+    to: "ready",
+    patch: {
+      leaseId: `lease:${environmentId}`,
+      nodeDeviceId: `node:${environmentId}`,
+      sshEndpoint: null,
+      desktop,
+      ...readyPatch(environmentId),
+    },
+  });
+}
+
+export function readyPatch(
+  environmentId: string,
+  receipt: NonNullable<WorkerEnvironmentTransitionPatch["bootstrapReceipt"]> = BOOTSTRAP_RECEIPT,
+) {
   return {
     bootstrapReceipt: receipt,
     credential: {
@@ -462,6 +532,7 @@ export function placementHarness(
   identity.credentialHash = credentialHash;
   const placementStore = {
     readWorkerTurnClaim: vi.fn(() => claim),
+    readWorkerTurnLiveAckCursor: vi.fn(() => 0),
     validateWorkerTurn: vi.fn(() => true),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
     updateAckCursors: vi.fn(),

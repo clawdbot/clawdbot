@@ -12,6 +12,7 @@ import {
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -28,7 +29,6 @@ import {
   createCliStatusTextStyles,
   filterDaemonEnv,
   formatRuntimeStatus,
-  resolveDaemonContainerContext,
   resolveRuntimeStatusColor,
   renderRuntimeHints,
   safeDaemonEnv,
@@ -42,14 +42,17 @@ import {
 function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   // JSON output can be copied into issues; redact service env before serialization.
   const command = status.service.command;
-  if (!command?.environment) {
+  if (!command) {
     return status;
   }
   const safeEnv = filterDaemonEnv(command.environment);
-  const nextCommand = {
+  const nextCommand: GatewayServiceCommandConfig = {
     ...command,
     environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
   };
+  delete nextCommand.managedDefinition;
+  delete nextCommand.managedOverrides;
+  delete nextCommand.definitionPaths;
   return {
     ...status,
     service: {
@@ -104,9 +107,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   const { service, rpc, extraServices } = status;
   const serviceTargetsProbe = service.targetRole !== "diagnostic-only";
-  const serviceStatus = service.loaded
+  const serviceLoaded = service.loadState.status === "loaded";
+  const serviceStatus = serviceLoaded
     ? okText(service.loadedText)
-    : warnText(service.notLoadedText);
+    : warnText(service.loadState.status === "not-loaded" ? service.notLoadedText : "unknown");
   defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
   if (status.logFile) {
     defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(status.logFile))}`);
@@ -120,6 +124,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.log(
       `${label("Service file:")} ${infoText(shortenHomePath(service.command.sourcePath))}`,
     );
+  }
+  if (service.command?.reloadPending) {
+    defaultRuntime.log(warnText("Systemd reload: pending (run systemctl --user daemon-reload)"));
   }
   if (service.command?.workingDirectory) {
     defaultRuntime.log(
@@ -292,7 +299,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     rpc &&
     !rpc.ok &&
     serviceTargetsProbe &&
-    service.loaded &&
+    serviceLoaded &&
     service.runtime?.status === "running"
   ) {
     // The RPC probe failed while the service is loaded and running. Only the case where
@@ -386,18 +393,28 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
+  const serviceInspectionDetail =
+    service.loadState.status === "unknown" ? service.loadState.detail : undefined;
+  if (serviceInspectionDetail) {
+    defaultRuntime.error(errorText(`Service inspection failed: ${serviceInspectionDetail}`));
+    defaultRuntime.error(errorText(`Retry: ${formatCliCommand("openclaw gateway status --deep")}`));
+    spacer();
+  }
+  const systemdUnavailableDetail =
+    serviceInspectionDetail ??
+    service.runtime?.inspectionFailure?.detail ??
+    service.runtime?.detail;
   const systemdUnavailable =
     process.platform === "linux" &&
-    rpc?.ok !== true &&
-    isSystemdUnavailableDetail(service.runtime?.detail);
+    (serviceInspectionDetail !== undefined || rpc?.ok !== true) &&
+    isSystemdUnavailableDetail(systemdUnavailableDetail);
   if (systemdUnavailable) {
     const serviceEnv = service.command?.environment ?? process.env;
-    const container = Boolean(resolveDaemonContainerContext(serviceEnv));
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({
       wsl: isWSLEnv(serviceEnv),
-      kind: classifySystemdUnavailableDetail(service.runtime?.detail),
-      container,
+      kind: classifySystemdUnavailableDetail(systemdUnavailableDetail),
+      env: serviceEnv,
     })) {
       defaultRuntime.error(errorText(hint));
     }
@@ -429,7 +446,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     )) {
       defaultRuntime.error(errorText(hint));
     }
-  } else if (service.loaded && service.runtime?.status === "stopped") {
+  } else if (serviceLoaded && service.runtime?.status === "stopped") {
     const startLimitHit = process.platform === "linux" && isSystemdStartLimitHit(service.runtime);
     defaultRuntime.error(
       errorText(
@@ -501,7 +518,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   if (
     serviceTargetsProbe &&
-    service.loaded &&
+    serviceLoaded &&
     service.runtime?.status === "running" &&
     status.port &&
     status.port.status === "free"

@@ -157,6 +157,48 @@ describe("cli program (nodes diagnostics auth)", () => {
     expect(requests[0]?.useStoredDeviceAuth).toBe(true);
   });
 
+  it("lets missing credentials reach the shared renderer without a nodes status prefix", async () => {
+    const error = Object.assign(
+      new Error(
+        [
+          "gateway node.list requires credentials before opening a websocket",
+          "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+          "Config: /tmp/openclaw.json",
+        ].join("\n"),
+      ),
+      {
+        name: "GatewayCredentialsRequiredError",
+        method: "node.list",
+        configPath: "/tmp/openclaw.json",
+      },
+    );
+    programGatewayCallMock.mockRejectedValue(error);
+
+    await expect(runProgram(["nodes", "status"])).rejects.toBe(error);
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    new Error("connect ECONNREFUSED 127.0.0.1:4242"),
+    Object.assign(new Error("unauthorized: token mismatch"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      details: { code: "AUTH_TOKEN_MISMATCH" },
+    }),
+  ])("keeps non-credential node failures distinct: $message", async (error) => {
+    programGatewayCallMock.mockRejectedValue(error);
+
+    await expect(runProgram(["nodes", "status"])).rejects.toThrow("exit");
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(error.message));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("nodes status failed:"));
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("configure gateway.auth"),
+    );
+  });
+
   it("falls back to configured auth after stored device auth is rejected", async () => {
     programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string; useStoredDeviceAuth?: boolean };

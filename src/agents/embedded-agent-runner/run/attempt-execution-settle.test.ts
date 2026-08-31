@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
 
@@ -122,7 +123,9 @@ function createFixture() {
   };
   const sessionManager = {
     kind: "session-manager",
+    appendMessage: vi.fn((message) => messages.push(message)),
     buildSessionContext: vi.fn(() => ({ messages: [] })),
+    getSessionTarget: vi.fn(() => undefined),
   };
   const hookRunner = { hasHooks: vi.fn(() => false) };
   const cacheTrace = { recordStage: vi.fn() };
@@ -130,6 +133,7 @@ function createFixture() {
   const toolResultPromptProjectionState = { kind: "tool-result-projection" };
   const sessionPromptState = { toolResults: toolResultPromptProjectionState };
   const sessionRuntimeState = {
+    currentTurnImageFailureCount: 0,
     prePromptMessageCount: 2,
     promptCache: undefined,
     systemPromptText: "system prompt",
@@ -170,8 +174,11 @@ function createFixture() {
     agentSession: {
       activeSession,
       clientToolCallSlots: [],
+      coreReadAuthorized: true,
+      getCodeModeRecoveryCandidate: vi.fn(() => undefined),
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
+      setCodeModeReconciliationReadAuthorized: vi.fn(),
       setActiveSessionSystemPrompt: vi.fn(),
       settingsManager: { getCompactionReserveTokens: vi.fn(() => 1_000) },
     },
@@ -226,6 +233,7 @@ function createFixture() {
     resolveActiveContextEnginePluginId: vi.fn(),
     runAbortController: new AbortController(),
     prepared: {
+      promptToolPolicy: { apply: vi.fn(), refresh: vi.fn(), current: {} },
       bootstrap: {
         bootstrapPromptWarning: {},
         shouldRecordCompletedBootstrapTurn: false,
@@ -239,7 +247,7 @@ function createFixture() {
         runtimeInfo: { model: { id: "model" } },
         systemPromptReport: { chars: 13 },
       },
-      toolBase: { toolSearchTargetTranscriptProjections: [] },
+      toolBase: { nestedToolActivities: [] },
       toolCatalog: {
         effectiveTools: [{ name: "read" }],
         emptyExplicitToolAllowlistError: undefined,
@@ -318,6 +326,7 @@ function createFixture() {
     order,
     queueHandle,
     result,
+    sessionManager,
     sessionRuntimeState,
     state,
     subscription,
@@ -368,12 +377,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             __openclaw: { senderName: "Alice" },
           }),
         }),
-        toolPolicy: expect.objectContaining({
-          baseline: {
-            activeToolNames: ["read"],
-            catalogEntries: [],
-          },
-        }),
+        toolPolicy: fixture.input.prepared.promptToolPolicy,
       }),
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(
@@ -398,10 +402,40 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     );
   });
 
+  it("persists image failure notes after after-turn transcript reconciliation", async () => {
+    const fixture = createFixture();
+    fixture.sessionRuntimeState.currentTurnImageFailureCount = 1;
+    await runEmbeddedAttemptSettledPhase(fixture.input);
+
+    expect(fixture.sessionManager.appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: "openclaw.system-note",
+        display: true,
+        content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
+      }),
+    );
+    expect(fixture.sessionManager.appendMessage.mock.calls[0]?.[0]).not.toHaveProperty(
+      "excludeFromContext",
+    );
+    expect(mocks.completeResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({
+          messagesSnapshot: expect.arrayContaining([
+            expect.objectContaining({ customType: "openclaw.system-note", display: true }),
+          ]),
+        }),
+      }),
+    );
+  });
+
   it("carries a successful hidden target through settlement into the terminal receipt", async () => {
     const fixture = createFixture();
-    fixture.input.prepared.toolBase.toolSearchTargetTranscriptProjections.push(
-      {
+    fixture.input.prepared.toolBase.nestedToolActivities.push(
+      createNestedToolActivity({
+        runId: "run-test",
+        scopeId: "scope-test",
+        afterEntryId: null,
+        startOrder: 0,
         parentToolCallId: "outer-exec",
         toolCallId: "tool_search_code:outer-exec:read:1",
         toolName: "read",
@@ -411,8 +445,14 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           details: {},
         },
         isError: false,
-      },
-      {
+        startedAt: 1,
+        timestamp: 2,
+      }),
+      createNestedToolActivity({
+        runId: "run-test",
+        scopeId: "scope-test",
+        afterEntryId: null,
+        startOrder: 0,
         parentToolCallId: "outer-exec",
         toolCallId: "tool_search_code:outer-exec:write:2",
         toolName: "write",
@@ -422,7 +462,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           details: {},
         },
         isError: true,
-      },
+        startedAt: 3,
+        timestamp: 4,
+      }),
     );
     const actualStreamSettle = await vi.importActual<typeof import("./attempt-stream-settle.js")>(
       "./attempt-stream-settle.js",

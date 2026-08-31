@@ -1,35 +1,41 @@
 import {
-  GATEWAY_SERVER_CAPS,
   readSystemAgentInferenceUnavailableErrorDetails,
   type SystemAgentChatParams,
   type SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { WizardStep } from "../../api/types.ts";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { performCustodianAgentHandoff } from "./custodian-navigation.ts";
 import {
-  canCallGatewayMethod,
-  isGatewayCapabilityAdvertised,
-  isGatewayMethodAdvertised,
-} from "../../lib/gateway-methods.ts";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
-import { custodianWizardSubmission, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
+  createCustodianSessionId,
+  CustodianSessionOwner,
+  loadCustodianSessionId,
+  persistCustodianSessionId,
+} from "./custodian-session-identity.ts";
+import {
+  resolveCustodianConfiguredInferenceState,
+  type CustodianConfiguredInferenceState,
+} from "./custodian-session-variant.ts";
+import {
+  custodianWizardSubmission,
+  initialCustodianWizardValue,
+  isCustodianWizardCancelAvailable,
+} from "./custodian-wizard-step.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
   custodianChatParams,
+  hasCustodianUserInput,
   isCustodianSessionInvalidatedError,
   type CustodianSessionVariant,
 } from "./session-lifecycle.ts";
-import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
+import { parseCustodianQuestion } from "./structured-question.ts";
 import {
-  createCustodianSessionId,
-  createCustodianTranscriptMessages,
+  createCustodianAssistantMessage,
   custodianErrorMessage,
+  CustodianTranscriptLoader,
   hasUnresolvedCustodianQuestion,
-  readCustodianTranscript,
   retireCustodianQuestions,
   type CustodianMessage,
 } from "./transcript.ts";
@@ -37,16 +43,7 @@ import {
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
-function hasCustodianUserInput(params: SystemAgentChatParams): boolean {
-  return (
-    params.message !== undefined ||
-    params.wizardAnswer !== undefined ||
-    params.wizardCancel !== undefined
-  );
-}
-
 type StoreListener = () => void;
-type ConfiguredInferenceState = "unresolved" | "required" | "ready";
 type CustodianSetupIssue = "missing" | "unavailable";
 
 /** One process-local conversation owner shared by the full page and dock surface. */
@@ -60,6 +57,7 @@ export class CustodianSessionStore {
   wizardSecretVisible = false;
   questionReplyUncertain = false;
   error: string | null = null;
+  transcript = new CustodianTranscriptLoader(() => this.emit());
   setupIssue: CustodianSetupIssue | null = null;
   dismissedQuestions = new Set<string>();
   answeredQuestions = new Set<string>();
@@ -74,16 +72,21 @@ export class CustodianSessionStore {
   private context: ApplicationContext | null = null;
   private variant: CustodianSessionVariant = "caretaker";
   private sessionVariant: CustodianSessionVariant | null = null;
-  private sessionId = createCustodianSessionId();
+  private restoredIdentity = loadCustodianSessionId();
+  private sessionId = this.restoredIdentity.sessionId;
+  // True while the id may address a live session whose per-session queue can
+  // hold an in-flight turn from a previous page; cleared after one barrier
+  // refresh and on any fresh mint.
+  private rejoinBarrierPending = this.restoredIdentity.restored;
   private requestEpoch = 0;
   private requestAbort: AbortController | null = null;
   private nextMessageId = 1;
   private retryParams: SystemAgentChatParams | null = null;
   private sessionClient: GatewayBrowserClient | null = null;
   private sessionOwnershipKey: string | null = null;
+  private readonly sessionOwner = new CustodianSessionOwner();
   private sessionStarted = false;
-  private lastHelloDeviceToken = "";
-  private configuredInferenceState: ConfiguredInferenceState = "unresolved";
+  private configuredInferenceState: CustodianConfiguredInferenceState = "unresolved";
   private eventNudgeClosed = false;
   private gatewayCleanup: (() => void) | null = null;
   private agentCleanup: (() => void) | null = null;
@@ -164,6 +167,24 @@ export class CustodianSessionStore {
     );
   }
 
+  async refreshTranscriptIfIdle(): Promise<void> {
+    const client = this.activeClient;
+    if (!client || !this.canRefreshTranscript()) {
+      return;
+    }
+    const refreshed = await this.refreshTranscriptHistory(client, this.requestEpoch);
+    if (refreshed && this.abandonedTurnOutcomeUnknown) {
+      this.abandonedTurnOutcomeUnknown = false;
+      this.emit();
+    }
+  }
+
+  canRefreshTranscript(): boolean {
+    // hasUnresolvedQuestion() also covers a pending wizard step.
+    const blocked = this.sending || this.hasUnresolvedQuestion() || this.transcript.refreshing;
+    return this.activeClient !== null && this.sessionStarted && this.chatAvailable && !blocked;
+  }
+
   canRetry(): boolean {
     return this.retryParams !== null && !hasCustodianUserInput(this.retryParams);
   }
@@ -173,12 +194,7 @@ export class CustodianSessionStore {
   }
 
   get wizardCancelAvailable(): boolean {
-    return (
-      isGatewayCapabilityAdvertised(
-        this.context?.gateway.snapshot ?? {},
-        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
-      ) ?? false
-    );
+    return isCustodianWizardCancelAvailable(this.context);
   }
 
   retry(): void {
@@ -368,11 +384,16 @@ export class CustodianSessionStore {
   private revokeNavigationAuthority(): void {
     this.requestAbort?.abort();
     this.requestAbort = null;
-    this.requestEpoch += 1;
+    this.advanceRequestEpoch();
     this.sending = false;
     this.questionReplyUncertain = false;
     this.retryParams = null;
     this.error = null;
+  }
+
+  private advanceRequestEpoch(): number {
+    this.transcript.invalidate();
+    return ++this.requestEpoch;
   }
 
   openModelSetup(): void {
@@ -386,34 +407,30 @@ export class CustodianSessionStore {
     }
   }
 
-  private currentSessionOwnershipKey(): string {
-    const context = this.context;
-    if (!context) {
-      return "";
-    }
-    const { gatewayUrl, token, password, bootstrapToken } = context.gateway.connection;
-    const auth = context.gateway.snapshot.hello?.auth;
-    if (auth) {
-      this.lastHelloDeviceToken = auth.deviceToken ?? "";
-    }
-    return JSON.stringify([gatewayUrl, token, password, bootstrapToken, this.lastHelloDeviceToken]);
-  }
-
   private startSession(
     client: GatewayBrowserClient,
     variant: CustodianSessionVariant,
     loadTranscript: boolean,
   ): void {
-    this.sessionId = createCustodianSessionId();
     this.sessionVariant = variant;
     this.sessionClient = client;
-    this.sessionOwnershipKey = this.currentSessionOwnershipKey();
+    this.sessionOwnershipKey = this.sessionOwner.key(this.context?.gateway ?? null);
     this.sessionStarted = true;
     void this.initializeSession(
       client,
       { sessionId: this.sessionId, ...custodianChatParams(variant) },
       loadTranscript,
     );
+  }
+
+  private replaceSessionId(sessionId?: string): void {
+    if (sessionId === undefined) {
+      // A freshly minted id cannot address a live session; no barrier needed.
+      this.rejoinBarrierPending = false;
+    }
+    const next = sessionId ?? createCustodianSessionId();
+    this.sessionId = next;
+    persistCustodianSessionId(next);
   }
 
   private abandonPendingUserTurn(pendingParams: SystemAgentChatParams | null): void {
@@ -425,10 +442,14 @@ export class CustodianSessionStore {
     this.abandonedTurnOutcomeUnknown = true;
   }
 
-  private rotateVolatileSession(
+  private restartVolatileSession(
     client: GatewayBrowserClient,
     variant: CustodianSessionVariant,
+    rotateSessionId: boolean,
   ): void {
+    if (rotateSessionId) {
+      this.replaceSessionId();
+    }
     this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
     this.retryParams = null;
     this.input = "";
@@ -451,11 +472,12 @@ export class CustodianSessionStore {
     const chatSupported =
       client !== null && canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin");
     const chatUnsupported = isGatewayMethodAdvertised(snapshot, "openclaw.chat") === false;
-    const configuredInferenceState = this.resolveConfiguredInferenceState();
+    const configuredInferenceState = resolveCustodianConfiguredInferenceState(this.context);
     const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
     this.configuredInferenceState = configuredInferenceState;
     const variantChanged = this.sessionStarted && this.sessionVariant !== this.variant;
-    const ownershipKey = this.currentSessionOwnershipKey();
+    const ownershipKey = this.sessionOwner.key(context.gateway);
+    const reconnected = this.sessionStarted && client !== null && this.activeClient === null;
     const clientReplaced =
       this.sessionStarted &&
       client !== null &&
@@ -476,17 +498,21 @@ export class CustodianSessionStore {
     const requestWasPending = this.sending && this.retryParams !== null;
     const pendingParams = requestWasPending ? this.retryParams : null;
     this.activeClient = client;
-    this.requestEpoch += 1;
+    this.advanceRequestEpoch();
     this.sending = false;
     this.chatAvailable = false;
     if (variantChanged || ownershipChanged) {
-      // A different operator or route mode must never inherit retained live context.
+      // A different operator gets a new server owner binding; route changes retain
+      // the stable companion id but rebuild their visible transcript projection.
+      if (ownershipChanged) {
+        this.replaceSessionId();
+      }
       [this.eventNudge, this.eventNudgePending] = [null, null];
       this.eventNudgeClosed = false;
       this.abandonedTurnOutcomeUnknown = false;
       this.sessionStarted = false;
       this.clearConversation();
-    } else if (client && clientReplaced) {
+    } else if (client && (clientReplaced || reconnected)) {
       if (!chatSupported) {
         this.sessionStarted = false;
         this.abandonPendingUserTurn(pendingParams);
@@ -495,7 +521,29 @@ export class CustodianSessionStore {
       }
       this.chatAvailable = true;
       this.abandonPendingUserTurn(pendingParams);
-      this.rotateVolatileSession(client, this.currentSessionVariant());
+      this.requestAbort?.abort();
+      this.requestAbort = null;
+      this.sessionClient = client;
+      this.sessionOwnershipKey = ownershipKey;
+      if (this.questionReplyUncertain || this.abandonedTurnOutcomeUnknown) {
+        // A SUBMITTED reply with an unknown outcome blocks the idle refresh by
+        // design; only a full rejoin can settle it — the Gateway session owns
+        // whether the answer was consumed and which control is live now, and
+        // its projection re-renders the authoritative state. A merely displayed
+        // unanswered card keeps its state; the session still awaits it.
+        this.questionReplyUncertain = false;
+        this.wizardInputPending = false;
+        this.abandonedTurnOutcomeUnknown = false;
+        // The reconnect rejoin races the interrupted turn the same way a
+        // reload does; arm one barrier refresh behind it.
+        this.rejoinBarrierPending = true;
+        void this.initializeSession(client, {
+          sessionId: this.sessionId,
+          ...custodianChatParams(this.variant),
+        });
+      } else {
+        void this.refreshTranscriptIfIdle();
+      }
       return;
     } else if (requestWasPending) {
       if (pendingParams?.message === undefined) {
@@ -530,32 +578,7 @@ export class CustodianSessionStore {
       return;
     }
     this.clearConversation();
-    this.startSession(client, this.currentSessionVariant(), true);
-  }
-
-  private resolveConfiguredInferenceState(): ConfiguredInferenceState {
-    const context = this.context;
-    if (!context || context.gateway.snapshot.phase !== "connected") {
-      return "unresolved";
-    }
-    const agentsList = context.agents.state.agentsList;
-    if (!agentsList) {
-      return "unresolved";
-    }
-    const selectedId = normalizeAgentId(
-      context.gateway.snapshot.assistantAgentId ?? agentsList.defaultId ?? "",
-    );
-    const selectedAgent = agentsList.agents.find(
-      (agent) => normalizeAgentId(agent.id) === selectedId,
-    );
-    if (!selectedAgent) {
-      return "unresolved";
-    }
-    return selectedAgent.model?.primary?.trim() ? "ready" : "required";
-  }
-
-  private currentSessionVariant(): CustodianSessionVariant {
-    return this.variant;
+    this.startSession(client, this.variant, true);
   }
 
   private async initializeSession(
@@ -563,7 +586,7 @@ export class CustodianSessionStore {
     params: SystemAgentChatParams,
     loadTranscript = true,
   ): Promise<void> {
-    const epoch = ++this.requestEpoch;
+    const epoch = this.advanceRequestEpoch();
     this.sending = true;
     this.error = null;
     this.retryParams = params;
@@ -580,23 +603,28 @@ export class CustodianSessionStore {
   private async refreshTranscriptHistory(
     client: GatewayBrowserClient,
     epoch: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const context = this.context;
     if (
       !context ||
       isGatewayMethodAdvertised(context.gateway.snapshot, "openclaw.chat.history") !== true
     ) {
-      return;
+      return false;
     }
-    const turns = await readCustodianTranscript(client);
-    if (turns === null || epoch !== this.requestEpoch || client !== this.activeClient) {
-      return;
+    const isCurrent = () => epoch === this.requestEpoch && client === this.activeClient;
+    const transcript = await this.transcript.loadMessages(
+      client,
+      epoch,
+      this.nextMessageId,
+      isCurrent,
+    );
+    if (!transcript) {
+      return false;
     }
-    const transcript = createCustodianTranscriptMessages(turns, this.nextMessageId);
-    this.messages = transcript.messages;
-    this.nextMessageId = transcript.nextMessageId;
+    [this.messages, this.nextMessageId] = [transcript.messages, transcript.nextMessageId];
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
     this.emit();
+    return true;
   }
 
   private clearConversation(): void {
@@ -605,30 +633,12 @@ export class CustodianSessionStore {
     this.answeredQuestions = new Set();
     this.retryParams = null;
     this.error = null;
+    this.transcript.reset();
     this.setupIssue = null;
     this.input = "";
-    this.wizardValue = undefined;
-    this.wizardSecretVisible = false;
+    [this.wizardValue, this.wizardSecretVisible] = [undefined, false];
     this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
-  }
-
-  private appendAssistant(
-    reply: string,
-    question: CustodianStructuredQuestion | null,
-    step: WizardStep | null,
-  ): void {
-    this.messages = [
-      ...this.messages,
-      {
-        id: this.nextMessageId++,
-        role: "assistant",
-        text: reply,
-        at: Date.now(),
-        question,
-        step,
-      },
-    ];
   }
 
   private async requestReply(
@@ -649,7 +659,7 @@ export class CustodianSessionStore {
     this.requestAbort?.abort();
     const requestAbort = new AbortController();
     this.requestAbort = requestAbort;
-    const epoch = ++this.requestEpoch;
+    const epoch = this.advanceRequestEpoch();
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
     this.error = null;
@@ -668,43 +678,45 @@ export class CustodianSessionStore {
       if (epoch !== this.requestEpoch || client !== this.activeClient) {
         return "sent";
       }
-      this.sessionId = result.sessionId;
+      this.replaceSessionId(result.sessionId);
       this.sensitive = result.sensitive === true;
       this.wizardInputPending = result.wizardInputPending === true;
       this.retryParams = null;
       this.setupIssue = null;
       const step = result.step ?? null;
       const question = step ? null : parseCustodianQuestion(result.question);
+      if (this.rejoinBarrierPending && !hasCustodianUserInput(params)) {
+        // Rejoin barrier: this input-free request queued behind any in-flight
+        // turn on the Gateway's per-session queue, so refreshing here shows
+        // rows a racing turn persisted after the initial history fetch. Runs
+        // before the reply/control is appended, so a projected live wizard or
+        // question renders on top of the reconciled rows. Once per restored id.
+        this.rejoinBarrierPending = false;
+        await this.refreshTranscriptHistory(client, epoch);
+        if (epoch !== this.requestEpoch || client !== this.activeClient) {
+          return "sent";
+        }
+      }
       this.wizardValue = step ? initialCustodianWizardValue(step) : undefined;
       this.wizardSecretVisible = false;
       const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
       if (!silentReply || question || step) {
-        this.appendAssistant(silentReply ? "" : result.reply, question, step);
+        const message = createCustodianAssistantMessage(
+          this.nextMessageId++,
+          silentReply ? "" : result.reply,
+          question,
+          step,
+        );
+        this.messages = [...this.messages, message];
       }
       if (result.action === "open-agent") {
-        let sessionKey = context.gateway.snapshot.sessionKey?.trim();
-        if (result.agentId) {
-          const roster = await context.agents.refreshList();
-          if (epoch !== this.requestEpoch || client !== this.activeClient) {
-            return "sent";
-          }
-          sessionKey = buildAgentMainSessionKey({
-            agentId: result.agentId,
-            mainKey: roster?.mainKey,
-          });
-          selectApplicationSession({
-            selection: context.agentSelection,
-            gateway: context.gateway,
-            sessionKey,
-            agentId: result.agentId,
-          });
-        }
-        if (result.agentDraft === "hatch" && sessionKey) {
-          context.navigate("chat", {
-            pathname: pathForCustodianAgentHandoff(context, sessionKey),
-            search: `?draft=${encodeURIComponent(t("custodian.hatchDraft"))}`,
-          });
-        } else {
+        const handoff = await performCustodianAgentHandoff({
+          context,
+          ...(result.agentId ? { agentId: result.agentId } : {}),
+          hatchDraft: result.agentDraft === "hatch",
+          isCurrent: () => epoch === this.requestEpoch && client === this.activeClient,
+        });
+        if (handoff === "exit-setup") {
           this.exitSetup();
         }
       } else if (result.action === "exit") {
@@ -722,9 +734,14 @@ export class CustodianSessionStore {
               ? "missing"
               : "unavailable"
             : null;
-        if (hasCustodianUserInput(params) && isCustodianSessionInvalidatedError(error)) {
+        const sessionInvalidated = isCustodianSessionInvalidatedError(error);
+        if (sessionInvalidated && hasCustodianUserInput(params)) {
           // Retained transcript rows are display context only; the next turn needs a fresh id.
-          this.rotateVolatileSession(client, this.currentSessionVariant());
+          this.restartVolatileSession(client, this.variant, true);
+          this.error = t("custodian.sessionRestarted", { error: custodianErrorMessage(error) });
+        } else if (sessionInvalidated) {
+          this.replaceSessionId();
+          this.retryParams = { ...params, sessionId: this.sessionId };
           this.error = t("custodian.sessionRestarted", { error: custodianErrorMessage(error) });
         }
       }

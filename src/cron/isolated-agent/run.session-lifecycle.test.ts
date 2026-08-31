@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as diagnostic from "../../logging/diagnostic.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
@@ -20,6 +21,9 @@ import {
   preflightCronModelProviderMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
+  resolveCronDeliveryPlanMock,
+  resolveCronPayloadOutcomeMock,
+  resolveDeliveryTargetMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
@@ -257,44 +261,118 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     expect(mutationCommitted).toBe(true);
   });
 
-  it("releases an isolated run lease before delete-after-run cleanup", async () => {
-    const sessionKey = "agent:main:cron:test-job";
-    const sessionId = "isolated-session";
-    const storePath = inMemoryStorePath;
+  it("releases admission when final lifecycle marking fails", async () => {
+    const sessionKey = "agent:main:cron:final-lifecycle-failure";
+    const sessionId = "final-lifecycle-session";
+    const initialSessionEntry = makeCronSessionEntry({ sessionId });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
-        storePath,
-        initialSessionEntry: undefined,
-        isNewSession: true,
-        sessionEntry: makeCronSessionEntry({ sessionId }),
+        storePath: inMemoryStorePath,
+        store: { [sessionKey]: { ...initialSessionEntry } },
+        initialSessionEntry,
+        isNewSession: false,
+        sessionEntry: { ...initialSessionEntry },
       }),
     );
-    loadSessionEntryMock.mockReturnValue(undefined);
-    let admissionActiveDuringDelete = true;
-    callGatewayMock.mockImplementationOnce(async () => {
-      admissionActiveDuringDelete = isSessionWorkAdmissionActive(storePath, [
-        sessionKey,
-        sessionId,
-      ]);
-      return { ok: true, deleted: true };
-    });
+    loadSessionEntryMock.mockReturnValue({ ...initialSessionEntry });
+    const originalLogSessionStateChange = diagnostic.logSessionStateChange;
+    const logSessionStateChangeSpy = vi
+      .spyOn(diagnostic, "logSessionStateChange")
+      .mockImplementation((params) => {
+        if (params.state === "idle") {
+          throw new Error("simulated final lifecycle failure");
+        }
+        return originalLogSessionStateChange(params);
+      });
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({
-        agentId: "main",
-        sessionKey: "cron:test-job",
-        job: makeIsolatedAgentJobFixture({
-          sessionTarget: "isolated",
-          deleteAfterRun: true,
-          delivery: { mode: "none" },
-        }),
-      }),
-    );
-
-    expect(result.status).toBe("ok");
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(admissionActiveDuringDelete).toBe(false);
+    try {
+      await expect(runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey))).rejects.toThrow(
+        "simulated final lifecycle failure",
+      );
+      expect(isSessionWorkAdmissionActive(inMemoryStorePath, [sessionKey, sessionId])).toBe(false);
+    } finally {
+      logSessionStateChangeSpy.mockRestore();
+    }
   });
+
+  it.each(["none", "silent", "best-effort", "execution error", "presentation warning"])(
+    "settles isolated %s cleanup after releasing its lease",
+    async (outcome) => {
+      dispatchCronDeliveryMock.mockImplementationOnce(
+        (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
+          .dispatchCronDelivery,
+      );
+      const bestEffort = outcome !== "none" && outcome !== "silent";
+      const failed = outcome === "execution error" || outcome === "presentation warning";
+      resolveCronPayloadOutcomeMock.mockImplementation(
+        (await vi.importActual<typeof import("./helpers.js")>("./helpers.js"))
+          .resolveCronPayloadOutcome,
+      );
+      resolveCronDeliveryPlanMock.mockReturnValue({
+        requested: outcome !== "none",
+        mode: outcome === "none" ? "none" : "announce",
+      });
+      resolveDeliveryTargetMock.mockResolvedValue({
+        ok: false,
+        mode: "implicit",
+        error: new Error("delivery target unavailable"),
+      });
+      runEmbeddedAgentMock.mockResolvedValue({
+        payloads: [
+          { text: outcome === "silent" ? "NO_REPLY" : "Report" },
+          ...(outcome === "presentation warning"
+            ? [{ text: "⚠️ ✉️ Message failed", isError: true }]
+            : []),
+        ],
+        meta: {
+          agentMeta: {},
+          ...(outcome === "silent" ? { finalAssistantRawText: "NO_REPLY" } : {}),
+          ...(outcome === "execution error"
+            ? { error: { kind: "provider_error", message: "provider failed" } }
+            : {}),
+        },
+      });
+      const sessionKey = "agent:main:cron:test-job";
+      const sessionId = "isolated-session";
+      const storePath = inMemoryStorePath;
+      resolveCronSessionMock.mockReturnValue(
+        makeCronSession({
+          storePath,
+          initialSessionEntry: undefined,
+          isNewSession: true,
+          sessionEntry: makeCronSessionEntry({ sessionId }),
+        }),
+      );
+      loadSessionEntryMock.mockReturnValue(undefined);
+      let admissionActiveDuringDelete = true;
+      callGatewayMock.mockImplementationOnce(async () => {
+        admissionActiveDuringDelete = isSessionWorkAdmissionActive(storePath, [
+          sessionKey,
+          sessionId,
+        ]);
+        return { ok: true, deleted: true };
+      });
+
+      const result = await runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          agentId: "main",
+          sessionKey: "cron:test-job",
+          job: makeIsolatedAgentJobFixture({
+            sessionTarget: "isolated",
+            deleteAfterRun: true,
+            delivery: { mode: outcome === "none" ? "none" : "announce", bestEffort },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe(failed ? "error" : "ok");
+      expect(callGatewayMock).toHaveBeenCalledTimes(failed ? 0 : 1);
+      if (!failed) {
+        expect(admissionActiveDuringDelete).toBe(false);
+      }
+      expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
+    },
+  );
 
   it("keeps a non-deleting isolated run admitted through delivery", async () => {
     const sessionKey = "agent:main:cron:test-job";
@@ -408,6 +486,10 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   });
 
   it("releases a custom cron session lease before delete-after-run cleanup", async () => {
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
+        .dispatchCronDelivery,
+    );
     const sessionKey = "agent:main:cron:cleanup";
     const sessionId = "custom-cron-session";
     const storePath = inMemoryStorePath;

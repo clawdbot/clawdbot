@@ -1,11 +1,44 @@
 // Host-thaw channel restart over the public ChannelManager surface.
 import type { ChannelId } from "../channels/plugins/index.js";
-import type { ChannelManager } from "./server-channels.js";
+import type { ChannelAccountStartOutcome, ChannelManager } from "./server-channels.js";
 
 type ThawRestartManager = Pick<
   ChannelManager,
-  "getRuntimeSnapshot" | "isManuallyStopped" | "stopChannel" | "startChannel"
->;
+  "getRuntimeSnapshot" | "isManuallyStopped" | "stopChannel"
+> & {
+  startChannelAccountForRecovery: (
+    channelId: ChannelId,
+    accountId: string,
+    opts: { preserveManualStop: true },
+  ) => Promise<ChannelAccountStartOutcome>;
+};
+
+export type ThawRestartTarget = { channelId: ChannelId; accountId: string };
+
+export type ThawRestartSelection =
+  | { kind: "new-thaw"; pendingTargets?: readonly ThawRestartTarget[] }
+  | { kind: "deferred-retry"; targets: readonly ThawRestartTarget[] };
+
+function snapshotRunningTargets(manager: ThawRestartManager): ThawRestartTarget[] {
+  return Object.entries(manager.getRuntimeSnapshot().channelAccounts).flatMap(
+    ([channelId, accounts]) =>
+      Object.entries(accounts ?? {})
+        .filter(([, status]) => status?.running === true)
+        .map(([accountId]) => ({ channelId: channelId as ChannelId, accountId })),
+  );
+}
+
+function dedupeTargets(targets: readonly ThawRestartTarget[]): ThawRestartTarget[] {
+  const seen = new Set<string>();
+  return targets.filter((target) => {
+    const key = `${target.channelId}:${target.accountId}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
 
 /**
  * Restarts every running, non-manually-stopped channel account after a host
@@ -14,34 +47,64 @@ type ThawRestartManager = Pick<
 export async function restartRunningChannelAccounts(
   manager: ThawRestartManager,
   opts: { shouldContinue: () => boolean; onError: (message: string) => void },
-): Promise<void> {
-  const snapshot = manager.getRuntimeSnapshot();
-  for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
-    for (const [accountId, status] of Object.entries(accounts ?? {})) {
-      const channel = channelId as ChannelId;
-      if (status?.running !== true || manager.isManuallyStopped(channel, accountId)) {
+  selection: ThawRestartSelection = { kind: "new-thaw" },
+): Promise<ThawRestartTarget[]> {
+  const targets =
+    selection.kind === "new-thaw"
+      ? dedupeTargets([...(selection.pendingTargets ?? []), ...snapshotRunningTargets(manager)])
+      : [...selection.targets];
+  const failedTargets: ThawRestartTarget[] = [];
+  for (const [index, target] of targets.entries()) {
+    const { channelId, accountId } = target;
+    if (manager.isManuallyStopped(channelId, accountId)) {
+      continue;
+    }
+    // A suspension can commit while an account stop is awaited; retain only
+    // unfinished targets so successful siblings are not disrupted again.
+    if (!opts.shouldContinue()) {
+      return [...failedTargets, ...targets.slice(index)];
+    }
+    try {
+      let current = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
+      if (!current) {
         continue;
       }
-      // A suspension can commit while an account stop is awaited; later
-      // accounts must stay untouched so the prepared gateway remains quiet.
+      await manager.stopChannel(channelId, accountId, { manual: false });
       if (!opts.shouldContinue()) {
-        return;
+        return [...failedTargets, target, ...targets.slice(index + 1)];
       }
-      try {
-        await manager.stopChannel(channel, accountId, { manual: false });
-        if (!opts.shouldContinue()) {
-          return;
-        }
-        await manager.startChannel(channel, accountId, { preserveManualStop: true });
-        const restarted = manager.getRuntimeSnapshot().channelAccounts[channel]?.[accountId];
-        if (restarted?.restartPending === true) {
-          // A timed-out stop uses a two-call recovery contract: the first call
-          // requests replacement and the second discards the stale task.
-          await manager.startChannel(channel, accountId, { preserveManualStop: true });
-        }
-      } catch (error) {
-        opts.onError(`[${channel}:${accountId}] host-thaw restart failed: ${String(error)}`);
+      current = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
+      if (!current) {
+        continue;
       }
+      let startOutcome = await manager.startChannelAccountForRecovery(channelId, accountId, {
+        preserveManualStop: true,
+      });
+      let restarted = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
+      if (startOutcome.status === "retry" && restarted?.restartPending === true) {
+        // A timed-out stop uses a two-call recovery contract: the first call
+        // requests replacement and the second discards the stale task.
+        startOutcome = await manager.startChannelAccountForRecovery(channelId, accountId, {
+          preserveManualStop: true,
+        });
+        restarted = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
+      }
+      // The channel manager owns all failures after handoff through its restart
+      // supervisor. Intentional configuration skips are complete; only a
+      // transient owner conflict remains this thaw's retry.
+      if (startOutcome.status === "retry") {
+        failedTargets.push(target);
+        opts.onError(
+          `[${channelId}:${accountId}] host-thaw restart failed: replacement was not handed off (${startOutcome.reason})${restarted?.lastError ? `: ${restarted.lastError}` : ""}`,
+        );
+      }
+    } catch (error) {
+      failedTargets.push(target);
+      opts.onError(`[${channelId}:${accountId}] host-thaw restart failed: ${String(error)}`);
+    }
+    if (!opts.shouldContinue()) {
+      return [...failedTargets, ...targets.slice(index + 1)];
     }
   }
+  return failedTargets;
 }

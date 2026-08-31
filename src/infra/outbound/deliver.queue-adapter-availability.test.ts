@@ -8,14 +8,16 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import {
   boundedCronCompletionRetention,
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
-import { loadPendingDeliveries } from "./delivery-queue-storage.js";
+import { enqueueDelivery } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
   setQueuedEntryState,
@@ -132,6 +134,48 @@ describe("queued lazy outbound adapter availability", () => {
     ).toBe("completed");
   });
 
+  it("retains recovery custody when no outbound adapter can be resolved", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const id = await enqueueDelivery(
+      {
+        channel: "missing-adapter-test",
+        to: "recipient",
+        payloads: [{ text: "retry after adapter resolution" }],
+      },
+      tmpDir,
+    );
+    let deliveryError: unknown;
+    const recoveryDeliver = vi.fn<DeliverFn>(async (params) => {
+      try {
+        return await deliverOutboundPayloads(params);
+      } catch (error) {
+        deliveryError = error;
+        throw error;
+      }
+    });
+
+    const result = await recoverPendingDeliveries({
+      cfg: {} as OpenClawConfig,
+      deliver: recoveryDeliver,
+      log: createRecoveryLog(),
+      stateDir: tmpDir,
+    });
+
+    expect(result).toMatchObject({ failed: 1, recovered: 0, skippedMaxRetries: 0 });
+    expect(recoveryDeliver).toHaveBeenCalledOnce();
+    expect(deliveryError).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    const pendingEntry = expectDefined(
+      (await loadPendingDeliveries(tmpDir))[0],
+      "retained adapter-miss delivery",
+    );
+    expect(pendingEntry).toMatchObject({ id, retryCount: 1 });
+    expect(pendingEntry.recoveryState).toBeUndefined();
+    expect(pendingEntry.platformSendAttemptId).toBeUndefined();
+    expect(pendingEntry.platformSendStartedAt).toBeUndefined();
+    expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir)).toBe("pending");
+  });
+
   it("does not replay a provider call that already crossed the ambiguous send boundary", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     setActivePluginRegistry(
@@ -161,7 +205,7 @@ describe("queued lazy outbound adapter availability", () => {
     ).rejects.toThrow("provider result was lost");
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       id: deliveryIntentId,
-      recoveryState: "send_attempt_started",
+      recoveryState: "unknown_after_send",
     });
 
     const recoveryDeliver = vi.fn<DeliverFn>(async () => []);

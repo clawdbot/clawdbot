@@ -12,7 +12,6 @@ import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
   buildQualifiedChatModelValue,
-  createChatModelOverride,
   formatCatalogChatModelDisplayFromLookup,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
@@ -111,15 +110,13 @@ describe("chat-model-ref helpers", () => {
   });
 
   it("normalizes raw overrides when the catalog match is unique", () => {
-    expect(normalizeChatModelOverrideValue(createChatModelOverride("gpt-5-mini"), catalog)).toBe(
-      "openai/gpt-5-mini",
-    );
+    expect(normalizeChatModelOverrideValue("gpt-5-mini", catalog)).toBe("openai/gpt-5-mini");
   });
 
   it("keeps ambiguous raw overrides unchanged", () => {
     expect(
       normalizeChatModelOverrideValue(
-        createChatModelOverride("gpt-5-mini"),
+        "gpt-5-mini",
         createAmbiguousModelCatalog("gpt-5-mini", "openai", "openrouter"),
       ),
     ).toBe("gpt-5-mini");

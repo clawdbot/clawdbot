@@ -7,9 +7,11 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   createWorkspaceReconcileMetrics,
   MAX_WORKSPACE_HASH_MEMO_BYTES,
+  pruneWorkspaceHashMemo,
   recordRemoteWorkspaceHashMetrics,
   serializeRemoteWorkspaceHashMemo,
   withWorkspaceHashMemo,
+  type WorkspaceHashMemo,
 } from "./workspace-hash-memo.js";
 import { MAX_RECONCILIATION_ENTRIES, type WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { preflightWorkspaceApply, readActualWorkspaceManifest } from "./workspace-reconcile.js";
@@ -270,7 +272,6 @@ describe("workspace hash memo", () => {
     };
 
     const first = await capture([]);
-    expect(first.memo).toHaveLength(2);
     expect(
       first.memo
         .map(([identity]) => Number(identity.split(":")[3]))
@@ -290,5 +291,27 @@ describe("workspace hash memo", () => {
       memoHitCount: 2,
       memoTruncatedCount: 1,
     });
+  });
+});
+
+describe("placement hash memo pruning", () => {
+  it("keeps a memo under the byte cap and clears one that exceeds it", () => {
+    const retained: WorkspaceHashMemo = new Map([
+      ["worker:1:2:3:4:5", "a".repeat(64)],
+      ["gateway:1:2:3:4:5", "b".repeat(64)],
+    ]);
+    pruneWorkspaceHashMemo(retained);
+    expect(retained.size).toBe(2);
+
+    const digest = "c".repeat(64);
+    const oversized: WorkspaceHashMemo = new Map();
+    let bytes = 0;
+    for (let index = 0; bytes <= MAX_WORKSPACE_HASH_MEMO_BYTES; index += 1) {
+      const identity = `gateway:${index}:0:0:0:0`;
+      oversized.set(identity, digest);
+      bytes += identity.length + digest.length;
+    }
+    pruneWorkspaceHashMemo(oversized);
+    expect(oversized.size).toBe(0);
   });
 });

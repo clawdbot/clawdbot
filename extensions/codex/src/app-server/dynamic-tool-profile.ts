@@ -27,7 +27,6 @@ const CODEX_APP_SERVER_OWNED_REPLACEABLE_TOOL_EXCLUDES = new Set([
   "write",
   "edit",
   "apply_patch",
-  "update_plan",
   ...CODEX_NATIVE_GOAL_TOOL_EXCLUDES,
 ]);
 const CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES = new Set(["exec", "process"]);

@@ -42,6 +42,17 @@ function resolvePositiveTokenCount(value: number | undefined): number | undefine
     : undefined;
 }
 
+/** Resolves the blocking threshold using the selected reserve and server floor. */
+export function resolveCompactionThreshold(params: {
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  minimumThresholdTokens?: number;
+}): number {
+  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
+  return Math.max(0, contextWindow - reserveTokens, Math.floor(params.minimumThresholdTokens ?? 0));
+}
+
 export function resolveResponsesServerCompactionThreshold(params: {
   cfg?: OpenClawConfig;
   provider?: string;
@@ -81,6 +92,11 @@ export function resolveResponsesServerCompactionThreshold(params: {
   }
   const defaultOpenAIBaseUrl =
     normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
+  const activeContextTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider,
+    modelId,
+  });
   return resolveOpenAIResponsesServerCompactionPlan(
     {
       provider,
@@ -90,23 +106,19 @@ export function resolveResponsesServerCompactionThreshold(params: {
         (normalizedProvider === "openai" ? "openai-responses" : undefined),
       baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? defaultOpenAIBaseUrl,
       compat: configuredModel?.compat,
-      contextWindow:
-        configuredModel?.contextWindow ??
-        resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+      contextTokens: configuredModel?.contextTokens ?? activeContextTokens,
+      contextWindow: configuredModel?.contextWindow ?? activeContextTokens,
     },
     extraParams,
   ).threshold;
 }
 
-function resolveMemoryFlushGateState<
+function resolveMaintenanceGateState<
   TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
 >(params: {
   entry?: TEntry;
   tokenCount?: number;
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
-  minimumThresholdTokens?: number;
+  threshold: number;
 }): { entry: TEntry; totalTokens: number; threshold: number } | null {
   if (!params.entry) {
     return null;
@@ -118,19 +130,8 @@ function resolveMemoryFlushGateState<
     return null;
   }
 
-  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
-  const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
-  const threshold = Math.max(
-    0,
-    contextWindow - reserveTokens - softThreshold,
-    Math.floor(params.minimumThresholdTokens ?? 0),
-  );
-  if (threshold <= 0) {
-    return null;
-  }
-
-  return { entry: params.entry, totalTokens, threshold };
+  const threshold = params.threshold;
+  return threshold > 0 ? { entry: params.entry, totalTokens, threshold } : null;
 }
 
 export function shouldRunMemoryFlush(params: {
@@ -144,11 +145,9 @@ export function shouldRunMemoryFlush(params: {
    * SessionEntry.totalTokens (which may be stale/unknown).
    */
   tokenCount?: number;
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
+  threshold: number;
 }): boolean {
-  const state = resolveMemoryFlushGateState(params);
+  const state = resolveMaintenanceGateState(params);
   if (!state || state.totalTokens < state.threshold) {
     return false;
   }
@@ -168,12 +167,9 @@ export function shouldRunPreflightCompaction(params: {
    * of any cached SessionEntry total.
    */
   tokenCount?: number;
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
-  minimumThresholdTokens?: number;
+  threshold: number;
 }): boolean {
-  const state = resolveMemoryFlushGateState(params);
+  const state = resolveMaintenanceGateState(params);
   return Boolean(state && state.totalTokens >= state.threshold);
 }
 

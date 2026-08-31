@@ -90,7 +90,8 @@ export function repairRejectedCompactionReplayInSessionManager(
       (entry) =>
         entry.type === "message" &&
         entry.message.role === "assistant" &&
-        entry.message.providerReplay?.type === "openai-responses-compaction" &&
+        (entry.message.providerReplay?.type === "openai-responses-compaction" ||
+          entry.message.providerReplay?.type === "openai-responses-retained-compaction") &&
         entry.message.providerReplay.data === params.checkpoint.data &&
         (params.checkpoint.id === undefined ||
           entry.message.providerReplay.id === params.checkpoint.id),

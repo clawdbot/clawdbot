@@ -1,11 +1,11 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Discord plugin module implements runtime.messaging.messages behavior.
 import {
   jsonResult,
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 

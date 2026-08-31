@@ -1,8 +1,6 @@
 name: Mantis Web UI Chat Proof
 
 on:
-  issue_comment: # zizmor: ignore[dangerous-triggers] maintainer-only Mantis command; candidate refs are trusted before execution and publishing runs in a separate job
-    types: [created]
   workflow_dispatch:
     inputs:
       candidate_ref:
@@ -93,7 +91,7 @@ jobs:
       candidate_revision: ${{ steps.validate.outputs.candidate-revision }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -120,14 +118,18 @@ jobs:
       proof_status: ${{ steps.run_mantis.outputs.proof_status }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
 
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
           install-deps: "false"
@@ -140,7 +142,7 @@ jobs:
           set -euo pipefail
           worktree_root=".artifacts/qa-e2e/mantis/web-ui-chat-proof-worktrees"
           mkdir -p "$worktree_root"
-          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
           pnpm --dir "$worktree_root/candidate" install --frozen-lockfile --prefer-offline
 
       - name: Run web UI chat proof
@@ -214,7 +216,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 

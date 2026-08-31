@@ -110,6 +110,13 @@ Starting a guided setup flow also runs immediately: channel setup (`connect tele
 
 Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
 
+Changes delegated by a regular agent, including requests from messaging channels,
+require approval in the OpenClaw operator UI. Replying "yes" in that chat cannot
+approve the change. Run `openclaw dashboard` on the Gateway host to review the
+pending approval, or run the change directly with `openclaw setup` there.
+Interactive setup and agent handoffs require a direct operator session;
+delegated chat cannot start a wizard, even when a model proposes it.
+
 Configured agents can ask OpenClaw to create another agent through their
 `openclaw` tool. The request enters the same typed create-agent operation and
 operator approval flow used by Ask OpenClaw; the approval summary names the
@@ -249,10 +256,9 @@ Message-channel rescue mode never uses the model-assisted planner. Remote rescue
 Embedded runtimes and the Codex app-server harness enforce the ring-zero
 restriction directly: the run carries an OpenClaw tool allow-list with only
 the `openclaw` tool. For Codex, OpenClaw also disables environments, native
-execution, multi-agent, goal, app/plugin, skill/MCP, web-search, and
-`request_user_input` surfaces for that run. Codex still injects its inert native `update_plan`
-utility; it can update the model's temporary checklist but cannot write files
-or OpenClaw configuration. CLI harnesses do not consume OpenClaw's allow-list,
+execution, multi-agent, goal, app/plugin, skill/MCP, web-search,
+`request_user_input`, and its native planning utility for that run. CLI
+harnesses do not consume OpenClaw's allow-list,
 so OpenClaw admits only backends whose own tool-selection contract can prove
 the same restriction:
 

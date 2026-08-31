@@ -6,7 +6,7 @@ import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 
 // Extracts assistant-message canvas previews from tool JSON or markdown embed
 // shortcodes. The returned text strips consumed shortcodes for channel delivery.
-type CanvasSurface = "assistant_message";
+type CanvasSurface = "assistant_message" | "node_panel";
 type CanvasSandbox = "strict" | "scripts";
 
 type McpAppPreviewDescriptor = {
@@ -95,7 +95,7 @@ function coerceMcpAppDescriptor(
 }
 
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
-  return value === "assistant_message" ? value : undefined;
+  return value === "assistant_message" || value === "node_panel" ? value : undefined;
 }
 
 function normalizeSandbox(value: string | undefined): CanvasSandbox | undefined {
@@ -287,10 +287,17 @@ export function extractCanvasShortcodes(text: string | undefined): {
   const blockRe = /\[embed\s+([^\]]*?[^\]/]|)\]([\s\S]*?)\[\/embed\]/gi;
   const selfClosingRe = /\[embed\s+([^\]]*?)\/\]/gi;
   for (const re of [blockRe, selfClosingRe]) {
+    // Each regex starts a new ascending pass over the ordered fence spans.
+    let fenceIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = re.exec(text))) {
       const start = match.index ?? 0;
-      if (fenceSpans.some((span) => start >= span.start && start < span.end)) {
+      let fence = fenceSpans[fenceIndex];
+      while (fence && start >= fence.end) {
+        fenceIndex += 1;
+        fence = fenceSpans[fenceIndex];
+      }
+      if (fence && start >= fence.start) {
         // Literal embed examples in code blocks must remain visible text.
         continue;
       }

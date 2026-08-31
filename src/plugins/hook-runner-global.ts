@@ -77,7 +77,7 @@ export function getGlobalPluginRegistry(): GlobalHookRunnerRegistry | null {
  */
 export function hasGlobalHooks<K extends PluginHookName>(
   hookName: K,
-  ctx?: Parameters<PluginHookHandlerMap[K]>[1],
+  ctx?: Partial<Parameters<PluginHookHandlerMap[K]>[1]>,
 ): boolean {
   return getHookRunnerGlobalState().hookRunner?.hasHooks(hookName, ctx) ?? false;
 }

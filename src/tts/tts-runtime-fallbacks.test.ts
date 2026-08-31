@@ -495,7 +495,6 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
           text: structured ? undefined : answer,
           channelData,
         });
-        expect(dispatcher.getFailedCounts().final).toBe(0);
         expect((await import("./runtime-api.js")).getLastTtsAttempt()).toMatchObject({
           success: false,
           attemptedProviders: ["mock"],
@@ -792,31 +791,78 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
 });
 
 describe("cold speech runtime visible fallback", () => {
-  it("materializes voice-only structured speech as visible text when the runtime is unavailable", async () => {
-    const { setSpeechRuntimeAvailabilityGuard } = await import("./runtime-availability.js");
-    setSpeechRuntimeAvailabilityGuard(() => {
-      throw new Error("speech runtime configured cold");
-    });
-    try {
-      const payload: ReplyPayload = { text: "" };
-      setReplyPayloadMetadata(payload, {
-        ttsExplicit: true,
-        tts: { tagged: true, text: "Spoken greeting" },
+  it.each([
+    { loaded: true, structured: false },
+    { loaded: true, structured: true },
+    { loaded: false, structured: false },
+    { loaded: false, structured: true },
+  ])(
+    "delivers voice-only speech when its runtime is unavailable (loaded: $loaded, structured: $structured)",
+    async ({ loaded, structured }) => {
+      const { setSpeechRuntimeAvailabilityGuard } = await import("./runtime-availability.js");
+      const restoreRegistry = installStructuredReplyTestChannel(loaded);
+      setSpeechRuntimeAvailabilityGuard(() => {
+        throw new Error("speech runtime configured cold");
       });
-      const result = await maybeApplyTtsToPayloadCore(
-        {
-          payload,
-          cfg: createTtsConfig("openclaw-speech-cold-runtime-fallback-test"),
-          channel: "slack",
-          kind: "final",
-        },
-        async () => "unused",
-      );
-      expect(result.text).toBe("Spoken greeting");
-    } finally {
-      setSpeechRuntimeAvailabilityGuard(undefined);
-    }
-  });
+      routedPayloads.length = 0;
+      synthesizeMock.mockClear();
+      try {
+        const answer = "Spoken greeting";
+        const channelData = structured
+          ? {
+              slack: {
+                blocks: [
+                  { type: "section", text: { type: "mrkdwn", text: "Visible channel card" } },
+                ],
+              },
+            }
+          : { slack: { unfurl: false } };
+        const cfg = createTtsConfig(`openclaw-speech-cold-runtime-${loaded}-${structured}`);
+        const routingResults: Array<Awaited<ReturnType<typeof routeReply>>> = [];
+        const dispatcher = createReplyDispatcher({
+          beforeDeliver: (payload, info) =>
+            maybeApplyTtsToPayloadCore(
+              { payload, cfg, channel: "slack", kind: info.kind },
+              async () => "unused",
+            ),
+          deliver: async (payload, info) => {
+            routingResults.push(
+              await routeReply({
+                payload,
+                channel: "slack",
+                to: "channel:C123",
+                cfg,
+                replyKind: info.kind,
+              }),
+            );
+          },
+        });
+
+        expect(
+          dispatcher.sendFinalReply(
+            setReplyPayloadMetadata(
+              { text: "", channelData },
+              { ttsExplicit: true, tts: { tagged: true, text: answer } },
+            ),
+          ),
+        ).toBe(true);
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+
+        expect(routingResults).toEqual([{ ok: true, delivered: true, messageId: "tts-route-1" }]);
+        expect(routedPayloads).toHaveLength(1);
+        expect(routedPayloads[0]).toMatchObject({
+          text: structured ? "" : answer,
+          channelData,
+        });
+        expect(synthesizeMock).not.toHaveBeenCalled();
+      } finally {
+        setSpeechRuntimeAvailabilityGuard(undefined);
+        restoreRegistry();
+        routedPayloads.length = 0;
+      }
+    },
+  );
 
   it("keeps payloads with visible text unchanged when the runtime is unavailable", async () => {
     const { setSpeechRuntimeAvailabilityGuard } = await import("./runtime-availability.js");

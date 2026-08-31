@@ -9,6 +9,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import {
   buildTaskStatusSnapshot,
+  formatTaskStatus,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../../tasks/task-status.js";
@@ -18,10 +19,11 @@ import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const MAX_VISIBLE_TASKS = 5;
 
-const TASK_STATUS_ICONS: Record<TaskRecord["status"], string> = {
+const TASK_STATUS_ICONS: Record<ReturnType<typeof formatTaskStatus>, string> = {
   queued: "🟡",
   running: "🟢",
   succeeded: "✅",
+  blocked: "⚠️",
   failed: "🔴",
   timed_out: "⏱️",
   cancelled: "⚪️",
@@ -62,20 +64,16 @@ function formatTaskTiming(task: TaskRecord): string | undefined {
   return `finished ${formatTimeAgo(Date.now() - endedAt)}`;
 }
 
-function formatTaskDetail(task: TaskRecord): string | undefined {
-  return formatTaskStatusDetail(task);
-}
-
 function formatVisibleTask(task: TaskRecord, index: number): string {
   const title = formatTaskStatusTitle(task);
-  const status = task.status.replaceAll("_", " ");
+  const status = formatTaskStatus(task);
   const timing = formatTaskTiming(task);
-  const detail = formatTaskDetail(task);
-  let meta = `${TASK_RUNTIME_LABELS[task.runtime]} · ${status}`;
+  const detail = formatTaskStatusDetail(task);
+  let meta = `${TASK_RUNTIME_LABELS[task.runtime]} · ${status.replaceAll("_", " ")}`;
   if (timing) {
     meta += ` · ${timing}`;
   }
-  const lines = [`${index + 1}. ${TASK_STATUS_ICONS[task.status]} ${title}`, `   ${meta}`];
+  const lines = [`${index + 1}. ${TASK_STATUS_ICONS[status]} ${title}`, `   ${meta}`];
   if (detail) {
     lines.push(`   ${detail}`);
   }

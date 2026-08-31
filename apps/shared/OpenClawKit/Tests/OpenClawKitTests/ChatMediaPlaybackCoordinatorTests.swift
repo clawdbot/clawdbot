@@ -43,6 +43,7 @@ private final class RecordingNowPlayingOwner: ChatMediaNowPlayingOwner {
         duration: 42,
         elapsed: 3,
         playbackRate: 1)
+    var onCommand: (@MainActor (ChatMediaRemoteCommand) -> Void)?
     private(set) var commands: [ChatMediaRemoteCommand] = []
 
     func stopForMediaPlaybackInterruption() {}
@@ -54,6 +55,7 @@ private final class RecordingNowPlayingOwner: ChatMediaNowPlayingOwner {
             duration: 42,
             elapsed: 4,
             playbackRate: command == .pause ? 0 : 1)
+        self.onCommand?(command)
     }
 }
 
@@ -120,5 +122,33 @@ struct ChatMediaPlaybackCoordinatorTests {
 
         #expect(center.published.count == 1)
         #expect(center.clearCount == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func `remote commands never republish a released or replaced owner`(replaceOwner: Bool) {
+        let center = RecordingNowPlayingCenter()
+        let coordinator = ChatMediaPlaybackCoordinator(nowPlayingCenter: center)
+        let owner = RecordingNowPlayingOwner()
+        let replacement = RecordingNowPlayingOwner()
+        replacement.nowPlayingMetadata = ChatMediaNowPlayingMetadata(
+            title: "next.mov",
+            duration: 12,
+            elapsed: 0,
+            playbackRate: 1)
+        owner.onCommand = { [weak owner] _ in
+            guard let owner else { return }
+            if replaceOwner {
+                coordinator.activate(replacement)
+            } else {
+                coordinator.release(owner)
+            }
+        }
+
+        coordinator.activate(owner)
+        center.send(.play)
+
+        #expect(center.published.count == (replaceOwner ? 2 : 1))
+        #expect(center.published.last?.title == (replaceOwner ? "next.mov" : "clip.mov"))
+        #expect(center.clearCount == (replaceOwner ? 0 : 1))
     }
 }

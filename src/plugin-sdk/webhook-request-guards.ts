@@ -9,11 +9,17 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";
+import {
+  isHttpConnectionClosing,
+  sendHttpRequestRejection,
+  waitForHttpRequestRejection,
+} from "../infra/http-request-lifecycle.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 
 export { resolveAcceptedBrowserOrigin } from "../gateway/origin-check.js";
+export { sendHttpRequestRejection } from "../infra/http-request-lifecycle.js";
 
 /** Body-read profile for webhook payload limits before or after authentication. */
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
@@ -83,24 +89,26 @@ function resolveWebhookBodyReadLimits(params: {
   return { maxBytes, timeoutMs };
 }
 
-function respondWebhookBodyReadError(params: {
+async function respondWebhookBodyReadError(params: {
   req: IncomingMessage;
   res: ServerResponse;
   code: string;
   invalidMessage?: string;
   invalidStatusCode?: number;
-}): { ok: false } {
+}): Promise<{ ok: false }> {
   const { req, res, code, invalidMessage, invalidStatusCode } = params;
-  if (code === "PAYLOAD_TOO_LARGE") {
-    closeRequestAfterResponse(req, res);
-    res.statusCode = 413;
-    res.end(requestBodyErrorToText("PAYLOAD_TOO_LARGE"));
+  if (code === "PAYLOAD_TOO_LARGE" || code === "REQUEST_BODY_TIMEOUT") {
+    await sendHttpRequestRejection(
+      req,
+      res,
+      code === "PAYLOAD_TOO_LARGE" ? 413 : 408,
+      requestBodyErrorToText(code),
+    );
     return { ok: false };
   }
-  if (code === "REQUEST_BODY_TIMEOUT") {
-    closeRequestAfterResponse(req, res);
-    res.statusCode = 408;
-    res.end(requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+  const rejection = waitForHttpRequestRejection(req);
+  if (rejection) {
+    await rejection;
     return { ok: false };
   }
   if (code === "CONNECTION_CLOSED") {
@@ -111,19 +119,6 @@ function respondWebhookBodyReadError(params: {
   res.statusCode = invalidStatusCode ?? 400;
   res.end(invalidMessage ?? "Bad Request");
   return { ok: false };
-}
-
-function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
-  const once = Reflect.get(res, "once");
-  if (typeof once !== "function") {
-    return;
-  }
-  res.setHeader("Connection", "close");
-  once.call(res, "finish", () => {
-    if (!req.destroyed) {
-      req.destroy();
-    }
-  });
 }
 
 /** Create an in-memory limiter that caps concurrent webhook handlers per key. */
@@ -206,6 +201,9 @@ export function applyBasicWebhookRequestGuards(params: {
   /** Require JSON content type for POST requests. */
   requireJsonContentType?: boolean;
 }): boolean {
+  if (isHttpConnectionClosing(params.req.socket)) {
+    return false;
+  }
   const allowMethods = params.allowMethods?.length ? params.allowMethods : null;
   if (allowMethods && !allowMethods.includes(params.req.method ?? "")) {
     params.res.statusCode = 405;
@@ -296,7 +294,12 @@ export function beginWebhookRequestPipelineOrReject(params: {
       // Pipeline cleanup may run from multiple exits; release must stay idempotent.
       released = true;
       if (inFlightLimiter && inFlightKey) {
-        inFlightLimiter.release(inFlightKey);
+        const closed = waitForHttpRequestRejection(params.req);
+        if (closed) {
+          void closed.then(() => inFlightLimiter.release(inFlightKey));
+        } else {
+          inFlightLimiter.release(inFlightKey);
+        }
       }
     },
   };

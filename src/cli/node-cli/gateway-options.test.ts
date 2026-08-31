@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { encodePairingSetupCode } from "../../pairing/setup-code.js";
 import { resolveNodeGatewayOptions, resolveNodePairGatewayOptions } from "./gateway-options.js";
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+
 describe("node gateway options", () => {
   it("preserves ordered pairing endpoint candidates and pins only the direct endpoint", () => {
     const pair = resolveNodePairGatewayOptions(
@@ -9,7 +11,7 @@ describe("node gateway options", () => {
         url: "wss://192.168.1.20:8443/openclaw-gw",
         urls: ["wss://192.168.1.20:8443/openclaw-gw", "wss://gateway.tailnet.example/tailnet-gw"],
         bootstrapToken: "bootstrap-123",
-        tlsFingerprint: "sha256:direct-leaf",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
       }),
     );
 
@@ -19,7 +21,7 @@ describe("node gateway options", () => {
         port: 8443,
         contextPath: "/openclaw-gw",
         tls: true,
-        tlsFingerprint: "sha256:direct-leaf",
+        tlsFingerprint: TLS_FINGERPRINT,
       },
       {
         host: "gateway.tailnet.example",
@@ -58,5 +60,15 @@ describe("node gateway options", () => {
       host: "manual.example",
       gatewayCandidates: undefined,
     });
+  });
+
+  it("canonicalizes explicit TLS pins and rejects invalid values", () => {
+    const colonFingerprint = (TLS_FINGERPRINT.match(/.{2}/gu)?.join(":") ?? "").toUpperCase();
+    expect(
+      resolveNodeGatewayOptions({ tlsFingerprint: `SHA256:${colonFingerprint}` }, null),
+    ).toMatchObject({ tls: true, tlsFingerprint: TLS_FINGERPRINT });
+    expect(() => resolveNodeGatewayOptions({ tlsFingerprint: "abc123" }, null)).toThrow(
+      "Invalid TLS fingerprint",
+    );
   });
 });

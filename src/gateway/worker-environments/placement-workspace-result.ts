@@ -32,6 +32,45 @@ export type WorkerWorkspacePendingResult = {
   stagedResultRef: string | null;
 };
 
+function matchesWorkspaceResultGeneration(
+  placement: WorkerSessionPlacementRecord,
+  generation: number,
+): boolean {
+  // Reclaim reserves after drain; ordinary turns reserve before it. Both exact
+  // durable result generations remain recoverable without restoring live authority.
+  return (
+    (placement.state === "active" || placement.state === "draining") &&
+    (placement.generation === generation ||
+      (placement.state === "draining" && placement.generation === generation + 1))
+  );
+}
+
+export function isCurrentWorkerWorkspacePendingResultOwner(
+  placement: WorkerSessionPlacementRecord | undefined,
+  pending: WorkerWorkspacePendingResult,
+): placement is Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }> {
+  if (
+    (placement?.state !== "active" && placement?.state !== "draining") ||
+    placement.sessionId !== pending.sessionId ||
+    placement.environmentId !== pending.environmentId ||
+    placement.activeOwnerEpoch !== pending.ownerEpoch
+  ) {
+    return false;
+  }
+  if (placement.turnClaim) {
+    // Reclaim claims after drain; worker turns claim before it. The exact live
+    // claim owns either generation shape without weakening claimless recovery.
+    return isCurrentPlacementTurnClaim(placement, {
+      sessionId: pending.sessionId,
+      claimId: pending.claimId,
+      runId: pending.runId,
+      placementGeneration: pending.placementGeneration,
+      owner: placementTurnOwner(placement),
+    });
+  }
+  return matchesWorkspaceResultGeneration(placement, pending.placementGeneration);
+}
+
 function matchesWorkspaceResultClaim(
   placement: WorkerSessionPlacementRecord,
   row: StateDatabase["worker_workspace_pending_results"],
@@ -41,10 +80,6 @@ function matchesWorkspaceResultClaim(
     placement.state === "active" || placement.state === "draining"
       ? placementTurnOwner(placement)
       : undefined;
-  const recoveryGenerationMatches =
-    placement.state === "active"
-      ? placement.generation === claim.placementGeneration
-      : placement.state === "draining" && placement.generation === claim.placementGeneration + 1;
   return (
     row.session_id === claim.sessionId &&
     row.environment_id === placement.environmentId &&
@@ -54,7 +89,7 @@ function matchesWorkspaceResultClaim(
     row.run_id === claim.runId &&
     (isCurrentPlacementTurnClaim(placement, claim) ||
       // Restart revokes local authority; only the exact durable result may finish.
-      (recoveryGenerationMatches &&
+      (matchesWorkspaceResultGeneration(placement, claim.placementGeneration) &&
         placement.turnClaim === null &&
         recoveryOwner?.kind === "local" &&
         claim.owner.kind === "local" &&

@@ -27,15 +27,27 @@ function shouldSkipLegacyUpdateDoctorConfigWrite(env: NodeJS.ProcessEnv): boolea
   );
 }
 
+/** Removes queued retired profiles after any config references have been durably repaired. */
+export async function runRetiredAuthProfileCleanup(ctx: DoctorHealthFlowContext): Promise<void> {
+  const retiredAuthProfileCleanupPlans = ctx.configResult.retiredAuthProfileCleanupPlans;
+  if (!retiredAuthProfileCleanupPlans?.length) {
+    return;
+  }
+  const { removeAuthProfilesAcrossOwnerStores } = await import("../agents/auth-profiles.js");
+  for (const plan of retiredAuthProfileCleanupPlans) {
+    if (!(await removeAuthProfilesAcrossOwnerStores(plan))) {
+      throw new Error(`Failed to remove retired auth profile "${plan.profileIds.join(", ")}".`);
+    }
+  }
+  delete ctx.configResult.retiredAuthProfileCleanupPlans;
+}
+
 export async function runWriteConfigHealth(
   ctx: DoctorHealthFlowContext,
   options: { runPostWriteRepairs?: boolean } = {},
 ): Promise<void> {
-  if (ctx.configWriteDeferredByCronOwnership === true) {
-    return;
-  }
-  if (ctx.configWriteBlockedByValidation === true) {
-    // The initial write already reported the validation refusal; retrying the
+  if (ctx.configWriteRefusal) {
+    // The initial write already reported the refusal; retrying the
     // same candidate would fail identically and duplicate the warning.
     return;
   }
@@ -70,7 +82,7 @@ export async function runWriteConfigHealth(
           allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
           skipPluginValidation:
             ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
-          ...(configResultWritePending && ctx.configResult.explicitSetPaths
+          ...(ctx.configResult.explicitSetPaths
             ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
             : {}),
           preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
@@ -103,7 +115,7 @@ export async function runWriteConfigHealth(
           ].join("\n"),
           "Doctor warnings",
         );
-        ctx.configWriteBlockedByValidation = true;
+        ctx.configWriteRefusal = "validation";
         return;
       }
       const { isCronOwnerWriteRefusalError } = await import("../config/io.cron-owner-refusal.js");
@@ -119,7 +131,7 @@ export async function runWriteConfigHealth(
         ].join("\n"),
         "Doctor warnings",
       );
-      ctx.configWriteDeferredByCronOwnership = true;
+      ctx.configWriteRefusal = "cron-owner-safety";
       return;
     }
     // The atomic write committed: repair panels queued by the config flow are now
@@ -150,6 +162,7 @@ export async function runWriteConfigHealth(
   if (options.runPostWriteRepairs === false) {
     return;
   }
+  await runRetiredAuthProfileCleanup(ctx);
   if (ctx.configResult.retiredPhoneControlStateCleanupPending === true) {
     const { finalizeRetiredPhoneControlCleanup } =
       await import("../commands/doctor-retired-phone-control.js");

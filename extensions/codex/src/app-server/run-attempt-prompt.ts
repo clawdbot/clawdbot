@@ -52,6 +52,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     skillsCollaborationInstructions,
     promptState,
     codexContextProjectionMaxChars,
+    codexContinuityProjectionMaxChars,
   } = context;
   const {
     connection,
@@ -80,11 +81,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       assembledMessages: historyState.messages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: codexContinuityProjectionMaxChars,
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
+    promptState.noEngineContinuityProjectionApplied = true;
   };
   const applyActiveContextEngineProjection = async (
     decisionStartupBinding: typeof mutable.startupBinding,
@@ -186,16 +188,28 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const buildPromptFromCurrentInputs = async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
-      developerInstructions: promptState.developerInstructions,
+      developerInstructions: {
+        build: ({ toolsAllow }) => {
+          if (isRestrictivePromptToolsAllow(toolsAllow)) {
+            throw new Error(
+              "Codex app-server cannot enforce before_prompt_build toolsAllow; use the embedded or Copilot runtime for turn-scoped tool policy.",
+            );
+          }
+          return promptState.developerInstructions;
+        },
+      },
       messages: structuredClone(historyState.messages),
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
+      toolAuthority: {
+        fingerprint: params.toolAuthorityFingerprint,
+        activeToolNames: () =>
+          flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
+            .map((tool) => tool.name)
+            .filter(isNonEmptyString),
+        assertActive: params.hostCapabilities.assertActive,
+      },
     });
-    if (isRestrictivePromptToolsAllow(result.toolsAllow)) {
-      throw new Error(
-        "Codex app-server cannot enforce before_prompt_build toolsAllow; use the embedded or Copilot runtime for turn-scoped tool policy.",
-      );
-    }
     return result;
   };
   const resolveShiftedPromptInputRange = (
@@ -368,11 +382,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       assembledMessages: newerVisibleMessages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: codexContinuityProjectionMaxChars,
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
+    promptState.noEngineContinuityProjectionApplied = true;
     return true;
   };
   const precomputeNoContextEngineStaleBindingProjection = () => {

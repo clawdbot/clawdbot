@@ -1,4 +1,4 @@
-import { existsSync, watch } from "node:fs";
+import { existsSync, symlinkSync, watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 // Covers Tailscale whois, Serve, and Funnel helpers.
@@ -46,6 +46,7 @@ describe("tailscale helpers", () => {
       "OPENCLAW_TEST_TAILSCALE_BINARY",
       "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
       "NODE_ENV",
+      "PATH",
       "VITEST",
     ]);
     process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "tailscale";
@@ -222,6 +223,23 @@ describe("tailscale helpers", () => {
       await claim.stop();
       await expect(claim.exited).resolves.toBeUndefined();
       expect(claim.isActive()).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves an ownership conflict from the privileged route retry",
+    async () => {
+      const fixture = fileURLToPath(
+        new URL("../../test/fixtures/tailscale-sudo-conflict-fixture.mjs", import.meta.url),
+      );
+      const fakeBin = tempDirs.make("openclaw-tailscale-bin-");
+      symlinkSync(fixture, path.join(fakeBin, "sudo"));
+      process.env.PATH = `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`;
+      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
+
+      await expect(claimTailscaleRoute("serve", 18789)).rejects.toThrow(
+        "ownership OpenClaw cannot prove; it was not modified",
+      );
     },
   );
 

@@ -40,7 +40,23 @@ export async function ensureChromeMcpAvailable(
   profileOptions?: string | ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<void> {
-  await withChromeMcpLease(profileName, profileOptions, options, async () => {});
+  await withChromeMcpLease(profileName, profileOptions, options, async (lease, normalized) => {
+    if (!options.pageProbe) {
+      return;
+    }
+    try {
+      const pages = await listChromeMcpTargetsWithLease({
+        profileName,
+        profileOptions: normalized,
+        lease,
+        options: { ...options, timeoutMs: options.pageProbe.timeoutMs?.() ?? options.timeoutMs },
+      });
+      options.pageProbe.onResult(pages.length);
+    } catch {
+      options.signal?.throwIfAborted();
+      options.pageProbe.onResult(null);
+    }
+  });
 }
 
 /** Return the cached Chrome MCP process pid for a profile, when present. */

@@ -1,6 +1,12 @@
 // Status format tests cover compact token and prompt-cache display helpers.
 import { describe, expect, it } from "vitest";
-import { formatKTokens, formatPromptCacheCompact, formatTokensCompact } from "./status.format.js";
+import { withEnv } from "../test-utils/env.js";
+import {
+  formatKTokens,
+  formatPromptCacheCompact,
+  formatStatusConfigDiagnosticEntries,
+  formatTokensCompact,
+} from "./status.format.js";
 
 describe("status cache formatting", () => {
   it("formats explicit cache details for verbose status output", () => {
@@ -67,5 +73,27 @@ describe("status cache formatting", () => {
         totalTokens: 21_300,
       }),
     ).toBe("56% hit · read 12k · write 300");
+  });
+});
+
+describe("status config diagnostic formatting", () => {
+  it.each([
+    ["default", undefined, undefined, "openclaw doctor --fix"],
+    ["profile", "work", undefined, "openclaw --profile work doctor --fix"],
+    ["container", undefined, "staging", "openclaw --container staging doctor --fix"],
+    ["container over profile", "work", "staging", "openclaw --container staging doctor --fix"],
+  ])("keeps the %s target in its repair command", (_context, profile, container, command) => {
+    const entries = withEnv({ OPENCLAW_PROFILE: profile, OPENCLAW_CONTAINER_HINT: container }, () =>
+      formatStatusConfigDiagnosticEntries({
+        path: "/tmp/openclaw.json",
+        issues: [{ path: "gateway.port", message: "invalid" }],
+      }),
+    );
+
+    expect(entries).toEqual([
+      "- Config file is invalid: /tmp/openclaw.json",
+      "- gateway.port: invalid",
+      `- Fix: ${command}`,
+    ]);
   });
 });

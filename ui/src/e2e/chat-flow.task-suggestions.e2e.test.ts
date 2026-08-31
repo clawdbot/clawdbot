@@ -3,6 +3,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/inde
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
@@ -65,7 +66,7 @@ suite.define(() => {
       expect(moreActionsBox).not.toBeNull();
       expect(
         (moreActionsBox?.x ?? 0) - ((startBox?.x ?? 0) + (startBox?.width ?? 0)),
-      ).toBeGreaterThanOrEqual(4);
+      ).toBeLessThanOrEqual(1);
       await moreActions.click();
       await page
         .getByText("Copy prompt", { exact: true })
@@ -181,7 +182,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const startButton = page.getByRole("button", { name: "Start with worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.deferNext("taskSuggestions.list");
@@ -258,7 +259,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the composer visible when follow-up suggestions overflow", async () => {
+  it("stacks follow-up suggestions without obscuring the composer", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -293,9 +294,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const tray = page.locator(".task-suggestions");
       await tray.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await tray.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
-        true,
-      );
+      expect(await tray.locator(".task-suggestion:visible").count()).toBe(1);
+      expect(await tray.getByText("1 / 12", { exact: true }).count()).toBe(1);
+      await tray.getByRole("button", { name: "Next suggested task" }).click();
+      expect(await tray.getByText("2 / 12", { exact: true }).count()).toBe(1);
 
       const composer = page.locator(".agent-chat__composer-shell");
       await composer.waitFor({ state: "visible", timeout: 10_000 });

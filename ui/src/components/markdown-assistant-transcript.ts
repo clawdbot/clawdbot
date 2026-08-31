@@ -1,4 +1,4 @@
-import type MarkdownIt from "markdown-it";
+import type { MarkdownIt } from "markdown-it";
 import {
   ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
   markdownItAssistantTranscriptRoles,
@@ -98,7 +98,7 @@ export function installAssistantTranscriptRoleImageRenderer(
     if (!token) {
       return "";
     }
-    const src = token.attrGet("src")?.trim() ?? "";
+    const src = String(token.attrGet("src") ?? "").trim();
     // token.content preserves raw Markdown formatting in image labels.
     const alt = options.normalizeLabel(token.content);
     const roleMeta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)

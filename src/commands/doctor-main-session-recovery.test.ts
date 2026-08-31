@@ -4,7 +4,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { noteMainSessionRecoveryIntegrity } from "./doctor-main-session-recovery.js";
+import {
+  inspectMainSessionRecoveryEntry,
+  noteMainSessionRecoveryIntegrity,
+} from "./doctor-main-session-recovery.js";
 
 const agentId = "main";
 const sessionKey = "agent:main:wedged-main";
@@ -41,6 +44,12 @@ describe("doctor main-session recovery integrity", () => {
     } as InternalSessionEntry);
   }
 
+  function recoveryScan() {
+    const entry = loadSessionEntry({ sessionKey, storePath }) as InternalSessionEntry;
+    const candidate = inspectMainSessionRecoveryEntry(sessionKey, entry);
+    return { wedged: candidate ? [candidate] : [] };
+  }
+
   it("warns about a tombstone without offering stale repair", async () => {
     await writeTombstone(false);
     const warnings: string[] = [];
@@ -48,7 +57,7 @@ describe("doctor main-session recovery integrity", () => {
     const confirmRepair = vi.fn(async () => false);
 
     await noteMainSessionRecoveryIntegrity({
-      agentId,
+      ...recoveryScan(),
       storePath,
       warnings,
       changes,
@@ -71,7 +80,7 @@ describe("doctor main-session recovery integrity", () => {
     const confirmRepair = vi.fn(async () => true);
 
     await noteMainSessionRecoveryIntegrity({
-      agentId,
+      ...recoveryScan(),
       storePath,
       warnings,
       changes,

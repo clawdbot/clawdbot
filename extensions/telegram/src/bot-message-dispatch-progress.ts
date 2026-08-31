@@ -34,8 +34,9 @@ function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgr
   };
 }
 
-function buildTelegramTextToolProgressLine(text: string): ChannelProgressDraftLine {
+function buildTelegramTextToolProgressLine(text: string, id?: string): ChannelProgressDraftLine {
   return {
+    ...(id ? { id } : {}),
     kind: "item",
     label: "",
     text,
@@ -51,14 +52,11 @@ type TelegramProgressDraftState = {
 export function createProgressState(
   config: TurnConfig,
   draftState: TelegramProgressDraftState,
-  getTurn: () => Turn,
   prepareAnswerLaneForToolProgress: () => Promise<void>,
 ): TelegramProgressStateSlice {
   const progressState = {
-    draftEverRendered: false,
     finalAnswerDeliveryStarted: false,
     finalAnswerDelivered: false,
-    sawProgressFinal: false,
     verboseProgressActive: () => false,
   };
   const progressCompositor = createChannelProgressDraftCompositor({
@@ -80,7 +78,6 @@ export function createProgressState(
     // headline/checklist mode, so they must not also arrive inside the text.
     rendersRollingLinesNatively: true,
     update: async (streamText, options) => {
-      getTurn().draftEverRendered = true;
       await prepareAnswerLaneForToolProgress();
       draftState.answerLane.lastPartialText = streamText;
       draftState.answerLane.hasStreamedMessage = true;
@@ -123,13 +120,22 @@ async function pushProgressEvent(turn: Turn, event: () => Promise<boolean>): Pro
 export async function pushToolProgress(
   turn: Turn,
   line?: string | ChannelProgressDraftLine,
-  options?: { toolName?: string; startImmediately?: boolean },
+  options?: { toolName?: string; startImmediately?: boolean; id?: string },
 ): Promise<boolean> {
   if (!canPushToolProgress(turn)) {
     return false;
   }
+  // Structured rows own detail; formatted callbacks only fill a missing keyed row.
+  if (
+    options?.id &&
+    turn.progressCompositor
+      .getSnapshot()
+      .lines.some((entry) => typeof entry === "object" && entry.id === options.id)
+  ) {
+    return true;
+  }
   return await turn.progressCompositor.pushToolProgress(
-    typeof line === "string" ? buildTelegramTextToolProgressLine(line) : line,
+    typeof line === "string" ? buildTelegramTextToolProgressLine(line, options?.id) : line,
     options,
   );
 }
@@ -159,7 +165,6 @@ export function markFinalStarted(turn: Turn): void {
 
 export function markFinalDelivered(turn: Turn): void {
   turn.finalAnswerDelivered = true;
-  turn.sawProgressFinal = true;
   turn.progressCompositor.markFinalReplyDelivered();
 }
 

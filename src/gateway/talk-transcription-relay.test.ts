@@ -2,6 +2,7 @@
  * Tests talk transcription relay behavior between realtime events and clients.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-transcription/provider-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -559,11 +560,22 @@ describe("talk transcription gateway relay", () => {
   });
 
   it("closes a backpressured owner for final transcripts while healthy owners still receive them", async () => {
-    const createSocket = () => ({
-      bufferedAmount: 0,
-      send: vi.fn<(payload: string) => void>(),
-      close: vi.fn<(code: number, reason: string) => void>(),
-    });
+    const createSocket = () => {
+      const socket = {
+        readyState: WebSocket.OPEN as number,
+        bufferedAmount: 0,
+        send: vi.fn<(payload: string) => void>(),
+        close: vi.fn<(code: number, reason: string) => void>(),
+        terminate: vi.fn<() => void>(),
+      };
+      socket.close.mockImplementation(() => {
+        socket.readyState = WebSocket.CLOSING;
+      });
+      socket.terminate.mockImplementation(() => {
+        socket.readyState = WebSocket.CLOSING;
+      });
+      return socket;
+    };
     const slowSocket = createSocket();
     const healthySocket = createSocket();
     const createClient = (
@@ -612,11 +624,13 @@ describe("talk transcription gateway relay", () => {
 
       expect(slowSocket.send).toHaveBeenCalledTimes(slowFramesBeforePartial);
       expect(slowSocket.close).not.toHaveBeenCalled();
+      expect(slowSocket.terminate).not.toHaveBeenCalled();
 
       slowRequest.onTranscript?.("slow final");
       healthyRequest.onTranscript?.("healthy final");
 
       expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+      expect(slowSocket.terminate).toHaveBeenCalledOnce();
       const healthyFrames = healthySocket.send.mock.calls.map(
         ([frame]) => JSON.parse(frame) as { event: string; payload: unknown },
       );

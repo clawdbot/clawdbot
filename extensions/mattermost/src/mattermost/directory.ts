@@ -35,17 +35,12 @@ function buildClient(params: {
   });
 }
 
-/**
- * Build clients from ALL enabled accounts (deduplicated by token).
- *
- * We always scan every account because:
- * - Private channels are only visible to bots that are members
- * - The requesting agent's account may have an expired/invalid token
- *
- * This means a single healthy bot token is enough for directory discovery.
- */
+/** Build the requested account client, or aggregate accounts for an explicitly unscoped lookup. */
 function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
-  const accountIds = listMattermostAccountIds(params.cfg);
+  const requestedAccountId = params.accountId?.trim();
+  const accountIds = requestedAccountId
+    ? [requestedAccountId]
+    : listMattermostAccountIds(params.cfg);
   const seen = new Set<string>();
   const clients: MattermostClient[] = [];
   for (const id of accountIds) {

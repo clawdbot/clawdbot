@@ -10,7 +10,6 @@ import {
   type ArchiveEntryKind,
 } from "openclaw/plugin-sdk/archive";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
 import { humanSize, readClampedInt } from "../shared/params.js";
@@ -135,7 +134,6 @@ export function createDirFetchTool(): AnyAgentTool {
         hardMin: 1,
         hardMax: DIR_FETCH_HARD_MAX_BYTES,
       });
-      const includeDotfiles = asBoolean(params.includeDotfiles) ?? false;
 
       const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
         node,
@@ -144,7 +142,6 @@ export function createDirFetchTool(): AnyAgentTool {
         commandParams: {
           path: dirPath,
           maxBytes,
-          includeDotfiles,
         },
         requestedPath: dirPath,
       });
@@ -153,7 +150,6 @@ export function createDirFetchTool(): AnyAgentTool {
       const tarBase64 = typeof payload.tarBase64 === "string" ? payload.tarBase64 : "";
       const tarBytes = typeof payload.tarBytes === "number" ? payload.tarBytes : -1;
       const sha256 = typeof payload.sha256 === "string" ? payload.sha256 : "";
-      const fileCount = typeof payload.fileCount === "number" ? payload.fileCount : 0;
 
       if (!canonicalPath || !tarBase64 || tarBytes < 0 || !sha256) {
         throw new Error("invalid dir.fetch payload (missing fields)");
@@ -236,6 +232,7 @@ export function createDirFetchTool(): AnyAgentTool {
         const fileSha256 = await computeFileSha256(absPath);
         files.push({ relPath, size, mimeType, sha256: fileSha256, localPath: absPath });
       }
+      const fileCount = files.length;
 
       const imageFiles = files.filter((f) => IMAGE_MIME_INLINE_SET.has(f.mimeType));
       const nonImageFiles = files.filter((f) => !IMAGE_MIME_INLINE_SET.has(f.mimeType));

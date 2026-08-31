@@ -119,10 +119,10 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     return next;
   }
 
-  if (patch.kind === "heartbeat") {
-    // Unreachable through the service (system-owned boundary rejects it
-    // first); keep the merge total for the type union.
-    return { kind: "heartbeat" };
+  if (patch.kind !== "agentTurn") {
+    // System-owned payloads carry no fields; the service boundary already
+    // rejects client patches for them.
+    return { kind: patch.kind };
   }
 
   if (existing.kind !== "agentTurn") {
@@ -206,8 +206,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     return next;
   }
 
-  if (patch.kind === "heartbeat") {
-    return { kind: "heartbeat" };
+  if (patch.kind !== "agentTurn") {
+    return { kind: patch.kind };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

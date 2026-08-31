@@ -10,7 +10,10 @@ import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
+import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { tryReadSecretFileSync } from "../infra/secret-file.js";
 import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
 import {
   peekSystemEventEntries,
@@ -18,20 +21,24 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
-import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
+import {
+  listActiveDegradedSecretOwners,
+  setActiveDegradedSecretOwners,
+} from "../secrets/runtime-degraded-state.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import {
   connectWebchatClient,
   getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
+  setTestPluginRegistry,
   startTestGatewayServer,
   testState,
 } from "./test-helpers.js";
 import "./server-startup-secret-diagnostics.test-support.js";
 import "./server-startup-secret-surfaces.test-support.js";
-import "./server-startup-session-migration.test-support.js";
 
 const { webSearchProviders } = vi.hoisted(() => {
   const credentialPath = "plugins.entries.google.config.webSearch.apiKey";
@@ -180,6 +187,192 @@ describe("Gateway startup SecretRef owner isolation", () => {
         ws.close();
       }
     });
+  });
+
+  it("recovers only a repaired credential-file account through secrets.reload without restarting sibling accounts", async () => {
+    await withEnvAsync(
+      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      async () => {
+        const credentialPath = path.join(tempDirs.make("openclaw-gateway-credential-"), "token");
+        const credentialConfigPath = "channels.telegram.accounts.broken.tokenFile";
+        const repairedToken = "repaired-test-token-never-public";
+        type TestAccount = {
+          accountId: string;
+          token?: string;
+          credentialDiagnostics?: Array<{
+            code: "CREDENTIAL_FILE_UNAVAILABLE";
+            path: string;
+            reason: string;
+          }>;
+        };
+        const startAccount = vi.fn(
+          async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+            await new Promise<void>((resolve) => {
+              abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            }),
+        );
+        const plugin: ChannelPlugin<TestAccount> = {
+          ...createChannelTestPluginBase({ id: "telegram" }),
+          config: {
+            listAccountIds: (config) => Object.keys(config.channels?.telegram?.accounts ?? {}),
+            resolveAccount: (config, accountId) => {
+              if (!accountId) {
+                throw new Error("Missing Telegram test account id");
+              }
+              const configured = config.channels?.telegram?.accounts?.[accountId];
+              if (!configured) {
+                throw new Error(`Missing Telegram test account ${accountId}`);
+              }
+              const credential = configured.tokenFile
+                ? tryReadSecretFileSync(
+                    configured.tokenFile,
+                    "Telegram bot token",
+                    {},
+                    {
+                      configPath: credentialConfigPath,
+                    },
+                  )
+                : { status: "available" as const, value: configured.botToken };
+              return {
+                accountId,
+                ...(credential.status === "configured_unavailable"
+                  ? { credentialDiagnostics: [credential.diagnostic] }
+                  : { token: typeof credential.value === "string" ? credential.value : undefined }),
+              };
+            },
+          },
+          gateway: { startAccount },
+        };
+        setTestPluginRegistry(
+          createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
+        );
+        await writeConfig({
+          ...baseConfig(),
+          gateway: { ...baseConfig().gateway, reload: { mode: "off" } },
+          channels: {
+            telegram: {
+              enabled: true,
+              healthMonitor: { enabled: false },
+              accounts: {
+                broken: { tokenFile: credentialPath },
+                healthy: { botToken: "healthy-test-token" },
+                stopped: { botToken: "stopped-test-token" },
+              },
+            },
+          },
+        });
+        const configPath = process.env.OPENCLAW_CONFIG_PATH;
+        if (!configPath) {
+          throw new Error("Gateway test did not configure a config file path");
+        }
+        const originalConfig = readFileSync(configPath);
+        const port = await getGatewayTestPort();
+        server = await startTestGatewayServer(port, { auth: { mode: "none" } });
+        const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+        try {
+          const brokenStart = await rpcReq(ws, "channels.start", {
+            channel: "telegram",
+            accountId: "broken",
+          });
+          expect(brokenStart.ok).toBe(false);
+          for (const accountId of ["healthy", "stopped"]) {
+            const started = await rpcReq<{ accountId: string; started: boolean }>(
+              ws,
+              "channels.start",
+              { channel: "telegram", accountId },
+            );
+            expect(started.ok, JSON.stringify(started)).toBe(true);
+            expect(started.payload).toMatchObject({ accountId, started: true });
+          }
+          expect(startAccount).toHaveBeenCalledTimes(2);
+          expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual([
+            "healthy",
+            "stopped",
+          ]);
+          const healthyLifetime = startAccount.mock.calls[0]?.[0].abortSignal;
+          const stoppedLifetime = startAccount.mock.calls[1]?.[0].abortSignal;
+          expect(healthyLifetime?.aborted).toBe(false);
+          expect(stoppedLifetime?.aborted).toBe(false);
+
+          const before = await rpcReq<{
+            channelAccounts: Record<string, ChannelAccountSnapshot[]>;
+          }>(ws, "channels.status", { probe: false });
+          expect(before.ok, JSON.stringify(before)).toBe(true);
+          const initialAccounts = before.payload?.channelAccounts.telegram ?? [];
+          expect(initialAccounts).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ accountId: "broken", configured: true, running: false }),
+              expect.objectContaining({ accountId: "healthy", running: true }),
+              expect.objectContaining({ accountId: "stopped", running: true }),
+            ]),
+          );
+          expect(listActiveDegradedSecretOwners()).toContainEqual(
+            expect.objectContaining({
+              ownerId: "telegram:broken",
+              paths: [credentialConfigPath],
+              reason: "credential file is unavailable",
+            }),
+          );
+          expect(brokenStart.error).toMatchObject({ code: "UNAVAILABLE" });
+          const publicDiagnostics = JSON.stringify({
+            error: brokenStart.error,
+            accounts: initialAccounts,
+          });
+          expect(publicDiagnostics).not.toContain(credentialPath);
+          expect(publicDiagnostics).not.toContain(repairedToken);
+
+          const stopped = await rpcReq<{ accountId: string; stopped: boolean }>(
+            ws,
+            "channels.stop",
+            {
+              channel: "telegram",
+              accountId: "stopped",
+            },
+          );
+          expect(stopped.ok, JSON.stringify(stopped)).toBe(true);
+          expect(stopped.payload).toMatchObject({ accountId: "stopped", stopped: true });
+          expect(stoppedLifetime?.aborted).toBe(true);
+          expect(healthyLifetime?.aborted).toBe(false);
+
+          writeFileSync(credentialPath, repairedToken, { mode: 0o600 });
+          expect(readFileSync(configPath)).toEqual(originalConfig);
+
+          const reload = await rpcReq<{ warningCount: number }>(ws, "secrets.reload", {});
+          expect(reload.ok, JSON.stringify(reload)).toBe(true);
+          expect(reload.payload).toMatchObject({ warningCount: 0 });
+          expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual([
+            "healthy",
+            "stopped",
+            "broken",
+          ]);
+          expect(startAccount.mock.calls[2]?.[0].account.token).toBe(repairedToken);
+          expect(healthyLifetime?.aborted).toBe(false);
+          expect(stoppedLifetime?.aborted).toBe(true);
+          expect(listActiveDegradedSecretOwners()).not.toContainEqual(
+            expect.objectContaining({ ownerId: "telegram:broken" }),
+          );
+
+          const after = await rpcReq<{ channelAccounts: Record<string, ChannelAccountSnapshot[]> }>(
+            ws,
+            "channels.status",
+            { probe: false },
+          );
+          expect(after.ok, JSON.stringify(after)).toBe(true);
+          expect(after.payload?.channelAccounts.telegram).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ accountId: "broken", running: true }),
+              expect.objectContaining({ accountId: "healthy", running: true }),
+              expect.objectContaining({ accountId: "stopped", running: false }),
+            ]),
+          );
+          expect(JSON.stringify(after.payload)).not.toContain(repairedToken);
+          expect(JSON.stringify(after.payload)).not.toContain(credentialPath);
+          expect(readFileSync(configPath)).toEqual(originalConfig);
+        } finally {
+          ws.close();
+        }
+      },
+    );
   });
 
   it("reaches /readyz while isolating every optional owner family", async () => {

@@ -6,6 +6,7 @@ import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import { resolveOpenAIClientBaseUrl } from "../transports/openai-transport-shared.js";
 import type {
   CacheRetention,
   Context,
@@ -160,9 +161,12 @@ function createClient(
         }
       : headers;
 
+  const baseUrl = isCloudflareProvider(model.provider)
+    ? resolveCloudflareBaseUrl(model)
+    : model.baseUrl;
   return new OpenAI({
     apiKey,
-    baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
+    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
     dangerouslyAllowBrowser: true,
     defaultHeaders,
     // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.

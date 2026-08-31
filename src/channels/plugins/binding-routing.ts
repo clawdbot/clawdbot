@@ -7,9 +7,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
   getSessionBindingService,
+  inspectSessionBindingByConversation,
   type ConversationRef,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
+import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -34,10 +36,13 @@ export type ConfiguredBindingRouteResult = {
  * Route resolution after applying a runtime conversation binding record.
  */
 export type RuntimeConversationBindingRouteResult = {
+  /** False only when the authoritative channel-owned binding store is temporarily unavailable. */
+  bindingOwnerAvailable?: boolean;
   bindingRecord: SessionBindingRecord | null;
   route: ResolvedAgentRoute;
   boundSessionKey?: string;
   boundAgentId?: string;
+  pluginId?: string;
 };
 
 type ConfiguredBindingRouteConversationInput =
@@ -63,18 +68,6 @@ function resolveConfiguredBindingConversationRef(
     conversationId: params.conversationId,
     parentConversationId: params.parentConversationId,
   };
-}
-
-function isPluginOwnedRuntimeBindingRecord(record: SessionBindingRecord | null): boolean {
-  const metadata = record?.metadata;
-  if (!metadata || typeof metadata !== "object") {
-    return false;
-  }
-  return (
-    metadata.pluginBindingOwner === "plugin" &&
-    typeof metadata.pluginId === "string" &&
-    typeof metadata.pluginRoot === "string"
-  );
 }
 
 /**
@@ -132,14 +125,25 @@ export function resolveConfiguredBindingRoute(
 export function resolveRuntimeConversationBindingRoute(
   params: {
     route: ResolvedAgentRoute;
+    /** Set false for read-only ownership checks that must not extend binding liveness. */
+    touchBinding?: boolean;
   } & ConfiguredBindingRouteConversationInput,
 ): RuntimeConversationBindingRouteResult {
-  const bindingRecord = getSessionBindingService().resolveByConversation(
+  const inspection = inspectSessionBindingByConversation(
     resolveConfiguredBindingConversationRef(params),
   );
+  if (inspection.status === "unavailable") {
+    return {
+      bindingOwnerAvailable: false,
+      bindingRecord: null,
+      route: params.route,
+    };
+  }
+  const bindingRecord = inspection.binding;
   const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
   if (!bindingRecord || !boundSessionKey) {
     return {
+      bindingOwnerAvailable: true,
       bindingRecord: null,
       route: params.route,
     };
@@ -151,23 +155,36 @@ export function resolveRuntimeConversationBindingRoute(
       `ignored runtime conversation binding ${bindingRecord.bindingId} to isolated cron run session ${boundSessionKey}`,
     );
     return {
+      bindingOwnerAvailable: true,
       bindingRecord: null,
       route: params.route,
     };
   }
 
-  getSessionBindingService().touch(bindingRecord.bindingId);
-  if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
+  if (params.touchBinding !== false) {
+    getSessionBindingService().touch(
+      bindingRecord.bindingId,
+      undefined,
+      bindingRecord.conversation,
+    );
+  }
+  const pluginId = isPluginOwnedBindingMetadata(bindingRecord.metadata)
+    ? bindingRecord.metadata.pluginId.trim()
+    : undefined;
+  if (pluginId) {
     // Plugin-owned binding records are observed but not route-rewritten by core; the owning
     // plugin is responsible for its runtime target handoff.
     return {
+      bindingOwnerAvailable: true,
       bindingRecord,
+      pluginId,
       route: params.route,
     };
   }
 
   const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey) || params.route.agentId;
   return {
+    bindingOwnerAvailable: true,
     bindingRecord,
     boundSessionKey,
     boundAgentId,

@@ -183,9 +183,9 @@ describe("isShellLikeCodeModeSource", () => {
     "export * from './types';",
     "export interface Result { value: number }",
     "export enum Color { Red, Green }",
-    'const result = await tools.callValue("openclaw:core:exec", { command: "ls" }); return result;',
-    'return await tools.callValue("openclaw:core:read", { path: "/workspace" });',
-    "console.log(await tools.callValue('openclaw:core:read', { path: '/workspace' }));",
+    'const result = await exec({ command: "ls" }); return result;',
+    'return await read({ path: "/workspace" });',
+    "console.log(await read({ path: '/workspace' }));",
     "// shell documentation: ls /workspace\nreturn 7;",
     "// shell documentation: ls /workspace\nconst answer = 7; return answer;",
     "/* typed module */ export interface Result { value: number }",
@@ -209,8 +209,8 @@ describe("isShellLikeCodeModeSource", () => {
   it("explains how to execute a real catalog tool without retrying shell source", () => {
     expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("JavaScript or TypeScript");
     expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("not shell");
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("tools.callValue");
-    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("ALL_TOOLS");
+    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("enabled async tool global");
+    expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("catalog.search(query)");
     expect(CODE_MODE_SHELL_SOURCE_ERROR).toContain("Do not retry");
   });
 });

@@ -35,7 +35,10 @@ export type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb" | "ownerAgentId">;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "mediaMaxMb" | "ownerAgentId" | "dispatchReplyFromConfig"
+  >;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   /**
@@ -46,6 +49,7 @@ export type DispatchTelegramMessageParams = {
     admission?: "exclusive" | "cancel-only";
     onAdopted: () => void | Promise<void>;
     onDeferred?: () => void;
+    onDeferredHeartbeat?: () => void;
     onAbandoned?: () => void;
     abortSignal?: AbortSignal;
   };
@@ -135,6 +139,7 @@ type TelegramProgressCompositor = {
   readonly commentaryProgressEnabled: boolean;
   readonly hasStatusHeadline: boolean;
   readonly hasPlanProgress: boolean;
+  getSnapshot: () => { lines: ReadonlyArray<string | ChannelProgressDraftLine> };
   markFinalReplyStarted: () => void;
   markFinalReplyDelivered: () => void;
   beginNewTurn: (options?: { force?: boolean }) => boolean;
@@ -159,17 +164,12 @@ type TelegramProgressCompositor = {
   pushPatchEvent: (payload: CallbackPayload<"onPatchSummary">) => Promise<boolean>;
 };
 
-export type TelegramBufferedFinalAnswer = {
-  payload: ReplyPayload;
-  text: string;
-};
-
 export type TelegramReasoningStepState = {
   noteReasoningHint: () => void;
   noteReasoningDelivered: () => void;
   shouldBufferFinalAnswer: () => boolean;
-  bufferFinalAnswer: (value: TelegramBufferedFinalAnswer) => void;
-  takeBufferedFinalAnswer: () => TelegramBufferedFinalAnswer | undefined;
+  bufferFinalAnswer: (value: ReplyPayload) => void;
+  takeBufferedFinalAnswer: () => ReplyPayload | undefined;
   resetForNextStep: () => void;
 };
 
@@ -193,10 +193,8 @@ export type TelegramDraftStateSlice = {
 };
 
 export type TelegramProgressStateSlice = {
-  draftEverRendered: boolean;
   finalAnswerDeliveryStarted: boolean;
   finalAnswerDelivered: boolean;
-  sawProgressFinal: boolean;
   verboseProgressActive: () => boolean;
   progressCompositor: TelegramProgressCompositor;
   commentaryProgressEnabled: boolean;

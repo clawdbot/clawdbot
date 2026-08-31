@@ -194,7 +194,7 @@ describe("packaged Control UI postinstall inventory", () => {
       for (const relativePath of CONTROL_UI_FILES) {
         expect
           .soft(validationErrors)
-          .toContain(`postinstall inventory omits Control UI file ${relativePath}`);
+          .toContain(`postinstall inventory omits packaged dist file ${relativePath}`);
       }
     });
   });

@@ -1,0 +1,28 @@
+title: Control UI progress card live placement
+
+scenario:
+  id: control-ui-progress-card-live-placement
+  surface: control-ui
+  coverage:
+    secondary:
+      - control-ui.gateway-hosted-ui-control
+  objective: >-
+    Prove a durable progress card has one responsive live placement while its
+    transcript tool call remains a compact receipt instead of duplicating the
+    card contents.
+  successCriteria:
+    - A wide layout renders exactly one progress card in the session rail.
+    - A narrow layout moves exactly one progress card beside the composer.
+    - The transcript renders a compact progress receipt without duplicating markdown.
+  docsRefs:
+    - docs/web/control-ui.md
+  codeRefs:
+    - ui/src/e2e/session-progress-live-placement.e2e.test.ts
+    - ui/src/components/session-progress-card-controller.ts
+    - ui/src/pages/chat/components/chat-tool-cards.ts
+  execution:
+    kind: playwright
+    path: ui/src/e2e/session-progress-live-placement.e2e.test.ts
+    summary: >-
+      Playwright coverage for one responsive live card placement plus a compact
+      transcript receipt.

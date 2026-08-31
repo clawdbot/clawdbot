@@ -20,10 +20,10 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
 } from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
-import { healthCommand } from "../commands/health.js";
+import { healthCommandNonExiting } from "../commands/health.js";
 import {
-  buildOnboardingControlUiUrl,
   probeGatewayReachable,
   waitForGatewayReachable,
   resolveAdvertisedControlUiLinks,
@@ -46,9 +46,14 @@ import {
   isGatewayExternallySupervised,
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { runTui } from "../tui/tui.js";
+import {
+  cancelProcessExitAfterTuiReturn,
+  resolveTuiShutdownHardExitMs,
+  runTui,
+  scheduleProcessExitAfterTuiReturn,
+} from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
@@ -144,11 +149,16 @@ async function closeSessionGatewayForOnboarding(params: {
 
 function getLocalizedGatewayDaemonRuntimeOptions() {
   return GATEWAY_DAEMON_RUNTIME_OPTIONS.map((option) => ({
-    hint:
+    hint: t(
       option.value === "node"
-        ? t("wizard.finalize.daemonRuntimeNodeHint")
-        : (option.hint ?? undefined),
-    label: option.value === "node" ? t("wizard.finalize.daemonRuntimeNode") : option.label,
+        ? "wizard.finalize.daemonRuntimeNodeHint"
+        : "wizard.finalize.daemonRuntimeBunHint",
+    ),
+    label: t(
+      option.value === "node"
+        ? "wizard.finalize.daemonRuntimeNode"
+        : "wizard.finalize.daemonRuntimeBun",
+    ),
     value: option.value,
   }));
 }
@@ -173,7 +183,7 @@ function buildGatewayRecoveryProjection(params: {
 } {
   const { gateway } = params;
   const notDetected = t("wizard.finalize.gatewayNotDetected");
-  if (params.reachable) {
+  if (params.reachable && gateway.status !== "failed") {
     return { detail: t("wizard.finalize.gatewayReachable"), summary: t("wizard.guided.complete") };
   }
   if (gateway.status === "ready") {
@@ -193,7 +203,10 @@ function buildGatewayRecoveryProjection(params: {
       statusCommand: formatCliCommand("openclaw gateway status --deep"),
       recoveryCommand: formatCliCommand("openclaw gateway install --force"),
     });
-    return { detail, summary: `${notDetected} ${detail.replaceAll("\n", " ")}` };
+    return {
+      detail,
+      summary: `${params.reachable ? "" : `${notDetected} `}${detail.replaceAll("\n", " ")}`,
+    };
   }
 
   const startGuidance =
@@ -379,7 +392,7 @@ export async function ensureGatewayServiceForOnboarding(params: {
       }
     }
     const loaded = await service.isLoaded({ env: process.env });
-    let restartWasScheduled = false;
+    let shouldInstall = !loaded;
     if (loaded) {
       const action =
         (params.loadedAction === "restart" ? params.loadedAction : undefined) ??
@@ -406,7 +419,6 @@ export async function ensureGatewayServiceForOnboarding(params: {
             restartDoneMessage = restartStatus.scheduled
               ? t("wizard.finalize.gatewayServiceRestartScheduled")
               : t("wizard.finalize.gatewayServiceRestarted");
-            restartWasScheduled = restartStatus.scheduled;
             gateway = {
               status: "ready",
               action: restartStatus.scheduled ? "restart-scheduled" : "restarted",
@@ -414,21 +426,12 @@ export async function ensureGatewayServiceForOnboarding(params: {
           },
         );
       } else if (action === "reinstall") {
-        await withWizardProgress(
-          t("wizard.finalize.gatewayService"),
-          { doneMessage: t("wizard.finalize.gatewayServiceUninstalled") },
-          async (progress) => {
-            progress.update(t("wizard.finalize.gatewayServiceUninstalling"));
-            await service.uninstall({ env: process.env, stdout: process.stdout });
-          },
-        );
+        // Preserve the old definition so the install owner can replace or restore it.
+        shouldInstall = true;
       }
     }
 
-    if (
-      !loaded ||
-      (!restartWasScheduled && loaded && !(await service.isLoaded({ env: process.env })))
-    ) {
+    if (shouldInstall) {
       const progress = prompter.progress(t("wizard.finalize.gatewayService"));
       let installError: string | null = null;
       const installWarnings: Array<{ message: string; title?: string }> = [];
@@ -456,11 +459,13 @@ export async function ensureGatewayServiceForOnboarding(params: {
             t("wizard.finalize.gatewayInstallFixAuth"),
           ].join(" ");
         } else {
+          const existingCommand = await service.readCommand(process.env).catch(() => null);
           const { programArguments, workingDirectory, environment, environmentValueSources } =
             await buildGatewayInstallPlan({
               env: process.env,
               port: settings.port,
               runtime: daemonRuntime,
+              existingCommand,
               warn: (message, title) => {
                 installWarnings.push({ message, title });
               },
@@ -507,8 +512,10 @@ export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
-  const suppressGatewayTokenOutput = opts.suppressGatewayTokenOutput === true;
   let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
+  // Reachability and health are separate facts: a reachable gateway can still
+  // fail its health check, and the outro must not report plain success then.
+  let gatewayHealthCheckFailed = false;
   let resolvedGatewayPassword = "";
   let sessionGateway: import("../gateway/server.js").GatewayServer | undefined;
 
@@ -520,9 +527,6 @@ export async function finalizeSetupWizard(
     prompter,
     runtime,
   });
-  if (gateway.status === "failed") {
-    gatewayProbe = { ok: false, detail: gateway.error };
-  }
 
   if (settings.authMode === "password") {
     try {
@@ -562,17 +566,22 @@ export async function finalizeSetupWizard(
         basePath: undefined,
         tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
       });
-      // A failed installation cannot become healthy; preserve its authoritative
-      // error instead of masking it behind a slow, guaranteed-to-fail probe.
-      if (gateway.status !== "failed") {
-        // Install/restart can briefly flap the WS; wait before checking health.
-        gatewayProbe = await waitForGatewayReachable({
-          url: probeLinks.wsUrl,
-          token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-          password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
-          deadlineMs: 15_000,
-        });
-      }
+      const probeOptions = {
+        url: probeLinks.wsUrl,
+        token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+        password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
+      };
+      // A failed replacement may leave the old Gateway alive. Observe it once;
+      // only successful install/restart needs the startup grace period.
+      gatewayProbe =
+        gateway.status === "failed"
+          ? await probeGatewayReachable(probeOptions)
+          : await waitForGatewayReachable({
+              ...probeOptions,
+              ...(gateway.status === "ready" && gateway.action !== "reused"
+                ? resolveGatewayStartupTiming()
+                : { deadlineMs: 15_000 }),
+            });
       if (gatewayProbe.ok) {
         try {
           const healthConfig: OpenClawConfig =
@@ -589,7 +598,7 @@ export async function finalizeSetupWizard(
                   },
                 }
               : nextConfig;
-          await healthCommand(
+          await healthCommandNonExiting(
             {
               json: false,
               timeoutMs: 10_000,
@@ -600,7 +609,12 @@ export async function finalizeSetupWizard(
             runtime,
           );
         } catch (err) {
-          runtime.error(formatHealthCheckFailure(err));
+          gatewayHealthCheckFailed = true;
+          // A trapped ExitError means healthCommand already printed its own
+          // reachable-gateway diagnostic; re-formatting it would only add noise.
+          if (!(err instanceof ExitError)) {
+            runtime.error(formatHealthCheckFailure(err));
+          }
           await prompter.note(
             [
               t("common.docs"),
@@ -668,13 +682,7 @@ export async function finalizeSetupWizard(
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    const authedUrl = buildOnboardingControlUiUrl({
-      httpUrl: displayLinks.httpUrl,
-      authMode: settings.authMode,
-      token: settings.gatewayToken,
-      suppressTokenOutput: suppressGatewayTokenOutput,
-    });
-    if (gateway.status !== "failed" && (opts.skipHealth || !gatewayProbe.ok)) {
+    if (opts.skipHealth || (!gatewayProbe.ok && gateway.status !== "failed")) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
@@ -766,14 +774,6 @@ export async function finalizeSetupWizard(
     await prompter.note(
       [
         dashboardReady ? t("wizard.finalize.webUiUrl", { url: displayLinks.httpUrl }) : undefined,
-        dashboardReady &&
-        !opts.skipUi &&
-        gatewayProbe.ok &&
-        settings.authMode === "token" &&
-        settings.gatewayToken &&
-        !suppressGatewayTokenOutput
-          ? t("wizard.finalize.webUiWithTokenUrl", { url: authedUrl })
-          : undefined,
         t("wizard.finalize.gatewayWsUrl", { url: displayLinks.wsUrl }),
         gatewayStatusLine,
         ...windowsFirewallLines,
@@ -820,11 +820,9 @@ export async function finalizeSetupWizard(
           t("wizard.finalize.gatewayTokenGenerate", {
             command: formatCliCommand("openclaw doctor --generate-gateway-token"),
           }),
-          suppressGatewayTokenOutput ? undefined : t("wizard.finalize.dashboardTokenMemory"),
           t("wizard.finalize.dashboardOpenAnytime", {
             command: formatCliCommand("openclaw dashboard --no-open"),
           }),
-          suppressGatewayTokenOutput ? undefined : t("wizard.finalize.dashboardTokenPrompt"),
         ].filter(Boolean);
         await prompter.note(tokenNotes.join("\n"), "Token");
       }
@@ -993,29 +991,31 @@ export async function finalizeSetupWizard(
     await prompter.note(t("wizard.finalize.whatNow"), t("wizard.finalize.whatNowTitle"));
 
     await prompter.outro(
-      gatewayProbe.ok
-        ? dashboardReady
-          ? t("wizard.finalize.outroDashboardLink")
-          : controlUiEnabled
-            ? [
-                t("wizard.guided.complete"),
-                t("wizard.finalize.dashboardWhenReady", {
-                  command: formatCliCommand("openclaw dashboard"),
-                }),
-              ].join(" ")
-            : t("wizard.guided.complete")
-        : buildGatewayRecoveryProjection({
+      !gatewayProbe.ok || gateway.status === "failed"
+        ? buildGatewayRecoveryProjection({
             gateway,
-            reachable: false,
+            reachable: gatewayProbe.ok,
             serviceLabel: gateway.status === "skipped" ? undefined : resolveGatewayService().label,
-          }).summary,
+          }).summary
+        : gatewayHealthCheckFailed
+          ? t("wizard.finalize.outroHealthCheckFailed", {
+              command: formatCliCommand("openclaw health"),
+            })
+          : dashboardReady
+            ? t("wizard.finalize.outroDashboardLink")
+            : controlUiEnabled
+              ? [
+                  t("wizard.guided.complete"),
+                  t("wizard.finalize.dashboardWhenReady", {
+                    command: formatCliCommand("openclaw dashboard"),
+                  }),
+                ].join(" ")
+              : t("wizard.guided.complete"),
     );
 
     if (shouldLaunchTui) {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
       try {
-        // Setup now hosts the TUI in-process, so arm the final exit fallback
-        // when runtime handles outlive the normal TUI teardown.
         await runTui({
           ...(gatewayProbe.ok
             ? {
@@ -1032,23 +1032,34 @@ export async function finalizeSetupWizard(
               }
             : { local: true }),
           deliver: false,
-          forceProcessExitOnReturn: true,
           message: shouldSeedBootstrapHatch
             ? t("wizard.finalize.bootstrapHatchMessage")
             : undefined,
-          timeoutMs: HATCH_TUI_TIMEOUT_MS,
+          initialMessageTimeoutMs: HATCH_TUI_TIMEOUT_MS,
         });
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
         if (sessionGateway) {
-          await closeSessionGatewayForOnboarding({
-            sessionGateway,
-            runtime,
-            reason: "onboarding tui exited",
+          // The temporary Gateway can own the same provider and child-process teardown as
+          // local TUI mode. Reuse that longer budget while keeping shutdown bounded.
+          const cleanupExitTimer = scheduleProcessExitAfterTuiReturn({
+            delayMs: resolveTuiShutdownHardExitMs({ localMode: true }),
           });
-          sessionGateway = undefined;
+          try {
+            await closeSessionGatewayForOnboarding({
+              sessionGateway,
+              runtime,
+              reason: "onboarding tui exited",
+            });
+            sessionGateway = undefined;
+          } finally {
+            cancelProcessExitAfterTuiReturn(cleanupExitTimer);
+          }
         }
       }
+      // Setup owns the temporary Gateway, so its cleanup must finish before
+      // the in-process TUI fallback is allowed to terminate the process.
+      scheduleProcessExitAfterTuiReturn();
       launchedTui = true;
     }
 

@@ -10,6 +10,7 @@ import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
 type NodeApprovalState = "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
+type NodeWorkerSlots = { total: number; available: number };
 type NodeWorkerBundleStatus = { status: "installed"; version: string } | { status: "missing" };
 
 /** Typed projection of one raw `node.list` row. */
@@ -28,6 +29,7 @@ type NodeListEntry = {
   commands: string[];
   approvalState?: NodeApprovalState;
   pendingRequestId?: string;
+  workerSlots?: NodeWorkerSlots;
   workerBundle?: NodeWorkerBundleStatus;
   connected: boolean;
   paired: boolean;
@@ -81,6 +83,28 @@ function stringList(value: unknown): string[] {
     .filter((entry): entry is string => entry !== undefined);
 }
 
+function parseWorkerSlots(value: unknown): NodeWorkerSlots | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const keys = Object.keys(value);
+  const total = value.total;
+  const available = value.available;
+  return keys.length === 2 &&
+    keys.includes("total") &&
+    keys.includes("available") &&
+    typeof total === "number" &&
+    typeof available === "number" &&
+    Number.isSafeInteger(total) &&
+    Number.isSafeInteger(available) &&
+    total >= 1 &&
+    total <= 1_024 &&
+    available >= 0 &&
+    available <= total
+    ? { total, available }
+    : undefined;
+}
+
 function parseWorkerBundleStatus(value: unknown): NodeWorkerBundleStatus | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -119,6 +143,7 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
         ? (approvalState as NodeApprovalState)
         : undefined,
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
+    workerSlots: parseWorkerSlots(raw.workerSlots),
     workerBundle: parseWorkerBundleStatus(raw.workerBundle),
     connected: raw.connected === true,
     paired: raw.paired === true,

@@ -2,6 +2,7 @@
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   generatePluginNpmPackageLockWithRetry,
@@ -11,7 +12,8 @@ import {
   runPluginNpmCiWithRetry,
   withAugmentedPluginNpmManifestForPackage,
 } from "../scripts/lib/plugin-npm-package-manifest.mts";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import { writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 const tsxImport = import.meta.resolve("tsx");
@@ -55,6 +57,38 @@ function writeFileText(filePath: string, text: string): void {
   writeFileSync(filePath, text, "utf8");
 }
 
+type NpmPackResult = { filename: string; files: Array<{ path: string }> };
+
+function parseNpmPackResult(stdout: string): NpmPackResult {
+  const parsed = JSON.parse(stdout) as unknown;
+  const candidates = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && "files" in parsed
+      ? [parsed]
+      : parsed && typeof parsed === "object"
+        ? Object.values(parsed)
+        : [];
+  const [packResult] = candidates;
+  if (
+    !packResult ||
+    typeof packResult !== "object" ||
+    !("filename" in packResult) ||
+    typeof packResult.filename !== "string" ||
+    !("files" in packResult) ||
+    !Array.isArray(packResult.files) ||
+    !packResult.files.every(
+      (file: unknown) =>
+        file !== null &&
+        typeof file === "object" &&
+        "path" in file &&
+        typeof file.path === "string",
+    )
+  ) {
+    throw new Error("npm pack --json did not return a package result");
+  }
+  return packResult as NpmPackResult;
+}
+
 function listNpmPackDryRunFiles(packageDir: string): string[] {
   const invocation = resolvePluginNpmCommand(["pack", "--dry-run", "--json", "--ignore-scripts"]);
   const result = spawnSync(invocation.command, invocation.args, {
@@ -73,19 +107,7 @@ function listNpmPackDryRunFiles(packageDir: string): string[] {
   if (result.status !== 0) {
     throw new Error(result.stderr.trim() || `npm pack failed with exit ${result.status}`);
   }
-  const parsed = JSON.parse(result.stdout) as unknown;
-  const packResult = (
-    Array.isArray(parsed)
-      ? parsed[0]
-      : parsed && typeof parsed === "object" && "files" in parsed
-        ? parsed
-        : parsed && typeof parsed === "object"
-          ? Object.values(parsed)[0]
-          : undefined
-  ) as { files?: { path?: string }[] } | undefined;
-  return (packResult?.files ?? []).flatMap((entry) =>
-    typeof entry.path === "string" ? [entry.path] : [],
-  );
+  return parseNpmPackResult(result.stdout).files.map((entry) => entry.path);
 }
 
 function writePublishablePluginPackage(repoDir: string): string {
@@ -545,9 +567,7 @@ describe("plugin npm package manifest staging", () => {
           : {}),
       });
       expect(pack.status, pack.stderr).toBe(0);
-      const [packedPackage] = JSON.parse(pack.stdout) as [
-        { filename: string; files: Array<{ path: string }> },
-      ];
+      const packedPackage = parseNpmPackResult(pack.stdout);
       const packedFiles = packedPackage.files.map((file) => file.path);
       expect(packedFiles).toContain("dist/configured-state.cjs");
       expect(packedFiles).toContain("dist/auth-presence.cjs");
@@ -595,118 +615,109 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
   });
 
-  it("stages portable bundled dependencies without polluting pack output", () => {
-    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-portable-optional-");
-    const packageDir = writePublishablePluginPackage(repoDir);
-    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
-    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
-    writeOptionalPlatformDependencyPackage(packageDir);
-    writeLocalDependencyPackage(packageDir, {
-      optionalDependencySpec: "file:../../deps/optional-platform-dep",
-    });
-    writeJsonFile(join(packageDir, "package.json"), {
-      name: "@openclaw/diffs",
-      version: "2026.5.3",
-      type: "module",
-      dependencies: {
-        "local-runtime-dep": "file:./deps/local-runtime-dep",
-      },
-      devDependencies: {
-        "@openclaw/plugin-sdk": "workspace:*",
-      },
-      openclaw: {
-        extensions: ["./index.ts"],
-        setupEntry: "./setup-entry.ts",
-        compat: {
-          pluginApi: ">=2026.4.30",
+  it.each(["default destination", "relative destination", "split destination", "failed command"])(
+    "preserves source dependencies while staging npm bundles with %s",
+    (scenario) => {
+      const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-portable-optional-");
+      const packageDir = writePublishablePluginPackage(repoDir);
+      writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+      writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+      writeOptionalPlatformDependencyPackage(packageDir);
+      writeLocalDependencyPackage(packageDir, {
+        optionalDependencySpec: "file:../../deps/optional-platform-dep",
+      });
+      writeJsonFile(join(packageDir, "package.json"), {
+        name: "@openclaw/diffs",
+        version: "2026.5.3",
+        type: "module",
+        dependencies: { "local-runtime-dep": "file:./deps/local-runtime-dep" },
+        devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
+        openclaw: {
+          extensions: ["./index.ts"],
+          setupEntry: "./setup-entry.ts",
+          compat: { pluginApi: ">=2026.4.30" },
+          release: { publishToNpm: true },
         },
-        release: {
-          publishToNpm: true,
+      });
+      const sourceDependencyPath = join(
+        packageDir,
+        "node_modules",
+        "local-runtime-dep",
+        "package.json",
+      );
+      const sourceVersion = '{"name":"local-runtime-dep","version":"9.0.0"}\n';
+      writeFileText(sourceDependencyPath, sourceVersion);
+      const sourceOnlyPath = join(packageDir, "node_modules", "source-only", "marker");
+      writeFileText(sourceOnlyPath, "keep\n");
+      const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
+      const outputDir =
+        scenario.includes("destination") && scenario !== "default destination"
+          ? join(packageDir, "artifacts")
+          : packageDir;
+      mkdirSync(outputDir, { recursive: true });
+      const command =
+        scenario === "failed command"
+          ? [process.execPath, "-e", "console.log(process.cwd()); process.exit(7);"]
+          : [
+              "npm",
+              "pack",
+              "--json",
+              "--ignore-scripts",
+              ...(scenario === "relative destination"
+                ? ["--pack-destination=artifacts"]
+                : scenario === "split destination"
+                  ? ["--pack-destination", "artifacts"]
+                  : []),
+            ];
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          tsxImport,
+          fileURLToPath(new URL("../scripts/lib/plugin-npm-package-manifest.mts", import.meta.url)),
+          "--run",
+          packageDir,
+          "--",
+          ...command,
+        ],
+        {
+          cwd: repoDir,
+          encoding: "utf8",
+          env: { ...process.env, OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES: "1" },
         },
-      },
-    });
-
-    const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
-    const nodeModulesPath = join(packageDir, "node_modules");
-    const manifestModuleUrl = new URL(
-      "../scripts/lib/plugin-npm-package-manifest.mts",
-      import.meta.url,
-    ).href;
-    const childSource = `
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import {
-  resolvePluginNpmCommand,
-  withAugmentedPluginNpmManifestForPackage,
-} from ${JSON.stringify(manifestModuleUrl)};
-
-const packageDir = ${JSON.stringify(packageDir)};
-const nodeModulesPath = ${JSON.stringify(nodeModulesPath)};
-withAugmentedPluginNpmManifestForPackage(
-  {
-    repoRoot: ${JSON.stringify(repoDir)},
-    packageDir,
-    bundleDependencies: true,
-  },
-  () => {
-    const stagedPackageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
-    if (JSON.stringify(stagedPackageJson.bundledDependencies) !== '["local-runtime-dep"]') {
-      throw new Error("bundled dependencies were not staged");
-    }
-    if (stagedPackageJson.bundleDependencies || stagedPackageJson.devDependencies) {
-      throw new Error("unpublishable dependency metadata remained staged");
-    }
-    if (!existsSync(join(nodeModulesPath, "local-runtime-dep", "package.json"))) {
-      throw new Error("missing bundled runtime dependency");
-    }
-    if (!existsSync(join(nodeModulesPath, "optional-platform-dep", "package.json"))) {
-      throw new Error("missing portable optional bundled dependency");
-    }
-    if (existsSync(join(packageDir, "package-lock.json"))) {
-      throw new Error("package lock remained staged");
-    }
-    const invocation = resolvePluginNpmCommand(["pack", "--dry-run", "--json", "--ignore-scripts"]);
-    const pack = spawnSync(invocation.command, invocation.args, {
-      cwd: packageDir,
-      encoding: "utf8",
-      ...(invocation.env ? { env: invocation.env } : {}),
-      ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
-      stdio: ["ignore", "pipe", "pipe"],
-      ...(invocation.windowsVerbatimArguments !== undefined
-        ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
-        : {}),
-    });
-    if (pack.status !== 0) throw new Error(pack.stderr || "npm pack failed");
-    const [packedPackage] = JSON.parse(pack.stdout);
-    const packedFiles = packedPackage.files.map((file) => file.path);
-    if (!packedFiles.includes("node_modules/local-runtime-dep/package.json")) {
-      throw new Error("bundled runtime dependency was not packed");
-    }
-    if (packedFiles.includes("package-lock.json") || packedFiles.includes("npm-shrinkwrap.json")) {
-      throw new Error("package lock was packed");
-    }
-    process.stdout.write("pack-json\\n");
-  },
-);
-`;
-    const result = spawnSync(
-      process.execPath,
-      ["--import", tsxImport, "--input-type=module", "--eval", childSource],
-      {
-        cwd: repoDir,
-        encoding: "utf8",
-        env: process.env,
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("pack-json\n");
-
-    expect(existsSync(nodeModulesPath)).toBe(false);
-    expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
-    expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
-  });
+      );
+      expect(result.status, result.stderr).toBe(scenario === "failed command" ? 7 : 0);
+      expect(readFileSync(sourceDependencyPath, "utf8")).toBe(sourceVersion);
+      expect(readFileSync(sourceOnlyPath, "utf8")).toBe("keep\n");
+      expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
+      expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+      if (scenario === "failed command") {
+        const stagingDir = result.stdout.trim();
+        expect(stagingDir).not.toBe("");
+        expect(stagingDir).not.toBe(packageDir);
+        expect(existsSync(stagingDir)).toBe(false);
+        return;
+      }
+      const packed = parseNpmPackResult(result.stdout);
+      const tarball = join(outputDir, packed.filename);
+      expect(existsSync(tarball)).toBe(true);
+      const files = packed.files.map((entry) => entry.path);
+      expect(files).toContain("node_modules/local-runtime-dep/package.json");
+      expect(files).toContain("node_modules/optional-platform-dep/package.json");
+      expect(files.some((file) => file.includes("source-only"))).toBe(false);
+      expect(files).not.toContain("package-lock.json");
+      expect(files).not.toContain("npm-shrinkwrap.json");
+      const extract = (file: string) => {
+        const result = spawnSync("tar", ["-xOf", tarball, `package/${file}`], { encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(0);
+        return JSON.parse(result.stdout);
+      };
+      const manifest = extract("package.json");
+      expect(manifest.bundledDependencies).toEqual(["local-runtime-dep"]);
+      expect(manifest.devDependencies).toBeUndefined();
+      expect(extract("node_modules/local-runtime-dep/package.json").version).toBe("1.0.0");
+    },
+  );
 
   it("honors plugin package opt-out for bundled runtime dependencies", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-bundle-opt-out-");

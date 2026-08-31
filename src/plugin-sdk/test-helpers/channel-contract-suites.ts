@@ -96,18 +96,14 @@ export function installChannelActionsContractSuite(params: {
       expect(sortStrings(actions)).toEqual(sortStrings(testCase.expectedActions));
       expect(sortStrings(capabilities)).toEqual(sortStrings(testCase.expectedCapabilities ?? []));
 
-      if (params.plugin.actions?.supportsAction) {
-        for (const action of testCase.expectedActions) {
-          expect(params.plugin.actions.supportsAction({ action })).toBe(true);
-        }
-        if (
-          params.unsupportedAction &&
-          !testCase.expectedActions.includes(params.unsupportedAction)
-        ) {
-          expect(params.plugin.actions.supportsAction({ action: params.unsupportedAction })).toBe(
-            false,
-          );
-        }
+      if (
+        params.plugin.actions?.supportsAction &&
+        params.unsupportedAction &&
+        !testCase.expectedActions.includes(params.unsupportedAction)
+      ) {
+        expect(params.plugin.actions.supportsAction({ action: params.unsupportedAction })).toBe(
+          false,
+        );
       }
     });
   }

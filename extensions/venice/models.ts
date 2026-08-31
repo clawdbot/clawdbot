@@ -1,5 +1,5 @@
 import {
-  buildManifestModelDefinition,
+  buildManifestModelProviderConfig,
   readManifestProviderDefaultModelRef,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
@@ -29,13 +29,7 @@ const VENICE_DISCOVERY_CACHE_TTL_MS = 60_000;
 
 function decorateVeniceModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
   return {
-    id: entry.id,
-    name: entry.name,
-    reasoning: entry.reasoning,
-    input: [...entry.input],
-    cost: VENICE_DEFAULT_COST,
-    contextWindow: entry.contextWindow,
-    maxTokens: entry.maxTokens,
+    ...entry,
     compat: {
       supportsUsageInStreaming: false,
       ...entry.compat,
@@ -44,13 +38,10 @@ function decorateVeniceModelDefinition(entry: ModelDefinitionConfig): ModelDefin
 }
 
 /** Venice's decorated network-free fallback catalog. */
-export const VENICE_MODEL_CATALOG: ModelDefinitionConfig[] = VENICE_MANIFEST_CATALOG.models.map(
-  buildManifestModelDefinition({
-    providerId: "venice",
-    catalog: VENICE_MANIFEST_CATALOG,
-    decorate: decorateVeniceModelDefinition,
-  }),
-);
+export const VENICE_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
+  providerId: "venice",
+  catalog: VENICE_MANIFEST_CATALOG,
+}).models.map(decorateVeniceModelDefinition);
 
 interface VeniceModelSpec {
   name: string;

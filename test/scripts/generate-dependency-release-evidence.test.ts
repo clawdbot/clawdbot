@@ -258,8 +258,15 @@ describe("generate-dependency-release-evidence", () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-evidence-test-"));
     try {
       await writeJson(dir, "dependency-vulnerability-gate.json", {
-        blockers: [{ id: "GHSA-blocker" }],
-        findings: [{ id: "GHSA-blocker" }, { id: "GHSA-report" }],
+        blockers: [
+          { id: "GHSA-blocker", lockfile: "pnpm-lock.yaml" },
+          { id: "GHSA-blocker", lockfile: ".github/release/vercel-cli/package-lock.json" },
+        ],
+        findings: [
+          { id: "GHSA-blocker", lockfile: "pnpm-lock.yaml" },
+          { id: "GHSA-blocker", lockfile: ".github/release/vercel-cli/package-lock.json" },
+          { id: "GHSA-report", lockfile: ".github/release/clawhub-cli/package-lock.json" },
+        ],
       });
       await writeJson(dir, "transitive-manifest-risk-report.json", {
         findingCount: 17,
@@ -283,8 +290,8 @@ describe("generate-dependency-release-evidence", () => {
 
       const counts = await collectDependencyEvidenceSummaryCounts(dir);
       expect(counts).toEqual({
-        vulnerabilityBlockers: 1,
-        vulnerabilityFindings: 2,
+        vulnerabilityBlockers: 2,
+        vulnerabilityFindings: 3,
         transitiveRiskSignals: 17,
         workspaceExcludedTransitiveSignals: 3,
         transitiveMetadataFailures: 1,
@@ -302,7 +309,7 @@ describe("generate-dependency-release-evidence", () => {
         baseRef: "v2026.5.1",
         counts,
       });
-      expect(summary).toContain("- npm advisory vulnerability hard blockers: 1");
+      expect(summary).toContain("- npm advisory vulnerability hard blockers: 2");
       expect(summary).toContain("- Transitive manifest reported risk signals: 17");
       expect(summary).toContain("- Dependency change baseline: `v2026.5.1`");
       expect(summary).toContain("- Resolved package changes: +5 -6 changed 7");
@@ -315,7 +322,7 @@ describe("generate-dependency-release-evidence", () => {
       expect(stepSummary).toContain(
         "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
       );
-      expect(stepSummary).toContain("- npm advisory vulnerability hard blockers: `1`");
+      expect(stepSummary).toContain("- npm advisory vulnerability hard blockers: `2`");
 
       await expect(
         readFile(path.join(dir, "dependency-vulnerability-gate.json"), "utf8"),

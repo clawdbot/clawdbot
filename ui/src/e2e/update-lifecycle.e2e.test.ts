@@ -2,6 +2,7 @@
 // confirmation, the multi-minute install, the reconnect result, and a failure
 // that names the cause the updater recorded.
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -47,6 +48,15 @@ const HANDOFF_PENDING_SENTINEL = {
     stats: { reason: "managed-service-handoff-started" },
   },
 };
+
+async function openUpdateConfirmation(page: Page): Promise<void> {
+  await page.locator(".sidebar-issues-button").click();
+  const updateIssue = page.locator(
+    'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+  );
+  await updateIssue.locator("summary").click();
+  await updateIssue.locator(".sidebar-update-card__action").click();
+}
 
 suite.define(() => {
   it.each(["light", "dark"] as const)(
@@ -96,15 +106,19 @@ suite.define(() => {
             updateAvailable: DEV_UPDATE_AVAILABLE,
           });
 
-          await page.getByRole("button", { name: /246 commits behind/ }).click();
-          await page.getByRole("button", { name: "Update and restart", exact: true }).waitFor();
+          await openUpdateConfirmation(page);
+          await page
+            .locator("openclaw-modal-dialog")
+            .getByRole("button", { name: "Update and restart", exact: true })
+            .waitFor();
           // The modal fades in; capture it settled so the proof is readable.
           await page.waitForTimeout(500);
           await page.screenshot({ path: path.join(artifactDir, "1-confirm-dialog.png") });
-          await page.getByRole("button", { name: "Update and restart", exact: true }).click();
+          await page
+            .locator("openclaw-modal-dialog")
+            .getByRole("button", { name: "Update and restart", exact: true })
+            .click();
 
-          // The dialog is the primary surface: it stays open and reports the
-          // install rather than closing onto a page with nothing to say.
           const updating = page.getByRole("button", { name: "Updating…", exact: true });
           await updating.waitFor();
           expect(await updating.isEnabled()).toBe(false);
@@ -115,8 +129,6 @@ suite.define(() => {
           await gateway.resolveDeferred("update.run", HANDOFF_STARTED_RESPONSE);
           await gateway.closeLatest(1012, "managed update handoff");
 
-          // The dialog lives on document.body, outside the shell, so losing the
-          // Gateway cannot unmount the only surface still reporting.
           await page.getByText("The Gateway is restarting", { exact: false }).waitFor();
           await page.screenshot({ path: path.join(artifactDir, "3-restarting.png") });
 
@@ -188,12 +200,15 @@ suite.define(() => {
             updateAvailable: DEV_UPDATE_AVAILABLE,
           });
 
-          await page.getByRole("button", { name: /246 commits behind/ }).click();
-          await page.getByRole("button", { name: "Update and restart", exact: true }).click();
+          await openUpdateConfirmation(page);
+          await page
+            .locator("openclaw-modal-dialog")
+            .getByRole("button", { name: "Update and restart", exact: true })
+            .click();
           await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
           await gateway.closeLatest(1012, "managed update handoff");
 
-          // The recorded cause lands in the dialog the operator is still watching.
+          // The initiating dialog owns the recorded outcome in place.
           await page
             .locator("openclaw-modal-dialog")
             .getByText(
@@ -203,15 +218,6 @@ suite.define(() => {
             .waitFor({ timeout: 20_000 });
           await page.waitForTimeout(300);
           await page.screenshot({ path: path.join(artifactDir, "5-failure-in-dialog.png") });
-
-          // Closing it leaves the same outcome beside the control that started
-          // the update, for anyone who dismissed the dialog.
-          await page.getByRole("button", { name: "Close", exact: true }).click();
-          await page
-            .locator(".sidebar-update-card__status")
-            .filter({ hasText: "ENOSPC" })
-            .waitFor();
-          await page.screenshot({ path: path.join(artifactDir, "6-failure-in-sidebar.png") });
           expect(pageErrors).toEqual([]);
         },
       );

@@ -12,8 +12,17 @@ import type { ResolvedRaftAccount } from "./accounts.js";
 import { startRaftGatewayAccount } from "./gateway.js";
 import { dispatchRaftWake } from "./inbound.js";
 
+const processRuntimeMocks = vi.hoisted(() => ({
+  killProcessTree: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  killProcessTree: processRuntimeMocks.killProcessTree,
+}));
+
 class FakeBridge extends EventEmitter {
-  kill = vi.fn(() => true);
+  pid = 4242;
 }
 
 const tempWorkspaces: TempWorkspaceSync[] = [];
@@ -139,6 +148,7 @@ async function waitFor<T>(getValue: () => T | undefined): Promise<T> {
 }
 
 afterEach(() => {
+  processRuntimeMocks.killProcessTree.mockReset();
   resetPluginStateStoreForTests();
   for (const workspace of tempWorkspaces.splice(0)) {
     workspace.cleanup();
@@ -313,7 +323,11 @@ describe("Raft wake gateway", () => {
 
     controller.abort();
     await start;
-    expect(bridge.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(processRuntimeMocks.killProcessTree).toHaveBeenCalledOnce();
+    expect(processRuntimeMocks.killProcessTree).toHaveBeenCalledWith(bridge.pid, {
+      graceMs: 5_000,
+      detached: process.platform !== "win32",
+    });
   });
 
   it("returns the Raft bridge runtime session for accepted wakes", async () => {

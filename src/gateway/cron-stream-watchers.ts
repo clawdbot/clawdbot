@@ -1,7 +1,6 @@
 import { resolveCronTriggerMinIntervalMs } from "../config/cron-limits.js";
 import type { CronJob, CronJobState } from "../cron/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import type { ProcessSupervisor } from "../process/supervisor/index.js";
 import {
   CronStreamJobOwner,
   isCronStreamJob,
@@ -9,17 +8,12 @@ import {
   type CronStreamOwnerSnapshot,
   type CronStreamStopReason,
 } from "./cron-stream-job-owner.js";
-import type { CronStreamFireDisposition, CronStreamJob } from "./cron-stream-output.js";
+import type { CronStreamJob } from "./cron-stream-output.js";
 
 export type { CronStreamFireDisposition } from "./cron-stream-output.js";
 
 const MAX_RETIRED_COUNTER_SEEDS = 1_024;
 const MAX_MUTATION_EPOCHS = 1_024;
-
-type Logger = {
-  info: (obj: unknown, msg?: string) => void;
-  warn: (obj: unknown, msg?: string) => void;
-};
 
 type CronStreamWatchers = {
   reconcile: (jobs: CronJob[], enabled: boolean, triggersEnabled?: boolean) => Promise<void>;
@@ -51,42 +45,13 @@ export function resolveStreamStopReason(input: {
 }
 
 /** Supervise line-producing cron sources through one serialized owner per job. */
-export function createCronStreamWatchers(params: {
-  getProcessSupervisor: () => ProcessSupervisor;
-  /** Test seams; production uses the built-in cadence and retry schedules. */
-  minIntervalMs?: number;
-  retryBackoffMs?: number[];
-  updateState: (
-    jobId: string,
-    patch: Partial<CronJobState>,
-    streamScheduleKey: string,
-    streamSourceIdentity: string,
-  ) => Promise<boolean | void>;
-  retireSource: (
-    jobId: string,
-    streamScheduleKey: string,
-    streamSourceIdentity: string,
-  ) => Promise<string | undefined>;
-  updateCounters?: (
-    jobId: string,
-    counters: Pick<CronJobState, "streamDroppedBatches" | "streamCoalescedBatches">,
-  ) => Promise<void>;
-  recordFailure: (
-    jobId: string,
-    error: string,
-    patch: Partial<CronJobState>,
-    streamScheduleKey: string,
-    streamSourceIdentity: string,
-  ) => Promise<void>;
-  fireBatch: (
-    job: CronJob,
-    batch: string,
-    streamScheduleKey: string,
-    streamSourceIdentity: string,
-  ) => Promise<CronStreamFireDisposition>;
-  logger: Logger;
-  nowMs?: () => number;
-}): CronStreamWatchers {
+export function createCronStreamWatchers(
+  params: Omit<CronStreamOwnerParams, "minIntervalMs" | "nowMs"> & {
+    /** Test seams; production uses the built-in cadence and retry schedules. */
+    minIntervalMs?: number;
+    nowMs?: () => number;
+  },
+): CronStreamWatchers {
   const owners = new Map<string, CronStreamJobOwner>();
   const retiredCounterSeeds = new Map<
     string,

@@ -176,7 +176,6 @@ vi.mock("../agents/model-selection.js", () => {
         allowedKeys: refs,
         allowedCatalog: [],
         allowAny: policyRefs.length === 0,
-        automaticFallbackKeys: new Set<string>(),
       };
     }),
     createModelVisibilityPolicy: vi.fn(
@@ -210,7 +209,6 @@ vi.mock("../agents/model-selection.js", () => {
           hasProviderWildcards: wildcardModelKeys.size > 0,
           allowConfigPath: policy.configPath,
           allowRepairConfigPath: "agents.defaults.modelPolicy.allow",
-          automaticFallbackKeys: new Set<string>(),
           allowsKey,
           allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
           allowsByWildcard: ({ provider, model }: ModelRef) =>
@@ -301,11 +299,18 @@ vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
   buildSkillSnapshot: vi.fn(() => undefined),
 }));
 
-vi.mock("../skills/loading/workspace-skill-loader.js", () => ({
-  filterWorkspaceSkills: (entries: unknown[]) => entries,
-  loadVisibleSkills: vi.fn(() => []),
-  loadWorkspaceSkills: vi.fn(() => []),
-}));
+vi.mock("../skills/loading/workspace-skill-loader.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../skills/loading/workspace-skill-loader.js")
+  >("../skills/loading/workspace-skill-loader.js");
+  return {
+    filterWorkspaceSkills: (entries: unknown[]) => entries,
+    loadMergedWorkspaceSkills: vi.fn(() => []),
+    loadVisibleSkills: vi.fn(() => []),
+    loadWorkspaceSkills: vi.fn(() => []),
+    normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
+  };
+});
 
 vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => undefined),

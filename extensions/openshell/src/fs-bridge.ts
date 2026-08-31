@@ -1,15 +1,16 @@
 // Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   SandboxFsBridge,
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
-import { FsSafeError, isPathInside } from "openclaw/plugin-sdk/security-runtime";
-import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
+import type { OpenShellFsBridgeContext, OpenShellMirrorBackend } from "./backend.types.js";
+import { resolveOpenShellWorkspaceRoot, type OpenShellWorkspaceRoot } from "./workspace-roots.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
   mountHostRoot: string;
@@ -24,8 +25,8 @@ const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "ski
 
 export function createOpenShellFsBridge(params: {
   sandbox: OpenShellFsBridgeContext;
-  backend: OpenShellSandboxBackend;
-}): SandboxFsBridge {
+  backend: OpenShellMirrorBackend;
+}) {
   return new OpenShellFsBridge(params.sandbox, params.backend);
 }
 
@@ -37,7 +38,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   constructor(
     private readonly sandbox: OpenShellFsBridgeContext,
-    private readonly backend: OpenShellSandboxBackend,
+    private readonly backend: OpenShellMirrorBackend,
   ) {}
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
@@ -303,39 +304,81 @@ class OpenShellFsBridge implements SandboxFsBridge {
       }
     }
 
-    if (input.startsWith(`${workspaceContainerRoot}/`) || input === workspaceContainerRoot) {
-      const relative = path.posix.relative(workspaceContainerRoot, input) || "";
+    const containerMounts: OpenShellWorkspaceRoot<{
+      hostRoot: string;
+      writable: boolean;
+    }>[] = [
+      {
+        remote: workspaceContainerRoot,
+        owner: "workspace",
+        value: {
+          hostRoot: workspaceRoot,
+          writable: this.sandbox.workspaceAccess === "rw",
+        },
+      },
+      ...(hasAgentMount
+        ? [
+            {
+              remote: agentContainerRoot,
+              owner: "agent" as const,
+              value: {
+                hostRoot: agentRoot,
+                writable: this.sandbox.workspaceAccess === "rw",
+              },
+            },
+          ]
+        : []),
+    ];
+    const resolveContainerTarget = (containerPath: string): ResolvedMountPath | undefined => {
+      const containerMount = resolveOpenShellWorkspaceRoot(containerMounts, containerPath);
+      if (!containerMount) {
+        return undefined;
+      }
+      const relative = path.posix.relative(containerMount.remote, containerPath) || "";
       const hostPath = relative
-        ? path.resolve(workspaceRoot, ...relative.split("/"))
-        : workspaceRoot;
+        ? path.resolve(containerMount.value.hostRoot, ...relative.split("/"))
+        : containerMount.value.hostRoot;
+      if (!isPathInside(containerMount.value.hostRoot, hostPath)) {
+        throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+      }
       return {
         hostPath,
-        relativePath: relative,
+        relativePath:
+          containerMount.owner === "agent"
+            ? relative
+              ? containerMount.remote + "/" + relative
+              : containerMount.remote
+            : relative,
         containerPath: relative
-          ? path.posix.join(workspaceContainerRoot, relative)
-          : workspaceContainerRoot,
-        mountHostRoot: workspaceRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
-        source: "workspace",
+          ? path.posix.join(containerMount.remote, relative)
+          : containerMount.remote,
+        mountHostRoot: containerMount.value.hostRoot,
+        writable: containerMount.value.writable,
+        source: containerMount.owner,
       };
-    }
-
-    if (
-      hasAgentMount &&
-      (input.startsWith(`${agentContainerRoot}/`) || input === agentContainerRoot)
-    ) {
-      const relative = path.posix.relative(agentContainerRoot, input) || "";
-      const hostPath = relative ? path.resolve(agentRoot, ...relative.split("/")) : agentRoot;
-      return {
-        hostPath,
-        relativePath: relative ? agentContainerRoot + "/" + relative : agentContainerRoot,
-        containerPath: relative
-          ? path.posix.join(agentContainerRoot, relative)
-          : agentContainerRoot,
-        mountHostRoot: agentRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
-        source: "agent",
-      };
+    };
+    const containerCwd = params.cwd?.replace(/\\/g, "/");
+    const cwdMount = containerCwd
+      ? resolveOpenShellWorkspaceRoot(containerMounts, containerCwd)
+      : undefined;
+    const containerInput = path.posix.isAbsolute(input)
+      ? input
+      : cwdMount || !params.cwd
+        ? path.posix.resolve(containerCwd ?? workspaceContainerRoot, input)
+        : undefined;
+    if (containerInput) {
+      const target = resolveContainerTarget(containerInput);
+      if (target) {
+        return target;
+      }
+      if (
+        cwdMount ||
+        containerMounts.some(
+          (mount) => input === mount.remote || input.startsWith(`${mount.remote}/`),
+        )
+      ) {
+        throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+      }
     }
 
     const cwd = params.cwd ? path.resolve(params.cwd) : workspaceRoot;
@@ -355,16 +398,10 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
     if (isPathInside(workspaceRoot, hostPath)) {
       const relative = path.relative(workspaceRoot, hostPath).split(path.sep).join(path.posix.sep);
-      return {
-        hostPath,
-        relativePath: relative,
-        containerPath: relative
-          ? path.posix.join(workspaceContainerRoot, relative)
-          : workspaceContainerRoot,
-        mountHostRoot: workspaceRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
-        source: "workspace",
-      };
+      return expectResolvedContainerTarget(
+        resolveContainerTarget(path.posix.join(workspaceContainerRoot, relative)),
+        input,
+      );
     }
 
     if (skillsRoot && this.sandbox.workspaceAccess === "rw" && isPathInside(skillsRoot, hostPath)) {
@@ -385,20 +422,24 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
     if (hasAgentMount && isPathInside(agentRoot, hostPath)) {
       const relative = path.relative(agentRoot, hostPath).split(path.sep).join(path.posix.sep);
-      return {
-        hostPath,
-        relativePath: relative ? `${agentContainerRoot}/${relative}` : agentContainerRoot,
-        containerPath: relative
-          ? path.posix.join(agentContainerRoot, relative)
-          : agentContainerRoot,
-        mountHostRoot: agentRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
-        source: "agent",
-      };
+      return expectResolvedContainerTarget(
+        resolveContainerTarget(path.posix.join(agentContainerRoot, relative)),
+        input,
+      );
     }
 
     throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${params.filePath}`);
   }
+}
+
+function expectResolvedContainerTarget(
+  target: ResolvedMountPath | undefined,
+  input: string,
+): ResolvedMountPath {
+  if (!target) {
+    throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+  }
+  return target;
 }
 
 async function mkdirLocalRootPath(params: {

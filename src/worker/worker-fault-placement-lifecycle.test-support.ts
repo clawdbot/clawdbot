@@ -77,6 +77,39 @@ export class WorkerFaultPlacementLifecycle {
     this.options.placementStore.releaseTurn(claim);
   }
 
+  reclaimPlacement(
+    placement: Extract<WorkerSessionPlacementRecord, { state: "active" }>,
+    ownerEpoch: number,
+  ): void {
+    const draining = this.options.placementStore.startDrain({
+      sessionId: placement.sessionId,
+      environmentId: this.options.environmentId,
+      ownerEpoch,
+      expectedGeneration: placement.generation,
+    });
+    if (draining.state !== "draining") {
+      throw new Error("fault placement did not enter draining");
+    }
+    const reconciling = this.options.placementStore.startReconcile({
+      sessionId: placement.sessionId,
+      environmentId: this.options.environmentId,
+      ownerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    if (reconciling.state !== "reconciling") {
+      throw new Error("fault placement did not enter reconciliation");
+    }
+    const reclaimed = this.options.placementStore.transition({
+      sessionId: placement.sessionId,
+      from: "reconciling",
+      to: "reclaimed",
+      expectedGeneration: reconciling.generation,
+    });
+    if (reclaimed.state !== "reclaimed") {
+      throw new Error("fault placement did not finish reclaimed");
+    }
+  }
+
   private activatePlacement(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
     let placement = this.options.placementStore.startDispatch({
       sessionId: this.options.sessionId,
@@ -110,7 +143,7 @@ export class WorkerFaultPlacementLifecycle {
   }
 
   private bindCredentialToClaim(credential: string, claim: WorkerSessionTurnClaim): void {
-    if (claim.owner.kind !== "worker") {
+    if (claim.owner.kind !== "worker" || !this.options.placementStore.validateTurnClaim(claim)) {
       throw new Error("fault worker credential requires a worker-owned claim");
     }
     const previous = this.options.environmentStore.getCredential(this.options.environmentId);
@@ -125,6 +158,8 @@ export class WorkerFaultPlacementLifecycle {
     });
     if (previous && previous.credentialHash !== credentialHash) {
       this.options.getLiveEvents().rotateCredential({
+        ackedSeq:
+          this.options.placementStore.get(this.options.sessionId)?.lastLiveEventAckCursor ?? 0,
         credentialHash,
         environmentId: this.options.environmentId,
         newProcessTurn: true,

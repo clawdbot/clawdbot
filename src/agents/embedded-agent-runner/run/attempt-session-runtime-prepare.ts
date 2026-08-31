@@ -26,12 +26,14 @@ type TrajectoryInput = Parameters<typeof prepareEmbeddedAttemptTrajectory>[0];
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 type SessionSettleTracker = ReturnType<typeof createEmbeddedAttemptSessionSettleTracker>;
 type TrajectoryRecorder = Awaited<ReturnType<typeof prepareEmbeddedAttemptTrajectory>>;
+
 type ExternalAbortController = Pick<
   ReturnType<typeof createEmbeddedAttemptExternalAbortController>,
   "setActiveSessionAbort"
 >;
 
 type EmbeddedAttemptSessionRuntimeState = {
+  currentTurnImageFailureCount: number;
   prePromptMessageCount: number;
   promptCache: EmbeddedRunAttemptResult["promptCache"];
   systemPromptText: string;
@@ -46,6 +48,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   effectiveWorkspace: string;
   initialSystemPrompt: string;
   isRawModelRun: boolean;
+  nestedToolActivities: AgentSessionInput["nestedToolActivities"];
   sessionManager: Pick<
     SessionManagerInput,
     | "replayAllowedToolNames"
@@ -109,6 +112,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     preparedSessionManager;
 
   const state: EmbeddedAttemptSessionRuntimeState = {
+    currentTurnImageFailureCount: 0,
     prePromptMessageCount: 0,
     promptCache: undefined,
     systemPromptText: input.initialSystemPrompt,
@@ -134,17 +138,24 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionAgentId: input.sessionManager.sessionAgentId,
     transcriptLifecycle: input.sessionManager.transcriptLifecycle,
     sessionManager,
+    nestedToolActivities: input.nestedToolActivities,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
+  const recordCurrentTurnImageFailure = (count: number) => {
+    state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
+  };
   await attempt.userTurnTranscriptRecorder?.waitForRuntimePersistence();
-  const boundary = prepareEmbeddedAttemptSessionBoundary({
-    activeSession,
-    attempt,
-    ...preparedSessionManager.userMessageBoundary,
-    isRawModelRun: input.isRawModelRun,
-    sessionManager,
-    setActiveSessionSystemPrompt,
-  });
+  const boundary = await input.sessionManager.withOwnedTranscriptWrite(() =>
+    prepareEmbeddedAttemptSessionBoundary({
+      abortSignal: input.agentSession.runAbortSignal,
+      activeSession,
+      attempt,
+      ...preparedSessionManager.userMessageBoundary,
+      isRawModelRun: input.isRawModelRun,
+      sessionManager,
+      setActiveSessionSystemPrompt,
+    }),
+  );
   state.prePromptMessageCount = activeSession.messages.length;
 
   // Session-owned projections survive attempt teardown so already-sent tool results
@@ -159,12 +170,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     activeSession,
   });
 
-  // Guard hooks run during prompt submission, after transport setup fills this value.
-  const promptCacheRetentionRef: {
-    current: Awaited<
-      ReturnType<typeof prepareEmbeddedAttemptTransport>
-    >["effectivePromptCacheRetention"];
-  } = { current: undefined };
+  // Guard hooks execute during prompt submission, after transport preparation.
   const contextGuards = installEmbeddedAttemptContextGuards({
     ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
     activeSession,
@@ -177,7 +183,9 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     effectiveWorkspace: input.effectiveWorkspace,
     getPrePromptMessageCount: () => state.prePromptMessageCount,
     getPromptCache: () => state.promptCache,
-    getPromptCacheRetention: () => promptCacheRetentionRef.current,
+    onCurrentTurnImageFailure: recordCurrentTurnImageFailure,
+    getPromptCacheRetention: () => transport.effectivePromptCacheRetention,
+    getCompactionReplayEnabled: () => transport.compactionReplayEnabled,
     getSystemPrompt: () => state.systemPromptText,
     isOpenAIResponsesApi,
     repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
@@ -234,6 +242,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     agentDir: input.agentDir,
     abortSignal: input.transport.abortSignal,
     getProviderRuntimeHandle: input.transport.getProviderRuntimeHandle,
+    onCurrentTurnImageFailure: recordCurrentTurnImageFailure,
     sandboxSessionKey: input.transport.sandboxSessionKey,
     ...(input.transport.sandbox !== undefined ? { sandbox: input.transport.sandbox } : {}),
     codeModeControlsEnabled: input.transport.codeModeControlsEnabled,
@@ -248,7 +257,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       ...(trajectoryRecorder ? { recordEvent: trajectoryRecorder.recordEvent } : {}),
     },
   });
-  promptCacheRetentionRef.current = transport.effectivePromptCacheRetention;
 
   return {
     agentSession: preparedAgentSession,

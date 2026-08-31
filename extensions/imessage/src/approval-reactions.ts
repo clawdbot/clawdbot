@@ -1,5 +1,6 @@
 // Imessage plugin module implements approval reactions behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   addApprovalReactionHintToText,
   approvalReactionDecisionSetsMatch,
@@ -47,7 +48,7 @@ const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
 type IMessageApprovalReactionResolution = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   decision: ExecApprovalReplyDecision;
 };
 type IMessageApprovalReactionHandleResult =
@@ -56,11 +57,11 @@ type IMessageApprovalReactionHandleResult =
   | {
       handled: true;
       stopPolling: true;
-      stopPollingReason: "resolved" | "not-found" | "resolver-error";
+      stopPollingReason: "resolved" | "not-found";
     };
 
 type IMessageApprovalReactionTarget = ApprovalReactionTargetRecord & {
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
 };
 
 export type { IMessageApprovalConversationKey } from "./approval-target-keys.js";
@@ -187,7 +188,7 @@ function visibleApprovalBindingMatches(
 /** Preserve a validated typed approval binding until the iMessage GUID is known. */
 export function addIMessageApprovalReactionHintToStructuredPayload(params: {
   payload: ReplyPayload;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
 }): ReplyPayload | null {
   const metadata = readApprovalReactionPresentationBinding({
     payload: params.payload,
@@ -227,7 +228,7 @@ export function registerIMessageApprovalReactionTarget(params: {
   conversation: IMessageApprovalConversationKey;
   messageId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
 }): IMessageApprovalReactionTarget | null {
@@ -592,7 +593,9 @@ export async function handleIMessageApprovalReaction(params: {
     params.logVerboseMessage?.(
       `imessage: approval reaction failed id=${target.approvalId} sender=${event.actorHandle}: ${String(error)}`,
     );
-    return { handled: true, stopPolling: true, stopPollingReason: "resolver-error" };
+    // Non-terminal resolver errors must reach the durable ingress drain.
+    // Returning here would commit the claim and lose the operator's reaction.
+    throw error;
   }
 }
 

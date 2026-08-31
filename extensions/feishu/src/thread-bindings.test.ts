@@ -44,7 +44,7 @@ describe("Feishu thread bindings", () => {
   it("binds and resolves a Feishu topic conversation", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     createFeishuThreadBindingManager({
-      cfg: { ...baseCfg, agents: { list: [{ id: "main" }, { id: "codex" }] } },
+      cfg: { ...baseCfg, agents: { entries: { main: {}, codex: {} } } },
       accountId: "default",
     });
 
@@ -255,68 +255,86 @@ describe("Feishu thread bindings", () => {
     ).toBeNull();
   });
 
-  it("preserves delivery routing metadata when rebinding the same conversation", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_700_000_100_000);
-    const manager = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+  it.each(["refresh", "session", "kind"] as const)(
+    "preserves conversation delivery fields without inheriting another target's owner (%s)",
+    async (change) => {
+      const replace = change !== "refresh";
+      vi.spyOn(Date, "now").mockReturnValue(1_700_000_100_000);
+      const manager = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
 
-    manager.bindConversation({
-      conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
-      parentConversationId: "oc_group_chat",
-      targetKind: "subagent",
-      targetSessionKey: "agent:main:subagent:child",
-      metadata: {
-        agentId: "codex",
-        label: "child",
-        boundBy: "system",
-        deliveryTo: "user:ou_sender_1",
-        deliveryThreadId: "om_topic_root",
-      },
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:child",
-      targetKind: "subagent",
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
+      manager.bindConversation({
         conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
         parentConversationId: "oc_group_chat",
-      },
-      placement: "current",
-      metadata: {
-        label: "child",
-      },
-    });
+        targetKind: "subagent",
+        targetSessionKey: "agent:main:subagent:child",
+        metadata: {
+          agentId: "previous-agent",
+          label: "child",
+          boundBy: "system",
+          deliveryTo: "user:ou_sender_1",
+          deliveryThreadId: "om_topic_root",
+          pluginBindingOwner: "plugin",
+          pluginId: "fixture-plugin",
+          pluginRoot: "/fixture/plugin",
+          data: { threadId: "plugin-thread" },
+        },
+      });
 
-    expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
-      }),
-    ).toEqual({
-      bindingId: "default:oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
-      targetSessionKey: "agent:main:subagent:child",
-      targetKind: "subagent",
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
-        parentConversationId: "oc_group_chat",
-      },
-      status: "active",
-      boundAt: 1_700_000_100_000,
-      expiresAt: 1_700_086_500_000,
-      metadata: {
-        agentId: "codex",
-        label: "child",
-        boundBy: "system",
-        deliveryTo: "user:ou_sender_1",
-        deliveryThreadId: "om_topic_root",
-        lastActivityAt: 1_700_000_100_000,
-        idleTimeoutMs: 86_400_000,
-        maxAgeMs: 0,
-      },
-    });
-  });
+      await getSessionBindingService().bind({
+        targetSessionKey:
+          change === "session" ? "agent:main:subagent:replacement" : "agent:main:subagent:child",
+        targetKind: change === "kind" ? "session" : "subagent",
+        conversation: {
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+          parentConversationId: "oc_group_chat",
+        },
+        placement: "current",
+        metadata: {
+          label: "child",
+        },
+      });
+
+      expect(
+        getSessionBindingService().resolveByConversation({
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+        }),
+      ).toEqual({
+        bindingId: "default:oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+        targetSessionKey:
+          change === "session" ? "agent:main:subagent:replacement" : "agent:main:subagent:child",
+        targetKind: change === "kind" ? "session" : "subagent",
+        conversation: {
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+          parentConversationId: "oc_group_chat",
+        },
+        status: "active",
+        boundAt: 1_700_000_100_000,
+        expiresAt: 1_700_086_500_000,
+        metadata: {
+          ...(!replace
+            ? {
+                pluginBindingOwner: "plugin",
+                pluginId: "fixture-plugin",
+                pluginRoot: "/fixture/plugin",
+                data: { threadId: "plugin-thread" },
+              }
+            : {}),
+          agentId: replace ? "main" : "previous-agent",
+          label: "child",
+          boundBy: replace ? undefined : "system",
+          deliveryTo: "user:ou_sender_1",
+          deliveryThreadId: "om_topic_root",
+          lastActivityAt: 1_700_000_100_000,
+          idleTimeoutMs: 86_400_000,
+          maxAgeMs: 0,
+        },
+      });
+    },
+  );
 });

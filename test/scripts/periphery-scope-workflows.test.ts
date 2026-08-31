@@ -4,7 +4,7 @@ import path from "node:path";
 import { compileFunction } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
 
 const WORKFLOW_CASES = [
   {
@@ -155,6 +155,9 @@ describe("Periphery scope workflows", () => {
     "selects only $name scope changes",
     async ({ path: workflowPath, scopedPath }) => {
       await expect(runScope(workflowPath, { files: [scopedPath] })).resolves.toBe("true");
+      await expect(
+        runScope(workflowPath, { files: ["scripts/install-periphery.sh"] }),
+      ).resolves.toBe("true");
       await expect(runScope(workflowPath, { files: ["docs/index.md"] })).resolves.toBe("false");
       await expect(runScope(workflowPath, { draft: true, files: [scopedPath] })).resolves.toBe(
         "false",

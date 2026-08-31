@@ -13,10 +13,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
-  resolvePluginSessionOwnershipError,
-  type PluginSessionOwnershipAction,
-} from "../session-plugin-ownership.js";
-import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -25,11 +21,10 @@ import {
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
-import { isWorkerPlacementSafeForArchive } from "../worker-environments/session-placement-lifecycle.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 export {
   resolveSessionWorkerPlacementMutationError,
-  retireSessionWorkerPlacementBeforeMutation,
   SessionWorkerPlacementMutationError,
 } from "../worker-environments/session-placement-lifecycle.js";
 
@@ -60,12 +55,28 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   if (!placement || placement.state === "local") {
     return undefined;
   }
+  if (
+    "permissionMode" in params.patch &&
+    placement.executionMode === "worker-turn" &&
+    placement.turnClaim
+  ) {
+    return "This remote worker cannot apply permissions while active. Stop the worker run, then change permissions.";
+  }
   if (params.patch.archived === false) {
-    if (!isWorkerPlacementSafeForArchive(params.context, placement)) {
-      return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+    const restoreError = resolveWorkerPlacementArchiveRestoreError({
+      context: params.context,
+      key: params.key,
+      placement,
+    });
+    if (restoreError) {
+      return restoreError;
     }
   }
-  if (!params.validateModelRuntime || params.patch.model === undefined || !params.entry) {
+  if (
+    !params.validateModelRuntime ||
+    params.patch.model === undefined ||
+    !params.entry?.sessionId
+  ) {
     return undefined;
   }
   const runtime = resolveWorkerPlacementSessionRuntime({
@@ -102,26 +113,6 @@ export function requireSessionKey(key: unknown, respond: RespondFn): string | nu
     return null;
   }
   return normalized;
-}
-
-export function rejectPluginRuntimeSessionOwnershipMismatch(params: {
-  action: PluginSessionOwnershipAction;
-  client: GatewayClient | null;
-  key: string;
-  entry: SessionEntry | undefined;
-  respond: RespondFn;
-}): boolean {
-  const error = resolvePluginSessionOwnershipError({
-    action: params.action,
-    entry: params.entry,
-    key: params.key,
-    pluginOwnerId: params.client?.internal?.pluginRuntimeOwnerId,
-  });
-  if (!error) {
-    return false;
-  }
-  params.respond(false, undefined, error);
-  return true;
 }
 
 export function resolveGatewaySessionTargetFromKey(

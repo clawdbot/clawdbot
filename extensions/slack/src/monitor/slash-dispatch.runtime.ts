@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute as resolveAgentRouteImpl } from "openclaw/plugin-sdk/routing";
 import { deliverSlackSlashReplies as deliverSlackSlashRepliesImpl } from "./replies.js";
+export { sanitizeSlackMonitorReplyPayload } from "./replies.js";
 
 type ResolveChunkMode = typeof import("openclaw/plugin-sdk/reply-runtime").resolveChunkMode;
 type FinalizeInboundContext =

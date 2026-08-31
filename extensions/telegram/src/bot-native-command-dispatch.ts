@@ -1,4 +1,3 @@
-// Telegram plugin module implements native command admission and dispatch behavior.
 import type { Bot, Context } from "grammy";
 import {
   isChannelPartialDeliveryError,
@@ -13,10 +12,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import {
-  PLUGIN_COMMAND_DISPATCH,
-  type PluginCommandCatalogDecision,
-} from "openclaw/plugin-sdk/plugin-command-runtime";
+import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
@@ -48,6 +44,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import {
+  buildTelegramConversationRouteContext,
   resolveTelegramConversationRoute,
   resolveTelegramTargetSession,
 } from "./conversation-route.js";
@@ -64,10 +61,6 @@ import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
-const NON_PLUGIN_COMMAND_DISPATCH = Object.freeze({
-  kind: "non-plugin",
-}) satisfies PluginCommandCatalogDecision;
-
 const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
   () => import("./bot-native-commands.delivery.runtime.js"),
 );
@@ -108,6 +101,7 @@ export type TelegramCommandExecutorParams = {
     | "groupAllowFrom"
     | "replyToMode"
     | "accountAbortSignal"
+    | "dispatchReplyFromConfig"
   >;
 };
 
@@ -191,6 +185,7 @@ async function resolveTelegramCommandAuth(params: {
         accountId,
         chatId,
         isGroup,
+        threadSpec,
         senderId,
         senderUsername,
       })
@@ -236,7 +231,7 @@ async function resolveTelegramCommandAuth(params: {
         accountId,
         chatId,
         isGroup,
-        resolvedThreadId,
+        threadSpec,
         senderId,
         senderUsername,
       })
@@ -246,7 +241,7 @@ async function resolveTelegramCommandAuth(params: {
     accountId,
     chatId,
     isGroup,
-    resolvedThreadId,
+    threadSpec,
     senderId,
     senderUsername,
   });
@@ -359,6 +354,7 @@ async function resolveTelegramCommandAuth(params: {
     senderUsername,
     groupConfig,
     topicConfig,
+    threadSpec,
     commandAuthorized,
     senderIsOwner: ownerAccess.senderIsOwner,
   };
@@ -395,14 +391,12 @@ export async function prepareTelegramCommandDispatch(
   if (!auth) {
     return null;
   }
-  const threadSpec = resolveTelegramMessageThreadSpec(params.msg, auth.isForum);
   const { route, bindingMode } = resolveTelegramConversationRoute({
     cfg: runtimeCfg,
     accountId: params.accountId,
     chatId: auth.chatId,
     isGroup: auth.isGroup,
-    resolvedThreadId: auth.resolvedThreadId,
-    replyThreadId: threadSpec.id,
+    threadSpec: auth.threadSpec,
     senderId: auth.senderId,
     topicAgentId: auth.topicConfig?.agentId,
   });
@@ -423,7 +417,7 @@ export async function prepareTelegramCommandDispatch(
           params.bot.api.sendMessage(
             auth.chatId,
             "Configured ACP binding is unavailable right now. Please try again.",
-            buildTelegramThreadParams(threadSpec) ?? {},
+            buildTelegramThreadParams(auth.threadSpec) ?? {},
           ),
       });
       return null;
@@ -446,7 +440,7 @@ export async function prepareTelegramCommandDispatch(
     chatId: auth.chatId,
     isGroup: auth.isGroup,
     senderId: auth.senderId,
-    dmThreadId: threadSpec.scope === "dm" ? threadSpec.id : undefined,
+    dmThreadId: auth.threadSpec.scope === "dm" ? auth.threadSpec.id : undefined,
     botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(params.botUser),
   });
   const buildDeliveryBaseOptions = (keys?: {
@@ -468,7 +462,7 @@ export async function prepareTelegramCommandDispatch(
     mediaMaxBytes: params.mediaMaxBytes,
     replyToMode: turnSettings.replyToMode,
     textLimit: turnSettings.textLimit,
-    thread: threadSpec,
+    thread: auth.threadSpec,
     tableMode,
     chunkMode,
     linkPreview: runtimeTelegramCfg.linkPreview,
@@ -481,8 +475,8 @@ export async function prepareTelegramCommandDispatch(
     runtimeTelegramCfg,
     turnSettings,
     ...auth,
-    threadSpec,
-    threadParams: buildTelegramThreadParams(threadSpec),
+    threadSpec: auth.threadSpec,
+    threadParams: buildTelegramThreadParams(auth.threadSpec),
     route,
     mediaLocalRoots,
     targetSessionKey,
@@ -541,10 +535,11 @@ export async function dispatchTelegramBuiltinTurn(params: {
     CommandBody: params.prompt,
     CommandArgs: params.commandArgs,
     From: dispatch.isGroup
-      ? buildTelegramGroupFrom(dispatch.chatId, dispatch.resolvedThreadId)
+      ? buildTelegramGroupFrom(dispatch.chatId, dispatch.threadSpec)
       : `telegram:${dispatch.chatId}`,
     To: `slash:${dispatch.senderId || dispatch.chatId}`,
     ChatType: dispatch.isGroup ? "group" : "direct",
+    ...buildTelegramConversationRouteContext(dispatch),
     ConversationToolPolicy: dispatch.isGroup
       ? undefined
       : resolveTelegramDirectToolPolicy({
@@ -598,6 +593,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
     accountId: dispatch.route.accountId,
     route: { agentId: dispatch.route.agentId, sessionKey: commandSessionKey },
     ctxPayload,
+    dispatchReplyFromConfig: dispatch.opts.dispatchReplyFromConfig,
     record: {
       sessionKey: commandTargetSessionKey,
       trackSessionMetaTask: (task) => {
@@ -688,7 +684,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
         const enabled = resolveChannelStreamingBlockEnabled(dispatch.runtimeTelegramCfg);
         return typeof enabled === "boolean" ? !enabled : undefined;
       })(),
-      [PLUGIN_COMMAND_DISPATCH]: NON_PLUGIN_COMMAND_DISPATCH,
+      [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
     },
   };
   const turnResult = await (

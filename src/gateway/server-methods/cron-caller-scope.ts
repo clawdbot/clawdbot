@@ -8,6 +8,7 @@ import type {
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../../cron/types.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -23,6 +24,8 @@ export type CronCallerScope = {
   accountId: string;
   currentJobId?: string;
   toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** Restrict-only exec policy carried by the signed creator-turn identity. */
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
 };
 
@@ -57,6 +60,14 @@ export function readCronCallerScope(
             source: "final-executable-surface" as const,
             callerOrigin,
           },
+          ...(identity.cronExecToolTarget?.host === "gateway"
+            ? {
+                toolsAllowExecTarget: {
+                  version: 1 as const,
+                  ...identity.cronExecToolTarget,
+                },
+              }
+            : {}),
         }
       : {}),
     ...(identity.cronCreatorAuthorityGrant

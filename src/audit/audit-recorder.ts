@@ -17,6 +17,7 @@ type AuditEventRecorder = AgentEventAuditRecorder & {
   recordMessage: (event: TrustedMessageAuditEvent) => void;
   recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
   recordExecutionDecision: AuditEventWriter["recordExecutionDecision"];
+  recordExecutionDecisionWork: AuditEventWriter["recordExecutionDecisionWork"];
 };
 
 export function createAuditEventRecorder(options: {
@@ -30,6 +31,7 @@ export function createAuditEventRecorder(options: {
     options.writer ??
     createAuditEventWriter({
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
+      onContention: (message) => log.warn(message),
       onError: (error) => {
         if (!persistenceFailureWarned) {
           persistenceFailureWarned = true;
@@ -48,6 +50,7 @@ export function createAuditEventRecorder(options: {
     ...agentRecorder,
     recordExecutionIdentity: writer.recordExecutionIdentity,
     recordExecutionDecision: writer.recordExecutionDecision,
+    recordExecutionDecisionWork: writer.recordExecutionDecisionWork,
     recordMessage: (event) => {
       if (options.messageMode === "off") {
         return;

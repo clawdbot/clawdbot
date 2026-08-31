@@ -73,26 +73,6 @@ export function resolveSpawnChannelAccountId(params: {
   return normalizeOptionalString(channels?.[channel]?.defaultAccount) ?? "default";
 }
 
-export function resolveConversationRefForThreadBinding(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-  accountId?: string;
-  to?: string;
-  threadId?: string | number;
-  groupId?: string;
-}): { conversationId: string; parentConversationId?: string } | null {
-  const resolution = resolveInboundConversationResolution({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    to: params.to,
-    threadId: params.threadId,
-    groupId: params.groupId,
-    isGroup: true,
-  });
-  return resolution?.canonical ?? null;
-}
-
 function resolveRequesterBoundConversationRef(params: {
   bindingService: SessionBindingService;
   requesterSessionKey?: string;
@@ -154,7 +134,7 @@ function buildThreadBindingUnavailableError(kind: SpawnBackendKind, mode: SpawnM
     return (
       'sessions_spawn(mode="session") is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). ' +
       "This request is not running on a channel that can bind a subagent thread. " +
-      'Use mode="run" for one-shot subagent work, or sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.'
+      'Use mode="run" for one-shot subagent work.'
     );
   }
   return (
@@ -233,7 +213,7 @@ export function prepareSpawnThreadBinding(params: {
       error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
     };
   }
-  const fallback = resolveConversationRefForThreadBinding({
+  const fallback = resolveInboundConversationResolution({
     cfg: params.cfg,
     channel: policy.channel,
     accountId: policy.accountId,
@@ -354,7 +334,7 @@ export function resolveSpawnAdmission(params: {
     return {
       ok: false,
       error:
-        "sessions_spawn requires explicit agentId when requireAgentId is configured. Use agents_list to see allowed agent ids.",
+        "sessions_spawn requires explicit agentId when requireAgentId is configured. Provide an allowed configured agentId.",
     };
   }
   const targetPolicy = resolveSubagentTargetPolicy({

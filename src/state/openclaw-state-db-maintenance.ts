@@ -14,11 +14,14 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const STATE_V6_ADDITIVE_TABLES = [
+  // v6-v12 databases may predate this former same-version lazy table.
+  "gateway_origin_device_tokens",
   ...LAZY_ADDITIVE_STATE_TABLES,
   "worker_session_tool_operations",
   "worker_turn_tool_authorities",
@@ -47,6 +50,12 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   6: STATE_V6_ADDITIVE_TABLES,
   7: STATE_V6_ADDITIVE_TABLES,
   8: STATE_V6_ADDITIVE_TABLES,
+  9: STATE_V6_ADDITIVE_TABLES,
+  10: STATE_V6_ADDITIVE_TABLES,
+  11: STATE_V6_ADDITIVE_TABLES,
+  12: STATE_V6_ADDITIVE_TABLES,
+  13: LAZY_ADDITIVE_STATE_TABLES,
+  14: LAZY_ADDITIVE_STATE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -165,7 +174,7 @@ function assertOpenClawStateDatabaseVersionForMigration(
 }
 
 /** Require every stable v5 table before the v6 additive migration can run. */
-export function assertOpenClawStateDatabaseV5ForMigration(
+function assertOpenClawStateDatabaseV5ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
@@ -173,7 +182,7 @@ export function assertOpenClawStateDatabaseV5ForMigration(
 }
 
 /** Require every stable v6 table before the v7 retirement migration can run. */
-export function assertOpenClawStateDatabaseV6ForMigration(
+function assertOpenClawStateDatabaseV6ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
@@ -181,7 +190,7 @@ export function assertOpenClawStateDatabaseV6ForMigration(
 }
 
 /** Require every stable v7 table before the v8 placement migration can run. */
-export function assertOpenClawStateDatabaseV7ForMigration(
+function assertOpenClawStateDatabaseV7ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
@@ -189,13 +198,141 @@ export function assertOpenClawStateDatabaseV7ForMigration(
 }
 
 /** Require every stable v8 table before the v9 registry migration can run. */
-export function assertOpenClawStateDatabaseV8ForMigration(
+function assertOpenClawStateDatabaseV8ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
   assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 8 });
 }
 
+/** Require every stable v9 table before the v10 retirement migration can run. */
+function assertOpenClawStateDatabaseV9ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 9 });
+}
+
+/** Require every stable v10 table before the v11 curator retirement can run. */
+function assertOpenClawStateDatabaseV10ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 10 });
+}
+
+/** Require every stable v11 table before singleton state folds into the v12 store. */
+function assertOpenClawStateDatabaseV11ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 11 });
+}
+
+/** Require every stable v12 table before wide rows become JSON-canonical. */
+function assertOpenClawStateDatabaseV12ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 12 });
+}
+
+/** Keep historical migration gates beside their version-specific ownership assertions. */
+export const openClawStateMigrationAssertions = new Map([
+  [5, assertOpenClawStateDatabaseV5ForMigration],
+  [6, assertOpenClawStateDatabaseV6ForMigration],
+  [7, assertOpenClawStateDatabaseV7ForMigration],
+  [8, assertOpenClawStateDatabaseV8ForMigration],
+  [9, assertOpenClawStateDatabaseV9ForMigration],
+  [10, assertOpenClawStateDatabaseV10ForMigration],
+  [11, assertOpenClawStateDatabaseV11ForMigration],
+  [12, assertOpenClawStateDatabaseV12ForMigration],
+  [
+    13,
+    (database: DatabaseSync, options: { pathname: string }) =>
+      assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 13 }),
+  ],
+  [
+    14,
+    (database: DatabaseSync, options: { pathname: string }) =>
+      assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 14 }),
+  ],
+]);
+
+export function markCurrentStateSchemaVersion(
+  db: DatabaseSync,
+  options: { createMetadataIfMissing?: boolean } = {},
+): void {
+  // Pre-v2 databases can legitimately predate the audit table. Leave their
+  // version untouched so normal open can create the complete v2 schema first.
+  if (!tableExists(db, "audit_events")) {
+    return;
+  }
+  db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+  if (
+    tableExists(db, "schema_meta") &&
+    ["meta_key", "schema_version", "updated_at"].every((column) =>
+      tableHasColumn(db, "schema_meta", column),
+    )
+  ) {
+    const now = Date.now();
+    if (options.createMetadataIfMissing) {
+      // Recognized pre-metadata schemas may acquire the global owner row during
+      // doctor migration. Conflicting existing ownership is preserved so the
+      // final maintenance assertion rejects and rolls back the repair.
+      db.prepare(
+        `INSERT INTO schema_meta (
+           meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
+         ) VALUES ('primary', 'global', ?, NULL, NULL, ?, ?)
+         ON CONFLICT(meta_key) DO UPDATE SET
+           schema_version = excluded.schema_version,
+           updated_at = excluded.updated_at`,
+      ).run(OPENCLAW_STATE_SCHEMA_VERSION, now, now);
+      return;
+    }
+    db.prepare(
+      "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary'",
+    ).run(OPENCLAW_STATE_SCHEMA_VERSION, now);
+  }
+}
+
 export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
+}
+
+/** Historical jobs lost the creator's origin; preserve attribution without guessing authority. */
+export function migrateCronCreatorNamespaces(db: DatabaseSync, previousVersion: number): boolean {
+  if (previousVersion >= 14 || !tableExists(db, "cron_jobs")) {
+    return false;
+  }
+  db.exec(`
+    UPDATE cron_jobs
+       SET job_json = json_set(job_json, '$.createdActor.source', 'unknown')
+     WHERE json_valid(job_json)
+       AND json_extract(job_json, '$.createdActor.type') = 'human';
+  `);
+  return true;
+}
+
+/** Keep opaque plugin targets independent of agent identity without rewriting binding records. */
+export function migrateConversationBindingTargets(
+  db: DatabaseSync,
+  previousVersion: number,
+): boolean {
+  if (previousVersion >= 15) {
+    return false;
+  }
+  const columns = ["target_agent_id", "target_session_id"].filter((column) =>
+    tableHasColumn(db, "current_conversation_bindings", column),
+  );
+  if (columns.length === 0) {
+    return false;
+  }
+  // The caller owns one transaction through index recreation and version publication.
+  // Unknown schema dependencies must fail and roll back, never be dropped to force migration.
+  db.exec("DROP INDEX IF EXISTS idx_current_conversation_bindings_target;");
+  for (const column of columns) {
+    db.exec(`ALTER TABLE current_conversation_bindings DROP COLUMN ${column};`);
+  }
+  return true;
 }

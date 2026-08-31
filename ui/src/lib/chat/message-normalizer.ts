@@ -3,29 +3,31 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import {
   extractCanvasShortcodes,
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
+import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
-import { splitMediaFromOutput } from "../../../../src/media/parse.js";
-import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
+import {
+  isRelativeAssistantMediaReference,
+  splitMediaFromOutput,
+} from "../../../../src/media/parse.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
+import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
 
-// Older gateways baked sender labels as "name (<profile uuid>)" into transcript
-// text. The UUID is machine noise in a human label but it is also the row's
-// only author key, so split it into display + identity instead of discarding.
+// Keep legacy labels readable without treating their UUID suffix as profile evidence.
 const OPAQUE_ID_LABEL_SUFFIX_RE =
   /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
-const OPAQUE_ID_LABEL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 const optionalMessageStringSchema = z.string().optional().catch(undefined);
 const optionalMessageNumberSchema = z.number().optional().catch(undefined);
@@ -54,6 +56,8 @@ const rawCanvasPreviewSchema = z
   .catch(undefined);
 const rawAttachmentSchema = z
   .looseObject({
+    code: optionalMessageStringSchema,
+    kind: optionalMessageStringSchema,
     url: optionalMessageStringSchema,
     label: optionalMessageStringSchema,
     mimeType: optionalMessageStringSchema,
@@ -107,6 +111,14 @@ const rawOpenClawMetadataSchema = z
   })
   .optional()
   .catch(undefined);
+const rawOpenClawDeliverySchema = z
+  .object({
+    audioAsVoice: z.literal(true).optional(),
+    replyToCurrent: z.literal(true).optional(),
+    replyToId: optionalMessageStringSchema,
+  })
+  .optional()
+  .catch(undefined);
 const rawMessageSchema = z
   .looseObject({
     role: optionalMessageStringSchema,
@@ -115,6 +127,14 @@ const rawMessageSchema = z
     timestamp: optionalMessageNumberSchema,
     id: optionalMessageStringSchema,
     senderLabel: optionalMessageStringSchema,
+    senderSession: z
+      .object({
+        sessionKey: optionalMessageStringSchema.transform((value) => value?.trim() || undefined),
+        agentId: optionalMessageStringSchema.transform((value) => value?.trim() || undefined),
+      })
+      .refine((value) => Boolean(value.sessionKey || value.agentId))
+      .optional()
+      .catch(undefined),
     toolCallId: optionalMessageStringSchema,
     tool_call_id: optionalMessageStringSchema,
     toolUseId: optionalMessageStringSchema,
@@ -122,65 +142,42 @@ const rawMessageSchema = z
     toolName: optionalMessageStringSchema,
     tool_name: optionalMessageStringSchema,
     __openclaw: rawOpenClawMetadataSchema,
+    openclawDelivery: rawOpenClawDeliverySchema,
   })
   .catch({});
 
 type RawContentBlock = z.infer<typeof rawContentBlockSchema>;
 type RawCanvasPreview = z.infer<typeof rawCanvasPreviewSchema>;
 
-function splitOpaqueIdLabel(label: string): { display: string; id: string } | null {
-  // A nameless legacy sender labels as the bare UUID; keep it as the
-  // last-resort display while still attributing the row to that profile.
-  if (OPAQUE_ID_LABEL_RE.test(label)) {
-    return { display: label, id: label };
-  }
-  const match = OPAQUE_ID_LABEL_SUFFIX_RE.exec(label);
-  if (!match?.[1]) {
-    return null;
-  }
-  const display = label.slice(0, match.index).trim();
-  return display ? { display, id: match[1] } : null;
-}
-
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
-  if (lower === "user") {
-    return "user";
+  if (["user", "assistant", "system"].includes(lower)) {
+    return lower;
   }
-  if (lower === "assistant") {
-    return "assistant";
-  }
-  if (lower === "system") {
-    return "system";
-  }
-  if (
-    lower === "toolresult" ||
-    lower === "tool_result" ||
-    lower === "tool" ||
-    lower === "function"
-  ) {
+  if (["toolresult", "tool_result", "tool", "function"].includes(lower)) {
     return "tool";
   }
   return role;
 }
 
 export function isToolResultMessage(message: unknown): boolean {
-  const m = rawMessageSchema.parse(message);
-  const role = m.role?.toLowerCase() ?? "";
+  const m = asOptionalRecord(message);
+  const role = typeof m?.role === "string" ? m.role.toLowerCase() : "";
   return role === "toolresult" || role === "tool_result";
 }
 
 export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
-  const m = rawMessageSchema.parse(message);
-  const role = m.role ? normalizeRoleForGrouping(m.role) : "unknown";
+  // Tool classification needs envelope fields, not parsed content or media.
+  const m = asOptionalRecord(message);
+  const role = typeof m?.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
   return (
     role === "tool" ||
-    m.toolCallId !== undefined ||
-    m.tool_call_id !== undefined ||
-    m.toolUseId !== undefined ||
-    m.tool_use_id !== undefined ||
-    m.toolName !== undefined ||
-    m.tool_name !== undefined
+    typeof m?.toolCallId === "string" ||
+    typeof m?.tool_call_id === "string" ||
+    typeof m?.toolUseId === "string" ||
+    typeof m?.tool_use_id === "string" ||
+    typeof m?.toolName === "string" ||
+    typeof m?.tool_name === "string"
   );
 }
 
@@ -246,35 +243,6 @@ function coerceCanvasPreview(
   };
 }
 
-function isRenderableAssistantAttachment(url: string): boolean {
-  const trimmed = url.trim();
-  return (
-    /^https?:\/\//i.test(trimmed) ||
-    /^data:(?:image|audio|video)\//i.test(trimmed) ||
-    /^\/(?:__openclaw__|media)\//.test(trimmed) ||
-    trimmed.startsWith("file://") ||
-    trimmed.startsWith("~") ||
-    trimmed.startsWith("/") ||
-    /^[a-zA-Z]:[\\/]/.test(trimmed)
-  );
-}
-
-function shouldPreserveRelativeAssistantAttachment(url: string): boolean {
-  const trimmed = url.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return (
-    !/^https?:\/\//i.test(trimmed) &&
-    !/^data:(?:image|audio|video)\//i.test(trimmed) &&
-    !/^\/(?:__openclaw__|media)\//.test(trimmed) &&
-    !trimmed.startsWith("file://") &&
-    !trimmed.startsWith("~") &&
-    !trimmed.startsWith("/") &&
-    !/^[a-zA-Z]:[\\/]/.test(trimmed)
-  );
-}
-
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -293,6 +261,7 @@ const MIME_BY_EXT: Record<string, string> = {
   m4a: "audio/mp4",
   m2a: "audio/mpeg",
   mp4: "video/mp4",
+  webm: "video/webm",
   mov: "video/quicktime",
   pdf: "application/pdf",
   txt: "text/plain",
@@ -448,24 +417,30 @@ function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageConten
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
-function expandTextContent(text: string): {
+function expandTextContent(
+  text: string,
+  delivery: z.infer<typeof rawOpenClawDeliverySchema>,
+): {
   content: MessageContentItem[];
   audioAsVoice: boolean;
   replyTarget: NormalizedMessage["replyTarget"];
 } {
   const extracted = extractCanvasShortcodes(text);
-  const parsed = splitMediaFromOutput(extracted.text);
+  const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
   const parts: MessageContentItem[] = [];
-  let audioAsVoice = parsed.audioAsVoice === true;
-  let replyTarget: NormalizedMessage["replyTarget"] = null;
+  const audioAsVoice = delivery?.audioAsVoice === true;
+  const replyToId = delivery?.replyToId?.trim();
+  const replyTarget: NormalizedMessage["replyTarget"] = replyToId
+    ? { kind: "id", id: replyToId }
+    : delivery?.replyToCurrent === true
+      ? { kind: "current" }
+      : null;
   const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
 
   for (const segment of segments) {
     if (segment.type === "media") {
-      if (!isRenderableAssistantAttachment(segment.url)) {
-        if (shouldPreserveRelativeAssistantAttachment(segment.url)) {
-          parts.push({ type: "text", text: `MEDIA:${segment.url}` });
-        }
+      if (isRelativeAssistantMediaReference(segment.url)) {
+        parts.push({ type: "text", text: `MEDIA:${segment.url}` });
         continue;
       }
       const inferred = inferAttachmentKind(segment.url);
@@ -481,23 +456,19 @@ function expandTextContent(text: string): {
       continue;
     }
 
-    const directives = parseInlineDirectives(segment.text, {
-      stripAudioTag: true,
-      stripReplyTags: true,
-    });
-    audioAsVoice = audioAsVoice || directives.audioAsVoice;
-    if (directives.replyToExplicitId) {
-      replyTarget = { kind: "id", id: directives.replyToExplicitId };
-    } else if (directives.replyToCurrent && replyTarget === null) {
-      replyTarget = { kind: "current" };
-    }
-    if (directives.text) {
-      const normalizedText = directives.text + (segment.text.endsWith("\n") ? "\n" : "");
-      parts.push({ type: "text", text: normalizedText });
+    if (segment.text) {
+      parts.push({ type: "text", text: segment.text });
     }
   }
   for (const preview of extracted.previews) {
-    parts.push({ type: "canvas", preview, rawText: null });
+    if (preview.surface !== "assistant_message") {
+      continue;
+    }
+    parts.push({
+      type: "canvas",
+      preview: { ...preview, surface: "assistant_message" },
+      rawText: null,
+    });
   }
 
   const content = mergeAdjacentTextItems(
@@ -513,9 +484,9 @@ function expandTextContent(text: string): {
     content:
       content.length > 0
         ? content
-        : (parsed.mediaUrls ?? []).some((url) => shouldPreserveRelativeAssistantAttachment(url))
+        : (parsed.mediaUrls ?? []).some(isRelativeAssistantMediaReference)
           ? (parsed.mediaUrls ?? [])
-              .filter((url) => shouldPreserveRelativeAssistantAttachment(url))
+              .filter(isRelativeAssistantMediaReference)
               .map((url) => ({ type: "text" as const, text: `MEDIA:${url}` }))
           : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
             ? [{ type: "text", text: parsed.text }]
@@ -553,6 +524,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     role = "toolResult";
   }
   const isAssistantMessage = role === "assistant";
+  const delivery = isAssistantMessage ? m.openclawDelivery : undefined;
 
   // Extract content
   let content: MessageContentItem[] = [];
@@ -561,7 +533,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   if (typeof m.content === "string") {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.content);
+      const expanded = expandTextContent(m.content, delivery);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
@@ -582,46 +554,9 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       } else if (item.type === "audio") {
         return [];
       }
-      if (item.type === "attachment" && item.attachment) {
-        const attachment = item.attachment;
-        if (
-          attachment.url === undefined ||
-          (attachment.kind !== "image" &&
-            attachment.kind !== "audio" &&
-            attachment.kind !== "video" &&
-            attachment.kind !== "document") ||
-          attachment.label === undefined
-        ) {
-          return [];
-        }
-        return [
-          {
-            type: "attachment" as const,
-            attachment: {
-              url: attachment.url,
-              kind: attachment.kind,
-              label: attachment.label,
-              ...(attachment.mimeType !== undefined ? { mimeType: attachment.mimeType } : {}),
-              ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
-              ...(attachment.artifactId !== undefined ? { artifactId: attachment.artifactId } : {}),
-              ...(attachment.playback === "native" || attachment.playback === "transcode"
-                ? { playback: attachment.playback }
-                : {}),
-              ...(attachment.sizeBytes !== undefined && attachment.sizeBytes >= 0
-                ? { sizeBytes: attachment.sizeBytes }
-                : {}),
-              ...(attachment.durationMs !== undefined && attachment.durationMs >= 0
-                ? { durationMs: attachment.durationMs }
-                : {}),
-              ...(attachment.width !== undefined && attachment.width > 0
-                ? { width: attachment.width }
-                : {}),
-              ...(attachment.height !== undefined && attachment.height > 0
-                ? { height: attachment.height }
-                : {}),
-            },
-          },
-        ];
+      const attachmentContent = normalizeAttachmentContentBlock(item);
+      if (attachmentContent) {
+        return attachmentContent;
       }
       if (item.type === "canvas" && item.preview) {
         const preview = coerceCanvasPreview(item.preview);
@@ -638,7 +573,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       }
       if (isTextContentBlock(item, role)) {
         if (isAssistantMessage) {
-          const expanded = expandTextContent(item.text);
+          const expanded = expandTextContent(item.text, delivery);
           audioAsVoice = audioAsVoice || expanded.audioAsVoice;
           if (expanded.replyTarget?.kind === "id") {
             replyTarget = expanded.replyTarget;
@@ -671,7 +606,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     });
   } else if (m.text !== undefined) {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.text);
+      const expanded = expandTextContent(m.text, delivery);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
@@ -690,30 +625,20 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const replyPreviewRecord = openClawMeta?.replyToPreview;
   const replyPreviewText = replyPreviewRecord?.text?.trim() ?? "";
   const replyPreviewSender = replyPreviewRecord?.senderLabel?.trim() ?? "";
+  const identity = readTranscriptSenderIdentity(openClawMeta?.senderIdentity);
   const metaSender = normalizeSenderIdentity({
+    identity,
     id: openClawMeta?.senderId,
     name: openClawMeta?.senderName,
     username: openClawMeta?.senderUsername,
-    profileAvatarUrl: openClawMeta?.senderProfileAvatarUrl,
+    profileAvatarUrl:
+      identity?.type === "profile" ? openClawMeta?.senderProfileAvatarUrl : undefined,
   });
   const rawLabel = m.senderLabel?.trim() ?? "";
-  const legacyLabelIdentity = rawLabel ? splitOpaqueIdLabel(rawLabel) : null;
   const senderLabel = rawLabel
-    ? (legacyLabelIdentity?.display ?? rawLabel)
+    ? rawLabel.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim()
     : formatSenderLabel(metaSender);
-  // Legacy transcripts baked the author's profile UUID only into the label.
-  // Keep it as structured (non-display) identity so the avatar gutter resolves
-  // the actual author instead of falling back to the local viewer.
-  const sender =
-    metaSender ??
-    (legacyLabelIdentity
-      ? normalizeSenderIdentity({
-          id: legacyLabelIdentity.id,
-          ...(legacyLabelIdentity.display !== legacyLabelIdentity.id
-            ? { name: legacyLabelIdentity.display }
-            : {}),
-        })
-      : null);
+  const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
 
   content = stripMessageDisplayMetadata(content);
 
@@ -723,6 +648,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     timestamp,
     id,
     senderLabel,
+    ...(m.senderSession ? { senderSession: m.senderSession } : {}),
     ...(sender ? { sender } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyPreviewText

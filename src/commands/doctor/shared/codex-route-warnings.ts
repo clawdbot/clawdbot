@@ -33,7 +33,11 @@ import {
   collectDisabledCodexPluginRouteIssues,
   enableCodexPluginForRequiredRoutes,
 } from "./codex-route-config-scan.js";
-import { parseCodexRouteModelRef } from "./codex-route-model-ref.js";
+import {
+  isBlockedLegacyCodexModelRef,
+  parseCodexRouteModelRef,
+  toCanonicalOpenAIModelRef,
+} from "./codex-route-model-ref.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 import type {
   CodexRouteHit,
@@ -45,6 +49,24 @@ import {
   collectBlockedLegacyOpenAICodexProviderPlan,
   type BlockedLegacyOpenAICodexProviderPlan,
 } from "./legacy-config-migrations.runtime.models.js";
+import { rewriteKnownModelRefs } from "./legacy-config-migrations.runtime.models.refs.js";
+import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
+
+export function resolveKnownModelRefMigrationTarget(
+  cfg: OpenClawConfig,
+  ref: string,
+): string | undefined {
+  const blockedModelIdentities = new Set(
+    collectBlockedLegacyOpenAICodexProviderPlan(cfg).blockedModelIdentities,
+  );
+  if (isBlockedLegacyCodexModelRef({ modelRef: ref, blockedModelIdentities })) {
+    return undefined;
+  }
+  const providerRef =
+    migrateLegacyRuntimeModelRef(ref)?.ref ?? toCanonicalOpenAIModelRef(ref) ?? ref;
+  const migrated = rewriteKnownModelRefs(providerRef, "model", []).value;
+  return typeof migrated === "string" && migrated !== ref ? migrated : undefined;
+}
 
 function formatCodexRouteChange(hit: CodexRouteHit): string {
   return `${hit.path}: ${hit.model} -> ${hit.canonicalModel}.`;

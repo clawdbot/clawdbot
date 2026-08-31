@@ -18,9 +18,6 @@ type TestDraftStream = {
   clear: ReturnType<typeof vi.fn<() => Promise<void>>>;
   stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
   discard: ReturnType<typeof vi.fn<() => Promise<void>>>;
-  finalizeToPreview: ReturnType<
-    typeof vi.fn<(preview: TelegramDraftPreview) => Promise<number | undefined>>
-  >;
   forceNewMessage: ReturnType<typeof vi.fn<() => void>>;
   rotateToNewMessageDeferringDelete: ReturnType<typeof vi.fn<() => number | undefined>>;
   sendMayHaveLanded: ReturnType<typeof vi.fn<() => boolean>>;
@@ -88,14 +85,6 @@ export function createTestDraftStream(params?: {
       }
       await params?.onDiscard?.();
     }),
-    finalizeToPreview: vi.fn().mockImplementation(async (preview: TelegramDraftPreview) => {
-      if (messageId == null) {
-        return undefined;
-      }
-      lastDeliveredText = preview.text.trimEnd();
-      stopped = true;
-      return messageId;
-    }),
     forceNewMessage: vi.fn().mockImplementation(() => {
       stopped = false;
       if (params?.clearMessageIdOnForceNew) {
@@ -160,13 +149,6 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
     clear: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockResolvedValue(undefined),
     discard: vi.fn().mockResolvedValue(undefined),
-    finalizeToPreview: vi.fn().mockImplementation(async (preview: TelegramDraftPreview) => {
-      if (activeMessageId == null) {
-        return undefined;
-      }
-      lastDeliveredText = preview.text.trimEnd();
-      return activeMessageId;
-    }),
     forceNewMessage: vi.fn().mockImplementation(() => {
       activeMessageId = undefined;
     }),

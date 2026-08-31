@@ -151,6 +151,23 @@ describe("MessageActionParamsSchema", () => {
       }),
     ).toBe(false);
   });
+
+  it("validates closed reply routing facts", () => {
+    for (const reply of [
+      { replyToId: "message-1", source: "explicit" },
+      { replyToId: "message-1", source: "implicit", mode: "first" },
+      { replyToId: "message-1", source: "implicit", mode: "all" },
+    ]) {
+      expect(Value.Check(MessageActionParamsSchema, { ...baseParams, reply })).toBe(true);
+    }
+    for (const reply of [
+      { replyToId: "message-1", source: "explicit", mode: "off" },
+      { replyToId: "message-1", source: "implicit" },
+      { replyToId: "message-1", source: "implicit", mode: "batched" },
+    ]) {
+      expect(Value.Check(MessageActionParamsSchema, { ...baseParams, reply })).toBe(false);
+    }
+  });
 });
 
 describe("Conversation schemas", () => {

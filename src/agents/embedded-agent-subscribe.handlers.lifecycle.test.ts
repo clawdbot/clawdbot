@@ -10,6 +10,7 @@ import {
   handleAgentStart,
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
@@ -185,9 +186,10 @@ describe("handleAgentEnd", () => {
     );
   });
 
-  it("keeps explicit session and agent identity on lifecycle start events", () => {
+  it("keeps identity and the same observed start time on the bus and callback", () => {
     emitAgentEventMock.mockClear();
-    const ctx = createContext(undefined);
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
     ctx.params.sessionId = "session-1";
     ctx.params.agentId = "main";
 
@@ -200,6 +202,12 @@ describe("handleAgentEnd", () => {
       agentId: "main",
       stream: "lifecycle",
       data: expect.objectContaining({ phase: "start" }),
+    });
+    const event = emitAgentEventMock.mock.calls[0]?.[0];
+    expect(event.data.startedAt).toEqual(expect.any(Number));
+    expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith({
+      stream: "lifecycle",
+      data: event.data,
     });
   });
 
@@ -937,6 +945,9 @@ describe("handleAgentEnd", () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
     ctx.state.pendingToolAudioAsVoice = true;
+    vi.mocked(ctx.emitBlockReply).mockImplementation(
+      createReplyDelivery({ params: ctx.params, state: ctx.state, log: ctx.log }).emitBlockReply,
+    );
 
     await handleAgentEnd(ctx);
 

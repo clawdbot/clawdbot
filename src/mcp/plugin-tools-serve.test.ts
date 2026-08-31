@@ -370,6 +370,34 @@ describe("plugin tools MCP server", () => {
     ]);
   });
 
+  it.each([
+    ["failed status", { status: "failed", error: "backend unavailable" }, true],
+    ["blocked status", { status: "blocked" }, true],
+    ["timeout flag", { timedOut: true }, true],
+    ["explicit failure", { ok: false }, true],
+    ["successful status", { status: "success" }, undefined],
+    ["completed nonzero shell exit", { status: "completed", exitCode: 23 }, undefined],
+  ])(
+    "projects a resolved %s through the canonical error contract",
+    async (_label, details, isError) => {
+      const content = [{ type: "text", text: "original tool result" }];
+      const execute = vi.fn().mockResolvedValue({ content, details });
+      const handlers = createPluginToolsMcpHandlers([
+        {
+          name: "result_probe",
+          description: "Return a structured result",
+          parameters: { type: "object", properties: {} },
+          execute,
+        } as unknown as AnyAgentTool,
+      ]);
+
+      const result = await handlers.callTool({ name: "result_probe", arguments: {} });
+
+      expect(result.content).toEqual(content);
+      expect(result.isError).toBe(isError);
+    },
+  );
+
   it("returns MCP errors for unknown tools and thrown tool errors", async () => {
     const failingTool = {
       name: "memory_forget",

@@ -903,21 +903,32 @@ describe("gateway probe endpoints", () => {
     });
   });
 
-  it("serves /healthz before loading gateway config", async () => {
+  it("serves liveness probes before loading gateway config or resolving auth", async () => {
     const getRuntimeConfig = vi.fn(() => {
       throw new Error("config load blocked");
     });
+    const getResolvedAuth = vi.fn(() => {
+      getRuntimeConfig();
+      return AUTH_NONE;
+    });
 
     await withGatewayServer({
-      prefix: "probe-healthz-before-config",
+      prefix: "probe-liveness-before-config-auth",
       resolvedAuth: AUTH_NONE,
-      overrides: { getRuntimeConfig },
+      overrides: { getRuntimeConfig, getResolvedAuth },
       run: async (server) => {
-        const { res, getBody } = await sendGatewayRequest(server, { path: "/healthz" });
+        for (const path of ["/health", "/healthz"]) {
+          for (const method of ["GET", "HEAD"] as const) {
+            const { res, getBody } = await sendGatewayRequest(server, { path, method });
 
-        expect(res.statusCode).toBe(200);
-        expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+            expect(res.statusCode, `${method} ${path}`).toBe(200);
+            expect(getBody(), `${method} ${path}`).toBe(
+              method === "HEAD" ? "" : JSON.stringify({ ok: true, status: "live" }),
+            );
+          }
+        }
         expect(getRuntimeConfig).not.toHaveBeenCalled();
+        expect(getResolvedAuth).not.toHaveBeenCalled();
       },
     });
   });

@@ -186,6 +186,79 @@ describe("handleRestartCommand", () => {
     }
   });
 
+  it("adopts the durable ingress claim before scheduling the restart", async () => {
+    const order: string[] = [];
+    mocks.scheduleGatewaySigusr1Restart.mockImplementationOnce((_opts) => {
+      order.push("schedule");
+      return { scheduled: true };
+    });
+    const handler = () => {};
+    process.on("SIGUSR1", handler);
+    try {
+      await handleRestartCommand(
+        restartCommandParams({
+          opts: {
+            turnAdoptionLifecycle: {
+              onAdopted: () => {
+                order.push("adopt");
+              },
+            },
+          } as HandleCommandsParams["opts"],
+        }),
+        true,
+      );
+    } finally {
+      process.removeListener("SIGUSR1", handler);
+    }
+
+    // Unadopted at restart => drain releases with recordAttempt:false and the
+    // successor replays /restart, restarting again forever.
+    expect(order).toEqual(["adopt", "schedule"]);
+  });
+
+  it("adopts the durable ingress claim before the fallback restart path", async () => {
+    const order: string[] = [];
+    mocks.triggerOpenClawRestart.mockImplementationOnce(() => {
+      order.push("trigger");
+      return { ok: true, method: "launchctl" };
+    });
+
+    await handleRestartCommand(
+      restartCommandParams({
+        opts: {
+          turnAdoptionLifecycle: {
+            onAdopted: () => {
+              order.push("adopt");
+            },
+          },
+        } as HandleCommandsParams["opts"],
+      }),
+      true,
+    );
+
+    expect(order).toEqual(["adopt", "trigger"]);
+  });
+
+  it("does not restart when ingress adoption was lost to another owner", async () => {
+    await expect(
+      handleRestartCommand(
+        restartCommandParams({
+          opts: {
+            turnAdoptionLifecycle: {
+              onAdopted: () => {
+                throw new Error("ingress adoption lost: guillotined");
+              },
+            },
+          } as HandleCommandsParams["opts"],
+        }),
+        true,
+      ),
+    ).rejects.toThrow("ingress adoption lost");
+
+    expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
+    expect(mocks.scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
+  });
+
   it("rejects authorized non-owner restart commands", async () => {
     const result = await handleRestartCommand(
       restartCommandParams({

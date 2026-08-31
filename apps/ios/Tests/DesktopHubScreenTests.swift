@@ -30,13 +30,13 @@ struct DesktopHubScreenTests {
 
     @Test func `standalone desktop URL uses document mode without credentials`() throws {
         let config = try Self.makeConfig(
-            url: #require(URL(string: "wss://gateway.example.com:8443/openclaw")),
+            url: #require(URL(string: "wss://gateway.example.com:8443/openclaw/")),
             token: "secret-token",
             password: "secret-password")
 
         let url = DesktopHubScreen.desktopURL(config: config, source: nil, session: nil)
 
-        #expect(url?.absoluteString == "https://gateway.example.com:8443/openclaw/?view=desktop")
+        #expect(url?.absoluteString == "https://gateway.example.com:8443/openclaw/focus/desktop")
         #expect(url?.absoluteString.contains("secret-token") == false)
         #expect(url?.absoluteString.contains("secret-password") == false)
     }
@@ -49,29 +49,33 @@ struct DesktopHubScreenTests {
         let url = DesktopHubScreen.desktopURL(
             config: config,
             source: nil,
-            session: "agent:main:mobile session")
+            session: "agent:main/mobile session")
 
-        #expect(url?.absoluteString == "http://192.168.1.10:18789/?view=desktop&session=agent%3Amain%3Amobile%20session")
+        #expect(
+            url?.absoluteString ==
+                "http://192.168.1.10:18789/focus/desktop/session/agent%3Amain%2Fmobile%20session")
         #expect(url?.absoluteString.contains("secret-token") == false)
     }
 
-    @Test func `explicit desktop source is retained alongside the session`() throws {
+    @Test func `explicit desktop source wins over the session`() throws {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")))
 
         let url = DesktopHubScreen.desktopURL(
             config: config,
-            source: "node:worker-1",
+            source: "node:worker-1/primary?mode=qa",
             session: "agent:main:mobile")
 
-        #expect(url?.absoluteString == "https://gateway.example.com/?view=desktop&source=node%3Aworker-1&session=agent%3Amain%3Amobile")
+        #expect(
+            url?.absoluteString ==
+                "https://gateway.example.com/focus/desktop/source/node%3Aworker-1%2Fprimary%3Fmode%3Dqa")
     }
 
-    @Test func `empty desktop source is omitted`() throws {
+    @Test func `empty desktop source and session are normalized away`() throws {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")))
 
         let url = DesktopHubScreen.desktopURL(config: config, source: "  ", session: "  ")
 
-        #expect(url?.absoluteString == "https://gateway.example.com/?view=desktop")
+        #expect(url?.absoluteString == "https://gateway.example.com/focus/desktop")
     }
 
     @Test func `desktop auth script carries credentials outside the URL`() throws {
@@ -83,7 +87,7 @@ struct DesktopHubScreenTests {
         let url = DesktopHubScreen.desktopURL(config: config, source: "gateway")
         let script = DesktopHubScreen.desktopAuthUserScript(config: config, source: "gateway")
 
-        #expect(url?.absoluteString == "https://gateway.example.com/?view=desktop&source=gateway")
+        #expect(url?.absoluteString == "https://gateway.example.com/focus/desktop/source/gateway")
         #expect(url?.absoluteString.contains("secret-token") == false)
         #expect(url?.absoluteString.contains("secret-password") == false)
         #expect(script?.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") == true)

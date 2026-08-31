@@ -1,10 +1,16 @@
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 /** Owns steer replacement and restart-recovery receipt transitions. */
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { setCanonicalTaskBackingDetail } from "../../../tasks/task-backing-authority-write.js";
+import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import {
@@ -12,9 +18,8 @@ import {
   ensureCompletionState,
   normalizeSubagentRunState,
 } from "./subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { resolveFinalizedSubagentTaskState } from "./subagent-registry-completion.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type {
   RequesterSettleWakeState,
@@ -30,97 +35,6 @@ import {
 const log = createSubsystemLogger("agents/subagent-registry");
 
 export class SubagentRecoveryManager extends SubagentWaitManager {
-  readonly markSubagentRunForSteerRestart = (
-    runId: string,
-    expected?: SubagentRunRecord,
-  ): boolean => {
-    const key = runId.trim();
-    if (!key) {
-      return false;
-    }
-    const entry = this.options.runs.get(key);
-    if (
-      !entry ||
-      (expected && entry !== expected) ||
-      entry.execution.restartRecovery ||
-      entry.killIntent ||
-      entry.killReconciliation
-    ) {
-      return false;
-    }
-    if (entry.suppressAnnounceReason === "steer-restart") {
-      return false;
-    }
-    entry.suppressAnnounceReason = "steer-restart";
-    try {
-      this.options.persistOrThrow(entry.runId);
-    } catch (error) {
-      entry.suppressAnnounceReason = undefined;
-      throw error;
-    }
-    return true;
-  };
-
-  readonly clearSubagentRunSteerRestart = (
-    runId: string,
-    expected?: SubagentRunRecord,
-  ): boolean => {
-    const key = runId.trim();
-    if (!key) {
-      return false;
-    }
-    const entry = this.options.runs.get(key);
-    if (!entry || (expected && entry !== expected)) {
-      return false;
-    }
-    if (entry.suppressAnnounceReason !== "steer-restart") {
-      return true;
-    }
-    if (typeof entry.execution.endedAt === "number") {
-      const taskResolution = this.options.resolveSubagentTask(entry);
-      const task = taskResolution.lookup === "available" ? taskResolution.task : undefined;
-      const terminal =
-        entry.endedReason === SUBAGENT_ENDED_REASON_KILLED
-          ? {
-              status: "cancelled" as const,
-              endedAt: entry.execution.endedAt,
-              lastEventAt: entry.execution.endedAt,
-              error: "Subagent restart failed after the prior run was interrupted.",
-            }
-          : resolveFinalizedSubagentTaskState(entry);
-      if (terminal) {
-        const targetRunId = task?.runId ?? entry.taskRunId ?? entry.runId;
-        const targetSessionKey = task?.childSessionKey ?? entry.childSessionKey;
-        try {
-          finalizeTaskRunByRunId({
-            runId: targetRunId,
-            runtime: "subagent",
-            sessionKey: targetSessionKey,
-            ...terminal,
-            suppressDelivery: true,
-          });
-        } catch (err) {
-          // A task-runtime failure must not leave the interrupted run's
-          // announcement and cleanup path permanently suppressed.
-          log.warn("failed to finalize abandoned steer-restart task run", {
-            err,
-            runId: targetRunId,
-            childSessionKey: targetSessionKey,
-          });
-        }
-      }
-    }
-    entry.suppressAnnounceReason = undefined;
-    this.options.persist(entry.runId);
-    // If the interrupted run already finished while suppression was active, retry
-    // cleanup now so completion output is not lost when restart dispatch fails.
-    this.options.resumedRuns.delete(key);
-    if (typeof entry.execution.endedAt === "number" && !entry.cleanupCompletedAt) {
-      this.options.resumeSubagentRun(key);
-    }
-    return true;
-  };
-
   readonly replaceSubagentRunAfterSteer = (replaceParams: {
     previousRunId: string;
     nextRunId: string;
@@ -140,6 +54,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     restartRecovery?: SubagentRestartRecoveryReceipt;
     lifecycleGeneration?: string;
     persistenceFailure?: "return-false" | "throw";
+    gatewayContextResolver?: GatewayContextResolver;
   }): boolean => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -270,6 +185,10 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       archiveAtMs: undefined,
       runTimeoutSeconds,
     });
+    bindGatewayContextResolver(
+      next,
+      replaceParams.gatewayContextResolver ?? getGatewayContextResolver(source),
+    );
     clearDeliveryState(next);
 
     if (previousRunId !== nextRunId) {
@@ -282,6 +201,29 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       nextRunId,
       ...[...killReconciliationSnapshots.keys()].map((entry) => entry.runId),
     ];
+    // Revoke the prior task projection before the successor becomes durable.
+    // A crash between stores then fails closed instead of preserving stale authority.
+    const taskBindingResult =
+      source.expectsCompletionMessage === false
+        ? "missing"
+        : setCanonicalTaskBackingDetail({
+            runtime: "subagent",
+            childSessionKey: next.childSessionKey,
+            runId: next.taskRunId ?? next.runId,
+            detail: createSubagentTaskBackingDetail(generation),
+          });
+    if (taskBindingResult === "persist_failed") {
+      this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
+      this.options.runs.delete(nextRunId);
+      this.options.runs.set(previousRunId, source);
+      log.warn("failed to bind replacement subagent task generation; restored source lease", {
+        runId: next.runId,
+      });
+      if (replaceParams.persistenceFailure === "throw") {
+        throw new Error(`failed to bind replacement subagent task generation for ${next.runId}`);
+      }
+      return false;
+    }
     try {
       this.options.persistOrThrow(...changedRunIds);
     } catch (error) {
@@ -312,6 +254,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       });
       this.options.persist(...changedRunIds);
     }
+    subagentRuns.commitOwnership(next);
     if (previousRunId !== nextRunId) {
       this.options.clearPendingLifecycleError(previousRunId);
       this.options.resumedRuns.delete(previousRunId);

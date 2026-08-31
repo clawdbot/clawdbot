@@ -598,7 +598,6 @@ describe("loadEnabledBundleMcpConfig", () => {
           loaded.config.mcpServers.dotPrefixedChild?.cwd,
           path.join(pluginRoot, "..cache"),
         );
-        expect(loaded.diagnostics).toHaveLength(2);
         expect(loaded.diagnostics.map((entry) => entry.message)).toEqual([
           expect.stringContaining('invalid MCP server "relativeEscape"'),
           expect.stringContaining('invalid MCP server "placeholderEscape"'),

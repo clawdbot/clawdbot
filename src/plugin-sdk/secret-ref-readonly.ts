@@ -2,6 +2,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputString } from "../config/types.secrets.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "./secret-ref-readonly.internal.js";
 
+export { canResolveEnvSecretRefInReadOnlyPath } from "./secret-ref-readonly.internal.js";
+
 export type ReadOnlyEnvSecretRefResolution =
   | { status: "available"; value: string }
   | { status: "missing" }
@@ -45,5 +47,6 @@ export function resolveReadOnlyEnvSecretRef(params: {
     return { status: "blocked" };
   }
   const envValue = params.normalizeValue(process.env[envId]);
-  return envValue ? { status: "available", value: envValue } : { status: "missing" };
+  // An absent selected value does not release the configured ref's credential ownership.
+  return envValue ? { status: "available", value: envValue } : { status: "blocked" };
 }

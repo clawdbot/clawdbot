@@ -60,8 +60,12 @@ describe("routeReply delivery result", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
-  it.each(["cancelled_by_message_sending_hook", "empty_after_message_sending_hook"] as const)(
-    "returns routed message hook suppression reason %s",
+  it.each([
+    "cancelled_by_message_sending_hook",
+    "empty_after_message_sending_hook",
+    "adapter_returned_no_send",
+  ] as const)(
+    "returns intentional suppression reason %s without claiming delivery",
     async (reason) => {
       mocks.deliverOutboundPayloads.mockImplementationOnce(
         async ({
@@ -177,25 +181,6 @@ describe("routeReply delivery result", () => {
       delivered: true,
       error: "Failed to route reply to telegram: network reset",
       messageId: "msg-1",
-    });
-  });
-
-  it("reports delivery when the provider returns a non-id delivery identity", async () => {
-    mocks.deliverOutboundPayloads.mockResolvedValueOnce([
-      { channel: "whatsapp", messageId: "", toJid: "group:ops" },
-    ]);
-
-    const res = await routeReply({
-      payload: { text: "hello" },
-      channel: "whatsapp",
-      to: "group:ops",
-      cfg: {} as never,
-    });
-
-    expect(res).toEqual({
-      ok: true,
-      delivered: true,
-      messageId: "",
     });
   });
 

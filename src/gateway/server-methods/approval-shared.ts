@@ -7,7 +7,9 @@ import type {
   ApprovalChannelReviewer,
   ValidationError,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload,
@@ -50,7 +52,11 @@ type ApprovalTurnSourceFields = {
   turnSourceAccountId?: string | null;
 };
 
-type RequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields> = {
+type RequestedApprovalEvent<
+  TPayload extends ApprovalTurnSourceFields,
+  TKind extends ChannelApprovalKind = ChannelApprovalKind,
+> = {
+  approvalKind?: TKind;
   id: string;
   request: TPayload;
   createdAtMs: number;
@@ -137,10 +143,15 @@ export function registerPendingApprovalRecord<TPayload>(params: {
 }
 
 /** Builds the gateway event payload broadcast when an approval starts waiting. */
-export function buildRequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields>(
+export function buildRequestedApprovalEvent<
+  TPayload extends ApprovalTurnSourceFields,
+  TKind extends ChannelApprovalKind,
+>(
   record: ExecApprovalRecord<TPayload>,
-): RequestedApprovalEvent<TPayload> {
+  approvalKind?: TKind,
+): RequestedApprovalEvent<TPayload, TKind> {
   return {
+    ...(approvalKind ? { approvalKind } : {}),
     id: record.id,
     request: record.request,
     createdAtMs: record.createdAtMs,
@@ -224,6 +235,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: unknown;
   client?: GatewayClient | null;
+  cfg?: OpenClawConfig;
   respond: RespondFn;
   resolveTerminalReason?: WaitReasonResolver<TPayload>;
 }): Promise<void> {
@@ -238,6 +250,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     !isApprovalRecordVisibleToClient({
       record: snapshot,
       client: params.client ?? null,
+      ...(params.cfg ? { cfg: params.cfg } : {}),
     })
   ) {
     params.respond(
@@ -279,7 +292,7 @@ export async function handlePendingApprovalRequest<
   requestEventName: string;
   requestEvent: RequestedApprovalEvent<TPayload>;
   twoPhase: boolean;
-  approvalKind?: "exec" | "plugin";
+  approvalKind?: ChannelApprovalKind;
   deliverRequest: () => boolean | Promise<boolean>;
   afterDecision?: (
     decision: ExecApprovalDecision | null,
@@ -289,12 +302,18 @@ export async function handlePendingApprovalRequest<
   keepPendingWithoutRoute?: boolean;
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
+  deliverToApprovalClientsOnly?: boolean;
 }): Promise<void> {
   // Delivery may outlive the normal resolved-record grace. Keep the executable
   // binding until the requester response and post-decision handoff finish.
   const releaseHandoff = params.manager.retainForHandoff(params.record.id);
   try {
     const suppressDelivery = params.suppressDelivery === true;
+    // Cron/automation cards go only to connected approval surfaces (Control
+    // UI, TUI): chat runtimes and turn-source routes would recreate the
+    // per-occurrence spam #128031 removed, while an approval client can end
+    // the recurrence with one allow-always (standing grant).
+    const approvalClientsOnly = !suppressDelivery && params.deliverToApprovalClientsOnly === true;
     const approvalClientConnIds = suppressDelivery
       ? null
       : resolveApprovalRequestRecipientConnIds({
@@ -319,12 +338,13 @@ export async function handlePendingApprovalRequest<
         });
       }
     }
-    const internalApprovalSubscriberCount = suppressDelivery
-      ? 0
-      : (params.context.approvalEvents?.publishRequested(
-          params.approvalKind ?? "exec",
-          params.requestEvent,
-        ) ?? 0);
+    const internalApprovalSubscriberCount =
+      suppressDelivery || approvalClientsOnly
+        ? 0
+        : (params.context.approvalEvents?.publishRequested(
+            params.approvalKind ?? "exec",
+            params.requestEvent,
+          ) ?? 0);
 
     const hasApprovalClients = suppressDelivery
       ? false
@@ -332,11 +352,14 @@ export async function handlePendingApprovalRequest<
         ? approvalClientConnIds.size > 0 || internalApprovalSubscriberCount > 0
         : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false) ||
           internalApprovalSubscriberCount > 0;
-    const deliveredResult = suppressDelivery ? false : params.deliverRequest();
+    const deliveredResult =
+      suppressDelivery || approvalClientsOnly ? false : params.deliverRequest();
     const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
     // A turn-source route can approve without an active approval client, so keep
     // the record alive when the originating channel/account can still receive it.
     const hasTurnSourceRoute =
+      !suppressDelivery &&
+      !approvalClientsOnly &&
       !hasApprovalClients &&
       !delivered &&
       hasApprovalTurnSourceRoute({
@@ -458,7 +481,7 @@ function respondRepeatedApprovalResolution<TPayload>(
 export async function handleApprovalResolve<
   TPayload extends ExecApprovalRequestPayload | PluginApprovalRequestPayload,
 >(params: {
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
   decision: ExecApprovalDecision;
@@ -607,6 +630,12 @@ export async function handleApprovalResolve<
         }
       : null,
     ...(params.extraResolvedHandlers ?? []),
+    params.context.approvalWebPushDelivery
+      ? {
+          run: params.context.approvalWebPushDelivery.handleResolved,
+          errorLabel: `${params.approvalKind} approvals: Web Push resolve failed`,
+        }
+      : null,
   ].filter(
     (
       entry,

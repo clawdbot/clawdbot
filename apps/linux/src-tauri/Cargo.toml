@@ -3,7 +3,7 @@ name = "openclaw-desktop-linux"
 version = "0.1.0"
 description = "OpenClaw desktop companion for Linux"
 edition = "2021"
-rust-version = "1.93"
+rust-version = "1.97.1"
 
 [[bin]]
 name = "openclaw-desktop"
@@ -13,13 +13,12 @@ path = "src/main.rs"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-base64 = "0.23.0"
+base64 = "0.23.1"
 ed25519-dalek = "3.0.0"
-futures-util = "0.3.33"
+futures-util = "0.3.34"
 getrandom = "0.4.3"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
-mdns-sd = { version = "0.20", default-features = false }
-rustls = { version = "0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
+mdns-sd = { version = "0.21.0", default-features = false }
+rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
@@ -42,17 +41,16 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-window-state = "2.4.1"
+tauri-utils = { version = "2.9.3", features = ["config-json5"] }
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
-uuid = { version = "1.24.0", features = ["v4"] }
+uuid = { version = "1.24.1", features = ["v4"] }
 zeroize = "1.9.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-cairo-rs = { version = "0.18.5", features = ["png"] }
 libc = "0.2.189"
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "d20b4ff0e0e327e49fee80903478f825eac5a71a" }
-webkit2gtk = "2.0.2"
-zbus = { version = "5", default-features = false, features = ["tokio"] }
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "d20b4ff0e0e327e49fee80903478f825eac5a71a", default-features = false }

@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
   getPluginToolMeta,
@@ -51,6 +52,8 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
+import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 const MEMORY_STORE_ARGS: JsonValue = { text: "Tuesday 09:00 release window" };
@@ -538,13 +541,10 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(response.terminalResolution?.lastToolError).toMatchObject({
-      ownerKey: '["memory-lancedb","memory_store"]',
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining('owner=["memory-lancedb","memory_store"]|args='),
     });
-    expect(payloads).toHaveLength(2);
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toContain("I'll remember");
-    expect(payloads[1]).toMatchObject({ isError: true });
     expect(JSON.stringify(response)).not.toContain("memory-lancedb");
     expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
       "memory-lancedb",
@@ -584,13 +584,10 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(response.terminalResolution?.lastToolError).toMatchObject({
-      ownerKey: '["memory-lancedb","memory_forget"]',
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining('owner=["memory-lancedb","memory_forget"]|args='),
     });
-    expect(payloads).toHaveLength(2);
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toContain("I forgot");
-    expect(payloads[1]).toMatchObject({ isError: true });
     expect(JSON.stringify(response)).not.toContain("memory-lancedb");
     expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
       "memory-lancedb",
@@ -760,6 +757,25 @@ describe("createCodexDynamicToolBridge", () => {
       },
     );
     expectNoNamespace(specs.find((tool) => tool.name === "message"));
+  });
+
+  it("keeps progress_card direct when searchable loading defers broad tools", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "progress_card" }), createTool({ name: "web_search" })],
+      signal: new AbortController().signal,
+      loading: "searchable",
+      directToolNames: resolveCodexDynamicToolDirectNames({} as EmbeddedRunAttemptParams),
+    });
+
+    const specs = flattenSpecsWithNamespace(bridge.specs);
+    const progressCard = specs.find((tool) => tool.name === "progress_card");
+    const webSearch = specs.find((tool) => tool.name === "web_search");
+    expectNoNamespace(progressCard);
+    expectDynamicSpec(webSearch, {
+      name: "web_search",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      deferLoading: true,
+    });
   });
 
   it("isolates direct-only tools in Codex's model-only namespace", () => {
@@ -986,7 +1002,7 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("retains only MCP App preview details for OpenClaw transcript projection", async () => {
+  it("retains all sanitized details for OpenClaw transcript projection", async () => {
     const mcpAppPreview = {
       kind: "canvas",
       view: { id: "mcp-app-view-1", title: "Nearby food" },
@@ -1016,7 +1032,10 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { limit: 4 },
     });
 
-    expect(result.transcriptDetails).toEqual({ mcpAppPreview });
+    expect(result.transcriptDetails).toEqual({
+      mcpAppPreview,
+      structuredContent: { privateModelPayload: true },
+    });
     expect(Object.keys(result)).not.toContain("transcriptDetails");
     expect(JSON.stringify(result)).not.toContain("mcpAppPreview");
     expect(JSON.stringify(result)).not.toContain("privateModelPayload");
@@ -1325,6 +1344,177 @@ describe("createCodexDynamicToolBridge", () => {
     expect(result.executionStarted).toBe(false);
     expect(result.executedArguments).toEqual({});
     expect(badExecute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "punctuation in direct mode",
+      name: "bad.name",
+      placement: "direct" as const,
+      source: "both" as const,
+      diagnosticTool: "bad.name",
+    },
+    {
+      label: "leading whitespace in searchable mode",
+      name: " bad",
+      placement: "searchable" as const,
+      source: "available" as const,
+      diagnosticTool: " bad",
+    },
+    {
+      label: "trailing whitespace in a direct-only tool",
+      name: "bad ",
+      placement: "direct-only" as const,
+      source: "registered" as const,
+      diagnosticTool: "bad ",
+    },
+    {
+      label: "whitespace-only name",
+      name: "   ",
+      placement: "direct" as const,
+      source: "both" as const,
+      diagnosticTool: "   ",
+    },
+    {
+      label: "Unicode in searchable mode",
+      name: "mémoire",
+      placement: "searchable" as const,
+      source: "available" as const,
+      diagnosticTool: "mémoire",
+    },
+    {
+      label: "129 characters in a direct-only tool",
+      name: "a".repeat(129),
+      placement: "direct-only" as const,
+      source: "registered" as const,
+      diagnosticTool: "a".repeat(129),
+    },
+    {
+      label: "reserved mcp name",
+      name: "mcp",
+      placement: "direct" as const,
+      source: "both" as const,
+      diagnosticTool: "mcp",
+    },
+    {
+      label: "reserved mcp namespace prefix",
+      name: "mcp__read",
+      placement: "searchable" as const,
+      source: "both" as const,
+      diagnosticTool: "mcp__read",
+    },
+  ])("quarantines Codex-invalid dynamic tool names: $label", async (testCase) => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const execute = vi.fn(async () => textToolResult("healthy sibling executed"));
+    const placement =
+      testCase.placement === "direct-only" ? { catalogMode: "direct-only" as const } : {};
+    const invalidTool = createTool({ name: testCase.name, ...placement });
+    const sibling = createTool({ name: "valid_sibling", execute, ...placement });
+    const registeredOnly = createTool({ name: "registered_sibling", ...placement });
+    const tools = [sibling, ...(testCase.source === "registered" ? [] : [invalidTool])];
+    const registeredTools = [
+      sibling,
+      registeredOnly,
+      ...(testCase.source === "available" ? [] : [invalidTool]),
+    ];
+    const bridgeOptions = {
+      tools,
+      registeredTools,
+      signal: new AbortController().signal,
+      ...(testCase.placement === "direct" ? { loading: "direct" as const } : {}),
+    };
+    const bridge = createCodexDynamicToolBridge(bridgeOptions);
+    const healthyBridge = createCodexDynamicToolBridge({
+      ...bridgeOptions,
+      tools: [sibling],
+      registeredTools: [sibling, registeredOnly],
+    });
+
+    expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["valid_sibling"]);
+    expect(bridge.availableSpecs).toEqual(healthyBridge.availableSpecs);
+    expect(bridge.specs).toEqual(healthyBridge.specs);
+    expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
+      codexDynamicToolsFingerprint(healthyBridge.specs),
+    );
+    expect(specNames(bridge.availableSpecs)).toEqual(["valid_sibling"]);
+    expect(specNames(bridge.specs).toSorted()).toEqual(["registered_sibling", "valid_sibling"]);
+    const siblingSpec = flattenSpecsWithNamespace(bridge.availableSpecs)[0];
+    if (testCase.placement === "searchable") {
+      expect(siblingSpec).toMatchObject({
+        name: "valid_sibling",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      });
+    } else if (testCase.placement === "direct-only") {
+      expect(siblingSpec).toMatchObject({
+        name: "valid_sibling",
+        namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+      });
+      expect(siblingSpec).not.toHaveProperty("deferLoading");
+    } else {
+      expectDynamicSpec(siblingSpec, { name: "valid_sibling" });
+      expectNoNamespace(siblingSpec);
+    }
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      expect.objectContaining({ tool: testCase.diagnosticTool }),
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("retained 1 available and 2 registered tools"),
+      expect.objectContaining({
+        availableToolCount: 1,
+        registeredToolCount: 2,
+      }),
+    );
+
+    const validResult = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-valid",
+      namespace: null,
+      tool: "valid_sibling",
+      arguments: {},
+    });
+    expect(validResult.success).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
+
+    const invalidResult = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-invalid",
+      namespace: null,
+      tool: testCase.name,
+      arguments: {},
+    });
+    expect(invalidResult).toMatchObject({
+      success: false,
+      executionStarted: false,
+    });
+    expect(invalidResult.contentItems).toEqual([
+      {
+        type: "inputText",
+        text: `Unknown OpenClaw tool: ${testCase.name}`,
+      },
+    ]);
+  });
+
+  it("reports an empty final surface when all dynamic tool names are invalid", () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "bad.name" }), createTool({ name: "mcp" })],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableTools).toEqual([]);
+    expect(bridge.availableSpecs).toEqual([]);
+    expect(bridge.specs).toEqual([]);
+    expect(bridge.telemetry.quarantinedTools.map((tool) => tool.tool)).toEqual(["bad.name", "mcp"]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("retained 0 available and 0 registered tools"),
+      expect.objectContaining({
+        availableToolCount: 0,
+        registeredToolCount: 0,
+      }),
+    );
   });
 
   it("uses the bridge's executable projection for authority snapshots", () => {
@@ -2244,6 +2434,12 @@ describe("createCodexDynamicToolBridge", () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", {
+        messageDelivery: {
+          status: "settled",
+          primaryPlatformMessageId: "imessage-6264",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
         receipt: {
           primaryPlatformMessageId: "imessage-6264",
           platformMessageIds: ["imessage-6264"],
@@ -2856,11 +3052,11 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
   });
 
-  it("records heartbeat response tool outcomes", async () => {
+  it("accepts heartbeat response tool outcomes", async () => {
     const bridge = createBridgeWithToolResult(
       HEARTBEAT_RESPONSE_TOOL_NAME,
-      textToolResult("Recorded.", {
-        status: "recorded",
+      textToolResult("Accepted.", {
+        status: "accepted",
         outcome: "needs_attention",
         notify: true,
         summary: "Build is blocked.",
@@ -2878,7 +3074,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: {},
     });
 
-    expect(result).toEqual(expectInputText("Recorded."));
+    expect(result).toEqual(expectInputText("Accepted."));
     expect(bridge.telemetry.heartbeatToolResponse).toEqual({
       outcome: "needs_attention",
       notify: true,

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutputRuntimeEnv } from "../../runtime.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
@@ -30,6 +30,7 @@ const busyResult = {
 
 describe("gateway suspend CLI", () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllEnvs());
 
   it("prints a ready lease with the default CLI request id", async () => {
     const callGateway = vi.fn(async () => readyResult);
@@ -50,6 +51,58 @@ describe("gateway suspend CLI", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith("Resume with: openclaw gateway resume suspension-1");
   });
+
+  it.each([
+    {
+      name: "default gateway",
+      rpcOpts: {},
+      profile: "",
+      container: "",
+      command: "openclaw gateway resume suspension-1",
+    },
+    {
+      name: "custom local port",
+      rpcOpts: { localPortOverride: 18999 },
+      profile: "",
+      container: "",
+      command: "openclaw gateway resume suspension-1 --port 18999",
+    },
+    {
+      name: "named profile and custom local port",
+      rpcOpts: { localPortOverride: 18999 },
+      profile: "work",
+      container: "",
+      command: "openclaw --profile work gateway resume suspension-1 --port 18999",
+    },
+    {
+      name: "container takes precedence over profile",
+      rpcOpts: { localPortOverride: 18999 },
+      profile: "work",
+      container: "demo",
+      command: "openclaw --container demo gateway resume suspension-1 --port 18999",
+    },
+    {
+      name: "explicit URL and credentials remain private",
+      rpcOpts: { url: "wss://gateway.example:19444", token: "opaque-credential" },
+      profile: "",
+      container: "",
+      command: "openclaw gateway resume suspension-1",
+    },
+  ])(
+    "prints a correctly scoped resume hint for $name",
+    async ({ rpcOpts, profile, container, command }) => {
+      vi.stubEnv("OPENCLAW_PROFILE", profile);
+      vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
+      const runtime = createRuntime();
+
+      await runGatewaySuspend(
+        { rpcOpts },
+        { callGateway: vi.fn(async () => readyResult), runtime },
+      );
+
+      expect(runtime.log).toHaveBeenCalledWith(`Resume with: ${command}`);
+    },
+  );
 
   it("reports blockers without polling when --wait is omitted", async () => {
     const callGateway = vi.fn(async () => busyResult);

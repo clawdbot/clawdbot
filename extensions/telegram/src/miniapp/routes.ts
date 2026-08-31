@@ -8,6 +8,10 @@ import {
 } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  createFixedWindowRateLimiter,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveTelegramAccount } from "../accounts.js";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
@@ -26,7 +30,11 @@ const REPLAY_CACHE_LIMIT = 1000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 10;
 const replayCache = new Map<string, number>();
-const rateLimit = new Map<string, { count: number; resetAtMs: number }>();
+const rateLimit = createFixedWindowRateLimiter({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: RATE_LIMIT_MAX,
+  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+});
 
 export function registerTelegramMiniAppRoutes(
   api: OpenClawPluginApi,
@@ -180,14 +188,7 @@ function parseAuthBody(
 }
 
 function consumeRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const current = rateLimit.get(ip);
-  if (!current || current.resetAtMs <= now) {
-    rateLimit.set(ip, { count: 1, resetAtMs: now + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-  current.count += 1;
-  return current.count <= RATE_LIMIT_MAX;
+  return !rateLimit.isRateLimited(ip);
 }
 
 function rememberReplay(hash: string, expiresAtMs: number): boolean {

@@ -19,11 +19,13 @@ type ShellCompletionCommandTree = {
   descendants: ShellCompletionContext[];
 };
 
-function completionFlags(option: Option): string[] {
+export function completionFlags(option: Option): string[] {
   return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
 }
 
-function commandNameVariants(command: Command): string[] {
+// Aliases are typeable command words; every completion surface must offer them
+// alongside the canonical name or advertised commands appear nonexistent.
+export function commandNameVariants(command: Command): string[] {
   return [command.name(), ...command.aliases()];
 }
 

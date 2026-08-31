@@ -4,10 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import { acquireMemoryReindexLock } from "./manager-reindex-lock.js";
+import { tryAcquireMemoryReindexLock, waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
 
@@ -52,6 +54,10 @@ describe("memory manager reindex recovery", () => {
     }
     const { closeAllMemorySearchManagers } = await import("./index.js");
     await closeAllMemorySearchManagers();
+    // The agent close releases its leases through shared state and reopens it, so the
+    // shared handle is released second; otherwise Windows fails the removal with EBUSY.
+    closeOpenClawAgentDatabasesForTest();
+    resetPluginStateStoreForTests();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -90,6 +96,14 @@ describe("memory manager reindex recovery", () => {
     }
     manager = result.manager as unknown as MemoryIndexManager;
     return manager;
+  }
+
+  function acquireTestReindexLock(databasePath: string) {
+    const lock = tryAcquireMemoryReindexLock(databasePath);
+    if (!lock) {
+      throw new Error("expected test to acquire the memory reindex lock");
+    }
+    return lock;
   }
 
   it("restores retry state after a shadow full reindex fails late", async () => {
@@ -183,7 +197,7 @@ describe("memory manager reindex recovery", () => {
     const memoryManager = await openManager(createCfg({ provider: "none", sources: ["memory"] }));
     const harness = memoryManager as unknown as ReindexHarness;
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const lock = acquireMemoryReindexLock(databasePath);
+    const lock = acquireTestReindexLock(databasePath);
 
     try {
       await expect(harness.runInPlaceReindex({ reason: "test", force: true })).rejects.toThrow(
@@ -191,6 +205,35 @@ describe("memory manager reindex recovery", () => {
       );
     } finally {
       lock.release();
+    }
+  });
+
+  it("waits for the build lock without blocking the event loop", async () => {
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    const lock = acquireTestReindexLock(databasePath);
+    let timerFired = false;
+    let lockReleased = false;
+
+    try {
+      const wait = waitForMemoryReindexLock(databasePath);
+      const timer = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          timerFired = true;
+          resolve();
+        }, 10);
+      });
+
+      await timer;
+      expect(timerFired).toBe(true);
+      lock.release();
+      lockReleased = true;
+      const waitedLock = await wait;
+      waitedLock.release();
+    } finally {
+      if (!lockReleased) {
+        lock.release();
+      }
     }
   });
 

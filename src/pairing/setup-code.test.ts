@@ -15,25 +15,56 @@ vi.mock("../infra/device-bootstrap.js", () => ({
   })),
 }));
 
-const { decodePairingSetupCode, encodePairingSetupCode, resolvePairingSetupFromConfig } =
-  await import("./setup-code.js");
+const {
+  decodePairingSetupCode,
+  encodePairingSetupCode,
+  resolveConfiguredPairingPublicUrl,
+  resolvePairingSetupFromConfig,
+} = await import("./setup-code.js");
 const { issueDevicePairSetupBootstrapToken: issueDevicePairSetupBootstrapTokenMock } =
   await import("../infra/device-bootstrap.js");
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+const COLON_TLS_FINGERPRINT = (TLS_FINGERPRINT.match(/.{2}/gu)?.join(":") ?? "").toUpperCase();
+
 describe("pairing setup code", () => {
-  it("round-trips bare and wrapped setup codes without normalizing payload case", () => {
+  it("reads the configured public pairing URL from its owning plugin entry", () => {
+    expect(
+      resolveConfiguredPairingPublicUrl({
+        plugins: {
+          entries: { "device-pair": { config: { publicUrl: " wss://public.example " } } },
+        },
+      }),
+    ).toBe("wss://public.example");
+    expect(resolveConfiguredPairingPublicUrl({})).toBeUndefined();
+  });
+
+  it("round-trips setup codes while canonicalizing their TLS fingerprint", () => {
     const payload = {
       url: "wss://gateway.example:8443/openclaw-gw",
       bootstrapToken: "Bootstrap-AbC123",
-      tlsFingerprint: "sha256:AA:BB",
+      tlsFingerprint: `SHA256:${COLON_TLS_FINGERPRINT}`,
       expiresAtMs: 20_000,
     };
     const setupCode = encodePairingSetupCode(payload);
     expect(setupCode).toMatch(/[A-Z]/u);
 
-    expect(decodePairingSetupCode(setupCode, { nowMs: 10_000 })).toEqual(payload);
-    expect(decodePairingSetupCode(`oc-pair://${setupCode}`, { nowMs: 10_000 })).toEqual(payload);
+    const expected = { ...payload, tlsFingerprint: TLS_FINGERPRINT };
+    expect(decodePairingSetupCode(setupCode, { nowMs: 10_000 })).toEqual(expected);
+    expect(decodePairingSetupCode(`oc-pair://${setupCode}`, { nowMs: 10_000 })).toEqual(expected);
   });
+
+  it.each(["abc123", "sha256:abc123", "g".repeat(64)])(
+    "rejects invalid TLS fingerprint %s in a setup code",
+    (tlsFingerprint) => {
+      const setupCode = encodePairingSetupCode({
+        url: "wss://gateway.example",
+        bootstrapToken: "bootstrap-123",
+        tlsFingerprint,
+      });
+      expect(() => decodePairingSetupCode(setupCode)).toThrow("Invalid pairing setup payload");
+    },
+  );
 
   it("rejects garbage and expired shipped payload shapes", () => {
     expect(() => decodePairingSetupCode("not-json")).toThrow("Invalid pairing setup");
@@ -933,15 +964,27 @@ describe("pairing setup code", () => {
     const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });
     config.gateway = { ...config.gateway, tls: { enabled: true } };
     const direct = await resolvePairingSetupFromConfig(config, {
-      localTlsFingerprint: "sha256:direct-leaf",
+      localTlsFingerprint: `sha256:${COLON_TLS_FINGERPRINT}`,
     });
     const proxied = await resolvePairingSetupFromConfig(config, {
       publicUrl: "wss://proxy.example",
-      localTlsFingerprint: "sha256:direct-leaf",
+      localTlsFingerprint: `sha256:${COLON_TLS_FINGERPRINT}`,
     });
 
-    expect(direct.ok && direct.payload.tlsFingerprint).toBe("sha256:direct-leaf");
+    expect(direct.ok && direct.payload.tlsFingerprint).toBe(TLS_FINGERPRINT);
     expect(proxied.ok && proxied.payload.tlsFingerprint).toBeUndefined();
+  });
+
+  it("rejects an invalid direct TLS fingerprint before issuing a setup token", async () => {
+    const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });
+    config.gateway = { ...config.gateway, tls: { enabled: true } };
+
+    const resolved = await resolvePairingSetupFromConfig(config, {
+      localTlsFingerprint: "sha256:abc123",
+    });
+
+    expectResolvedSetupError(resolved, "TLS fingerprint is invalid");
+    expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   it("omits a configured remote TLS pin from a cleartext setup URL", async () => {
@@ -950,7 +993,7 @@ describe("pairing setup code", () => {
       ...config.gateway,
       remote: {
         url: "ws://127.0.0.1:18789",
-        tlsFingerprint: "sha256:stale-remote-leaf",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT}`,
       },
     };
 

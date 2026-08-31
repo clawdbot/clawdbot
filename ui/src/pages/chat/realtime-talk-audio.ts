@@ -258,7 +258,14 @@ export class RealtimeTalkPcmOutputQueue {
     ) {
       return "overflow";
     }
-    const samples = pcm16ToFloat(base64ToBytes(base64));
+    let samples: Float32Array;
+    try {
+      samples = pcm16ToFloat(base64ToBytes(base64));
+    } catch {
+      // Malformed base64 in a relayed frame must not throw back into the
+      // realtime event path; drop it like any other ignorable frame.
+      return "ignored";
+    }
     if (samples.length === 0) {
       return "ignored";
     }

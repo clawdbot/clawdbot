@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
@@ -16,7 +15,6 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
@@ -26,27 +24,13 @@ const TERMINAL_ENVIRONMENT_STATES = new Set(["destroyed", "failed", "orphaned"])
 
 type NodeWorkspaceRetainCoordinatorOptions = {
   gatewayNamespace: string;
-  placements: Pick<WorkerSessionPlacementStore, "list">;
+  placements: Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">;
   environments: Pick<WorkerEnvironmentService, "list">;
   warn: (message: string) => void;
 };
 
-function environmentDeviceId(
-  environment: ReturnType<WorkerEnvironmentService["list"]>[number],
-): string | undefined {
-  const settings = environment.profileSnapshot.settings;
-  const deviceId = isRecord(settings) ? settings.device : undefined;
-  return typeof deviceId === "string" && deviceId.trim() ? deviceId.trim() : undefined;
-}
-
 function nodeEnvironments(options: NodeWorkspaceRetainCoordinatorOptions, nodeId: string) {
-  return options.environments
-    .list()
-    .filter(
-      (environment) =>
-        environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
-        environmentDeviceId(environment) === nodeId,
-    );
+  return options.environments.list().filter((environment) => environment.nodeDeviceId === nodeId);
 }
 
 function bundleStatusTargetForNode(options: NodeWorkspaceRetainCoordinatorOptions, nodeId: string) {
@@ -87,18 +71,27 @@ function snapshotEntriesForNode(
   const placements = new Map(
     options.placements.list().map((placement) => [placement.sessionId, placement] as const),
   );
+  const pendingResults = new Map(
+    options.placements.listPendingWorkspaceResults().map((result) => [result.sessionId, result]),
+  );
   return nodeEnvironments(options, nodeId)
     .flatMap((environment): NodeWorkerWorkspaceRetainEntry[] => {
       if (
-        environment.providerId !== DEVICE_WORKER_PROVIDER_ID ||
         TERMINAL_ENVIRONMENT_STATES.has(environment.state) ||
-        environmentDeviceId(environment) !== nodeId ||
+        environment.nodeDeviceId !== nodeId ||
         environment.attachedSessionIds.length !== 1
       ) {
         return [];
       }
       const sessionId = environment.attachedSessionIds[0]!;
       const placement = placements.get(sessionId);
+      const pending = pendingResults.get(sessionId);
+      // The base is not a complete reachability set until reconciliation settles. Pending
+      // results preserve this protection across restarts, when node-local transfer pins are lost.
+      const unsettled =
+        placement?.turnClaim ||
+        (pending?.environmentId === environment.environmentId &&
+          pending.ownerEpoch === environment.ownerEpoch);
       const hasExactManifestOwner =
         placement?.state === "starting" ||
         placement?.state === "active" ||
@@ -106,6 +99,7 @@ function snapshotEntriesForNode(
         placement?.state === "reconciling";
       const exactManifest =
         hasExactManifestOwner &&
+        !unsettled &&
         placement.environmentId === environment.environmentId &&
         placement.workspaceBaseManifestRef &&
         (placement.activeOwnerEpoch === environment.ownerEpoch || placement.state === "starting")

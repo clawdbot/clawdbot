@@ -49,9 +49,9 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 - Before writing memory files, read them first; write only concrete updates, never empty placeholders.
 - Capture durable facts, preferences, and decisions; avoid secrets.
 
-## Heartbeats (optional)
+## Automations (optional)
 
-- The heartbeat monitor's cron scratch can hold a tiny checklist for heartbeat runs; keep it small.
+- A scheduled automation's scratch can hold a tiny task checklist; keep it small.
 
 ## Tools
 

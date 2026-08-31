@@ -111,14 +111,10 @@ function contentParts(value: unknown): Record<string, unknown>[] {
     const text = textPartContent(part);
     if (text !== undefined) {
       parts.push(textPart(text));
-    } else if (part.type === "toolCall" && typeof part.name === "string") {
-      parts.push({
-        type: "tool_call",
-        name: part.name,
-        ...(typeof part.id === "string" ? { id: part.id } : {}),
-        ...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
-      });
-    } else if (part.type === "tool_call" && typeof part.name === "string") {
+    } else if (
+      (part.type === "toolCall" || part.type === "tool_call") &&
+      typeof part.name === "string"
+    ) {
       parts.push({
         type: "tool_call",
         name: part.name,

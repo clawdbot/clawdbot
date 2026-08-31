@@ -21,8 +21,8 @@ import { launchTuiCli } from "./tui-launch.js";
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
 
-function createChildProcess(): ChildProcess {
-  return new EventEmitter() as ChildProcess;
+function createChildProcess(pid?: number): ChildProcess {
+  return Object.assign(new EventEmitter(), { pid }) as ChildProcess;
 }
 
 function expectSpawned(expectedArgs: string[]): SpawnOptions {
@@ -186,5 +186,38 @@ describe("launchTuiCli", () => {
       "resolved-token",
     ]);
     expect(options.env).toBe(process.env);
+  });
+
+  it("rejects a spawn error when the child has no pid", async () => {
+    const child = createChildProcess();
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => child.emit("error", new Error("spawn failed")));
+      return child;
+    });
+
+    await expect(launchTuiCli({ deliver: false })).rejects.toThrow(
+      "failed to launch TUI: spawn failed",
+    );
+    expect(detachMock).toHaveBeenCalledOnce();
+  });
+
+  it("waits for terminal exit across repeated operational errors", async () => {
+    const child = createChildProcess(4242);
+    spawnMock.mockReturnValue(child);
+    let settled = false;
+
+    const launched = launchTuiCli({ deliver: false }).finally(() => {
+      settled = true;
+    });
+    child.emit("error", new Error("first signal delivery failed"));
+    child.emit("error", new Error("second signal delivery failed"));
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(detachMock).not.toHaveBeenCalled();
+
+    child.emit("exit", 0, null);
+    await expect(launched).resolves.toBeUndefined();
+    expect(detachMock).toHaveBeenCalledOnce();
   });
 });

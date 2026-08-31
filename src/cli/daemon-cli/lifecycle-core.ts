@@ -12,6 +12,7 @@ import type {
 import {
   describeGatewayServiceRestart,
   inspectGatewayServiceStartRepair,
+  readGatewayServiceLoadState,
   startGatewayService,
 } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
@@ -45,6 +46,7 @@ type DaemonLifecycleOptions = {
   force?: boolean;
   wait?: string;
   restartIntent?: GatewayRestartIntent;
+  preserveDefinition?: boolean;
   disable?: boolean;
 };
 
@@ -114,24 +116,24 @@ async function resolveServiceLoadedOrFail(params: {
   service: GatewayService;
   fail: ReturnType<typeof createDaemonActionContext>["fail"];
   acceptInstalledDefinition?: boolean;
+  inspectionFailureMessage?: string;
 }): Promise<boolean | null> {
   // Keep native scope discovery in the adapter and failure emission in the action context.
   const hasInstalledDefinition = async () =>
     params.service.hasInstalledDefinition
       ? await params.service.hasInstalledDefinition({ env: process.env }).catch(() => false)
       : Boolean(await params.service.readCommand(process.env).catch(() => null));
-  try {
-    const loaded = await params.service.isLoaded({ env: process.env });
-    return (
-      loaded || (Boolean(params.acceptInstalledDefinition) && (await hasInstalledDefinition()))
+  const loadState = await readGatewayServiceLoadState(params.service, { env: process.env });
+  if (loadState.status === "unknown") {
+    params.fail(
+      `${params.inspectionFailureMessage ?? `${params.serviceNoun} service check failed`}: ${loadState.detail}`,
     );
-  } catch (err) {
-    if (params.acceptInstalledDefinition && (await hasInstalledDefinition())) {
-      return true;
-    }
-    params.fail(`${params.serviceNoun} service check failed: ${String(err)}`);
     return null;
   }
+  return (
+    loadState.status === "loaded" ||
+    (Boolean(params.acceptInstalledDefinition) && (await hasInstalledDefinition()))
+  );
 }
 
 export async function runServiceUninstall(params: {
@@ -157,11 +159,14 @@ export async function runServiceUninstall(params: {
     }
   }
 
-  let loaded;
-  try {
-    loaded = await params.service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
+  let loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+    inspectionFailureMessage: `${params.serviceNoun} uninstall aborted because service status is unknown; resolve the inspection error before retrying`,
+  });
+  if (loaded === null) {
+    return;
   }
   if (loaded && params.stopBeforeUninstall) {
     try {
@@ -176,10 +181,14 @@ export async function runServiceUninstall(params: {
     fail(`${params.serviceNoun} uninstall failed: ${String(err)}`);
     return;
   }
-  try {
-    loaded = await params.service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
+  loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+    inspectionFailureMessage: `${params.serviceNoun} uninstall verification failed because service status is unknown`,
+  });
+  if (loaded === null) {
+    return;
   }
   if (loaded && params.assertNotLoadedAfterUninstall) {
     fail(`${params.serviceNoun} service still loaded after uninstall.`);
@@ -204,6 +213,7 @@ export async function runServiceStart(params: {
   expectedPort?: number;
 }) {
   const json = Boolean(params.opts?.json);
+  const serviceCommand = formatCliCommand(`openclaw ${params.serviceNoun.toLowerCase()}`);
   const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "start", json });
   const warn = json ? (message: string) => warnings.push(message) : undefined;
   const loaded = await resolveServiceLoadedOrFail({
@@ -246,8 +256,7 @@ export async function runServiceStart(params: {
         return;
       }
     } catch (err) {
-      const hints = params.renderStartHints();
-      fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
+      fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
       return;
     }
   }
@@ -276,9 +285,11 @@ export async function runServiceStart(params: {
     }
     if (startResult.outcome === "already-running") {
       if (startResult.issues.length > 0) {
+        // Only services with a repair callback can rebuild their definition during restart.
+        const repairAction = params.repairLoadedService ? "restart" : "install --force";
         const warning = `${params.serviceNoun} service already running, but its installed service definition needs repair: ${startResult.issues
           .map((issue) => issue.message)
-          .join("; ")}; run \`openclaw gateway restart\` to apply.`;
+          .join("; ")}; run \`${serviceCommand} ${repairAction}\` to apply.`;
         warnings.push(warning);
         if (!json) {
           defaultRuntime.log(warning);
@@ -322,27 +333,26 @@ export async function runServiceStart(params: {
           return;
         }
       } catch (err) {
-        const hints = params.renderStartHints();
-        fail(`${params.serviceNoun} repair failed: ${String(err)}`, hints);
+        fail(`${params.serviceNoun} repair failed: ${String(err)}`, params.renderStartHints());
         return;
       }
       fail(
         `${params.serviceNoun} service needs repair before it can start: ${startResult.issues
           .map((issue) => issue.message)
           .join("; ")}`,
-        [formatCliCommand("openclaw gateway install --force")],
+        [`${serviceCommand} install --force`],
       );
       return;
     }
+    const serviceLoaded = startResult.state.loadState.status === "loaded";
     emit({
       ok: true,
       result: "started",
-      service: buildDaemonServiceSnapshot(params.service, startResult.state.loaded),
+      service: buildDaemonServiceSnapshot(params.service, serviceLoaded),
       warnings: warnings.length ? warnings : undefined,
     });
   } catch (err) {
-    const hints = params.renderStartHints();
-    fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
+    fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
   }
 }
 
@@ -437,16 +447,19 @@ export async function runServiceStop(params: {
     return;
   }
 
-  let stopped;
-  try {
-    stopped = await params.service.isLoaded({ env: process.env });
-  } catch {
-    stopped = false;
+  const finalLoaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+    inspectionFailureMessage: `${params.serviceNoun} stop verification failed because service status is unknown`,
+  });
+  if (finalLoaded === null) {
+    return;
   }
   emit({
     ok: true,
     result: "stopped",
-    service: buildDaemonServiceSnapshot(params.service, stopped),
+    service: buildDaemonServiceSnapshot(params.service, finalLoaded),
   });
 }
 
@@ -647,6 +660,7 @@ export async function runServiceRestart(params: {
       await prepareGatewayRestartIntent();
       try {
         restartResult = await params.service.restart({
+          preserveDefinition: params.opts?.preserveDefinition,
           env: process.env,
           stdout,
           warn,

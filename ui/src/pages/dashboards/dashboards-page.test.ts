@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -98,16 +99,17 @@ describe("DashboardsPage", () => {
     await element.updateComplete;
 
     expect(subscribeList).toHaveBeenCalledWith(
-      { limit: 50, boardFace: "dashboard", archivedFilter: "all" },
+      { limit: SIDEBAR_SESSION_ROSTER_LIMIT, boardFace: "dashboard", archivedFilter: "all" },
       expect.any(Function),
     );
     expect(refreshList).not.toHaveBeenCalled();
+    const retiredListener = listListeners.get("all")!;
 
     selectionState.scopeId = "writer";
     selectionListeners.forEach((listener) => listener());
     await vi.waitFor(() => expect(refreshList).toHaveBeenCalledTimes(1));
     expect(refreshList).toHaveBeenCalledWith({
-      limit: 50,
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
       boardFace: "dashboard",
       archivedFilter: "all",
       agentId: "writer",
@@ -122,13 +124,44 @@ describe("DashboardsPage", () => {
       error: null,
     });
     await vi.waitFor(() => expect(element.textContent).toContain("Writer dashboard"));
-    listListeners.get("all")?.({
+    retiredListener({
       result: result(row("agent:main:retired", "Retired")),
       agentId: null,
       loading: false,
-      error: null,
+      error: "Retired scope refresh failed",
     });
     await element.updateComplete;
     expect(element.textContent).not.toContain("Retired");
+
+    const writerListener = listListeners.get("writer")!;
+    writerListener({
+      result: result(row("agent:writer:current", "Writer dashboard")),
+      agentId: "writer",
+      loading: false,
+      error: "Writer refresh failed",
+    });
+    await element.updateComplete;
+    expect(element.textContent).toContain("Writer dashboard");
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain("Writer refresh failed");
+    refreshList.mockClear();
+    element.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    expect(refreshList).toHaveBeenCalledOnce();
+    expect(refreshList).toHaveBeenLastCalledWith({
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+      boardFace: "dashboard",
+      archivedFilter: "all",
+      agentId: "writer",
+      force: true,
+    });
+
+    element.remove();
+    writerListener({
+      result: null,
+      agentId: "writer",
+      loading: false,
+      error: "Detached refresh failed",
+    });
+    await element.updateComplete;
+    expect(element.textContent).not.toContain("Detached refresh failed");
   });
 });

@@ -2,12 +2,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { extractBasicHtmlContent } from "../src/agents/tools/web-fetch-utils.js";
-import { createWebFetchTool } from "../src/agents/tools/web-fetch.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { LookupFn } from "../src/infra/net/ssrf.js";
-import { extractReadableContent } from "../src/web-fetch/content-extractors.runtime.js";
-import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import * as cliArgs from "./lib/arg-utils.mts";
 
 type BenchmarkCaseId =
   | "tool-create"
@@ -68,8 +65,7 @@ const ALL_CASE_IDS = [
   "extract-basic-shell",
 ] as const satisfies readonly BenchmarkCaseId[];
 
-const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
-const VALUE_FLAGS = new Set(["--case", "--output", "--runs", "--warmup"]);
+const SPLIT_VALUE_FLAG_OPTIONS = { allowInline: false, rejectShortOptions: true } as const;
 
 class CliArgumentError extends Error {
   override name = "CliArgumentError";
@@ -125,71 +121,7 @@ const toolConfig: OpenClawConfig = {
   },
 };
 
-function validateArgs(args: string[]): void {
-  const seenSingularValueFlags = new Set<string>();
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index] ?? "";
-    if (BOOLEAN_FLAGS.has(arg)) {
-      continue;
-    }
-    if (VALUE_FLAGS.has(arg)) {
-      if (arg !== "--case") {
-        if (seenSingularValueFlags.has(arg)) {
-          throw new CliArgumentError(`${arg} was provided more than once`);
-        }
-        seenSingularValueFlags.add(arg);
-      }
-      const value = args[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new CliArgumentError(`${arg} requires a value`);
-      }
-      index += 1;
-      continue;
-    }
-    throw new CliArgumentError(`Unknown argument: ${arg}`);
-  }
-}
-
-function parsePositiveInteger(flag: string, fallback: number, args: string[]): number {
-  const index = args.indexOf(flag);
-  if (index === -1) {
-    return fallback;
-  }
-  const raw = args[index + 1];
-  if (!/^\d+$/u.test(raw ?? "")) {
-    throw new CliArgumentError(`${flag} must be a positive integer`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new CliArgumentError(`${flag} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInteger(flag: string, fallback: number, args: string[]): number {
-  const index = args.indexOf(flag);
-  if (index === -1) {
-    return fallback;
-  }
-  const raw = args[index + 1];
-  if (!/^\d+$/u.test(raw ?? "")) {
-    throw new CliArgumentError(`${flag} must be a non-negative integer`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new CliArgumentError(`${flag} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parseCases(args: string[]): BenchmarkCaseId[] {
-  const requested: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === "--case") {
-      requested.push(args[index + 1] ?? "");
-      index += 1;
-    }
-  }
+function parseCases(requested: string[]): BenchmarkCaseId[] {
   if (requested.length === 0 || requested.includes("all")) {
     return [...ALL_CASE_IDS];
   }
@@ -204,21 +136,51 @@ function parseCases(args: string[]): BenchmarkCaseId[] {
   return requested as BenchmarkCaseId[];
 }
 
-function parseFlagValue(flag: string, args: string[]): string | undefined {
-  const index = args.indexOf(flag);
-  return index === -1 ? undefined : args[index + 1];
+function parseBenchmarkCount(raw: string, flag: string, minimum: 0 | 1): number {
+  const parsed = cliArgs.classifyBoundedUnsignedDecimal(raw, minimum, Number.MAX_SAFE_INTEGER);
+  if (parsed.kind === "value") {
+    return parsed.value;
+  }
+  const kind = minimum === 0 ? "non-negative" : "positive";
+  throw new CliArgumentError(`${flag} must be a ${kind} integer`);
 }
 
 function parseOptions(args = process.argv.slice(2)): Options {
-  const normalizedArgs = stripLeadingPackageManagerSeparator(args);
-  validateArgs(normalizedArgs);
-  return {
-    cases: parseCases(normalizedArgs),
-    json: normalizedArgs.includes("--json"),
-    output: parseFlagValue("--output", normalizedArgs),
-    runs: parsePositiveInteger("--runs", 20, normalizedArgs),
-    warmup: parseNonNegativeInteger("--warmup", 3, normalizedArgs),
-  };
+  const normalizedArgs = cliArgs.stripLeadingPackageManagerSeparator(args);
+  try {
+    const parsed = cliArgs.parseFlagArgs(
+      normalizedArgs,
+      {
+        cases: [] as string[],
+        json: false,
+        output: undefined as string | undefined,
+        runs: "20",
+        warmup: "3",
+      },
+      [
+        cliArgs.stringListFlag("--case", "cases", SPLIT_VALUE_FLAG_OPTIONS),
+        cliArgs.stringFlag("--output", "output", SPLIT_VALUE_FLAG_OPTIONS),
+        cliArgs.stringFlag("--runs", "runs", SPLIT_VALUE_FLAG_OPTIONS),
+        cliArgs.stringFlag("--warmup", "warmup", SPLIT_VALUE_FLAG_OPTIONS),
+        cliArgs.booleanFlag("--json", "json", true, { repeatable: true }),
+      ],
+      {
+        ignoreDoubleDash: false,
+        onUnhandledArg(arg) {
+          throw new CliArgumentError(`Unknown argument: ${arg}`);
+        },
+      },
+    );
+    return {
+      cases: parseCases(parsed.cases),
+      json: parsed.json,
+      output: parsed.output,
+      runs: parseBenchmarkCount(parsed.runs, "--runs", 1),
+      warmup: parseBenchmarkCount(parsed.warmup, "--warmup", 0),
+    };
+  } catch (error) {
+    throw new CliArgumentError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 function printUsage(): void {
@@ -301,109 +263,115 @@ async function withOfflineProviderEnv<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-function createTool() {
-  const tool = createWebFetchTool({
-    config: toolConfig,
-    lookupFn,
-    sandboxed: false,
-  });
-  if (!tool?.execute) {
-    throw new Error("web_fetch tool was not created");
-  }
-  return tool;
-}
+async function loadCaseFactory(): Promise<() => Record<BenchmarkCaseId, BenchmarkCase>> {
+  const { extractBasicHtmlContent } = await import("../src/agents/tools/web-fetch-utils.js");
+  const { createWebFetchTool } = await import("../src/agents/tools/web-fetch.js");
+  const { extractReadableContent } = await import("../src/web-fetch/content-extractors.runtime.js");
 
-function createCases(): Record<BenchmarkCaseId, BenchmarkCase> {
-  const textTool = createTool();
-  const markdownTool = createTool();
-  const articleTool = createTool();
-  const articleTextTool = createTool();
-  const shellTool = createTool();
-  return {
-    "tool-create": {
-      id: "tool-create",
-      label: "create web_fetch tool",
-      run: () => {
-        createTool();
+  function createTool() {
+    const tool = createWebFetchTool({
+      config: toolConfig,
+      lookupFn,
+      sandboxed: false,
+    });
+    if (!tool?.execute) {
+      throw new Error("web_fetch tool was not created");
+    }
+    return tool;
+  }
+
+  return () => {
+    const textTool = createTool();
+    const markdownTool = createTool();
+    const articleTool = createTool();
+    const articleTextTool = createTool();
+    const shellTool = createTool();
+    return {
+      "tool-create": {
+        id: "tool-create",
+        label: "create web_fetch tool",
+        run: () => {
+          createTool();
+        },
       },
-    },
-    "tool-text": {
-      id: "tool-text",
-      label: "execute text/plain fetch",
-      run: async () => {
-        installMockFetch({ body: TEXT_BODY, contentType: "text/plain; charset=utf-8" });
-        await textTool.execute("bench", { url: "https://example.com/plain" });
+      "tool-text": {
+        id: "tool-text",
+        label: "execute text/plain fetch",
+        run: async () => {
+          installMockFetch({ body: TEXT_BODY, contentType: "text/plain; charset=utf-8" });
+          await textTool.execute("bench", { url: "https://example.com/plain" });
+        },
       },
-    },
-    "tool-markdown": {
-      id: "tool-markdown",
-      label: "execute text/markdown fetch",
-      run: async () => {
-        installMockFetch({ body: MARKDOWN_BODY, contentType: "text/markdown; charset=utf-8" });
-        await markdownTool.execute("bench", { url: "https://example.com/markdown" });
+      "tool-markdown": {
+        id: "tool-markdown",
+        label: "execute text/markdown fetch",
+        run: async () => {
+          installMockFetch({ body: MARKDOWN_BODY, contentType: "text/markdown; charset=utf-8" });
+          await markdownTool.execute("bench", { url: "https://example.com/markdown" });
+        },
       },
-    },
-    "tool-html-article": {
-      id: "tool-html-article",
-      label: "execute article HTML fetch",
-      run: async () => {
-        installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
-        await articleTool.execute("bench", { url: "https://example.com/article" });
+      "tool-html-article": {
+        id: "tool-html-article",
+        label: "execute article HTML fetch",
+        run: async () => {
+          installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
+          await articleTool.execute("bench", { url: "https://example.com/article" });
+        },
       },
-    },
-    "tool-html-article-text": {
-      id: "tool-html-article-text",
-      label: "execute article HTML fetch as text",
-      run: async () => {
-        installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
-        await articleTextTool.execute("bench", {
-          url: "https://example.com/article-text",
-          extractMode: "text",
-        });
+      "tool-html-article-text": {
+        id: "tool-html-article-text",
+        label: "execute article HTML fetch as text",
+        run: async () => {
+          installMockFetch({ body: ARTICLE_HTML, contentType: "text/html; charset=utf-8" });
+          await articleTextTool.execute("bench", {
+            url: "https://example.com/article-text",
+            extractMode: "text",
+          });
+        },
       },
-    },
-    "tool-html-shell": {
-      id: "tool-html-shell",
-      label: "execute shell HTML fallback fetch",
-      run: async () => {
-        installMockFetch({ body: SHELL_HTML, contentType: "text/html; charset=utf-8" });
-        await shellTool.execute("bench", { url: "https://example.com/shell" });
+      "tool-html-shell": {
+        id: "tool-html-shell",
+        label: "execute shell HTML fallback fetch",
+        run: async () => {
+          installMockFetch({ body: SHELL_HTML, contentType: "text/html; charset=utf-8" });
+          await shellTool.execute("bench", { url: "https://example.com/shell" });
+        },
       },
-    },
-    "extract-readable-article": {
-      id: "extract-readable-article",
-      label: "extract readable article HTML",
-      run: async () => {
-        await extractReadableContent({
-          html: ARTICLE_HTML,
-          url: "https://example.com/article",
-          extractMode: "markdown",
-          config: toolConfig,
-        });
+      "extract-readable-article": {
+        id: "extract-readable-article",
+        label: "extract readable article HTML",
+        run: async () => {
+          await extractReadableContent({
+            html: ARTICLE_HTML,
+            url: "https://example.com/article",
+            extractMode: "markdown",
+            config: toolConfig,
+          });
+        },
       },
-    },
-    "extract-readable-article-text": {
-      id: "extract-readable-article-text",
-      label: "extract readable article HTML as text",
-      run: async () => {
-        await extractReadableContent({
-          html: ARTICLE_HTML,
-          url: "https://example.com/article-text",
-          extractMode: "text",
-          config: toolConfig,
-        });
+      "extract-readable-article-text": {
+        id: "extract-readable-article-text",
+        label: "extract readable article HTML as text",
+        run: async () => {
+          await extractReadableContent({
+            html: ARTICLE_HTML,
+            url: "https://example.com/article-text",
+            extractMode: "text",
+            config: toolConfig,
+          });
+        },
       },
-    },
-    "extract-basic-shell": {
-      id: "extract-basic-shell",
-      label: "extract basic shell HTML",
-      run: async () => {
-        await extractBasicHtmlContent({
-          html: SHELL_HTML,
-          extractMode: "markdown",
-        });
+      "extract-basic-shell": {
+        id: "extract-basic-shell",
+        label: "extract basic shell HTML",
+        run: async () => {
+          await extractBasicHtmlContent({
+            html: SHELL_HTML,
+            extractMode: "markdown",
+          });
+        },
       },
-    },
+    };
   };
 }
 
@@ -442,6 +410,8 @@ async function main(): Promise<void> {
     return;
   }
   const options = parseOptions(args);
+  // Preserve runtime import environment, then construct tools inside the offline scope.
+  const createCases = await loadCaseFactory();
   const report = await withOfflineProviderEnv(async () => {
     const casesById = createCases();
     const cases: CaseReport[] = [];

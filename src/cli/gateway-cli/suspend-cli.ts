@@ -5,6 +5,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
+import { formatCliCommand } from "../command-format.js";
 import type { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 
 type SuspendRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
@@ -56,14 +57,6 @@ function formatBusyResult(
   ].join("\n");
 }
 
-function writeSuspendJson(
-  runtime: OutputRuntimeEnv,
-  result: GatewaySuspendPrepareResult,
-  requestId: string,
-): void {
-  runtime.writeJson({ ...result, requestId });
-}
-
 export async function runGatewaySuspend(
   options: {
     rpcOpts: SuspendRpcOpts;
@@ -97,7 +90,7 @@ export async function runGatewaySuspend(
     })) as GatewaySuspendPrepareResult;
     if (latest.status === "ready") {
       if (options.json) {
-        writeSuspendJson(deps.runtime, latest, requestId);
+        deps.runtime.writeJson({ ...latest, requestId });
         return;
       }
       const rich = isRich();
@@ -106,13 +99,20 @@ export async function runGatewaySuspend(
       deps.runtime.log(
         `${colorize(rich, theme.muted, "Expires:")} ${new Date(latest.expiresAtMs).toISOString()} (${latest.expiresAtMs} ms)`,
       );
-      deps.runtime.log(`Resume with: openclaw gateway resume ${latest.suspensionId}`);
+      const port = options.rpcOpts.localPortOverride;
+      const command = `openclaw gateway resume ${latest.suspensionId}`;
+      deps.runtime.log(
+        `Resume with: ${formatCliCommand(port === undefined ? command : `${command} --port ${port}`)}`,
+      );
       return;
+    }
+    if (latest.status === "draining") {
+      throw new Error("Gateway suspension unexpectedly entered drain mode");
     }
 
     if (deadlineMs === undefined) {
       if (options.json) {
-        writeSuspendJson(deps.runtime, latest, requestId);
+        deps.runtime.writeJson({ ...latest, requestId });
         deps.runtime.exit(1);
         return;
       }
@@ -131,7 +131,7 @@ export async function runGatewaySuspend(
     throw new Error("Gateway suspension polling ended without a result");
   }
   if (options.json) {
-    writeSuspendJson(deps.runtime, latest, requestId);
+    deps.runtime.writeJson({ ...latest, requestId });
     deps.runtime.exit(1);
     return;
   }

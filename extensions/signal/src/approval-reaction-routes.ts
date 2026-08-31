@@ -1,4 +1,5 @@
 import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-client-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
@@ -27,7 +28,7 @@ export type SignalApprovalReactionRoute =
 
 function resolveApprovalForwardingConfig(params: {
   cfg: OpenClawConfig;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
 }): ApprovalForwardingConfig | undefined {
   return params.approvalKind === "plugin"
     ? params.cfg.approvals?.plugin
@@ -125,7 +126,7 @@ function hasMatchingSignalApprovalReactionTarget(params: {
 export function isSignalApprovalReactionRouteStillEnabled(params: {
   cfg: OpenClawConfig;
   target: {
-    approvalKind: "exec" | "plugin";
+    approvalKind: ChannelApprovalKind;
     route: SignalApprovalReactionRoute;
   };
 }): boolean {
@@ -158,7 +159,7 @@ export function buildTargetRoute(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   agentId?: string | null;
   sessionKey?: string | null;
 }): Extract<SignalApprovalReactionRoute, { deliveryMode: "target" }> | null {

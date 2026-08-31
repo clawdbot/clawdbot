@@ -29,16 +29,24 @@ import {
   type PluginInstallRequest,
   type PluginListResult,
   type PluginSearchResult,
+  type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
+import {
+  pluginOriginLabel,
+  pluginVerificationLabel,
+  renderArtTile,
+  renderPluginConsentDialog,
+  renderPluginDeclaredCapabilities,
+  renderPluginGrants,
+  renderPluginMetaRow,
+  type PluginConsentState,
+} from "./consent-dialog.ts";
 import type { PluginInstallPolicyWarningDetails } from "./install-policy-warning.ts";
 import {
   CONNECTOR_GROUP_ORDER,
   CONNECTOR_SUGGESTIONS,
   PLUGIN_CATEGORY_ORDER,
-  pluginArtPath,
   pluginCategoryLabel,
-  pluginFallbackGradient,
-  pluginMonogram,
   type ConnectorGroup,
   type ConnectorSuggestion,
 } from "./presentation.ts";
@@ -50,7 +58,6 @@ export type InstalledFilter = "all" | "enabled" | "disabled" | "issues";
 export type PluginRowMessage = {
   kind: "success" | "error" | "warning";
   text: string;
-  acknowledge?: { packageName: string; version?: string };
   installPolicyWarning?: {
     details: PluginInstallPolicyWarningDetails;
     request: PluginInstallRequest;
@@ -87,8 +94,13 @@ type PluginsViewProps = {
   searchError: string | null;
   busy: Readonly<Record<string, boolean>>;
   messages: Readonly<Record<string, PluginRowMessage>>;
-  pendingRemoval: Readonly<Record<string, boolean>>;
   detailPluginId: string | null;
+  detailInspection: PluginsInspectResult | null;
+  detailInspectionError: string | null;
+  consent: PluginConsentState | null;
+  consentInspection: PluginsInspectResult | null;
+  consentInspectionLoading: boolean;
+  consentInspectionError: string | null;
   iconUrls: Readonly<Record<string, string>>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -105,9 +117,10 @@ type PluginsViewProps = {
   onShowDetails: (pluginId: string | null) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onInstall: (request: PluginInstallRequest, installIdentity: string) => void;
+  onCancelConsent: () => void;
+  onConfirmConsent: () => void;
+  onRetryConsentInspection: () => void;
   onDismissMessage: (rowKey: string) => void;
-  onRequestUninstall: (rowKey: string) => void;
-  onCancelUninstall: (rowKey: string) => void;
   onUninstall: (pluginId: string, rowKey: string) => void;
   onAddConnector: (suggestion: ConnectorSuggestion) => void;
   onSearchClawHub: (query: string) => void;
@@ -313,42 +326,6 @@ const compactNumber = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 });
 
-function renderArtTile(
-  slug: string,
-  name: string,
-  iconUrl?: string,
-  onIconError?: () => void,
-  className = "plugins-tile",
-): TemplateResult {
-  const art = pluginArtPath(slug);
-  if (art) {
-    return html`<span class=${className}>
-      <img src=${art} alt="" loading="lazy" decoding="async" />
-    </span>`;
-  }
-  if (iconUrl) {
-    return html`<span class=${className}>
-      <img
-        class="plugins-icon"
-        src=${iconUrl}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        @error=${onIconError}
-      />
-    </span>`;
-  }
-  const [from, to] = pluginFallbackGradient(slug);
-  const monogram = pluginMonogram(name);
-  return html`<span
-    class=${`${className} ${className}--fallback`}
-    style=${`--plugins-art-a:${from};--plugins-art-b:${to}`}
-    aria-hidden="true"
-  >
-    ${monogram ? html`<span>${monogram}</span>` : icons.puzzle}
-  </span>`;
-}
-
 function stateLabel(plugin: PluginCatalogItem): string {
   switch (plugin.state) {
     case "enabled":
@@ -373,23 +350,6 @@ function stateStatus(plugin: PluginCatalogItem) {
  * healthy states, so only the error status earns a pill next to the actions. */
 function rowStateStatus(plugin: PluginCatalogItem) {
   return plugin.state === "error" ? stateStatus(plugin) : nothing;
-}
-
-function originLabel(origin: string): string {
-  switch (origin) {
-    case "bundled":
-      return t("pluginsPage.included");
-    case "global":
-      return t("pluginsPage.global");
-    case "workspace":
-      return t("pluginsPage.workspace");
-    case "config":
-      return t("pluginsPage.config");
-    case "official":
-      return t("pluginsPage.official");
-    default:
-      return origin;
-  }
 }
 
 function requestInstall(
@@ -545,31 +505,6 @@ function renderRowMessage(
   return html`
     <div class="plugins-row-message plugins-row-message--${resolvedMessage.kind}" role=${role}>
       <span>${resolvedMessage.text}</span>
-      ${resolvedMessage.acknowledge
-        ? html`
-            <button
-              type="button"
-              class="btn btn--sm"
-              title=${props.mutationBlockedReason ?? ""}
-              ?disabled=${busy || !props.canMutate}
-              @click=${() =>
-                requestInstall(
-                  props,
-                  {
-                    source: "clawhub",
-                    packageName: resolvedMessage.acknowledge?.packageName ?? "",
-                    ...(resolvedMessage.acknowledge?.version
-                      ? { version: resolvedMessage.acknowledge.version }
-                      : {}),
-                    acknowledgeClawHubRisk: true,
-                  },
-                  installIdentity,
-                )}
-            >
-              ${busy ? t("pluginsPage.installing") : t("pluginsPage.acknowledgeRisk")}
-            </button>
-          `
-        : nothing}
     </div>
   `;
 }
@@ -640,7 +575,7 @@ function renderInstallButton(
   installIdentity: string,
 ) {
   const installMessage = props.messages[installIdentity];
-  if (installMessage?.installPolicyWarning || installMessage?.acknowledge) {
+  if (installMessage?.installPolicyWarning) {
     return nothing;
   }
   return html`
@@ -660,54 +595,12 @@ function renderInstallButton(
   `;
 }
 
-function renderRemoveConfirm(
-  plugin: PluginCatalogItem,
-  props: PluginsViewProps,
-  busy: boolean,
-  rowKey: string,
-) {
-  return html`
-    <span
-      class="plugins-remove-confirm"
-      role="alertdialog"
-      aria-label=${t("pluginsPage.removeNamed", { name: plugin.name })}
-    >
-      <span>${t("pluginsPage.removeConfirm")}</span>
-      <button
-        type="button"
-        class="btn btn--sm danger"
-        ?disabled=${busy || !props.canMutate}
-        @click=${(event: Event) => {
-          event.stopPropagation();
-          props.onUninstall(plugin.id, rowKey);
-        }}
-      >
-        ${busy ? t("pluginsPage.removing") : t("pluginsPage.remove")}
-      </button>
-      <button
-        type="button"
-        class="btn btn--sm"
-        ?disabled=${busy}
-        @click=${(event: Event) => {
-          event.stopPropagation();
-          props.onCancelUninstall(rowKey);
-        }}
-      >
-        ${t("pluginsPage.cancel")}
-      </button>
-    </span>
-  `;
-}
-
 function renderCatalogActions(
   plugin: PluginCatalogItem,
   props: PluginsViewProps,
   busy: boolean,
   rowKey: string,
 ) {
-  if (props.pendingRemoval[rowKey]) {
-    return renderRemoveConfirm(plugin, props, busy, rowKey);
-  }
   if (!plugin.installed) {
     const install = plugin.install;
     return install
@@ -726,7 +619,7 @@ function renderCatalogActions(
       onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, rowKey),
     })}
     ${plugin.removable
-      ? renderRemoveButton(props, busy, plugin.name, () => props.onRequestUninstall(rowKey))
+      ? renderRemoveButton(props, busy, plugin.name, () => props.onUninstall(plugin.id, rowKey))
       : nothing}
   `;
 }
@@ -824,7 +717,7 @@ function renderPluginRow(
           ${plugin.description || t("pluginsPage.optionalCapability")}
         </span>
         ${renderMetaLine([
-          plugin.origin ? originLabel(plugin.origin) : nothing,
+          plugin.origin ? pluginOriginLabel(plugin.origin) : nothing,
           includePackageName && plugin.packageName
             ? html`<span class="plugins-meta__mono">${plugin.packageName}</span>`
             : nothing,
@@ -1048,10 +941,6 @@ function findInstalledSearchPlugin(
   );
 }
 
-function verificationLabel(tier: string): string {
-  return tier === "source-linked" ? t("pluginsPage.verifiedSource") : tier;
-}
-
 function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps): TemplateResult {
   const pkg = item.package;
   const installed = findInstalledSearchPlugin(item, props.result?.plugins ?? []);
@@ -1088,7 +977,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
         <span class="settings-row__desc">${pkg.summary || pkg.name}</span>
         ${renderMetaLine([
           pkg.isOfficial ? t("pluginsPage.official") : nothing,
-          pkg.verificationTier ? verificationLabel(pkg.verificationTier) : nothing,
+          pkg.verificationTier ? pluginVerificationLabel(pkg.verificationTier) : nothing,
           typeof pkg.downloads === "number"
             ? html`<span class="plugins-downloads">
                 <span aria-hidden="true">${icons.download}</span>
@@ -1211,15 +1100,6 @@ function renderConnectorSection(
 
 /* ---------------------------------- detail overlay ---------------------------------- */
 
-function detailMetaRow(label: string, value: string | TemplateResult) {
-  return html`
-    <div class="plugins-detail__meta-row">
-      <span class="plugins-detail__meta-label">${label}</span>
-      <span class="plugins-detail__meta-value">${value}</span>
-    </div>
-  `;
-}
-
 function renderDetailOverlay(props: PluginsViewProps) {
   const plugin = props.detailPluginId
     ? props.result?.plugins.find((entry) => entry.id === props.detailPluginId)
@@ -1266,49 +1146,45 @@ function renderDetailOverlay(props: PluginsViewProps) {
             ${plugin.description || t("pluginsPage.optionalCapability")}
           </p>
           <div class="plugins-detail__actions">
-            ${props.pendingRemoval[key]
-              ? renderRemoveConfirm(plugin, props, busy, key)
-              : html`
-                  ${plugin.installed
-                    ? html`
-                        <button
-                          type="button"
-                          class="btn ${plugin.enabled ? "" : "primary"}"
-                          title=${props.mutationBlockedReason ?? ""}
-                          ?disabled=${!props.canMutate || busy}
-                          @click=${() => props.onSetEnabled(plugin.id, !plugin.enabled, key)}
-                        >
-                          ${busy
-                            ? t("pluginsPage.working")
-                            : plugin.enabled
-                              ? t("pluginsPage.disableAction")
-                              : t("pluginsPage.enableAction")}
-                        </button>
-                      `
-                    : plugin.install
-                      ? renderInstallButton(
-                          props,
-                          busy,
-                          plugin.name,
-                          plugin.install,
-                          resolveInstallIdentity(props, plugin.install),
-                        )
-                      : nothing}
-                  ${plugin.removable
-                    ? html`
-                        <button
-                          type="button"
-                          class="btn plugins-detail__remove"
-                          title=${props.mutationBlockedReason ?? ""}
-                          ?disabled=${!props.canMutate || busy}
-                          @click=${() => props.onRequestUninstall(key)}
-                        >
-                          <span aria-hidden="true">${icons.trash}</span>
-                          ${t("pluginsPage.remove")}
-                        </button>
-                      `
-                    : nothing}
-                `}
+            ${plugin.installed
+              ? html`
+                  <button
+                    type="button"
+                    class="btn ${plugin.enabled ? "" : "primary"}"
+                    title=${props.mutationBlockedReason ?? ""}
+                    ?disabled=${!props.canMutate || busy}
+                    @click=${() => props.onSetEnabled(plugin.id, !plugin.enabled, key)}
+                  >
+                    ${busy
+                      ? t("pluginsPage.working")
+                      : plugin.enabled
+                        ? t("pluginsPage.disableAction")
+                        : t("pluginsPage.enableAction")}
+                  </button>
+                `
+              : plugin.install
+                ? renderInstallButton(
+                    props,
+                    busy,
+                    plugin.name,
+                    plugin.install,
+                    resolveInstallIdentity(props, plugin.install),
+                  )
+                : nothing}
+            ${plugin.removable
+              ? html`
+                  <button
+                    type="button"
+                    class="btn plugins-detail__remove"
+                    title=${props.mutationBlockedReason ?? ""}
+                    ?disabled=${!props.canMutate || busy}
+                    @click=${() => props.onUninstall(plugin.id, key)}
+                  >
+                    <span aria-hidden="true">${icons.trash}</span>
+                    ${t("pluginsPage.remove")}
+                  </button>
+                `
+              : nothing}
           </div>
           ${plugin.error
             ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
@@ -1318,19 +1194,47 @@ function renderDetailOverlay(props: PluginsViewProps) {
           ${renderRowMessage(key, props.messages[key], busy, props, installIdentity)}
           <div class="plugins-detail__meta">
             ${plugin.origin
-              ? detailMetaRow(t("pluginsPage.detailOrigin"), originLabel(plugin.origin))
+              ? renderPluginMetaRow(t("pluginsPage.detailOrigin"), pluginOriginLabel(plugin.origin))
               : nothing}
             ${plugin.category
-              ? detailMetaRow(t("pluginsPage.detailCategory"), pluginCategoryLabel(plugin.category))
+              ? renderPluginMetaRow(
+                  t("pluginsPage.detailCategory"),
+                  pluginCategoryLabel(plugin.category),
+                )
               : nothing}
             ${plugin.packageName
-              ? detailMetaRow(
+              ? renderPluginMetaRow(
                   t("pluginsPage.detailPackage"),
                   html`<code>${plugin.packageName}</code>`,
                 )
               : nothing}
-            ${detailMetaRow(t("pluginsPage.detailPluginId"), html`<code>${plugin.id}</code>`)}
+            ${renderPluginMetaRow(t("pluginsPage.detailPluginId"), html`<code>${plugin.id}</code>`)}
           </div>
+          ${plugin.installed
+            ? html`<section class="plugins-detail__capabilities">
+                <h3>${t("pluginsPage.capabilities")}</h3>
+                ${props.detailInspectionError
+                  ? html`<div class="plugins-consent__error" role="alert">
+                      <span>${props.detailInspectionError}</span>
+                      <button
+                        type="button"
+                        class="btn btn--sm"
+                        @click=${() => props.onShowDetails(plugin.id)}
+                      >
+                        ${t("pluginsPage.tryAgain")}
+                      </button>
+                    </div>`
+                  : props.detailInspection
+                    ? html`
+                        ${renderPluginDeclaredCapabilities(props.detailInspection.declared)}
+                        ${renderPluginGrants(
+                          props.detailInspection.grants,
+                          props.detailInspection.plugin.origin,
+                        )}
+                      `
+                    : html`<p class="plugins-consent__hint">${t("pluginConsent.loading")}</p>`}
+              </section>`
+            : nothing}
         </div>
       </section>
     </openclaw-modal-dialog>
@@ -1447,6 +1351,27 @@ export function renderPlugins(props: PluginsViewProps) {
               : renderActivePanel(props)}
       </wa-tab-panel>
       ${renderDetailOverlay(props)}
+      ${props.consent
+        ? renderPluginConsentDialog({
+            consent: props.consent,
+            inspection: props.consentInspection,
+            loading: props.consentInspectionLoading,
+            error: props.consentInspectionError,
+            iconUrl: props.consent.pluginId ? props.iconUrls[props.consent.pluginId] : undefined,
+            canMutate: props.canMutate,
+            mutationBlockedReason: props.mutationBlockedReason,
+            busy: Boolean(
+              props.busy[
+                props.consent.intent.kind === "install"
+                  ? props.consent.intent.installIdentity
+                  : props.consent.intent.rowKey
+              ],
+            ),
+            onCancel: props.onCancelConsent,
+            onConfirm: props.onConfirmConsent,
+            onRetry: props.onRetryConsentInspection,
+          })
+        : nothing}
     `,
     { wide: true },
   );

@@ -1,12 +1,5 @@
 import type { DraftCloudProfile } from "./discovery.ts";
 
-export type PendingCloudPlace = {
-  agentId: string;
-  profileId: string;
-  machineClass?: string;
-  cwd?: string;
-};
-
 export class DraftCloudMachineState {
   private readonly overrides = new Map<string, string>();
 

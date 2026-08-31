@@ -1,9 +1,9 @@
 // Provider catalog shared tests cover catalog hashing, normalization, and model visibility.
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   applyProviderNativeStreamingUsageCompat,
-  buildManifestModelDefinition,
   buildManifestModelProviderConfig,
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
@@ -93,6 +93,77 @@ describe("provider-catalog-shared live catalog cache", () => {
     ).resolves.toBe("ok");
     expect(load).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["resolve", "reject", "throw"] as const)(
+    "bypasses a warm cache without modifying it when the uncached loader will %s",
+    async (outcome) => {
+      const keyParts = ["provider", "models"];
+      await getCachedLiveCatalogValue({ keyParts, load: async () => "cached" });
+      const error = new Error("uncached failure");
+      const load = vi.fn(() => {
+        if (outcome === "throw") {
+          throw error;
+        }
+        return outcome === "reject" ? Promise.reject(error) : Promise.resolve("fresh");
+      });
+      const shouldCache = vi.fn(() => false);
+      const fresh = getCachedLiveCatalogValue({ keyParts, load, shouldCache, ttlMs: 0 });
+      if (outcome === "resolve") {
+        await expect(fresh).resolves.toBe("fresh");
+      } else {
+        await expect(fresh).rejects.toBe(error);
+      }
+      expect(shouldCache).not.toHaveBeenCalled();
+      await expect(getCachedLiveCatalogValue({ keyParts, load })).resolves.toBe("cached");
+      expect(load).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["reject", "predicate-false", "predicate-throw", "same-promise"] as const)(
+    "preserves a replacement cache entry after expired work finishes with %s",
+    async (outcome) => {
+      let now = 1_000;
+      const keyParts = ["provider", "models"];
+      const pending = createDeferred<string>();
+      const error = new Error("expired failure");
+      const first = getCachedLiveCatalogValue({
+        keyParts,
+        load: () => pending.promise,
+        ttlMs: 100,
+        now: () => now,
+        shouldCache: () => {
+          if (outcome === "predicate-throw") {
+            throw error;
+          }
+          return false;
+        },
+      });
+      now = 1_101;
+      const replacement = getCachedLiveCatalogValue({
+        keyParts,
+        load: () => (outcome === "same-promise" ? pending.promise : Promise.resolve("replacement")),
+        ttlMs: 100,
+        now: () => now,
+      });
+      if (outcome === "reject") {
+        pending.reject(error);
+      } else {
+        pending.resolve("expired");
+      }
+      if (outcome === "reject" || outcome === "predicate-throw") {
+        await expect(first).rejects.toBe(error);
+      } else {
+        await expect(first).resolves.toBe("expired");
+      }
+      const expected = outcome === "same-promise" ? "expired" : "replacement";
+      await expect(replacement).resolves.toBe(expected);
+      const load = vi.fn(async () => "unnecessary reload");
+      await expect(getCachedLiveCatalogValue({ keyParts, load, now: () => now })).resolves.toBe(
+        expected,
+      );
+      expect(load).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not retain resolved live catalog values rejected by the cache predicate", async () => {
     const load = vi
@@ -377,20 +448,6 @@ describe("provider-catalog-shared manifest provider configs", () => {
         "example",
       ),
     ).toBe("example/example-model");
-
-    expect(
-      buildManifestModelDefinition({
-        providerId: "example",
-        catalog,
-        decorate: (model) => ({
-          ...model,
-          compat: { ...model.compat, supportsUsageInStreaming: false },
-        }),
-      })(catalog.models[0]),
-    ).toEqual({
-      ...buildManifestModelProviderConfig({ providerId: "example", catalog }).models[0],
-      compat: { supportsUsageInStreaming: false },
-    });
   });
 
   it("normalizes retired nested Gemini ids before emitting manifest provider config", () => {

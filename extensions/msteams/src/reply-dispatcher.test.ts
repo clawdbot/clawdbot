@@ -8,7 +8,9 @@ const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
-const sendMSTeamsMessagesMock = vi.hoisted(() => vi.fn(async () => []));
+const sendMSTeamsMessagesMock = vi.hoisted(() =>
+  vi.fn<(typeof import("./messenger.js"))["sendMSTeamsMessages"]>(async () => []),
+);
 
 vi.mock("../runtime-api.js", () => ({
   createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
@@ -29,12 +31,6 @@ vi.mock("./messenger.js", () => ({
   buildConversationReference: vi.fn((ref) => ref),
   renderReplyPayloadsToMessages: renderReplyPayloadsToMessagesMock,
   sendMSTeamsMessages: sendMSTeamsMessagesMock,
-}));
-
-vi.mock("./errors.js", () => ({
-  classifyMSTeamsSendError: vi.fn(() => ({})),
-  formatMSTeamsSendErrorHint: vi.fn(() => undefined),
-  formatUnknownError: vi.fn((err) => String(err)),
 }));
 
 vi.mock("./revoked-context.js", () => ({
@@ -830,9 +826,17 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [message, context] = firstSystemEventCall();
     expect(message).toContain("Microsoft Teams delivery failed");
-    expect(message).toContain("1 of 2 message blocks were not delivered");
-    expect(message).toContain("The user may not have received the full reply");
-    expect(message).toContain("Error: Error: gateway timeout.");
+    expect(message).toContain("the delivery outcome is unknown for 1 of 2 message blocks");
+    expect(message).not.toContain("not delivered");
+    expect(message).not.toContain("The user may not have received");
+    expect(message).toContain("Error: gateway timeout.");
+    expect(message).toContain("Delivery may already have succeeded");
+    expect(message).not.toContain("Retrying later may succeed");
+    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(2);
+    expect(sendMSTeamsMessagesMock.mock.calls.map(([send]) => send.messages)).toEqual([
+      [{ text: "one" }],
+      [{ text: "two" }],
+    ]);
     expect(context).toEqual({
       sessionKey: "agent:main:main",
       contextKey: "msteams:delivery-failure:conv",
