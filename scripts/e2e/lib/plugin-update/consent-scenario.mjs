@@ -246,11 +246,17 @@ export async function runConsentScenario(entry, coreTarball) {
       await serve(2);
       const denied = await cli(
         "update-denied",
-        ["update", "--tag", coreTarball, "--yes", "--no-restart", "--json"],
+        ["update", "--tag", coreTarball, "--yes", "--json"],
         { allowFailure: true },
       );
       const deniedResult = JSON.parse(denied.output);
       assertConsentBlocked(denied, deniedResult, "post-update-plugins");
+      assert(
+        !denied.children.some(
+          (child) => child.argv.includes("gateway") && child.argv.includes("restart"),
+        ),
+        "denied update attempted a Gateway restart",
+      );
       assert(
         denied.children.some((child) => child.postCore),
         "denied update did not hand off",
