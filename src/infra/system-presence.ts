@@ -46,7 +46,10 @@ type SystemPresenceUpdate = {
   changedKeys: (keyof SystemPresence)[];
 };
 
-const entries = new Map<string, SystemPresence>();
+// Keep the gateway row outside the caller-controlled string keyspace so a remote
+// identifier cannot replace it or inherit its capacity exemption.
+const SELF_KEY = Symbol("system-presence-self");
+const entries = new Map<string | symbol, SystemPresence>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
 const SELF_INSTANCE_ID = randomUUID();
@@ -114,8 +117,7 @@ function initSelfPresence() {
     text,
     ts: Date.now(),
   };
-  const key = normalizeLowercaseStringOrEmpty(host);
-  entries.set(key, selfEntry);
+  entries.set(SELF_KEY, selfEntry);
 }
 
 function ensureSelfPresence() {
@@ -128,11 +130,9 @@ function ensureSelfPresence() {
 }
 
 function touchSelfPresence() {
-  const host = os.hostname();
-  const key = normalizeLowercaseStringOrEmpty(host);
-  const existing = entries.get(key);
+  const existing = entries.get(SELF_KEY);
   if (existing) {
-    entries.set(key, { ...existing, ts: Date.now() });
+    entries.set(SELF_KEY, { ...existing, ts: Date.now() });
   } else {
     initSelfPresence();
   }
@@ -302,6 +302,7 @@ export function touchPresence(key: string): boolean {
 
 export function listSystemPresence(): SystemPresence[] {
   ensureSelfPresence();
+  touchSelfPresence();
   // prune expired
   const now = Date.now();
   for (const [k, v] of entries) {
@@ -311,12 +312,13 @@ export function listSystemPresence(): SystemPresence[] {
   }
   // enforce max size (LRU by ts)
   if (entries.size > MAX_ENTRIES) {
-    const sorted = [...entries.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
+    const sorted = [...entries.entries()]
+      .filter(([key]) => key !== SELF_KEY)
+      .toSorted((a, b) => a[1].ts - b[1].ts);
     const toDrop = entries.size - MAX_ENTRIES;
     for (const [key] of sorted.slice(0, toDrop)) {
       entries.delete(key);
     }
   }
-  touchSelfPresence();
   return [...entries.values()].toSorted((a, b) => b.ts - a.ts);
 }

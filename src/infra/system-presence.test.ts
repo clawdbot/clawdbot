@@ -188,4 +188,61 @@ describe("system-presence", () => {
     expect(entries.map((entry) => entry.deviceId)).not.toContain(deviceId);
     expect(entries.map((entry) => entry.reason)).toContain("self");
   });
+
+  it("keeps the self entry within the bounded presence map", () => {
+    vi.useFakeTimers();
+    const initialTime = Date.now();
+    vi.setSystemTime(initialTime);
+    listSystemPresence();
+
+    const deviceIdPrefix = `bounded-${randomUUID()}-`;
+    for (let index = 0; index < 205; index += 1) {
+      upsertPresence(`${deviceIdPrefix}${index}`, {
+        deviceId: `${deviceIdPrefix}${index}`,
+        host: `bounded-host-${index}`,
+        mode: "ui",
+        reason: "connect",
+      });
+    }
+
+    const entries = listSystemPresence();
+    expect(entries).toHaveLength(200);
+    expect(entries.map((entry) => entry.reason)).toContain("self");
+    expect(entries.map((entry) => entry.deviceId)).toContain(`${deviceIdPrefix}204`);
+  });
+
+  it("does not let caller-controlled identity fields replace the self entry", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now());
+
+    const initialSelf = listSystemPresence().find((entry) => entry.reason === "self");
+    if (!initialSelf?.host || !initialSelf.instanceId) {
+      throw new Error("self presence was not initialized");
+    }
+    const { host: selfHost, instanceId: selfInstanceId } = initialSelf;
+
+    upsertPresence(selfHost, {
+      deviceId: selfHost,
+      instanceId: selfHost,
+      host: selfHost,
+      mode: "gateway",
+      reason: "self",
+      text: "caller-controlled self",
+    });
+    const deviceIdPrefix = `collision-pressure-${randomUUID()}-`;
+    for (let index = 0; index < 205; index += 1) {
+      const deviceId = `${deviceIdPrefix}${index}`;
+      upsertPresence(deviceId, {
+        deviceId,
+        host: `collision-pressure-${index}`,
+        mode: "ui",
+        reason: "connect",
+      });
+    }
+
+    const entries = listSystemPresence();
+    expect(entries).toHaveLength(200);
+    expect(entries.map((entry) => entry.instanceId)).toContain(selfInstanceId);
+    expect(entries.map((entry) => entry.text)).not.toContain("caller-controlled self");
+  });
 });
