@@ -271,6 +271,7 @@ function createManager(options?: {
   fillChannelDependencies?: boolean;
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
   tryRecoverAutostartSuppression?: () => boolean;
+  isClosing?: () => boolean;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
@@ -302,6 +303,7 @@ function createManager(options?: {
     ...(options?.tryRecoverAutostartSuppression
       ? { tryRecoverAutostartSuppression: options.tryRecoverAutostartSuppression }
       : {}),
+    ...(options?.isClosing ? { isClosing: options.isClosing } : {}),
     ...(options?.getNativeApprovalRuntime
       ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
       : {}),
@@ -2553,6 +2555,32 @@ describe("server-channels auto restart", () => {
     ]);
     expect(manager.isHealthMonitorEnabled("discord", "work")).toBe(false);
     expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+  });
+
+  it("does not start recovered accounts after gateway close begins during handoff", async () => {
+    const accountStartReady = createDeferred();
+    const startAccount = vi.fn(async () => {});
+    let closing = false;
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({
+      deferStartupAccountStartsUntil: accountStartReady.promise,
+      isClosing: () => closing,
+      tryRecoverAutostartSuppression: () => true,
+    });
+    manager.setAutostartSuppression({
+      reason: "crash-loop-breaker",
+      message: "safe mode",
+    });
+
+    const recovery = manager.recoverAutostartSuppression();
+    await flushMicrotasks();
+    closing = true;
+    accountStartReady.resolve();
+    await recovery;
+    await flushMicrotasks();
+
+    expect(manager.getAutostartSuppression()).toBeNull();
+    expect(startAccount).not.toHaveBeenCalled();
   });
 
   it("keeps suppression when persisted recovery is not proven", async () => {
