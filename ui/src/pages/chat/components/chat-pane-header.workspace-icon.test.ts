@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import {
   mockWorkspaceIconFetch,
   mountChatPaneHeader,
@@ -106,6 +107,43 @@ describe("chat pane workspace chip icon", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
       "blob:reconnected-workspace-icon",
+    );
+  });
+
+  it("recovers when a pending 503 settles between disconnect and immediate reconnect", async () => {
+    vi.useFakeTimers();
+    const pending = createDeferred<Response>();
+    const routeUrl = "/__openclaw__/workspace-icon/agent%3Amain%3Aimmediate-reconnect";
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({
+        ok: true,
+        blob: async () => new Blob(["icon"], { type: "image/png" }),
+      } as Response);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:immediate-reconnect");
+    const { container, element } = await mountChip({
+      routeUrl,
+      authTokens: ["token"],
+      authReady: true,
+    });
+    container.remove();
+    pending.resolve({
+      ok: false,
+      status: 503,
+      headers: new Headers({ "retry-after": "1" }),
+    } as Response);
+    await pending.promise;
+
+    // Reattach in this task, before the deferred DOM-handoff release can delete the entry.
+    document.body.append(container);
+    await element?.updateComplete;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await element?.updateComplete;
+
+    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([routeUrl, routeUrl]);
+    expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
+      "blob:immediate-reconnect",
     );
   });
 

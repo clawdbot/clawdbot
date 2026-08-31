@@ -127,8 +127,8 @@ async function fetchAvatarRoute(
     if (notFound && cacheNotFound) {
       return;
     }
-    if (retryDelayMs !== undefined) {
-      if (entry.consumers.size > 0 && entry.retryAttempts < AUTHENTICATED_AVATAR_MAX_RETRIES) {
+    if (retryDelayMs !== undefined && entry.consumers.size > 0) {
+      if (entry.retryAttempts < AUTHENTICATED_AVATAR_MAX_RETRIES) {
         entry.retryAttempts += 1;
         // The budget belongs to this persistent shared entry. Keeping an
         // exhausted miss prevents Lit rerenders from minting a new poll loop.
@@ -140,7 +140,7 @@ async function fetchAvatarRoute(
           entry.controller = new AbortController();
           void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
         }, retryDelayMs);
-      } else if (entry.consumers.size > 0) {
+      } else {
         // Keep the exhausted entry through a cooldown so render churn cannot
         // remint the budget. A later render may start a fresh bounded window.
         entry.retryEligibleAt = Date.now() + AUTHENTICATED_AVATAR_RETRY_COOLDOWN_MS;
