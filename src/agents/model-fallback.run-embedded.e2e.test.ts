@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { wrapRunWithTestAdmission } from "./admitted-run-context.test-support.js";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -22,10 +22,6 @@ import {
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
-import {
-  captureRoutingDecisionWork,
-  createModelRoutingTestAdmission,
-} from "./test-helpers/model-routing-decision-e2e-fixtures.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const observedModelRoutingProvenance: Array<{
@@ -89,14 +85,18 @@ let runEmbeddedAgent: TestRunEmbeddedAgent;
 let runEmbeddedAgentWithPreparedAdmission: ProductionRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 let runEmbeddedAgentEntry: typeof import("./embedded-agent-runner/run-entry.js").runEmbeddedAgentEntry;
+let captureRoutingDecisionWork: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").captureRoutingDecisionWork;
+let createModelRoutingTestAdmission: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").createModelRoutingTestAdmission;
 
 beforeAll(async () => {
   installRunEmbeddedMocks();
   runEmbeddedAgentWithPreparedAdmission = (await import("./embedded-agent-runner/run.js"))
     .runEmbeddedAgent;
-  runEmbeddedAgent = wrapRunWithTestAdmission(runEmbeddedAgentWithPreparedAdmission);
+  runEmbeddedAgent = wrapRunWithTestPreparedAdmission(runEmbeddedAgentWithPreparedAdmission);
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
   ({ runEmbeddedAgentEntry } = await import("./embedded-agent-runner/run-entry.js"));
+  ({ captureRoutingDecisionWork, createModelRoutingTestAdmission } =
+    await import("./test-helpers/model-routing-decision-e2e-fixtures.js"));
 });
 
 beforeEach(() => {
