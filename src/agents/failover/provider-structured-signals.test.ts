@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { buildApiErrorObservationFields } from "../embedded-agent-error-observation.js";
 import { classifyAssistantFailoverReason } from "../embedded-agent-helpers/assistant-message-failures.js";
-import { formatUserFacingAssistantErrorText } from "../embedded-agent-helpers/error-text.js";
+import {
+  formatAssistantErrorText,
+  formatUserFacingAssistantErrorText,
+} from "../embedded-agent-helpers/error-text.js";
 import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
 import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -29,12 +32,12 @@ describe("provider failover hook structured signals", () => {
     },
     {
       errorMessage: "opaque provider refusal",
-      copy: "LLM request failed.",
+      copy: "⚠️ openai/test-model request failed.",
       runtimeKind: "unclassified",
     },
     {
       errorMessage: "model input limit reached",
-      copy: "LLM request failed.",
+      copy: "⚠️ openai/test-model request failed.",
       runtimeKind: "unclassified",
     },
     {
@@ -175,6 +178,77 @@ describe("provider failover hook structured signals", () => {
       expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    {
+      errorCode: "DEACTIVATED_WORKSPACE",
+      detail: "authentication was rejected",
+      hint: "Re-authenticate the provider and try again.",
+    },
+    {
+      errorType: "upstream_error",
+      detail: "provider internal error",
+      hint: "This is usually temporary — try again shortly.",
+    },
+    {
+      errorBody: '{"error":{"type":"upstream_error"}}',
+      detail: "provider internal error",
+      hint: "This is usually temporary — try again shortly.",
+    },
+    {
+      errorMessage: undefined,
+      errorType: "upstream_error",
+      detail: "provider internal error",
+      hint: "This is usually temporary — try again shortly.",
+    },
+  ])(
+    "carries structured $errorCode $errorType $errorBody into safe composed copy",
+    ({ detail, hint, ...fields }) => {
+      const message = makeAssistantMessageFixture({
+        errorMessage:
+          "RAW_BODY_CANARY Authorization: Bearer secret-canary https://private.invalid/body",
+        ...fields,
+      });
+      const text = formatUserFacingAssistantErrorText(message);
+      const expected = `⚠️ openai/test-model request failed (${detail}). ${hint}`;
+      expect(text).toBe(expected);
+      if ("errorMessage" in fields && fields.errorMessage === undefined) {
+        expect(formatAssistantErrorText(message)).toBe(expected);
+      }
+      expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
+      expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it("carries a prepared owner's structured decision into safe composed copy", () => {
+    const classifyFailoverReason = vi.fn(
+      ({ code, errorType }: { code?: string; errorType?: string }) =>
+        code === "OWNER_CODE" && errorType === "OWNER_TYPE" ? ("server_error" as const) : undefined,
+    );
+    const message = makeAssistantMessageFixture({
+      provider: "custom-route",
+      errorMessage:
+        "403 RAW_BODY_CANARY Authorization: Bearer secret-canary https://private.invalid/body",
+      errorCode: "OWNER_CODE",
+      errorType: "OWNER_TYPE",
+    });
+    const text = formatUserFacingAssistantErrorText(message, {
+      providerOwner: { id: "prepared-owner", classifyFailoverReason },
+    });
+    expect(text).toBe(
+      "⚠️ custom-route/test-model request failed (provider internal error, HTTP 403). This is usually temporary — try again shortly.",
+    );
+    expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
+    expect(classifyFailoverReason).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "prepared-owner",
+        status: 403,
+        code: "OWNER_CODE",
+        errorType: "OWNER_TYPE",
+      }),
+    );
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+  });
 
   it("does not resolve provider runtime for a generic non-ambiguous error", () => {
     expect(

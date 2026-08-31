@@ -11,7 +11,6 @@ import {
 } from "../../shared/assistant-error-format.js";
 import { renderAssistantRequestFailureCopy } from "../failover/assistant-request-failure-copy.js";
 import {
-  classifyFailoverReason,
   classifyFailoverSignal,
   isProviderCompletedErrorFinishReasonMessage,
   isReasoningConstraintErrorMessage,
@@ -56,9 +55,36 @@ type AssistantErrorTextOptions = {
   authMode?: string;
 };
 type ClassifiedAssistantErrorFacts = {
+  provider?: string;
+  model?: string;
+  providerRuntimeFailureKind: ReturnType<typeof classifyProviderRuntimeFailureKind>;
   reason: FailoverReason | null;
   status?: number;
 };
+function classifyAssistantErrorFacts(
+  msg: AssistantMessage,
+  opts?: AssistantErrorTextOptions,
+): ClassifiedAssistantErrorFacts {
+  const signal = buildAssistantFailoverSignal(msg, {
+    provider: opts?.providerOwner?.id ?? opts?.provider,
+  });
+  // Both projections share the complete signal and explicit owner. Raw schema
+  // evidence stays distinct from the full classification used for safe copy.
+  const providerPlugin = opts?.providerOwner ?? null;
+  const classification = classifyFailoverSignal(signal, { providerPlugin });
+  return {
+    provider: opts?.provider ?? msg.provider ?? opts?.providerOwner?.id,
+    model: opts?.model ?? msg.model,
+    reason:
+      classification?.kind === "reason"
+        ? classification.reason
+        : classification
+          ? "context_overflow"
+          : null,
+    status: signal.status ?? extractErrorHttpStatus(signal.message ?? "")?.code,
+    providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
+  };
+}
 function isMissingToolCallInputError(raw: string): boolean {
   return (
     Boolean(raw) && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))
@@ -75,13 +101,12 @@ export function formatAssistantErrorText(
     return undefined;
   }
   const formatCopy = renderFormatErrorCopy(raw);
-  const signal = buildAssistantFailoverSignal(msg, {
-    provider: opts?.providerOwner?.id ?? opts?.provider,
-  });
-  // Rendering reuses its explicit owner; ownerless presentation stays generic.
-  const providerPlugin = opts?.providerOwner ?? null;
-  const classification = classifyFailoverSignal(signal, { providerPlugin });
-  const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind(signal, { providerPlugin });
+  const classifiedFacts = facts ?? classifyAssistantErrorFacts(msg, opts);
+  const {
+    reason: failoverReason,
+    status: formatStatus,
+    providerRuntimeFailureKind,
+  } = classifiedFacts;
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
@@ -166,7 +191,6 @@ export function formatAssistantErrorText(
   if (providerRuntimeFailureKind === "model_not_found") {
     return MODEL_NOT_FOUND_USER_TEXT;
   }
-  const failoverReason = classification?.kind === "reason" ? classification.reason : undefined;
   if (failoverReason === "billing") {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
@@ -178,14 +202,13 @@ export function formatAssistantErrorText(
     return transientCopy;
   }
 
-  const formatStatus = extractErrorHttpStatus(raw)?.code;
   if (
     (formatStatus === 400 || formatStatus === 422) &&
     formatCopy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT
   ) {
     return formatCopy;
   }
-  if (classification?.kind === "context_overflow") {
+  if (failoverReason === "context_overflow") {
     return (
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
@@ -263,7 +286,9 @@ export function formatAssistantErrorText(
   }
 
   if (!raw) {
-    return "LLM request failed with an unknown error.";
+    return failoverReason
+      ? renderAssistantRequestFailureCopy(classifiedFacts)
+      : "LLM request failed with an unknown error.";
   }
 
   if (isRawApiErrorPayload(raw) || isLikelyHttpErrorText(raw)) {
@@ -309,18 +334,7 @@ export function formatUserFacingAssistantErrorText(
   opts?: AssistantErrorTextOptions,
 ): string {
   const rawError = msg.errorMessage?.trim();
-  const providerOwner = opts?.providerOwner?.id ?? opts?.provider ?? msg.provider;
-  const provider = opts?.provider ?? msg.provider ?? providerOwner;
-  const facts: ClassifiedAssistantErrorFacts = {
-    reason: rawError
-      ? classifyFailoverReason(rawError, {
-          provider: providerOwner,
-          // Rendering can reuse a prepared owner, but must not discover runtime plugins.
-          providerPlugin: opts?.providerOwner ?? null,
-        })
-      : null,
-    status: extractErrorHttpStatus(rawError ?? "")?.code,
-  };
+  const facts = classifyAssistantErrorFacts(msg, opts);
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
   const structuredSchemaDetail = [
@@ -341,12 +355,5 @@ export function formatUserFacingAssistantErrorText(
   if (safeFriendlyError) {
     return safeFriendlyError.trim();
   }
-  return (
-    renderAssistantRequestFailureCopy({
-      provider,
-      model: opts?.model ?? msg.model,
-      reason: facts.reason,
-      status: facts.status,
-    }) ?? GENERIC_ASSISTANT_ERROR_TEXT
-  );
+  return renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT;
 }

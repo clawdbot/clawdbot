@@ -174,23 +174,31 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
-  it("replaces raw provider detail with classified provider facts", () => {
-    const raw = "HTTP 500: opaque-provider-canary";
-    const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
-      provider: "openai",
-      providerOwner: {
-        id: "openai",
-        classifyFailoverReason: () => "server_error",
-      },
-      model: "gpt-5.6-luna",
-    });
+  it.each([
+    { prepared: false, reason: "request timed out" },
+    { prepared: true, reason: "provider internal error" },
+  ])(
+    "replaces raw provider detail with classified facts (prepared: $prepared)",
+    ({ prepared, reason }) => {
+      const raw = "HTTP 500: opaque-provider-canary";
+      const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
+        provider: "openai",
+        providerOwner: prepared
+          ? {
+              id: "openai",
+              classifyFailoverReason: () => "server_error",
+            }
+          : undefined,
+        model: "gpt-5.6-luna",
+      });
 
-    expect(userFacing).toBe(
-      "⚠️ openai/gpt-5.6-luna request failed (request timed out, HTTP 500). " +
-        "This is usually temporary — try again shortly.",
-    );
-    expect(userFacing).not.toContain("opaque-provider-canary");
-  });
+      expect(userFacing).toBe(
+        `⚠️ openai/gpt-5.6-luna request failed (${reason}, HTTP 500). ` +
+          "This is usually temporary — try again shortly.",
+      );
+      expect(userFacing).not.toContain("opaque-provider-canary");
+    },
+  );
 
   it("keeps the generic last resort when no classified facts are available", () => {
     const raw = "opaque-private-provider-detail";
