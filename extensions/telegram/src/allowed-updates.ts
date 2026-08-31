@@ -7,7 +7,11 @@ const DEFAULT_TELEGRAM_UPDATE_TYPES: ReadonlyArray<TelegramUpdateType> =
   API_CONSTANTS.DEFAULT_UPDATE_TYPES;
 
 export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateType> {
-  const updates = [...DEFAULT_TELEGRAM_UPDATE_TYPES] as TelegramUpdateType[];
+  // OpenClaw does not request stoppable drafts. Subscribing without a handler
+  // would acknowledge the user's stop action without a visible outcome.
+  const updates = DEFAULT_TELEGRAM_UPDATE_TYPES.filter(
+    (type) => type !== "stopped_message_generation",
+  );
   if (!updates.includes("message_reaction")) {
     updates.push("message_reaction");
   }

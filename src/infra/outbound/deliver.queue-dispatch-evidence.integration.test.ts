@@ -9,8 +9,10 @@ import {
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
-import { loadPendingDeliveries } from "./delivery-queue-storage.js";
-import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
+import {
+  loadPendingDeliveries,
+  installDeliveryQueueTmpDirHooks,
+} from "./delivery-queue.test-helpers.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 

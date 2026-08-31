@@ -44,7 +44,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Build Chunking
 
-- `ui/config/control-ui-boot-modules.json` is a generated manifest of the modules the default boot flow loads lazily; the `control-ui-boot` group in `ui/config/control-ui-chunking.ts` merges them into a few chunks so boot avoids ~140 HTTP/1.1 requests. Regenerate with `pnpm ui:boot-manifest:gen` after `pnpm ui:build` when boot-path surfaces change materially; stale entries degrade to extra chunks, never breakage. Do not hand-edit the manifest.
+- `ui/config/control-ui-boot-modules.json` is a generated manifest of the modules the default boot flow loads lazily; the `control-ui-boot` group in `ui/config/control-ui-chunking.ts` merges them into a few chunks so boot avoids ~140 HTTP/1.1 requests. Regenerate with `pnpm ui:boot-manifest:gen` when boot-path surfaces change materially; it builds into a temporary directory with only the old boot group disabled, preventing stale entries from feeding back into the capture. Rebuild with `pnpm ui:build` afterward to verify normal grouped output. Do not hand-edit the manifest.
 
 ## Live Verification
 

@@ -15,11 +15,11 @@ function readForwardedDockerEnvVars(): string[] {
 }
 
 describe("scripts/test-live-cli-backend-docker.sh", () => {
-  it("runs the staged live test without invoking pnpm inside Docker", () => {
+  it("runs the staged live test through the staged entrypoint resolver", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain(
-      "node --import tsx scripts/test-live.mts -- src/gateway/gateway-cli-backend.live.test.ts",
+      "openclaw_live_run_staged_script scripts/test-live -- src/gateway/gateway-cli-backend.live.test.ts",
     );
     expect(script).not.toContain("pnpm test:live src/gateway/gateway-cli-backend.live.test.ts");
   });

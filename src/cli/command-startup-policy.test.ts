@@ -50,6 +50,7 @@ describe("command-startup-policy", () => {
       ["hooks", "check"],
       ["memory", "search"],
       ["memory", "status"],
+      ["gateway", "stop"],
       ["gateway", "diagnostics", "export"],
       ["gateway", "stability"],
       ["gateway", "usage-cost"],
@@ -393,6 +394,9 @@ describe("command-startup-policy", () => {
     expect(policy.hideBanner).toBe(true);
     expect(policy.loadPlugins).toBe(false);
     expect(policy.suppressDoctorStdout).toBe(true);
+    expect(policy.validateConfigOnly).toBe(true);
+    expect(policy.skipConfigGuard).toBe(false);
+    expect(resolvePolicy({ commandPath: ["node", "run"] }).validateConfigOnly).toBeUndefined();
   });
 
   it("isolates cloud worker startup", () => {

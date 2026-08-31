@@ -1,5 +1,6 @@
 import type { Model } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isAnthropicOAuthApiKey } from "../providers/anthropic-auth-headers.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   splitSystemPromptCacheBoundary,
@@ -70,12 +71,14 @@ export function resolveAnthropicServerCompactionPlan(
     contextWindow?: unknown;
   },
   extraParams?: Record<string, unknown>,
+  apiKey?: string,
 ): { enabled: boolean; threshold?: number } {
   const provider = normalizeOptionalLowercaseString(model.provider);
   const api = normalizeOptionalLowercaseString(model.api);
   const endpointClass = resolveProviderEndpoint(model).endpointClass;
   const enabled =
     extraParams?.anthropicServerCompaction === true &&
+    !isAnthropicOAuthApiKey(apiKey) &&
     provider === "anthropic" &&
     api === "anthropic-messages" &&
     (endpointClass === "default" || endpointClass === "anthropic-public");

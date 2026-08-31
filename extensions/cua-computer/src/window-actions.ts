@@ -274,7 +274,7 @@ export async function handleWindowAct(
     case "get_accessibility_tree": {
       if (input.windowRef || input.query || input.depth !== undefined || input.maxElements) {
         throw new Error(
-          "COMPUTER_UNSUPPORTED_ACTION: CUA Driver 0.20.0 exposes get_accessibility_tree only as unfiltered desktop discovery; use get_window_state for a window tree",
+          "COMPUTER_UNSUPPORTED_ACTION: CUA Driver 0.21.0 exposes get_accessibility_tree only as unfiltered desktop discovery; use get_window_state for a window tree",
         );
       }
       const result = await callWindowTool(driver, state, "get_accessibility_tree", {}, signal);

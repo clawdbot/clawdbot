@@ -97,8 +97,6 @@ export async function requestFeishuApi<T>(
   options: {
     includeConfigParams?: boolean;
     includeNestedErrorLogId?: boolean;
-    /** Base retry delay in ms; doubles on the second retry. @internal */
-    retryDelayMs?: number;
   } = {},
 ): Promise<T> {
   try {
@@ -123,7 +121,7 @@ export async function requestFeishuApi<T>(
         // With a 2-retry budget the core exponential schedule (1x, 2x base)
         // matches the previous linear attempt*base backoff exactly; revisit
         // the delay curve if FEISHU_SEND_MAX_RETRIES grows.
-        minDelayMs: options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS,
+        minDelayMs: FEISHU_SEND_RETRY_BASE_MS,
         shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
       },
     );

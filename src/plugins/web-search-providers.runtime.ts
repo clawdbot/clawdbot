@@ -8,10 +8,7 @@ import {
   mapRegistryProviders,
   resolveManifestDeclaredWebProviderCandidatePluginIds,
 } from "./web-provider-resolution-shared.js";
-import {
-  resolvePluginWebProviders,
-  resolveRuntimeWebProviders,
-} from "./web-provider-runtime-shared.js";
+import { resolvePluginWebProviders } from "./web-provider-runtime-shared.js";
 import {
   resolveBundledWebSearchResolutionConfig,
   sortWebSearchProviders,
@@ -75,7 +72,7 @@ export function resolveRuntimeWebSearchProviders(params: {
   origin?: PluginManifestRecord["origin"];
   manifestRecords?: readonly PluginManifestRecord[];
 }): PluginWebSearchProviderEntry[] {
-  return resolveRuntimeWebProviders(params, {
+  return resolvePluginWebProviders(params, {
     resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,
     resolveCandidatePluginIds: resolveWebSearchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebSearchProviders,

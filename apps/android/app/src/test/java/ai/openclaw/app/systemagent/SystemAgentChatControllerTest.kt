@@ -196,7 +196,8 @@ class SystemAgentChatControllerTest {
           captureLease = { gatewayId ->
             val capturedRoute = gatewayId.orEmpty()
             val lease =
-              GatewaySession.RequestLease(capturedRoute, { currentRoute == capturedRoute }, null) { _, _, _ ->
+              GatewaySession.RequestLease(capturedRoute, { currentRoute == capturedRoute }, null) { _, _, _, withEnqueue ->
+                withEnqueue {}
                 requestCount += 1
                 reply("Welcome")
               }
@@ -488,7 +489,8 @@ class SystemAgentChatControllerTest {
           if (!access.connected) {
             null
           } else {
-            GatewaySession.RequestLease(gatewayId.orEmpty(), { routeCurrent }, commitIfCurrent) { method, paramsJson, timeoutMs ->
+            GatewaySession.RequestLease(gatewayId.orEmpty(), { routeCurrent }, commitIfCurrent) { method, paramsJson, timeoutMs, withEnqueue ->
+              withEnqueue {}
               val request = RecordedRequest(method, paramsJson.orEmpty(), timeoutMs)
               requests += request
               handler(request)

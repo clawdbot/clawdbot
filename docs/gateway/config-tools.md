@@ -62,6 +62,8 @@ Configured MCP servers are exposed as plugin-owned tools under the `bundle-mcp` 
 
 Server globs use the provider-safe MCP server prefix, not necessarily the raw `mcp.servers` key. Non-`[A-Za-z0-9_-]` characters become `-`, names that do not start with a letter get an `mcp-` prefix, and long or duplicate prefixes may be truncated or suffixed; for example, `mcp.servers["Outlook Graph"]` uses a glob like `outlook-graph__*`.
 
+Per-run `toolsAllow` caps also accept globs such as `outlook*` or `out*graph*` for configured MCP servers. These globs can trigger catalog discovery across all enabled static MCP servers, just like `outlook__*`; they do not limit which servers connect. Discovery is conservative and can run even when no tool ultimately matches. Final tool allow/deny and sandbox policies still apply, disabled servers remain excluded unless explicitly enabled by a session override, and requester-scoped servers still require their verified requester context.
+
 ```json5
 {
   agents: { defaults: { sandbox: { mode: "all" } } },
@@ -90,17 +92,16 @@ catalog bridge, and MCP tools are available through the generated `MCP`
 namespace. The model normally sees `exec` and `wait`; tools such as `computer`
 whose structured results cannot cross the JSON-only bridge stay direct.
 
-`enabled` defaults to `"auto"`, which engages code mode only for models whose
-catalog entry flags `compat.codeMode: "preferred"`. See
+`enabled` defaults to `false`, including when the object sets other Code Mode
+options. To engage code mode only for models whose catalog entry flags
+`compat.codeMode: "preferred"`, enable `"auto"` explicitly. See
 [Code Mode - automatic per-model activation](/tools/code-mode#automatic-per-model-activation).
-
-To opt out for every run:
 
 ```json5
 {
   tools: {
     codeMode: {
-      enabled: false,
+      enabled: "auto",
     },
   },
 }
@@ -110,7 +111,7 @@ The shorthand is also accepted:
 
 ```json5
 {
-  tools: { codeMode: false },
+  tools: { codeMode: "auto" },
 }
 ```
 
@@ -215,7 +216,7 @@ Controls elevated exec access outside the sandbox:
 
 GitHub CLI identity is native by default. When `tools.github` is omitted, local agent tools, the Codex harness, and Agent Settings follow normal `gh` resolution: `GH_TOKEN` or `GITHUB_TOKEN` from the Gateway process takes precedence, followed by the runtime user's `gh` keyring/config. The Git author comes from the selected agent's workspace.
 
-Use **Agents → Tools → GitHub Identity → Connect GitHub** for the recommended setup. OpenClaw displays a one-time user code and a fixed link to `https://github.com/login/device`; you open GitHub explicitly and approve `repo`, `workflow`, `read:org`, and `gist`. The latter two are part of GitHub CLI's minimum classic-token contract. The Gateway owns the device code, token exchange, account verification, private managed `gh` profile, and rotating refresh token. None of those credentials enter browser responses, config, logs, command arguments, transcripts, or model environments.
+Use **Agents → Tools → GitHub Identity → Connect GitHub** for the recommended setup. OpenClaw displays a one-time user code with a **Copy code** button beside it; clicking the code selects it in full for manual copying. Open the fixed `https://github.com/login/device` link, paste the code, and approve `repo`, `workflow`, `read:org`, and `gist`. The latter two are part of GitHub CLI's minimum classic-token contract. The Gateway owns the device code, token exchange, account verification, private managed `gh` profile, and rotating refresh token. None of those credentials enter browser responses, config, logs, command arguments, transcripts, or model environments.
 
 OAuth access tokens expire after about eight hours. The Gateway refreshes them before expiry, verifies the durable GitHub account ID, and atomically replaces the credential inside the same private profile so already-running local tools continue using that identity. An expired or rejected refresh token is shown as **Reconnect required**. Refresh never blocks Gateway startup.
 
@@ -285,6 +286,8 @@ Control UI repository previews and project discovery use the separate optional `
 
 Values shown are defaults except `applyPatch.allowModels` (empty/unset by default, meaning any compatible model may use `apply_patch`). `approvalRunningNoticeMs` emits a running notice when approval-backed exec runs long; `0` disables it.
 
+`tools.exec.grantExpiryDays` (unset by default) sets the default lifetime, in days (1–3650), for standing grants minted by Always allow on automation approvals. Unset keeps grants valid until revoked or the owning automation changes. Terms freeze at mint, so changing the value affects only future grants; see [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations).
+
 ### `tools.loopDetection`
 
 Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
@@ -307,7 +310,7 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
     web: {
       search: {
         enabled: true,
-        apiKey: "brave_api_key", // or BRAVE_API_KEY env (Brave provider)
+        provider: "brave", // optional; omit for auto-detect
         maxResults: 5,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
@@ -326,10 +329,19 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
       },
     },
   },
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: { apiKey: "brave_api_key" }, // or BRAVE_API_KEY env
+        },
+      },
+    },
+  },
 }
 ```
 
-Values shown are defaults except `provider` and `userAgent`. `maxResponseBytes` clamps to 32000–10000000; `maxChars` clamps to `maxCharsCap` (raise `maxCharsCap` to allow larger responses).
+Web-search provider credentials belong under `plugins.entries.<plugin>.config.webSearch`, as shown for Brave; see [Web search](/tools/web#storing-api-keys). The `tools.web` values shown are defaults except `provider` and `userAgent`. `maxResponseBytes` clamps to 32000–10000000; `maxChars` clamps to `maxCharsCap` (raise `maxCharsCap` to allow larger responses).
 
 ### `tools.media`
 
@@ -367,7 +379,7 @@ Configures inbound media understanding (image/audio/video):
 
     - `provider`: API provider id (`openai`, `anthropic`, `google`/`gemini`, `groq`, etc.)
     - `model`: model id override
-    - `profile` / `preferredProfile`: `auth-profiles.json` profile selection
+    - `profile` / `preferredProfile`: stored auth-profile selection
 
     **CLI entry** (`type: "cli"`):
 
@@ -381,7 +393,7 @@ Configures inbound media understanding (image/audio/video):
     - Matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `view_image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
     - Failures fall back to the next entry.
 
-    Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
+    Provider auth follows standard order: SQLite auth profiles → env vars → `models.providers.*.apiKey`.
 
   </Accordion>
 </AccordionGroup>
@@ -403,15 +415,15 @@ Configures inbound media understanding (image/audio/video):
 
 Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
 
-Default: `tree` (current session + sessions spawned by it, such as subagents;
-the main session can reach every session of the same agent).
+Default: `agent` (all sessions belonging to the current agent, including from
+non-main and retained cron sessions). Explicit visibility settings are unchanged.
 
 ```json5
 {
   tools: {
     sessions: {
       // "self" | "tree" | "agent" | "all"
-      visibility: "tree",
+      visibility: "agent",
     },
   },
 }
@@ -423,7 +435,7 @@ the main session can reach every session of the same agent).
     - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the canonical main session, it includes every same-agent session for list, history, search, send, and status.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
-    - `self` remains strict for main. Incognito denial remains absolute, and cross-agent access still requires `all` plus `tools.agentToAgent` policy.
+    - `self` remains strict for main. Incognito denial remains absolute. Ordinary cross-agent access requires `all` plus `tools.agentToAgent` policy; `tree` also permits owned native/ACP children across agent boundaries. `agent` does not include that exception, so keep explicit `tree` if your workflow relies on it.
     - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), access stays limited to spawned sessions even if the caller is main or `tools.sessions.visibility="all"`.
     - When not `all`, `sessions_list` includes a compact `visibility` field
       describing the effective mode and a warning that some sessions may be
@@ -433,10 +445,12 @@ the main session can reach every session of the same agent).
 </AccordionGroup>
 
 Ambient group watches still queue activity notices and tell the main session
-where something happened. They do not grant access: main's same-agent access is
-built into `tree`. In a multi-user setup, `session.dmScope: "main"` shares that
-main session across users; use a per-peer DM scope for isolation, or set
-`tools.sessions.visibility: "self"` for strict current-session access.
+where something happened. They do not grant access. The default `agent` scope
+already covers same-agent sessions, including conversations with other users.
+A per-peer `session.dmScope` separates DM context but does not restrict session
+tools. For narrower access, explicitly choose `tree` or `self`, or use separate
+agents. `tree` retains the canonical main-session exception; `self` restricts
+even main to its current session.
 
 ### `tools.sessions_spawn`
 
@@ -623,6 +637,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `supportsReasoningEffort` | Accepts a reasoning-effort control. |
     | `supportsTemperature` | Accepts `temperature` for this model and adapter. |
     | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
+    | `supportsInstructions` | Responses API only: accepts the system prompt via top-level `instructions` instead of embedded in `input`. Defaults to `true` only for native OpenAI and xAI's main route — the two routes with confirmed contract evidence. Every other route, bundled or custom, defaults to `false`; set explicitly once verified against that endpoint. |
     | `supportsTools` | Supports structured tool/function calling. Set `false` to disable tools. |
     | `supportsStrictMode` | Accepts strict tool schemas. |
     | `requiresStringContent` | Requires plain-string Chat Completions message content. |

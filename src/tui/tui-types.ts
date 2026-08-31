@@ -39,7 +39,7 @@ export type TuiHistoryRunOutcome =
   | { state: "failed"; errorMessage: string };
 
 export type TuiHistoryLoadResult =
-  | { loaded: true; runOutcome: TuiHistoryRunOutcome }
+  | { loaded: true; runOutcome: TuiHistoryRunOutcome; activeRunIds?: string[] }
   | { loaded: false };
 
 export type ChatEvent = {

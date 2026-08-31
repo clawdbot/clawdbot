@@ -2,12 +2,12 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI owner-first session roster" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "session-owner-stack");
 
 function sessionRoster(ownerId: string, key: string, label: string, updatedAt: number) {
   const owner = {
@@ -44,10 +44,10 @@ async function captureSidebar(page: Page, fileName: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "session-owner-stack"), { recursive: true });
   await page.locator(".sidebar-sessions").screenshot({
     animations: "disabled",
-    path: path.join(proofDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "session-owner-stack"), fileName),
   });
 }
 
@@ -67,7 +67,9 @@ suite.define(() => {
       // A literal key avoids the independent slug lookup while the roster is deferred.
       await page.goto(`${suite.server?.baseUrl ?? ""}chat/main/~key/ada`);
       const subscribe = await gateway.waitForRequest("sessions.subscribe");
-      expect(subscribe.params).toEqual(expect.objectContaining({ ownerFirst: true, limit: 60 }));
+      expect(subscribe.params).toEqual(
+        expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
+      );
       const adaRow = page.locator('[data-session-key="agent:main:ada"]');
       const bobRow = page.locator('[data-session-key="agent:main:bob"]');
       // The selected session has an optimistic placeholder before roster hydration.

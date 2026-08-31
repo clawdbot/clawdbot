@@ -1,12 +1,17 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -31,6 +36,73 @@ class ClawHubSkillRuntimeTest {
       .edit()
       .clear()
       .commit()
+  }
+
+  @Test
+  fun installResultsPreserveGatewayMessagesAndAuditWarnings() {
+    val success =
+      GatewaySession.RpcResult(
+        ok = true,
+        payloadJson = """{"message":"Installed @alice/alpha.","warning":"  ClawHub audit details.\n "}""",
+        error = null,
+      )
+    val rejections =
+      listOf("Blocked by ClawHub.", "Security verification unavailable.").map { message ->
+        GatewaySession.RpcResult(
+          ok = false,
+          payloadJson = null,
+          error =
+            GatewaySession.ErrorShape(
+              code = "UNAVAILABLE",
+              message = message,
+              details =
+                GatewayErrorDetails(
+                  code = null,
+                  canRetryWithDeviceToken = false,
+                  recommendedNextStep = null,
+                  clawhubWarning = "  ClawHub audit details.\n ",
+                ),
+            ),
+        )
+      }
+
+    for (result in listOf(success) + rejections) {
+      val runtime = createTestRuntime()
+      seedConnectedAdminRuntime(runtime)
+      val requests = mutableListOf<String?>()
+      runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+        when (method) {
+          "skills.install" -> {
+            requests += params
+            result.error?.let { throw GatewayRequestRejected(it) }
+            checkNotNull(result.payloadJson)
+          }
+          "skills.status" -> skillsStatus(installed = false)
+          else -> error("unexpected method $method")
+        }
+      }
+
+      try {
+        val install = runtime.installClawHubSkill("@alice/alpha", version = "1.2.3") ?: error("install job missing")
+        runBlocking { install.join() }
+
+        assertEquals(
+          Json.parseToJsonElement("""{"source":"clawhub","slug":"@alice/alpha","version":"1.2.3","timeoutMs":120000}"""),
+          Json.parseToJsonElement(checkNotNull(requests.single())),
+        )
+        val state = runtime.clawHubSkillSearchState.value
+        if (result.ok) {
+          assertEquals("Installed @alice/alpha.\n\nClawHub audit details.", state.messageText)
+          assertNull(state.errorText)
+        } else {
+          assertEquals("${result.error?.message}\n\nClawHub audit details.", state.errorText)
+          assertNull(state.messageText)
+        }
+        assertTrue(state.installingSlugs.isEmpty())
+      } finally {
+        runtime.disconnect()
+      }
+    }
   }
 
   @Test

@@ -11,16 +11,15 @@ import {
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-  preflightOpenClawDatabaseSchemas,
-  type IncompatibleOpenClawDatabase,
-  type IndeterminateOpenClawDatabase,
-  type OpenClawDatabaseSchemaPreflight,
-} from "../../state/openclaw-database-preflight.js";
+import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import { createUpdateProgress, printResult } from "./progress.js";
+import {
+  checkTargetDatabaseSchemas,
+  formatSchemaRefusalLines,
+  hasSchemaRefusal,
+} from "./schema-preflight.js";
 import {
   createGlobalCommandRunner,
   DEFAULT_PACKAGE_NAME,
@@ -31,7 +30,11 @@ import {
   runUpdateStep,
   type UpdateCommandOptions,
 } from "./shared.js";
-import { UpdateCommandAbort, type PreManagedServiceStop } from "./update-command-service.js";
+import {
+  resolvePreparedGatewayUpdatePolicy,
+  UpdateCommandAbort,
+  type PreManagedServiceStop,
+} from "./update-command-service.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
@@ -119,41 +122,6 @@ type BeforeGitMutation = (target: {
   allowGatewayActivation?: boolean;
 } | void>;
 
-export function formatSchemaRefusalLines(
-  schemas: {
-    incompatible: readonly IncompatibleOpenClawDatabase[];
-    indeterminate: readonly IndeterminateOpenClawDatabase[];
-  },
-  dryRun = false,
-): string[] {
-  const prefix = dryRun ? "Would refuse update" : "Update refused";
-  return [
-    ...schemas.incompatible.map((database) => {
-      const agent = database.agentId ? ` (agent ${database.agentId})` : "";
-      return `${prefix}: ${database.kind} database${agent} ${database.path} has schema ${database.foundVersion}; target supports ${database.supportedVersion}; writer build ${database.writerAppVersion ?? "unknown"}.`;
-    }),
-    ...schemas.indeterminate.map(
-      (database) =>
-        `${prefix}: could not inspect ${database.kind} database ${database.path}: ${database.reason}; retry once the gateway releases it.`,
-    ),
-    OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-    "Installing manually via npm bypasses this guard; back up first and verify compatibility.",
-  ];
-}
-
-export function checkTargetDatabaseSchemas(
-  supportedVersions: OpenClawSchemaVersions | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): OpenClawDatabaseSchemaPreflight {
-  return supportedVersions
-    ? preflightOpenClawDatabaseSchemas({ env, supportedVersions })
-    : { incompatible: [], indeterminate: [] };
-}
-
-export function hasSchemaRefusal(schemas: OpenClawDatabaseSchemaPreflight): boolean {
-  return schemas.incompatible.length > 0 || schemas.indeterminate.length > 0;
-}
-
 export function createBeforeGitMutation(params: {
   roots: readonly string[];
   shouldRestart: boolean;
@@ -186,15 +154,7 @@ export function createBeforeGitMutation(params: {
       defaultRuntime.error(formatSchemaRefusalLines(postStopSchemas).join("\n"));
       throw new UpdateCommandAbort();
     }
-    return {
-      // Only a positively owned service may be rewritten. Activation
-      // additionally requires this update to have stopped it.
-      allowGatewayServiceRepair: preManagedServiceStop?.serviceMatchesMutationRoot === true,
-      allowGatewayActivation:
-        params.shouldRestart &&
-        preManagedServiceStop?.stopped === true &&
-        preManagedServiceStop.serviceMatchesMutationRoot === true,
-    };
+    return resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart);
   };
 }
 
@@ -309,6 +269,9 @@ export async function updateGitInstall(params: {
       timeoutMs: effectiveTimeout,
       env: installEnv,
       installCwd: updateRoot,
+      // ensureGitCheckout already resolved the root; only the successful Git
+      // build/doctor flow can authorize exposing that exact checkout globally.
+      expectedGitCheckout: { root: updateRoot, sha: updateResult.after?.sha ?? null },
     });
     steps.push(...packageUpdate.steps);
 

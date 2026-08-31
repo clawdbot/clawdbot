@@ -6,6 +6,7 @@ type ClaudeSessionSource = "claude-cli" | "claude-desktop";
 export type ClaudeSessionCatalogSession = {
   threadId: string;
   name?: string | null;
+  color?: string;
   cwd?: string;
   status: "stored";
   createdAt?: number;

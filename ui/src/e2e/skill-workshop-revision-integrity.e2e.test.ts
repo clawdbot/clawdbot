@@ -1,7 +1,8 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { beforeAll, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -16,12 +17,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "skill-workshop-revision-integrity",
-);
+let artifactDir: string;
 const viewport = { height: 900, width: 1280 };
 const PROPOSAL_ID = "revision-integrity-proposal";
 const SKILL_KEY = "revision-integrity";
@@ -96,7 +92,7 @@ function proposalInspect(revision: ProposalRevision, status: ProposalStatus = "p
       updatedAt: revision.updatedAt,
       proposedVersion: revision.version,
       draftHash: "d".repeat(64),
-      origin: { agentId: "main", sessionKey: "main" },
+      origin: { agentId: "main", sessionKey: "agent:main:main" },
       target: { skillName: "Revision Integrity", skillKey: SKILL_KEY },
     },
     revisionHash: revision.hash,
@@ -174,9 +170,8 @@ async function closeProofContext(params: { context: BrowserContext }): Promise<v
 }
 
 suite.define(() => {
-  beforeAll(async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
+  beforeEach(() => {
+    artifactDir = createControlUiE2eArtifactDir("skill-workshop-revision-integrity");
   });
 
   it.each([
@@ -306,7 +301,7 @@ suite.define(() => {
         expectedRevisionHash: H1_HASH,
         instructions,
         proposalId: PROPOSAL_ID,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.waitForURL(/\/skills\/workshop(?:[?#].*)?$/u);
@@ -351,7 +346,7 @@ suite.define(() => {
         expectedRevisionHash: H2_HASH,
         instructions: reviewedInstructions,
         proposalId: PROPOSAL_ID,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.screenshot({

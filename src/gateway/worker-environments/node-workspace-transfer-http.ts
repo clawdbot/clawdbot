@@ -205,7 +205,7 @@ export function createNodeWorkspaceTransferHttpCallback(
         try {
           if (route.kind === "manifest" || route.kind === "pack") {
             const snapshot = service.snapshot(authorization);
-            if (!snapshot || (route.kind === "pack" && !snapshot.packPath)) {
+            if (!snapshot) {
               sendOpaqueNotFound(res);
               return;
             }
@@ -221,7 +221,12 @@ export function createNodeWorkspaceTransferHttpCallback(
               res.end(body);
               return;
             }
-            const stats = await fsp.stat(snapshot.packPath!);
+            const packPath = await service.pack(authorization);
+            if (!packPath) {
+              sendOpaqueNotFound(res);
+              return;
+            }
+            const stats = await fsp.stat(packPath);
             if (!stillCurrent()) {
               return;
             }
@@ -229,7 +234,7 @@ export function createNodeWorkspaceTransferHttpCallback(
               "content-type": "application/octet-stream",
               "content-length": String(stats.size),
             });
-            await pipeline(fs.createReadStream(snapshot.packPath!), res, { signal });
+            await pipeline(fs.createReadStream(packPath), res, { signal });
             return;
           }
           if (route.kind === "blob") {

@@ -357,7 +357,7 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
   latencyMs: Type.Optional(Type.Number()),
   /** Human-readable setup summary lines (workspace, model, gateway). */
   lines: Type.Optional(Type.Array(Type.String())),
-  /** The committed plugin source requires clients to reconnect before continuing. */
+  /** The committed config requires clients to reconnect after a Gateway restart. */
   gatewayRestartRequired: Type.Optional(Type.Literal(true)),
   /** Present on failure: coarse bucket for client copy + docs links. */
   status: Type.Optional(SetupInferenceStatus),

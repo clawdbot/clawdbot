@@ -266,12 +266,7 @@ export function registerSecretStoreCli(secrets: Command): void {
               ).readSecretStoreInput({
                 valueFile: options.valueFile,
               });
-        if (Buffer.byteLength(value, "utf8") > storeModule.SECRET_STORE_VALUE_MAX_BYTES) {
-          throw new SecretStoreCliFailure(
-            2,
-            `Value exceeds ${storeModule.SECRET_STORE_VALUE_MAX_BYTES} UTF-8 bytes.`,
-          );
-        }
+        storeModule.assertSecretStoreValue(value, kind);
         if (options.dryRun) {
           defaultRuntime.log(`Would ${kind === "secret" ? "write" : "set"} ${name} (${kind}).`);
           return;
@@ -392,12 +387,7 @@ export function registerSecretStoreCli(secrets: Command): void {
         });
         const storeModule = await import("../secrets/store/secret-store.js");
         for (const entry of normalized) {
-          if (Buffer.byteLength(entry.value, "utf8") > storeModule.SECRET_STORE_VALUE_MAX_BYTES) {
-            throw new SecretStoreCliFailure(
-              2,
-              `${entry.name} exceeds ${storeModule.SECRET_STORE_VALUE_MAX_BYTES} UTF-8 bytes.`,
-            );
-          }
+          storeModule.assertSecretStoreValue(entry.value, entry.kind);
         }
         if (options.dryRun) {
           defaultRuntime.log(`Would import ${normalized.length} team store entries.`);

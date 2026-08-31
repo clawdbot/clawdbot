@@ -9,6 +9,7 @@ import {
   formatRatchetMessage,
   loadRatchetReference,
   loadRatchetSnapshot,
+  loadRatchetSources,
   parseRatchetCounts,
   parseRatchetPaths,
   parseRatchetScalar,
@@ -18,6 +19,17 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("shrink-ratchet", () => {
+  it("rejects missing paths whose names resemble successful batch headers", () => {
+    const root = tempDirs.make("openclaw-shrink-ratchet-missing-");
+    execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    expect(() => loadRatchetSources(root, ["src/missing.ts"])).toThrow(
+      /Could not read staged source/u,
+    );
+    expect(() => loadRatchetSources(root, ["src/missing blob 0\n\n.ts"])).toThrow(
+      /Could not read staged source/u,
+    );
+  });
+
   it.each([
     {
       expected: ["src/b.ts", "src/a.ts"],

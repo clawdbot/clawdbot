@@ -674,6 +674,7 @@ describe("gateway-status command", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true,
       error: "missing scope: operator.read",
       close: null,
       auth: {

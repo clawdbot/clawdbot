@@ -260,7 +260,12 @@ describe("plugin management catalog lifecycle", () => {
     mocks.metadata.mockReturnValue(dependencyMetadataSnapshot(scenario));
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
 
-    const catalog = await listManagedPlugins({ config: {}, env: {} });
+    const catalog = await listManagedPlugins({
+      config: {
+        plugins: { entries: { [scenario.pluginId]: { enabled: scenario.enabled ?? true } } },
+      },
+      env: {},
+    });
     const plugin = catalog.plugins.find((entry) => entry.id === scenario.pluginId);
 
     expect(plugin?.state).toBe(scenario.expectedState);
@@ -313,6 +318,22 @@ describe("plugin management catalog lifecycle", () => {
     expect(first.plugins[0]?.state).toBe("error");
     const initialProbes = dependencyProbeCount();
     expect(initialProbes).toBeGreaterThan(0);
+
+    const disabled = await listManagedPlugins({
+      config: { plugins: { entries: { "lifecycle-missing-runtime": { enabled: false } } } },
+      env: {},
+    });
+    expect(disabled.plugins[0]).toMatchObject({ enabled: false, state: "disabled" });
+    expect(disabled.diagnostics).toEqual([]);
+    expect(dependencyProbeCount()).toBe(initialProbes);
+
+    const enabled = await listManagedPlugins({
+      config: { plugins: { entries: { "lifecycle-missing-runtime": { enabled: true } } } },
+      env: {},
+    });
+    expect(enabled.plugins[0]).toMatchObject({ enabled: true, state: "error" });
+    expect(enabled.diagnostics).toHaveLength(1);
+    expect(dependencyProbeCount()).toBe(initialProbes);
 
     await listManagedPlugins({ config: {}, env: {} });
     expect(dependencyProbeCount()).toBe(initialProbes);

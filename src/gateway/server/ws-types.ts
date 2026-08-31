@@ -34,6 +34,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
+  /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
+  personPresence?: { onlineSince: number; lastActivityAt?: number };
   authenticatedUserId?: string;
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;

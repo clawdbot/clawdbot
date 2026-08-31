@@ -2,6 +2,7 @@ import { html, nothing, svg } from "lit";
 import { t } from "../../i18n/index.ts";
 import { strokeIcon } from "../icons-tools.ts";
 import { icons } from "../icons.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 
 const KEYBOARD_GLYPH = strokeIcon(svg`
@@ -39,10 +40,7 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
     <div class="desktop-stage">
       <div class="desktop-surface"></div>
       ${options.state === "connecting"
-        ? html`<div class="desktop-connecting" role="status" aria-live="polite">
-            <span class="desktop-connecting__monitor" aria-hidden="true">${icons.monitor}</span>
-            <span>${t("desktop.connecting")}</span>
-          </div>`
+        ? renderPanelLoadingSkeleton("desktop", t("desktop.connecting"), false, true)
         : nothing}
       <textarea
         class="desktop-keyboard-input"

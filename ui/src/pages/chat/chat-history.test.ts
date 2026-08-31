@@ -2,23 +2,21 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  loadChatHistory,
-  rewindChatHistory,
-  syncSelectedSessionMessageSubscription,
-  switchChatHistoryBranch,
-  type ChatHistoryResult,
-  type ChatState,
-} from "./chat-history.ts";
+import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import type { ToolStreamEntry } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
-import { handleAgentEvent, type ToolStreamEntry } from "./tool-stream.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 type TestState = ChatState &
   Parameters<typeof handleAgentEvent>[0] & {
@@ -67,6 +65,23 @@ function activeHistory(runId: string): ChatHistoryResult {
   } satisfies ChatHistoryResult;
 }
 
+it.each(["main", "workspace"])(
+  "requests the configured default agent for global main alias %s",
+  async (sessionKey) => {
+    const state = createState({ messages: [] });
+    state.sessionKey = sessionKey;
+    state.assistantAgentId = "work";
+    state.agentsList = { defaultId: "main", mainKey: "workspace", scope: "global" };
+    const request = vi.spyOn(state.client!, "request");
+    await loadChatHistory(state);
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey,
+      agentId: "main",
+      limit: 800,
+    });
+  },
+);
+
 describe("syncSelectedSessionMessageSubscription", () => {
   it("starts the new subscription before the previous unsubscribe settles", async () => {
     let resolveUnsubscribe: () => void = () => undefined;
@@ -98,7 +113,10 @@ describe("syncSelectedSessionMessageSubscription", () => {
     await Promise.resolve();
 
     expect(unsubscribeMessages).toHaveBeenCalledOnce();
-    expect(subscribeMessages).toHaveBeenCalledWith("agent:main:next", { agentId: undefined });
+    expect(subscribeMessages).toHaveBeenCalledWith("agent:main:next", {
+      agentId: undefined,
+      includeApprovals: true,
+    });
     expect(state.chatSessionMessageSubscription).toEqual({
       key: "agent:main:previous",
       agentId: null,

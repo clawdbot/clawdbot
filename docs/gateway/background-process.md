@@ -58,6 +58,29 @@ Behavior:
 | `tools.exec.notifyOnExit`             | true    | Enqueue a system event + request heartbeat when a backgrounded exec exits.      |
 | `tools.exec.notifyOnExitEmptySuccess` | false   | Also enqueue completion events for successful backgrounded runs with no output. |
 
+## Worker environments
+
+On a paired-node or node-backed cloud worker, background processes belong to the
+session's environment. Finishing or cancelling a turn leaves already-backgrounded
+commands running. A later turn in the same environment can use `process` to poll,
+send input, or stop them; foreground commands still stop when their turn is cancelled.
+
+The retained worker occupies one node worker slot. Reusing it needs no additional
+slot. If a command finishes between turns, its retained output remains available
+to the next turn, subject to the normal process output limits and TTL. Once a turn
+finishes with no live background commands, the worker exits. Moving or retiring
+the environment, replacing its ownership, or stopping the node also stops its
+processes. Process handles do not survive a worker or node restart.
+
+If the node's pairing is revoked or its provider no longer recognizes the lease,
+the session placement fails. Physical cleanup can remain pending until OpenClaw
+confirms that the exact worker has stopped; an unconfirmed stop does not release
+its ownership record.
+
+Worker completion does not currently wake the Gateway session automatically;
+use `process poll` in a later turn to inspect the result. Closing a portal closes
+its proxy, not the development server: stop the server with `process kill`.
+
 ## Child process bridging
 
 When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/close. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.

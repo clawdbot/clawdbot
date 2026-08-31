@@ -23,6 +23,7 @@ function resolveModel(
     defaultModel: params?.defaultModel ?? "claude-opus-4-6",
     aliasIndex: params?.aliasIndex ?? emptyAliasIndex,
     allowedModelKeys: new Set(params?.allowedModelKeys ?? []),
+    cfg: { agents: { defaults: { modelPolicy: { allow: params?.allowedModelKeys ?? [] } } } },
   });
 }
 

@@ -6,16 +6,8 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
 import { withEnv } from "../../src/test-utils/env.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 describe("bench-cli-startup", () => {
   it("rejects unknown CLI options before running benchmarks", () => {

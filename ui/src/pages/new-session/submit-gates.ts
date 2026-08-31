@@ -2,6 +2,7 @@
 // can be blocked. canSubmit, the Start tooltip, and blocked-Enter notices all
 // derive from this walk, so a gate cannot block silently.
 import { t } from "../../i18n/index.ts";
+import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionPlacementTarget } from "../../lib/sessions/session-placement-recovery.ts";
 import * as catalog from "./catalog-target.ts";
@@ -58,7 +59,7 @@ export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): str
   if (place.repository.kind === "checking") {
     return t("newSession.checkingGit");
   }
-  if (place.repository.kind === "unavailable" && !place.worktreeAvailable()) {
+  if (place.repository.kind === "unavailable") {
     return t("newSession.gitCheckUnavailable");
   }
   return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
@@ -108,11 +109,11 @@ export function resolveNewSessionSubmitBlock(
   if (catalog.isRoutePending(snapshot.data, snapshot.context?.sessions)) {
     return { gate: "route-pending", reason: t("newSession.catalogUnavailable") };
   }
-  if (place.modelControl.isModelUnavailable(place.selectedAgent())) {
-    return {
-      gate: "model-unavailable",
-      reason: `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`,
-    };
+  const modelUnavailableMessage = chatModelUnavailableMessage(
+    place.modelControl.modelUnavailableReason(place.selectedAgent()),
+  );
+  if (modelUnavailableMessage) {
+    return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }
   if (host.pendingAttachmentReads > 0) {
     return { gate: "attachment-reads", reason: t("newSession.readingAttachment") };

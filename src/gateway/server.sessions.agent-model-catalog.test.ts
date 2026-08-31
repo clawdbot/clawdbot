@@ -1,9 +1,13 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
 import { writeSessionStore } from "./test-helpers.js";
+import { testState } from "./test-helpers.runtime-state.js";
 import {
   directSessionReq,
+  getGatewayConfigModule,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -23,75 +27,296 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-test.each([
-  { label: "explicit agent", agentId: "work" },
-  { label: "agent-qualified session", agentId: undefined },
-])("sessions.patch loads the $label model catalog", async ({ agentId }) => {
-  const { workStorePath } = await createSelectedGlobalSessionStore();
-  const key = "agent:work:dashboard:catalog-owner-patch";
-  await writeSessionStore({
-    agentId: "work",
-    storePath: workStorePath,
-    entries: { [key]: sessionStoreEntry("work-catalog-patch") },
-  });
-  const loadGatewayModelCatalog = createAgentModelCatalogLoader();
+const mainRef = "main-provider/main-only";
+const workRef = "work-provider/work-only";
 
-  const patched = await directSessionReq<{
-    entry?: { modelOverride?: string; providerOverride?: string };
-  }>(
-    "sessions.patch",
-    {
-      key,
-      ...(agentId ? { agentId } : {}),
-      model: "work-provider/work-only",
-    },
-    { context: { loadGatewayModelCatalog } },
-  );
+type ModelSelectionCase = {
+  label: string;
+  explicitAgent?: boolean;
+  globalAllow: string[];
+  agentAllow?: string[];
+  globalAlias?: string;
+  agentAlias?: string;
+  model: string;
+  expectedModel: string;
+  denied?: boolean;
+};
 
-  expect(patched.ok, patched.error?.message).toBe(true);
-  expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
-  expect(patched.payload?.entry).toMatchObject({
-    providerOverride: "work-provider",
-    modelOverride: "work-only",
-  });
-  expect(
-    loadSessionEntry({ agentId: "work", sessionKey: key, storePath: workStorePath }),
-  ).toMatchObject({
-    providerOverride: "work-provider",
-    modelOverride: "work-only",
+function configureAgentModels(
+  scenario: Pick<
+    ModelSelectionCase,
+    "globalAllow" | "agentAllow" | "globalAlias" | "agentAlias"
+  > & { subagentModel?: string },
+) {
+  testState.agentConfig = {
+    model: { primary: "synthetic/base" },
+    modelPolicy: { allow: scenario.globalAllow },
+    models: scenario.globalAlias ? { [workRef]: { alias: scenario.globalAlias } } : {},
+  };
+  testState.agentsConfig = {
+    list: [
+      {
+        id: "main",
+        default: true,
+        modelPolicy: { allow: [mainRef] },
+        models: { [mainRef]: { alias: "agent-choice" } },
+      },
+      {
+        id: "work",
+        subagents: scenario.subagentModel ? { model: scenario.subagentModel } : undefined,
+        ...(scenario.agentAllow ? { modelPolicy: { allow: scenario.agentAllow } } : {}),
+        models: scenario.agentAlias ? { [workRef]: { alias: scenario.agentAlias } } : {},
+      },
+    ],
+  };
+}
+
+const cases: ModelSelectionCase[] = [
+  {
+    label: "loads the explicit agent model catalog",
+    explicitAgent: true,
+    globalAllow: [],
+    model: workRef,
+    expectedModel: workRef,
+  },
+  {
+    label: "loads the agent-qualified session model catalog",
+    globalAllow: [],
+    model: workRef,
+    expectedModel: workRef,
+  },
+  {
+    label: "rejects outside agent policy despite unrestricted global policy",
+    explicitAgent: true,
+    globalAllow: [],
+    agentAllow: [workRef],
+    model: mainRef,
+    expectedModel: mainRef,
+    denied: true,
+  },
+  {
+    label: "accepts an uncataloged model under explicit empty agent policy",
+    globalAllow: [mainRef],
+    agentAllow: [],
+    model: "work-provider/uncataloged",
+    expectedModel: "work-provider/uncataloged",
+  },
+  {
+    label: "accepts the agent list instead of the opposing global list",
+    explicitAgent: true,
+    globalAllow: [mainRef],
+    agentAllow: [workRef],
+    model: workRef,
+    expectedModel: workRef,
+  },
+  {
+    label: "rejects the global list when the agent list replaces it",
+    globalAllow: [mainRef],
+    agentAllow: [workRef],
+    model: mainRef,
+    expectedModel: mainRef,
+    denied: true,
+  },
+  {
+    label: "resolves an agent-only alias under the target agent policy",
+    globalAllow: [mainRef],
+    agentAllow: [workRef],
+    agentAlias: "agent-choice",
+    model: "agent-choice",
+    expectedModel: workRef,
+  },
+  {
+    label: "uses the per-agent alias override for the same model key",
+    explicitAgent: true,
+    globalAllow: [mainRef],
+    agentAllow: [workRef],
+    globalAlias: "shared-choice",
+    agentAlias: "agent-choice",
+    model: "agent-choice",
+    expectedModel: workRef,
+  },
+  {
+    label: "rejects a displaced global alias",
+    globalAllow: [workRef],
+    agentAllow: [workRef],
+    globalAlias: "shared-choice",
+    agentAlias: "agent-choice",
+    model: "shared-choice",
+    expectedModel: "synthetic/shared-choice",
+    denied: true,
+  },
+  {
+    label: "checks the resolved agent alias against agent policy",
+    globalAllow: [],
+    agentAllow: [mainRef],
+    agentAlias: "agent-choice",
+    model: "agent-choice",
+    expectedModel: workRef,
+    denied: true,
+  },
+];
+
+describe.each(["sessions.create", "sessions.patch"] as const)("%s", (method) => {
+  test.each(cases)("$label", async (scenario) => {
+    const { workStorePath } = await createSelectedGlobalSessionStore();
+    configureAgentModels(scenario);
+    const key = "agent:work:dashboard:catalog-owner";
+    const access = { agentId: "work", sessionKey: key, storePath: workStorePath };
+    if (method === "sessions.patch") {
+      await writeSessionStore({
+        agentId: "work",
+        storePath: workStorePath,
+        entries: {
+          [key]: sessionStoreEntry("work-catalog-patch", {
+            label: "Original label",
+            providerOverride: "synthetic",
+            modelOverride: "previous",
+            modelOverrideSource: "user",
+          }),
+        },
+      });
+    }
+    const before = loadSessionEntry(access);
+    const loadGatewayModelCatalog = createAgentModelCatalogLoader();
+    const result = await directSessionReq<{ entry?: SessionEntry }>(
+      method,
+      {
+        key,
+        ...(scenario.explicitAgent ? { agentId: "work" } : {}),
+        model: scenario.model,
+        label: "Updated label",
+      },
+      { context: { loadGatewayModelCatalog } },
+    );
+
+    expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
+    if (scenario.denied) {
+      expect.soft(result.ok).toBe(false);
+      expect.soft(result.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: `model not allowed: ${scenario.expectedModel}`,
+      });
+      expect(loadSessionEntry(access)).toEqual(before);
+      return;
+    }
+    expect(result.ok, result.error?.message).toBe(true);
+    const [providerOverride, modelOverride] = scenario.expectedModel.split("/");
+    const selection = { providerOverride, modelOverride, modelOverrideSource: "user" };
+    expect(result.payload?.entry).toMatchObject(selection);
+    expect(loadSessionEntry(access)).toMatchObject({ ...selection, label: "Updated label" });
   });
 });
 
 test.each([
-  { label: "explicit agent", agentId: "work" },
-  { label: "agent-qualified session", agentId: undefined },
-])("sessions.create loads the $label model catalog", async ({ agentId }) => {
-  const { workStorePath } = await createSelectedGlobalSessionStore();
-  const key = `agent:work:dashboard:catalog-owner-create-${agentId ? "explicit" : "key"}`;
-  const loadGatewayModelCatalog = createAgentModelCatalogLoader();
+  {
+    name: "target agent alias",
+    globalAllow: [mainRef],
+    agentAllow: [workRef],
+    model: "agent-choice",
+    expected: { providerOverride: "work-provider", modelOverride: "work-only" },
+  },
+  {
+    name: "target agent denial despite unrestricted defaults",
+    globalAllow: [],
+    agentAllow: [workRef],
+    model: mainRef,
+    expected: null,
+  },
+  {
+    name: "uncataloged model under an explicit empty agent policy",
+    globalAllow: [mainRef],
+    agentAllow: [],
+    model: "work-provider/uncataloged",
+    expected: { providerOverride: "work-provider", modelOverride: "uncataloged" },
+  },
+])("prepares session lifecycle selection for $name", async (scenario) => {
+  await createSelectedGlobalSessionStore();
+  configureAgentModels({ ...scenario, agentAlias: "agent-choice" });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const { createGatewaySession } = await import("./session-create-service.js");
+  const prepareLifecycle = vi.fn<PrepareGatewaySessionLifecycle>(async () => ({
+    ok: true,
+    value: {},
+  }));
 
-  const created = await directSessionReq<{
-    entry?: { modelOverride?: string; providerOverride?: string };
-  }>(
-    "sessions.create",
-    {
-      key,
-      ...(agentId ? { agentId } : {}),
-      model: "work-provider/work-only",
+  const result = await createGatewaySession({
+    cfg: getRuntimeConfig(),
+    key: "agent:work:dashboard:prepared-selection",
+    agentId: "work",
+    model: scenario.model,
+    commandSource: "test",
+    prepareLifecycle,
+    loadGatewayModelCatalog: async () => [workModel],
+  });
+
+  expect(result.ok).toBe(scenario.expected !== null);
+  expect(prepareLifecycle).toHaveBeenCalledWith(
+    expect.objectContaining({ agentId: "work", titleModelSelection: scenario.expected }),
+  );
+});
+
+test.each([
+  { name: "pinned model requested by agent alias", subagent: false },
+  { name: "configured subagent default alias requested by canonical model", subagent: true },
+])("sessions.create preserves write-scoped adoption of $name", async ({ subagent }) => {
+  const { workStorePath } = await createSelectedGlobalSessionStore();
+  const otherRef = "work-provider/other";
+  configureAgentModels({
+    // The subagent request is globally allowed so only its default-alias comparison loses scope.
+    globalAllow: subagent ? [workRef, otherRef] : [mainRef],
+    agentAllow: [workRef, otherRef],
+    agentAlias: "agent-choice",
+    subagentModel: subagent ? "agent-choice" : undefined,
+  });
+  const key = `agent:work:${subagent ? "subagent" : "dashboard"}:adopt-selection`;
+  const access = { agentId: "work", sessionKey: key, storePath: workStorePath };
+  await writeSessionStore({
+    agentId: "work",
+    storePath: workStorePath,
+    entries: {
+      [key]: sessionStoreEntry("existing-selection", {
+        label: "Original label",
+        ...(subagent ? {} : { providerOverride: "work-provider", modelOverride: "work-only" }),
+      }),
     },
-    { context: { loadGatewayModelCatalog } },
+  });
+  const context = { loadGatewayModelCatalog: createAgentModelCatalogLoader() };
+  const writeClient = { connect: { scopes: ["operator.write"] } } as never;
+  const sameSelection = await directSessionReq<{ entry?: SessionEntry }>(
+    "sessions.create",
+    { key, model: subagent ? workRef : "agent-choice" },
+    { client: writeClient, context },
   );
 
-  expect(created.ok, created.error?.message).toBe(true);
-  expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
-  expect(created.payload?.entry).toMatchObject({
+  expect(sameSelection.ok, sameSelection.error?.message).toBe(true);
+  expect(loadSessionEntry(access)).toMatchObject({
+    sessionId: "existing-selection",
     providerOverride: "work-provider",
     modelOverride: "work-only",
+    modelOverrideSource: "user",
   });
-  expect(
-    loadSessionEntry({ agentId: "work", sessionKey: key, storePath: workStorePath }),
-  ).toMatchObject({
+  const beforeChange = loadSessionEntry(access);
+  const denied = await directSessionReq(
+    "sessions.create",
+    { key, model: otherRef, label: "Must not change" },
+    { client: writeClient, context },
+  );
+  expect(denied).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+  });
+  expect(loadSessionEntry(access)).toEqual(beforeChange);
+
+  const changed = await directSessionReq(
+    "sessions.create",
+    { key, model: otherRef },
+    { client: { connect: { scopes: ["operator.admin"] } } as never, context },
+  );
+  expect(changed.ok, changed.error?.message).toBe(true);
+  expect(loadSessionEntry(access)).toMatchObject({
+    sessionId: "existing-selection",
     providerOverride: "work-provider",
-    modelOverride: "work-only",
+    modelOverride: "other",
+    modelOverrideSource: "user",
   });
 });
