@@ -1259,6 +1259,82 @@ EOF
     expect(result.status).toBe(0);
   });
 
+  it("recovers a dangling launcher from the default npm error log", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-eexist-recovery-"));
+    const bin = join(tmp, "bin");
+    const npmRoot = join(tmp, "lib", "node_modules");
+    const packageDir = join(npmRoot, "openclaw");
+    const attempts = join(tmp, "attempts");
+    const target = join(bin, "openclaw");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(npmRoot, { recursive: true });
+    linkNodeExecutable(bin);
+    symlinkSync("/missing/ClawX.app/Contents/Resources/cli/openclaw", target);
+
+    const fakeNpm = join(bin, "npm");
+    writeFileSync(
+      fakeNpm,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'case "${1:-}" in',
+        "  --version) printf '11.8.0\\n'; exit 0 ;;",
+        '  config) printf "null\\n"; exit 0 ;;',
+        '  prefix) printf "%s\\n" "$NPM_FAKE_PREFIX"; exit 0 ;;',
+        '  root) printf "%s\\n" "$NPM_FAKE_ROOT"; exit 0 ;;',
+        "esac",
+        "install=0",
+        "silent=0",
+        'for arg in "$@"; do',
+        '  [[ "$arg" == "install" ]] && install=1',
+        '  [[ "$arg" == "--silent" ]] && silent=1',
+        "done",
+        "(( install == 1 )) || exit 1",
+        'count=0; [[ ! -f "$NPM_FAKE_ATTEMPTS" ]] || count="$(cat "$NPM_FAKE_ATTEMPTS")"',
+        'count=$((count + 1)); printf "%s\\n" "$count" > "$NPM_FAKE_ATTEMPTS"',
+        'if [[ -e "$NPM_FAKE_BIN/openclaw" || -L "$NPM_FAKE_BIN/openclaw" ]]; then',
+        "  if (( silent == 0 )); then",
+        "    printf 'npm error code EEXIST\\n' >&2",
+        "    printf 'npm error path %s\\n' \"$NPM_FAKE_BIN/openclaw\" >&2",
+        "    printf 'npm error File exists: %s\\n' \"$NPM_FAKE_BIN/openclaw\" >&2",
+        "  fi",
+        "  exit 1",
+        "fi",
+        'mkdir -p "$NPM_FAKE_PACKAGE"',
+        'printf "#!/usr/bin/env bash\\nexit 0\\n" > "$NPM_FAKE_PACKAGE/openclaw.mjs"',
+        'chmod +x "$NPM_FAKE_PACKAGE/openclaw.mjs"',
+        'ln -s "$NPM_FAKE_PACKAGE/openclaw.mjs" "$NPM_FAKE_BIN/openclaw"',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeNpm, 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
+          "NPM_LOGLEVEL=error",
+          "install_openclaw_npm openclaw@latest",
+        ].join("\n"),
+        {
+          NPM_FAKE_ATTEMPTS: attempts,
+          NPM_FAKE_BIN: bin,
+          NPM_FAKE_PACKAGE: packageDir,
+          NPM_FAKE_PREFIX: tmp,
+          NPM_FAKE_ROOT: npmRoot,
+        },
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(readFileSync(attempts, "utf8")).toBe("2\n");
+      expect(lstatSync(target).isSymbolicLink()).toBe(true);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("does not report npm owner retirement when uninstall fails", () => {
     const result = runInstallShell(`
       source "${SCRIPT_PATH}"
@@ -2367,7 +2443,6 @@ EOF
             `OPENCLAW_VERSION=${requested}`,
             "USE_BETA=0",
             "NPM_LOGLEVEL=error",
-            "NPM_SILENT_FLAG=",
             `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
             "set +e",
             "install_openclaw",
@@ -2417,7 +2492,6 @@ EOF
           "OPENCLAW_VERSION=latest",
           "USE_BETA=0",
           "NPM_LOGLEVEL=error",
-          "NPM_SILENT_FLAG=",
           `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
           "install_openclaw",
         ].join("\n"),
@@ -2464,7 +2538,6 @@ EOF
           `HOME=${JSON.stringify(home)}`,
           `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
           "NPM_LOGLEVEL=error",
-          "NPM_SILENT_FLAG=",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
         ].join("\n"),
       );
@@ -2503,7 +2576,6 @@ EOF
           `HOME=${JSON.stringify(home)}`,
           `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
           "NPM_LOGLEVEL=error",
-          "NPM_SILENT_FLAG=",
           `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
         ].join("\n"),
       );
