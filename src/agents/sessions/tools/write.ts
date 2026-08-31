@@ -25,7 +25,7 @@ import {
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   invalidArgText,
   normalizeDisplayText,
@@ -516,6 +516,7 @@ export function createWriteToolDefinition(
   options?: WriteToolOptions,
 ): ToolDefinition<typeof writeSchema, WriteToolDetails> {
   const ops = options?.operations ?? defaultWriteOperations;
+  const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "write",
     label: "write",
@@ -534,7 +535,7 @@ export function createWriteToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
-      const absolutePath = resolveToCwd(path, cwd);
+      const absolutePath = resolvePath(path, cwd);
       const dir = dirname(absolutePath);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
       return withFileMutationQueueKeyResolution(queueKey, async () => {

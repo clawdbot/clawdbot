@@ -13,10 +13,8 @@ import {
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
-import {
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
-} from "./package-dist-inventory-contract.mts";
+import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory-contract.mts";
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./package-lifecycle-marker.mjs";
 
 type PackageJson = DistributionPackageManifest;
 
@@ -91,18 +89,20 @@ export async function preparePackageBundledPlugins(sourceDir: string, pluginIds:
     })),
   );
   const snapshots = await Promise.all(
-    ["package.json", PACKAGE_DIST_INVENTORY_RELATIVE_PATH, PACKAGE_INSTALL_GUARD_RELATIVE_PATH].map(
-      async (relativePath) => {
-        const target = path.join(sourceDir, relativePath);
-        const bytes = await fs.readFile(target).catch((error: unknown) => {
-          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-            throw error;
-          }
-          return null;
-        });
-        return { target, bytes };
-      },
-    ),
+    [
+      "package.json",
+      PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+      PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+    ].map(async (relativePath) => {
+      const target = path.join(sourceDir, relativePath);
+      const bytes = await fs.readFile(target).catch((error: unknown) => {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+          throw error;
+        }
+        return null;
+      });
+      return { target, bytes };
+    }),
   );
   const cleanup = async (preparationFailure?: { cause: unknown }) => {
     const results = await Promise.allSettled(

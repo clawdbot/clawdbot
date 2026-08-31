@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
@@ -70,6 +69,8 @@ let runEmbeddedAgentWithPreparedAdmission: ProductionRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 let captureRoutingDecisionWork: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").captureRoutingDecisionWork;
 let createModelRoutingTestAdmission: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").createModelRoutingTestAdmission;
+let ensureAuthProfileStore: typeof import("./auth-profiles/store.js").ensureAuthProfileStore;
+let saveAuthProfileStore: typeof import("./auth-profiles/store.js").saveAuthProfileStore;
 
 beforeAll(async () => {
   vi.resetModules();
@@ -91,6 +92,7 @@ beforeAll(async () => {
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
   ({ captureRoutingDecisionWork, createModelRoutingTestAdmission } =
     await import("./test-helpers/model-routing-decision-e2e-fixtures.js"));
+  ({ ensureAuthProfileStore, saveAuthProfileStore } = await import("./auth-profiles/store.js"));
 });
 
 beforeEach(() => {
@@ -133,7 +135,7 @@ async function withScenarioWorkspace<T>(
 ): Promise<T> {
   const rawRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fault-sequences-"));
   const root = await fs.realpath(rawRoot);
-  const agentDir = path.join(root, "agent");
+  const agentDir = path.join(root, "agents", "test", "agent");
   const workspaceDir = path.join(root, "workspace");
   await Promise.all([
     fs.mkdir(agentDir, { recursive: true }),
@@ -142,7 +144,18 @@ async function withScenarioWorkspace<T>(
   try {
     return await run({ agentDir, workspaceDir });
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    const { waitForSessionTranscriptIndexReconcile } =
+      await import("../config/sessions/session-transcript-reconcile.js");
+    const { closeOpenClawAgentDatabaseByPath } = await import("../state/openclaw-agent-db.js");
+    const { closeAuthProfileReadPool } = await import("./auth-profiles/sqlite.js");
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    try {
+      await waitForSessionTranscriptIndexReconcile({ agentId: "test", path: databasePath });
+    } finally {
+      closeAuthProfileReadPool({ kind: "database", databasePath });
+      closeOpenClawAgentDatabaseByPath(databasePath);
+      await fs.rm(root, { recursive: true, force: true });
+    }
   }
 }
 
@@ -250,18 +263,14 @@ async function runScenario(params: {
   config: OpenClawConfig;
   runId: string;
 }): Promise<ScenarioOutcome> {
+  const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
   const sessionTarget = {
     agentId: "test",
     sessionId: `session:${params.runId}`,
     sessionKey: `agent:test:${params.runId}`,
     storePath: path.join(params.agentDir, "openclaw-agent.sqlite"),
   };
-  const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
-  await replaceSessionEntry(sessionTarget, {
-    sessionId: sessionTarget.sessionId,
-    updatedAt: Date.now(),
-  });
-  // Recovery needs a real durable writer, and every fallback shares one admission.
+  // Every fallback candidate belongs to the same outer admitted run.
   const preparedRunAdmission = createModelRoutingTestAdmission({
     cfg: params.config,
     runId: params.runId,
@@ -269,6 +278,12 @@ async function runScenario(params: {
     boundary: "provider-fault-sequence",
   });
   try {
+    // The synthetic attempt skips transcript creation; seed the real row so the
+    // runner claims its writer normally before entering compaction recovery.
+    await replaceSessionEntry(sessionTarget, {
+      sessionId: sessionTarget.sessionId,
+      updatedAt: Date.now(),
+    });
     const outcome = await runWithModelFallback<EmbeddedAgentRunResult>({
       cfg: params.config,
       provider: "openai",
@@ -287,10 +302,10 @@ async function runScenario(params: {
       run: async (provider, model, options) =>
         await runEmbeddedAgentWithPreparedAdmission({
           preparedRunAdmission,
-          sessionTarget,
           agentId: sessionTarget.agentId,
           sessionId: sessionTarget.sessionId,
           sessionKey: sessionTarget.sessionKey,
+          sessionTarget,
           workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           config: params.config,
@@ -385,10 +400,10 @@ async function expectPreparationInvalidationToDropRoutingWork(
       }
       return await realMkdir(target, options);
     });
-    let pendingRun: Promise<EmbeddedAgentRunResult> | undefined;
+    let run: ReturnType<ProductionRunEmbeddedAgent> | undefined;
     try {
       const { decisionWork } = await captureRoutingDecisionWork(async () => {
-        const run = runEmbeddedAgentWithPreparedAdmission({
+        run = runEmbeddedAgentWithPreparedAdmission({
           preparedRunAdmission: preparedAdmission,
           sessionId: `session:${runId}`,
           sessionKey: `agent:test:${runId}`,
@@ -402,13 +417,10 @@ async function expectPreparationInvalidationToDropRoutingWork(
           runId,
           enqueue: async (task) => await task(),
         });
-        pendingRun = run;
-        // An earlier preparation error must fail this test immediately, not leave
-        // a suspended filesystem spy behind for the following scenario.
         await Promise.race([
           reachedPreparation.promise,
           run.then(() => {
-            throw new Error("runner completed before reaching attempt preparation");
+            throw new Error("embedded run settled before attempt preparation");
           }),
         ]);
         if (mode === "close") {
@@ -431,11 +443,9 @@ async function expectPreparationInvalidationToDropRoutingWork(
       releasePreparation.resolve();
       replacementAdmission?.close();
       preparedAdmission.close();
-      try {
-        await pendingRun?.catch(() => undefined);
-      } finally {
-        mkdirSpy.mockRestore();
-      }
+      // The rejection is observed above; join all run work before restoring its checkpoint.
+      await Promise.allSettled(run ? [run] : []);
+      mkdirSpy.mockRestore();
     }
   });
 }

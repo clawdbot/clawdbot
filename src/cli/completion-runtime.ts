@@ -9,12 +9,42 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { isErrno } from "../infra/errors.js";
+import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import { pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
 
 export const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
 export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS";
+
+type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
+
+async function readCompletionProfile(profilePath: string, shell: CompletionShell) {
+  const buffer = await fs.readFile(profilePath);
+  let encoding: CompletionProfileEncoding = "utf8";
+  if (shell === "powershell" && process.platform === "win32") {
+    const [first, second, third] = buffer;
+    if ((first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)) {
+      encoding = first === 0xff ? "utf16le" : "utf16be";
+    } else if (first === 0xef && second === 0xbb && third === 0xbf) {
+      encoding = "utf8bom";
+    }
+  }
+  // Removing an owned first line must not remove the profile's encoding declaration.
+  return {
+    content:
+      encoding === "utf8" ? buffer.toString("utf8") : decodeWindowsTextFileBuffer({ buffer }),
+    encoding,
+  };
+}
+
+function encodeCompletionProfile(content: string, encoding: CompletionProfileEncoding): Buffer {
+  if (encoding === "utf8") {
+    return Buffer.from(content, "utf8");
+  }
+  const buffer = Buffer.from(`\uFEFF${content}`, encoding === "utf8bom" ? "utf8" : "utf16le");
+  return encoding === "utf16be" ? buffer.swap16() : buffer;
+}
 
 /** Narrows an arbitrary shell label to a completion shell supported by installer logic. */
 export function isCompletionShell(value: string): value is CompletionShell {
@@ -391,7 +421,7 @@ export async function isCompletionInstalled(
     return false;
   }
   const cachePath = resolveCompletionCachePath(shell, binName);
-  const content = await fs.readFile(profilePath, "utf-8");
+  const { content } = await readCompletionProfile(profilePath, shell);
   const lines = content.split("\n");
   // A marker does not install completion; retain missing-cache source lines for doctor repair.
   return lines.some((line) => isCompletionProfileLine(line, binName, cachePath));
@@ -412,7 +442,7 @@ export async function usesSlowDynamicCompletion(
   }
 
   const cachePath = resolveCompletionCachePath(shell, binName);
-  const content = await fs.readFile(profilePath, "utf-8");
+  const { content } = await readCompletionProfile(profilePath, shell);
   const lines = content.split("\n");
 
   for (const line of lines) {
@@ -451,8 +481,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
   try {
     let content: string;
+    let encoding: CompletionProfileEncoding = "utf8";
     try {
-      content = await fs.readFile(profilePath, "utf-8");
+      ({ content, encoding } = await readCompletionProfile(profilePath, shell));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
@@ -481,7 +512,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       tempPrefix: ".openclaw-completion-profile",
       durable: true,
       writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, update.next, { encoding: "utf-8", flag: "wx" });
+        await fs.writeFile(tempPath, encodeCompletionProfile(update.next, encoding), {
+          flag: "wx",
+        });
       },
     });
     if (!yes) {
