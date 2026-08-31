@@ -16,6 +16,7 @@ import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { configPageForSection } from "./config-sections.ts";
 import { memoryVisibleSchemaKeys } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
+import { setupVisibleSchema } from "./setup-schema.ts";
 
 type StaticSettingsBlock = SettingsSearchBlock & {
   searchText: string;
@@ -94,7 +95,10 @@ export function findSettingsSearchBlocks(params: {
     if (!isSettingsNavigationRouteVisible(routeId, params.canAdmin !== false)) {
       continue;
     }
-    const sectionSchema = visibleSectionSchema(routeId, rawSectionSchema);
+    const sectionSchema =
+      key === "wizard"
+        ? setupVisibleSchema(rawSectionSchema)
+        : visibleSectionSchema(routeId, rawSectionSchema);
     const meta = SECTION_META[key];
     const tierSplit = splitConfigSchemaByTier({
       schema: sectionSchema,
@@ -134,7 +138,7 @@ export function findSettingsSearchBlocks(params: {
         : {
             routeId,
             label: meta?.label ?? sectionSchema.title ?? key,
-            search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}`,
+            search: `?section=${encodedKey}${matchesAdvanced || key === "wizard" ? "&advanced=1" : ""}`,
             hash: destination.hash,
           },
     );

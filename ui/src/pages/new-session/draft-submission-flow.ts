@@ -633,7 +633,7 @@ export class DraftSubmissionFlow {
           result.key,
           { text: message, attachments, createdAt: submittedAt, ...(sender ? { sender } : {}) },
           submissionClient,
-          { runId: result.initialRun.runId, messageSeq: result.initialRun.messageSeq },
+          { runId: result.initialRun.runId },
         );
       }
       await this.draftPersistence.clearSubmittedDraft();

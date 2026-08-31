@@ -2,22 +2,14 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { waitForDead } from "../helpers/process-wait.js";
 
-const tempDirs: string[] = [];
-const activeFixtures: Promise<void>[] = [];
-afterEach(async () => {
-  // Vitest aborts timed-out tests before their async body finishes unwinding.
-  // Join fixture teardown before removing directories still used by children.
-  await Promise.allSettled(activeFixtures.splice(0));
-  for (const directory of tempDirs.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
+const fixture = createFixtureLifetime();
+afterEach(() => fixture.cleanup());
 const sourceRoot = process.cwd();
 const declarationPath = "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts";
 const tsgoArgs = ["-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"];
@@ -31,8 +23,7 @@ function write(root: string, relative: string, content: string) {
 }
 
 function createCheckout() {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dist-owner-")));
-  tempDirs.push(root);
+  const root = fs.realpathSync(fixture.createTempDir("openclaw-dist-owner-"));
   write(root, "package.json", '{"type":"module"}');
   write(root, "pnpm-workspace.yaml", "packages: []\n");
   write(root, "src/plugin-sdk/qa-channel-protocol.ts", "export interface Channel { id: string }\n");
@@ -115,9 +106,7 @@ function installScripts(root: string, scripts: string[]) {
 }
 
 function withProcesses(...args: Parameters<typeof runWithProcesses>) {
-  const work = runWithProcesses(...args);
-  activeFixtures.push(work);
-  return work;
+  return fixture.run(() => runWithProcesses(...args));
 }
 
 async function runWithProcesses(
@@ -164,7 +153,7 @@ async function runWithProcesses(
   const diagnostics: (() => string)[] = [];
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () =>
-    (cleanupPromise ??= (async () => {
+    (cleanupPromise ??= fixture.verifyCleanup(async () => {
       cleaning = true;
       for (const socket of sockets) {
         socket.end("continue");
@@ -177,18 +166,29 @@ async function runWithProcesses(
       await Promise.allSettled(completions);
       // Crash cases deliberately orphan a compiler; its barrier closes before
       // process exit. Join that process too before deleting the fixture.
-      await Promise.all([...checkpointPids].map((pid) => waitForDead(pid, 2_000)));
+      const orphans = await Promise.allSettled(
+        [...checkpointPids].map((pid) => waitForDead(pid, 2_000)),
+      );
       for (const socket of sockets) {
         socket.destroy();
       }
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
-    })());
+      const failures = orphans.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        throw new AggregateError(failures, "Fixture orphan cleanup unverified");
+      }
+    }));
   const abort = () => {
     void cleanup().catch((error: unknown) => console.error(error));
   };
   signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) {
+    abort();
+  }
   const waitEvent = (name: string) =>
     new Promise<net.Socket>((resolve, reject) => {
       signal.throwIfAborted();
@@ -234,7 +234,12 @@ async function runWithProcesses(
             announceWait();
           }
         });
-        const done = once(child, "close").then(([code]) => ({ code, output }));
+        child.once("error", (error) => {
+          output += String(error);
+        });
+        const done = new Promise<{ code: number | null; output: string }>((resolve) => {
+          child.once("close", (code) => resolve({ code, output }));
+        });
         completions.push(done);
         return {
           waiting,
@@ -270,7 +275,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     async ({ script, failStagingCleanup }, { signal }) => {
       await withProcesses(async ({ start }) => {
         const root = createCheckout();
-        installScripts(root, [script]);
+        installScripts(root, [script, "run-tsgo.mts"]);
         fs.mkdirSync(path.join(root, "packages"), { recursive: true });
         fs.symlinkSync(
           path.join(sourceRoot, "packages/normalization-core"),
@@ -316,7 +321,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           import { runManagedCommand } from ${JSON.stringify(moduleUrl("managed-child-process.mts"))};
           process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManagedCommand({
             bin: process.execPath,
-            args: ['--import', ${JSON.stringify(hook)}, ...distArtifactEntryArgs(${JSON.stringify(path.join(root, "scripts", script))})],
+            args: ['--import', ${JSON.stringify(pathToFileURL(hook).href)}, ...distArtifactEntryArgs(${JSON.stringify(path.join(root, "scripts", script))})],
             requireProcessTreeExit: true,
           }));
         `,

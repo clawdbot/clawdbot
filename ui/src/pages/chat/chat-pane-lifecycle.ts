@@ -32,8 +32,8 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
-import { syncSelectedSessionMessageSubscription } from "./chat-history.ts";
+import * as chatAvatars from "./chat-avatar.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
   type ChatAttachmentGatewayOwner,
   discardStateStagedAttachments,
@@ -49,11 +49,9 @@ import { releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-toggle.ts";
 import {
-  CHAT_AUTOTYPE_EXEMPT_SELECTOR,
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
   CHAT_OPEN_DETAILS_SELECTOR,
-  CHAT_SPACE_ACTIVATION_SELECTOR,
-  keyboardEventPathMatches,
+  focusChatComposerFromPrintableKeydown,
 } from "./chat-pane-shared.ts";
 import {
   subscribeChatPaneSnapshotInvalidation,
@@ -353,34 +351,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       return;
     }
 
-    if (
-      this.active &&
-      this.presented &&
-      !event.defaultPrevented &&
-      !event.isComposing &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      event.key.length === 1 &&
-      !keyboardEventPathMatches(event, CHAT_AUTOTYPE_EXEMPT_SELECTOR) &&
-      !(event.key === " " && keyboardEventPathMatches(event, CHAT_SPACE_ACTIVATION_SELECTOR)) &&
-      !document.openClawModalLayers?.size &&
-      !document.querySelector("[aria-modal='true']")
-    ) {
-      const composer = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
-      if (composer && !composer.disabled && !composer.readOnly) {
-        // Focus during keydown capture so the browser delivers beforeinput/input,
-        // including the first character, through the composer's normal pipeline.
-        composer.focus({ preventScroll: true });
-      }
+    if (this.active && this.presented) {
+      focusChatComposerFromPrintableKeydown(this, event);
     }
 
     clearChatModelSearchOnEscape(event);
     if (event.defaultPrevented || event.key !== "Escape") {
       return;
     }
-    const state = this.state;
-    if (!state) {
+    if (!this.state) {
       return;
     }
     const openDetails = this.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR);
@@ -580,10 +559,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         }
         if (state) {
           if (event.event === "config.changed") {
-            invalidateChatAvatarCache(state);
+            chatAvatars.invalidateChatAvatarCache(state);
             invalidateAssistantIdentityCache(state.client);
             state.assistantIdentityRequestVersion += 1;
-            void refreshChatAvatar(state).finally(() => state.requestUpdate?.());
+            void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
           }
           handleQuestionPromptEvent(this.questionPromptState, event);
         }
@@ -670,6 +649,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
+    void chatAvatars.refreshSenderAgentAvatars(this.state);
     if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
       // The outer router commit is not a meaningful chat paint. Keep the
       // handoff cover until this pane has committed its usable composer.
@@ -699,6 +679,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
 
   override disconnectedCallback() {
     if (this.state) {
+      chatAvatars.invalidateChatAvatarCache(this.state);
       retireChatMetadataRequests(this.state);
       if (this.suppressStagedAttachmentHandoffOnDisconnect) {
         // MCP app teardown can delay DOM removal after pane close. Finalize any

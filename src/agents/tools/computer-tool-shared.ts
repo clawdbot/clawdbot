@@ -15,6 +15,32 @@ export const MODEL_OBSERVATION_MAX_ELEMENTS = 200;
 
 export type ComputerToolAction = ComputerUseV2ActionName;
 
+const COMPUTER_OBSERVATION_ACTIONS = new Set<string>([
+  "screenshot",
+  "wait",
+  "list_apps",
+  "list_windows",
+  "get_accessibility_tree",
+  "get_cursor_position",
+  "get_window_state",
+  "zoom",
+  "get_browser_state",
+  "get_recording_state",
+] satisfies ComputerToolAction[]);
+
+// Observations may refresh frame/ref caches, but do not perform setup or input.
+// Keep result handling and replay classification on the same action contract.
+export function isComputerObservationAction(
+  action: string | undefined,
+  dialogAction?: unknown,
+): boolean {
+  return (
+    action !== undefined &&
+    (COMPUTER_OBSERVATION_ACTIONS.has(action) ||
+      (action === "browser_dialog" && dialogAction === "inspect"))
+  );
+}
+
 /** The owner binds the execution target and revalidates its authority before every dispatch. */
 export type ComputerToolTransport = {
   readonly computerUse?: ComputerUseCapabilityDescriptor;

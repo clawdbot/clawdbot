@@ -229,10 +229,33 @@ Codex `final`, reads randomized workspace inputs, writes their exact artifact,
 and sends explicit completion. This catches the v2026.7.1 regression where an
 ordinary progress send terminated the turn.
 
+Telegram release tests are best effort in every release profile. Selected source
+and package lanes still attempt the real Test Server flow when a Convex credential
+is available. They use the canonical 90-second lease-acquisition retry budget;
+missing broker access, an exhausted pool, or failed tests remain visible as
+failures or skips in the job summaries and evidence, but never block release
+validation. Assertions, credential isolation, lease cleanup, and exact candidate
+identity checks remain unchanged. A successful release decision does not imply
+that Telegram passed; inspect the recorded Telegram outcome separately.
+
 Use `-f skip_package_telegram_e2e=true` only when the release owner explicitly
 defers the Package Acceptance Telegram E2E to a follow-up beta. The input is
 rejected for `stable` and `full`, recorded in validation evidence, and does not disable the focused
 `rerun_group=npm-telegram` workflow.
+
+Best effort is separate from an explicit omission. For the release owner's
+2026.8.1 exception, pass
+`-f telegram_waiver=2026.8.1-owner-approved`. This is accepted only when the
+actual target package is `2026.8.1` and the profile is `stable` or `full`.
+It omits source Telegram QA, Package Acceptance Telegram E2E, and the
+published-package Telegram E2E; their evidence states **waived / not run**,
+never passed. Telegram unit tests and every other selected gate remain active,
+including stable soak and performance checks. An explicit Telegram rerun or
+suite filter, including an aggregate such as `qa-live` or `qa-live-non-slack`
+that selects Telegram, conflicts with the waiver and is rejected. The declaration and
+target version bind the immutable execution plan, manifest, and reuse identity;
+the publisher carries the waiver into release verification notes. The beta-only
+package deferral above remains unchanged.
 
 ## Top-level stages
 
@@ -375,16 +398,22 @@ artifact when package or Docker-facing stages need it.
 The Docker release-path stage runs these chunks when `live_suite_filter` is
 empty:
 
-| Chunk                                                           | Coverage                                                                                                                                     |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core`                                                          | Core Docker release-path smoke lanes.                                                                                                        |
-| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, Codex plugin live progress follow-through, and Chat Completions tool calls. |
-| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                                                               |
-| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                                                |
-| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                                          |
-| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                                |
-| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                        |
-| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                      |
+| Chunk                                                           | Coverage                                                                                                                                    |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core`                                                          | Core Docker release-path smoke lanes.                                                                                                       |
+| `package-update-openai`                                         | OpenAI package and tool-call proof, Codex on-demand install and live progress, root-managed VPS upgrades, and authenticated update restart. |
+| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                                               |
+| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                                         |
+| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes.                                                                                               |
+| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                                       |
+| `openwebui`                                                     | OpenWebUI compatibility smoke isolated on a dedicated large-disk runner when requested.                                                     |
+
+The two package/update rows share the same coverage across every release profile.
+Root-managed VPS upgrade and authenticated restart checks run in the shorter
+OpenAI row to balance the workload without adding jobs or raising resource caps.
+Missing required credentials still fail the job; the diagnostic pool continues
+so independent non-live checks also report their results. Setup failures and
+cancellation do not start that pool.
 
 Expanded published-upgrade survivor and update-migration coverage runs in
 baseline-specific groups of at most three scenarios, with up to 32 targeted
@@ -479,7 +508,8 @@ commands print heartbeat lines so a stuck update is visible before the job
 timeout.
 
 QA release-check failures block normal release validation only for selected
-Matrix, Telegram, and QA runtime tool coverage lanes. QA parity, runtime
+Matrix and QA runtime tool coverage lanes. Source and package Telegram outcomes
+are always advisory; failed or skipped attempts are never reported as passed. QA parity, runtime
 parity, and the gated Discord, WhatsApp, and Slack live lanes are advisory and
 publish status artifacts without blocking the release verifier. Tideclaw
 alpha runs may still treat non-package-safety release-check lanes as advisory. With

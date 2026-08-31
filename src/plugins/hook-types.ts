@@ -75,7 +75,6 @@ export type {
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
   PluginHookProviderUpdate,
 } from "./hook-message.types.js";
 export {
@@ -477,7 +476,7 @@ export type PluginHookBeforeAgentFinalizeResult = {
   };
 };
 
-export type PluginHookBeforeCompactionEvent = {
+type PluginHookBeforeCompactionEvent = {
   messageCount: number;
   compactingCount?: number;
   tokenCount?: number;
@@ -485,13 +484,13 @@ export type PluginHookBeforeCompactionEvent = {
   sessionFile?: string;
 };
 
-export type PluginHookBeforeResetEvent = {
+type PluginHookBeforeResetEvent = {
   sessionFile?: string;
   messages?: unknown[];
   reason?: string;
 };
 
-export type PluginHookAfterCompactionEvent = {
+type PluginHookAfterCompactionEvent = {
   messageCount: number;
   tokenCount?: number;
   compactedCount: number;
@@ -783,7 +782,7 @@ export type PluginHookBeforeMessageWriteResult = {
   message?: AgentMessage;
 };
 
-export type PluginHookSessionContext = {
+type PluginHookSessionContext = {
   agentId?: string;
   sessionId: string;
   sessionKey?: string;
@@ -874,7 +873,7 @@ export type PluginHookSubagentDeliveryTargetResult = {
   };
 };
 
-export type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase & {
+type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase & {
   runId: string;
   /** Fully resolved provider/model ref applied to the spawned child session. */
   resolvedModel?: string;
@@ -883,7 +882,7 @@ export type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase & {
 };
 
 /** Portable channel presentation signal for one background child run. */
-export type PluginHookSubagentProgressEvent =
+type PluginHookSubagentProgressEvent =
   | {
       phase: "started";
       runId: string;
@@ -898,7 +897,7 @@ export type PluginHookSubagentProgressEvent =
       requester?: PluginHookSubagentRequester;
     };
 
-export type PluginHookSubagentEndedEvent = {
+type PluginHookSubagentEndedEvent = {
   targetSessionKey: string;
   targetKind: PluginHookSubagentTargetKind;
   reason: string;
@@ -922,7 +921,7 @@ export type PluginHookCronReconciledContext = PluginHookGatewayContext & {
   abortSignal: AbortSignal;
 };
 
-export type PluginHookGatewayStartEvent = {
+type PluginHookGatewayStartEvent = {
   port: number;
 };
 

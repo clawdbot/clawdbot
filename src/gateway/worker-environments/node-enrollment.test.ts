@@ -109,6 +109,107 @@ describe("worker node enrollment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("grants artifact access before enrollment without creating a setup identity or credential", async () => {
+    const record = createProvisioning();
+    const manager = createManager();
+    const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
+    vi.mocked(ensureDevicePairSetupBootstrapToken).mockClear();
+    const runtime = await manager.prepareRuntime(record);
+    expect(ensureEnrollment).not.toHaveBeenCalled();
+    expect(ensureDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
+    expect(store.get(record.environmentId)).toMatchObject({
+      nodeSetupId: null,
+      nodeDeviceId: null,
+    });
+    const authorization = transfer.authorize({
+      token: runtime.nodeBootstrap.token,
+      artifactKey: runtime.nodeBootstrap.sha256,
+    })!;
+    const opened = await transfer.openFile(authorization);
+    expect(await opened?.handle.readFile("utf8")).toBe("x");
+    await opened?.handle.close();
+    const enrollment = await manager.begin(record);
+    expect(runtime.signal?.aborted).toBe(true);
+    expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
+    manager.closeRuntime(runtime);
+    manager.closeRuntime({ ...enrollment });
+    expect(enrollment.signal?.aborted).toBe(false);
+    expect(
+      transfer.authorize({
+        token: enrollment.nodeBootstrap.token,
+        artifactKey: enrollment.nodeBootstrap.sha256,
+      }),
+    ).toBeDefined();
+  });
+
+  it.each(["close", "shutdown", "destroy", "operation-abort"] as const)(
+    "revokes runtime preparation on %s",
+    async (reason) => {
+      const record = createProvisioning();
+      const manager = createManager();
+      const operation = new AbortController();
+      const runtime = await manager.prepareRuntime(record, operation.signal);
+      const request = {
+        token: runtime.nodeBootstrap.token,
+        artifactKey: runtime.nodeBootstrap.sha256,
+      };
+      const authorization = transfer.authorize(request)!;
+      if (reason === "close") {
+        manager.closeRuntime(runtime);
+      } else if (reason === "shutdown") {
+        manager.stop();
+      } else if (reason === "operation-abort") {
+        operation.abort();
+      } else {
+        store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
+      }
+      expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
+      expect(transfer.authorize(request)).toBeUndefined();
+      await expect(transfer.openFile(authorization)).resolves.toBeNull();
+    },
+  );
+
+  it.each(["enrollment", "operation-abort", "destroy"] as const)(
+    "rejects late runtime preparation after %s",
+    async (reason) => {
+      const record = createProvisioning();
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      let preparations = 0;
+      const manager = createManager({
+        prepareArtifact: async () => {
+          if (++preparations === 1) {
+            entered.resolve();
+            await resume.promise;
+          }
+          return artifact();
+        },
+      });
+      const operation = new AbortController();
+      const pending = manager.prepareRuntime(record, operation.signal);
+      const rejected = expect(pending).rejects.toThrow();
+      await entered.promise;
+      const enrollment = reason === "enrollment" ? await manager.begin(record) : undefined;
+      if (reason === "operation-abort") {
+        operation.abort();
+      }
+      if (reason === "destroy") {
+        store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
+      }
+      resume.resolve();
+      await rejected;
+      if (enrollment) {
+        expect(enrollment.signal?.aborted).toBe(false);
+        expect(
+          transfer.authorize({
+            token: enrollment.nodeBootstrap.token,
+            artifactKey: enrollment.nodeBootstrap.sha256,
+          }),
+        ).toBeDefined();
+      }
+    },
+  );
+
   it.each(
     [
       {
@@ -185,6 +286,27 @@ describe("worker node enrollment", () => {
     const opened = await transfer.openFile(authorization!);
     expect(await opened?.handle.readFile("utf8")).toBe("x");
     await opened?.handle.close();
+  });
+
+  it("does not split surrogate pairs when bounding the enrollment display name", async () => {
+    const profileId = `${"x".repeat(50)}😀tail`;
+    const requested = store.createIntent({
+      environmentId: "worker-enrollment-display-name",
+      providerId: "fake-provider",
+      profileId,
+      profileSnapshot: { settings: {} },
+      provisionOperationId: "provision:worker-enrollment-display-name",
+    });
+    const record = store.transition({
+      environmentId: requested.environmentId,
+      from: "requested",
+      to: "provisioning",
+    });
+    const manager = createManager();
+
+    await expect(manager.begin(record)).resolves.toMatchObject({
+      displayName: `Cloud worker ${"x".repeat(50)}`,
+    });
   });
 
   it("aborts pending enrollment waits idempotently and rejects enrollment after shutdown", async () => {

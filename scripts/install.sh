@@ -3086,11 +3086,23 @@ bounded_probe_output() {
     pid="$!"
 
     (
-        sleep "$timeout_seconds"
+        local sleeper
+        # Builtin wait lets TERM interrupt the watchdog; a foreground sleep
+        # would outlive it and hold the caller's command-substitution pipe open.
+        trap 'exit' TERM
+        trap '
+            for sleeper in $(jobs -p); do
+                kill "$sleeper" 2>/dev/null || true
+                wait "$sleeper" 2>/dev/null || true
+            done
+        ' EXIT
+        sleep "$timeout_seconds" &
+        wait "$!"
         if kill -0 "$pid" 2>/dev/null; then
             printf '1' >"$timeout_file"
             kill "$pid" 2>/dev/null || true
-            sleep 0.1
+            sleep 0.1 &
+            wait "$!"
             kill -9 "$pid" 2>/dev/null || true
             printf 'timeout' >"$status_file"
         fi
@@ -3642,17 +3654,29 @@ verify_installation() {
 
 retire_npm_owner_after_git_install() {
     local wrapper="$HOME/.local/bin/openclaw" npm_cmd="" npm_root="" npm_bin="" package_root="" package_name=""
-    npm_cmd="$(npm_command_path npm)" || return 1
+    if ! npm_cmd="$(npm_command_path npm)"; then
+        ui_error "Could not retire the previous npm install: npm not found on PATH"
+        return 1
+    fi
     npm_root="$("$npm_cmd" root -g 2>/dev/null | awk 'NF { value = $0 } END { print value }')" || true
     package_root="${npm_root%/}/openclaw"
     [[ -n "$npm_root" && -f "$package_root/package.json" ]] || return 0
     package_name="$(node -e 'const p=require(process.argv[1]); process.stdout.write(String(p.name || ""))' "$package_root/package.json" 2>/dev/null || true)"
-    [[ "$package_name" == "openclaw" ]] || return 1
+    if [[ "$package_name" != "openclaw" ]]; then
+        ui_error "Could not retire the previous npm install: ${package_root} contains package '${package_name:-unknown}', not openclaw"
+        return 1
+    fi
     npm_bin="$(npm_global_bin_dir "$npm_cmd" || true)"
     if [[ "${npm_bin%/}/openclaw" == "$wrapper" ]]; then
-        rm -rf "$package_root" || return 1
+        if ! rm -rf "$package_root"; then
+            ui_error "Could not retire the previous npm install: failed to remove ${package_root}"
+            return 1
+        fi
     else
-        "$npm_cmd" uninstall -g openclaw >/dev/null 2>&1 || return 1
+        if ! "$npm_cmd" uninstall -g openclaw >/dev/null 2>&1; then
+            ui_error "Could not retire the previous npm install: npm uninstall -g openclaw failed"
+            return 1
+        fi
     fi
     ui_success "Previous npm install retired"
 }
@@ -3668,10 +3692,13 @@ is_installer_git_wrapper() {
 
 prepare_git_wrapper_backup_for_npm() {
     local npm_cmd="" npm_root="" npm_bin="" target="" launcher=""
-    npm_cmd="$(npm_command_path npm)" || return 1
+    # Without a resolvable npm there is nothing to back up; let the npm
+    # install step report the missing npm with its own remediation text
+    # instead of silently exiting here (Arch splits node and npm packages).
+    npm_cmd="$(npm_command_path npm)" || return 0
     npm_root="$("$npm_cmd" root -g 2>/dev/null || true)"
     npm_bin="$(npm_global_bin_dir "$npm_cmd" || true)"
-    [[ -n "$npm_root" && -n "$npm_bin" ]] || return 1
+    [[ -n "$npm_root" && -n "$npm_bin" ]] || return 0
     target="${npm_bin%/}/openclaw"
     is_installer_git_wrapper "$target" || return 0
     launcher="${npm_root%/}/openclaw/openclaw.mjs"
@@ -3681,7 +3708,10 @@ prepare_git_wrapper_backup_for_npm() {
 retire_git_wrapper_after_npm_install() {
     local wrapper="$HOME/.local/bin/openclaw"
     is_installer_git_wrapper "$wrapper" || return 0
-    rm -f "$wrapper" || return 1
+    if ! rm -f "$wrapper"; then
+        ui_error "Could not retire the previous git wrapper: failed to remove ${wrapper}"
+        return 1
+    fi
     ui_success "Previous git wrapper retired"
 }
 

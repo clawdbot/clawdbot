@@ -17,7 +17,7 @@ import type { ChatInputHistoryState } from "./input-history.ts";
 import type { QueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ChatScrollHost } from "./scroll.ts";
-import type { ToolStreamHost } from "./tool-stream.ts";
+import type { ToolStreamHost } from "./tool-stream-contract.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -43,6 +43,7 @@ export type ChatHost = ChatInputHistoryState &
     chatVerboseLevel: string | null;
     chatStreamStartedAt: number | null;
     chatAttachments: ChatAttachment[];
+    selectedChatSessionIncognito?: boolean;
     chatQueue: ChatQueueItem[];
     /** Pane-local row draft while a queued message remains held in the outbox. */
     chatQueuedEdit?: QueuedMessageEdit | null;
@@ -50,7 +51,6 @@ export type ChatHost = ChatInputHistoryState &
     chatDisplayedLeafEntryId?: string | null;
     chatRunId: string | null;
     chatRunStartup?: ChatRunStartupState | null;
-    chatRunUsageById?: Map<string, number>;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
     chatRunError?: ChatRunError | null;

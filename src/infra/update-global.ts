@@ -382,7 +382,7 @@ async function collectInstalledPackageDistErrors(params: {
 
   const criticalErrors = await collectInstalledPathErrors({
     packageRoot: params.packageRoot,
-    expectedFiles: await collectLegacyInstalledPackageDistPaths(params.packageRoot),
+    expectedFiles: criticalPaths,
     actualFiles: null,
     missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
   });
@@ -399,10 +399,6 @@ async function collectInstalledPackageDistErrors(params: {
     ];
   }
   return criticalErrors;
-}
-
-async function collectLegacyInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
-  return await collectCriticalInstalledPackageDistPaths(packageRoot);
 }
 
 async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
@@ -1129,12 +1125,6 @@ export async function resolveGlobalInstallTarget(params: {
       : honoredDirectNpmRoot
         ? resolveInstallCommandForManager(params.manager, "npm", params.pkgRoot)
         : normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
-  const globalRoot =
-    requestedCommand.manager === "pnpm" &&
-    command.manager === requestedCommand.manager &&
-    command.command === requestedCommand.command
-      ? requestedPnpmGlobalRoot
-      : await resolveGlobalRoot(command, params.runCommand, params.timeoutMs, params.pkgRoot);
   const pkgRootGlobalRoot = command.manager === "pnpm" ? pnpmPackageRootGlobalRoot : null;
   // The detected npm owner applies to the running package, so its prefix is
   // authoritative. PATH's npm may belong to another Node installation and
@@ -1149,7 +1139,11 @@ export async function resolveGlobalInstallTarget(params: {
     pkgRootGlobalRoot ??
     (command.manager === "npm" ? honoredPackageRootGlobalRoot : null) ??
     npmPackageRootGlobalRoot ??
-    globalRoot;
+    (requestedCommand.manager === "pnpm" &&
+    command.manager === requestedCommand.manager &&
+    command.command === requestedCommand.command
+      ? requestedPnpmGlobalRoot
+      : await resolveGlobalRoot(command, params.runCommand, params.timeoutMs, params.pkgRoot));
   const pnpmIsolatedLayoutVersion =
     pnpmIsolatedPackage?.layoutVersion ??
     resolvePnpmIsolatedLayoutVersion(verifiedPnpmIsolatedGlobalRoot);

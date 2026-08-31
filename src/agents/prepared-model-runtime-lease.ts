@@ -146,21 +146,6 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       existing?.needsRefresh &&
       !existing.pending &&
       (existing.provenance === "run" || existing.provenance === "ephemeral");
-    const pluginGenerationChanged =
-      options.pluginGeneration !== undefined &&
-      !preparedPluginGenerationReusesBase(
-        existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration,
-        options.pluginGeneration,
-      );
-    if (existing?.pending && pluginGenerationChanged) {
-      // Do not supersede active discovery. Wait for its owner to settle, then retry against
-      // the published identity so same-generation callers still coalesce.
-      await racePromiseWithAbortSignal(
-        existing.pending.catch(() => undefined),
-        options.abortSignal,
-      );
-      continue;
-    }
     if (
       context.getGatewayLifecycleActive() &&
       provenance === "run" &&
@@ -197,8 +182,25 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         // has an owner to rebind. Keep ordinary agent runs fail-closed at this ownership boundary.
       }
     }
+    // A static owner cannot satisfy explicit live discovery; publish a new exact generation.
+    const ownerGenerationChanged =
+      (options.pluginGeneration !== undefined &&
+        !preparedPluginGenerationReusesBase(
+          existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration,
+          options.pluginGeneration,
+        )) ||
+      (options.catalogMode === "live" && existing?.catalogMode === "static");
+    if (existing?.pending && ownerGenerationChanged) {
+      // Do not supersede active discovery. Wait for its owner to settle, then retry against
+      // the published identity so same-generation callers still coalesce.
+      await racePromiseWithAbortSignal(
+        existing.pending.catch(() => undefined),
+        options.abortSignal,
+      );
+      continue;
+    }
     try {
-      if (existing?.pending && !pluginGenerationChanged) {
+      if (existing?.pending && !ownerGenerationChanged) {
         // Matching callers lease the immutable generation they joined even if a queued
         // mismatched caller publishes the next owner immediately after this one settles.
         snapshot = await racePromiseWithAbortSignal(existing.pending, options.abortSignal);
@@ -208,7 +210,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         owner = existing;
         break;
       }
-      if (existing && !staleDynamicOwner && !pluginGenerationChanged) {
+      if (existing && !staleDynamicOwner && !ownerGenerationChanged) {
         snapshot = await racePromiseWithAbortSignal(
           context.prepareSnapshot(input),
           options.abortSignal,

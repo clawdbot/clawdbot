@@ -19,6 +19,7 @@ import {
 } from "../agent-tools.ring-zero-context.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -495,7 +496,6 @@ async function runSelectedAgentHarnessAttempt(
       sessionIdUsed: result.sessionIdUsed,
       sessionKey: internalParams.sessionKey,
       sessionTarget: internalParams.sessionTarget,
-      sessionFile: result.sessionFileUsed ?? internalParams.sessionFile,
       promptError: result.terminal.kind === "failed",
       aborted:
         result.terminal.kind === "aborted" ||
@@ -505,19 +505,6 @@ async function runSelectedAgentHarnessAttempt(
       yieldAborted:
         result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
       isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
-      tokenBudget: internalParams.contextTokenBudget,
-      contextEngineHostSupport: {
-        id: `agent-harness:${harness.id}`,
-        label: `agent harness "${harness.id}"`,
-        capabilities: harness.contextEngineHostCapabilities ?? [],
-      },
-      harnessId: harness.id,
-      providerId: internalParams.provider,
-      requestedModelId: internalParams.requestedModelId,
-      modelId: internalParams.modelId,
-      fallbackReason: internalParams.fallbackReason,
-      degradedReason: internalParams.degradedReason,
-      config: internalParams.config,
     });
   }
   const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;
@@ -651,20 +638,22 @@ function prepareHarnessFinalizationParams(
 }
 
 function withoutPluginHarnessPrivateState(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptInternalParams,
 ): Omit<import("./types.js").AgentHarnessAttemptParamsV2, "hostCapabilities"> {
   // Keep mutable host-owned state behind one projection for every plugin handoff;
   // separate projections can drift and expose authority on less common operations.
   const {
     admittedRunContext: _admittedRunContext,
     codeModeRecovery: _codeModeRecovery,
+    compactionCountOwner: _compactionCountOwner,
+    onContextAccountingEvent: _onContextAccountingEvent,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
     hostCapabilities: _hostCapabilities,
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
     trajectoryRecorder: _trajectoryRecorder,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
     ...pluginParams
-  } = params as EmbeddedRunAttemptParams & {
+  } = params as EmbeddedRunAttemptInternalParams & {
     __openclawSourceReplyDeliveryRuntime?: unknown;
   };
   return pluginParams;
@@ -787,7 +776,10 @@ function resolvePluginHarnessToolPolicies(
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.config,
-    sessionKey: sandboxSessionKey,
+    agentId: params.agentId,
+    // Compaction can supply an execution owner without its own session key.
+    sessionKey: params.sessionKey ?? (params.agentId ? undefined : sandboxSessionKey),
+    classificationSessionKey: sandboxSessionKey,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const capabilityProfile = resolveConversationCapabilityProfile({

@@ -45,6 +45,7 @@ describe("readSessionMessageIdentity", () => {
       id: "persisted-message",
       seq: 7,
       idempotencyKey: "persisted-run:user",
+      runId: "queued-execution",
     });
     expect(
       readSessionMessageIdentity(message, {
@@ -57,7 +58,8 @@ describe("readSessionMessageIdentity", () => {
       id: "persisted-message",
       sequence: 7,
       idempotencyKey: "persisted-run:user",
-      runId: "persisted-run",
+      sendId: "persisted-run",
+      runId: "queued-execution",
       isImported: false,
       externalSource: null,
     });
@@ -74,6 +76,7 @@ describe("readSessionMessageIdentity", () => {
       id: "envelope-message",
       sequence: 9,
       idempotencyKey: "envelope-run",
+      sendId: "envelope-run",
       runId: "envelope-run",
     });
   });
@@ -116,6 +119,7 @@ describe("readSessionMessageIdentity", () => {
       }),
     ).toMatchObject({
       idempotencyKey: "cli-assistant:run-cli-1",
+      sendId: null,
       runId: "run-cli-1",
     });
   });
@@ -692,27 +696,65 @@ describe("session transcript projection", () => {
     }
   });
 
-  it("reconciles an attachment-only optimistic turn solely by its actual send key", () => {
-    const pending = { role: "user", content: "", __openclaw: { idempotencyKey: "image-run:user" } };
-    const persisted = {
-      role: "user",
-      content: "",
-      __openclaw: {
-        id: "image-user",
-        seq: 1,
-        idempotencyKey: "image-run:user",
-        media: [{ path: "/image.png", contentType: "image/png" }],
-      },
-    };
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "sendPending",
-      runId: "image-run",
-      message: pending,
-    });
-    state = projectLiveSessionMessage(state, persisted);
+  it.each([undefined, "queued-execution"])(
+    "reconciles an attachment-only optimistic turn by its send key with execution %s",
+    (runId) => {
+      const pending = {
+        role: "user",
+        content: "",
+        __openclaw: { idempotencyKey: "image-run:user" },
+      };
+      const persisted = {
+        role: "user",
+        content: "",
+        __openclaw: {
+          id: "image-user",
+          seq: 1,
+          idempotencyKey: "image-run:user",
+          runId,
+          media: [{ path: "/image.png", contentType: "image/png" }],
+        },
+      };
+      let state = reduceSessionProjection(createSessionProjection(primaryScope), {
+        type: "sendPending",
+        runId: "image-run",
+        message: pending,
+      });
+      state = projectLiveSessionMessage(state, persisted);
 
-    expect(state.messages).toEqual([persisted]);
-    expect(state.entries[0]).toMatchObject({ live: true, pending: false });
+      expect(state.messages).toEqual([persisted]);
+      expect(state.entries[0]).toMatchObject({ live: true, pending: false });
+    },
+  );
+
+  it("reconciles a restored pending send with a completed queued execution", () => {
+    const pending = createMessage("user", "Update the menu", {
+      idempotencyKey: "queued-send:user",
+    });
+    const persisted = createMessage("user", "Update the menu", {
+      id: "persisted-prompt",
+      seq: 1,
+      idempotencyKey: "queued-send:user",
+      runId: "queued-execution",
+    });
+    const reply = createMessage("assistant", "Menu updated", {
+      id: "persisted-reply",
+      seq: 2,
+      runId: "queued-execution",
+    });
+    const state = createSessionProjection(primaryScope, [persisted, reply, pending]);
+
+    const reconciled = reconcileSessionProjectionSnapshot(state, [persisted, reply], primaryScope);
+
+    expect(reconciled.messages).toEqual([persisted, reply]);
+    expect(reconciled.entries[0]?.identity?.runId).toBe("queued-execution");
+    expect(
+      reduceSessionProjection(reconciled, {
+        type: "sendPending",
+        runId: "queued-send",
+        message: pending,
+      }).messages,
+    ).toEqual([persisted, reply]);
   });
 
   it("rejects a delayed old-epoch snapshot after the selected session resets", () => {
@@ -819,6 +861,7 @@ describe("session transcript projection", () => {
       id: "peer-user",
       seq: 1,
       idempotencyKey: "peer-run:user",
+      runId: "provisional-run",
     });
     let state = projectLiveSessionMessage(createSessionProjection(primaryScope, [pending]), peer);
     state = reduceSessionProjection(state, {
@@ -833,6 +876,7 @@ describe("session transcript projection", () => {
       id: "accepted-user",
       seq: 2,
       idempotencyKey: "accepted-run:user",
+      runId: "queued-execution",
     });
     expect(projectLiveSessionMessage(state, accepted).messages).toEqual([peer, accepted]);
 

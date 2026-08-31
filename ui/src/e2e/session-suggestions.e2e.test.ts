@@ -151,7 +151,10 @@ suite.define(() => {
     });
     await page.getByRole("button", { name: "Suggest message" }).click();
     const add = await gateway.waitForRequest("session.suggestions.add");
-    expect(add.params).toMatchObject({ sessionKey: "main", text: "Try the focused change" });
+    expect(add.params).toMatchObject({
+      sessionKey: "agent:main:main",
+      text: "Try the focused change",
+    });
     await expect(page.locator(".session-suggestion__state")).toHaveText("Pending");
     await expect(page.locator(".session-suggestion__text")).toHaveText("Try the focused change");
     await screenshot(page, "viewer-pending.png");

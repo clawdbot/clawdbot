@@ -4687,82 +4687,90 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("renders CLI skills from sandbox-readable paths instead of persisted host snapshots", async () => {
-    const { dir } = fixture.session;
-    const hostSkillDir = "/home/tzdai/.npm-global/lib/node_modules/openclaw/skills/gog";
-    const hostSkillPath = `${hostSkillDir}/SKILL.md`;
-    const materializedWorkspace = path.join(dir, "state", "sandbox-skills");
-    const materializedSkillDir = path.join(materializedWorkspace, "skills", "gog");
-    const materializedSkillPath = path.join(materializedSkillDir, "SKILL.md");
-    fs.mkdirSync(materializedSkillDir, { recursive: true });
-    fs.writeFileSync(
-      materializedSkillPath,
-      [
-        "---",
-        "name: gog",
-        "description: Read Gmail safely.",
-        "---",
-        "",
-        "Use the Gmail tools before answering mail questions.",
-      ].join("\n"),
-      "utf-8",
-    );
-    ensureSandboxWorkspaceForSessionMock.mockResolvedValue({
-      workspaceDir: dir,
-      containerWorkdir: "/workspace",
-      skillsWorkspaceDir: materializedWorkspace,
-      workspaceAccess: "rw",
-    });
-
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:sandboxed-user",
-      agentId: "main",
-      prompt: "are there any unread emails",
-      skillsSnapshot: {
-        prompt: [
-          "<available_skills>",
-          "  <skill>",
-          "    <name>gog</name>",
-          "    <description>Read Gmail safely.</description>",
-          `    <location>${hostSkillPath}</location>`,
-          "  </skill>",
-          "</available_skills>",
+  it.each(["agent:main:sandboxed-user", "global"])(
+    "renders sandbox-readable CLI skills for the prepared owner of %s",
+    async (sessionKey) => {
+      const { dir } = fixture.session;
+      const hostSkillDir = "/home/tzdai/.npm-global/lib/node_modules/openclaw/skills/gog";
+      const hostSkillPath = `${hostSkillDir}/SKILL.md`;
+      const materializedWorkspace = path.join(dir, "state", "sandbox-skills");
+      const materializedSkillDir = path.join(materializedWorkspace, "skills", "gog");
+      const materializedSkillPath = path.join(materializedSkillDir, "SKILL.md");
+      fs.mkdirSync(materializedSkillDir, { recursive: true });
+      fs.writeFileSync(
+        materializedSkillPath,
+        [
+          "---",
+          "name: gog",
+          "description: Read Gmail safely.",
+          "---",
+          "",
+          "Use the Gmail tools before answering mail questions.",
         ].join("\n"),
-        skills: [{ name: "gog" }],
-        resolvedSkills: [
-          {
-            name: "gog",
-            description: "Read Gmail safely.",
-            filePath: hostSkillPath,
-            baseDir: hostSkillDir,
-            source: "openclaw-bundled",
-            sourceInfo: {
-              path: hostSkillPath,
-              source: "openclaw-bundled",
-              scope: "project",
-              origin: "top-level",
-              baseDir: hostSkillDir,
-            },
-            disableModelInvocation: false,
-          },
-        ],
-      },
-    });
+        "utf-8",
+      );
+      ensureSandboxWorkspaceForSessionMock.mockResolvedValue({
+        workspaceDir: dir,
+        containerWorkdir: "/workspace",
+        skillsWorkspaceDir: materializedWorkspace,
+        workspaceAccess: "rw",
+      });
 
-    expect(ensureSandboxWorkspaceForSessionMock).toHaveBeenCalledWith({
-      config: createCliBackendConfig(),
-      sessionKey: "agent:main:sandboxed-user",
-      workspaceDir: dir,
-    });
-    expect(context.systemPrompt).toContain(
-      "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",
-    );
-    expect(context.systemPrompt).not.toContain(hostSkillPath);
-    expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
-    expect(context.systemPromptReport.skills.entries).toEqual([
-      { name: "gog", blockChars: expect.any(Number) },
-    ]);
-  });
+      const config: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
+      };
+      const context = await fixture.prepare({
+        config,
+        sessionKey,
+        agentId: "main",
+        prompt: "are there any unread emails",
+        skillsSnapshot: {
+          prompt: [
+            "<available_skills>",
+            "  <skill>",
+            "    <name>gog</name>",
+            "    <description>Read Gmail safely.</description>",
+            `    <location>${hostSkillPath}</location>`,
+            "  </skill>",
+            "</available_skills>",
+          ].join("\n"),
+          skills: [{ name: "gog" }],
+          resolvedSkills: [
+            {
+              name: "gog",
+              description: "Read Gmail safely.",
+              filePath: hostSkillPath,
+              baseDir: hostSkillDir,
+              source: "openclaw-bundled",
+              sourceInfo: {
+                path: hostSkillPath,
+                source: "openclaw-bundled",
+                scope: "project",
+                origin: "top-level",
+                baseDir: hostSkillDir,
+              },
+              disableModelInvocation: false,
+            },
+          ],
+        },
+      });
+
+      expect(ensureSandboxWorkspaceForSessionMock).toHaveBeenCalledWith({
+        config,
+        agentId: "main",
+        sessionKey,
+        workspaceDir: dir,
+      });
+      expect(context.systemPrompt).toContain(
+        "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",
+      );
+      expect(context.systemPrompt).not.toContain(hostSkillPath);
+      expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
+      expect(context.systemPromptReport.skills.entries).toEqual([
+        { name: "gog", blockChars: expect.any(Number) },
+      ]);
+    },
+  );
 
   it("lazily rebuilds an unsafe modern skills snapshot for a non-sandbox CLI run", async () => {
     const { dir } = fixture.session;

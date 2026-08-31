@@ -1,12 +1,13 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
   captureUiProofEnabled,
   createSessionManagementE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
   trimmedTextContents,
   uiProofArtifactDir,
@@ -52,7 +53,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, candidateKey));
       const zoneEntry = page.locator(`[data-sidebar-entry="session:${candidateKey}"]`);
       const threads = page.locator('[data-session-section="ungrouped"]');
       const row = threads.locator(`.sidebar-recent-session[data-session-key="${candidateKey}"]`);
@@ -101,7 +102,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, candidateKey));
       const zoneEntry = page.locator(`[data-sidebar-entry="session:${candidateKey}"]`);
       const threads = page.locator('[data-session-section="ungrouped"]');
       const row = threads.locator(`.sidebar-recent-session[data-session-key="${candidateKey}"]`);
@@ -145,7 +146,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, candidateKey));
       const zoneEntry = page.locator(`[data-sidebar-entry="session:${candidateKey}"]`);
       const threads = page.locator('[data-session-section="ungrouped"]');
       const row = threads.locator(`.sidebar-recent-session[data-session-key="${candidateKey}"]`);

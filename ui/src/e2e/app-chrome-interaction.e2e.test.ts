@@ -78,7 +78,12 @@ suite.define(() => {
           historyMessages: [
             {
               role: "assistant",
-              content: [{ type: "text", text: "Selectable transcript content" }],
+              content: [
+                {
+                  type: "text",
+                  text: "Selectable transcript content\n\nRead [example.ts](/tmp/example.ts) for details.",
+                },
+              ],
             },
           ],
           models: [
@@ -135,6 +140,10 @@ suite.define(() => {
         });
         await page.keyboard.press("Escape");
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
+        const fileLink = page.getByRole("button", { name: "example.ts", exact: true });
+        expect(await fileLink.evaluate((element) => getComputedStyle(element).userSelect)).toBe(
+          "text",
+        );
         const thread = page.locator(".chat-thread");
         expect(await readFocusOutline(thread)).toMatchObject({
           focusVisible: false,
@@ -193,7 +202,7 @@ suite.define(() => {
         });
         expect(settingsStyles).toEqual({
           contentScrollbar: "12px",
-          contentSelection: "none",
+          contentSelection: "auto",
           inputSelection: "text",
           sidebarScrollbar: "12px",
           sidebarSelection: "none",
@@ -201,6 +210,11 @@ suite.define(() => {
 
         await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
         expect(await dragAcross(page, settingsTitle)).toBe("");
+        const sectionTitle = page.locator(".settings-section__heading").first();
+        expect(await dragAcross(page, sectionTitle)).not.toBe("");
+        const toggleRow = page.locator(".settings-row--toggle").first();
+        await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
+        expect(await dragAcross(page, toggleRow.locator(".settings-row__title"))).toBe("");
         await settingsSearch.selectText();
         expect(
           await settingsSearch.evaluate(

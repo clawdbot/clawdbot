@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { VERSION } from "../version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -66,7 +67,7 @@ function createVersion14Bindings() {
       CREATE INDEX idx_current_conversation_bindings_target
         ON current_conversation_bindings(target_agent_id, target_session_key, updated_at DESC, binding_key);
       PRAGMA user_version = 14;
-      UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
+      UPDATE schema_meta SET schema_version = 14, app_version = NULL WHERE meta_key = 'primary';
     `);
     const insert = legacy.prepare(`
       INSERT INTO current_conversation_bindings (
@@ -200,8 +201,8 @@ describe("conversation binding target migration", () => {
   });
 
   it.each(migrationPaths)(
-    "preserves bindings and additive data through %s and reopen",
-    (migrationPath) => {
+    "preserves bindings and additive data through %s and cold reopen under a Gateway",
+    async (migrationPath) => {
       const { options, databasePath, before } = createVersion14Bindings();
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
@@ -221,9 +222,9 @@ describe("conversation binding target migration", () => {
       });
       expect(
         migrated.db
-          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .prepare("SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION, app_version: VERSION });
       expect(
         migrated.db
           .prepare(
@@ -251,8 +252,13 @@ describe("conversation binding target migration", () => {
 
       const after = readMigrationSnapshot(migrated.db);
       closeOpenClawStateDatabaseForTest();
-      expect(readMigrationSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
-      closeOpenClawStateDatabaseForTest();
+      const holder = await holdGatewayLifecycle(databasePath);
+      try {
+        expect(readMigrationSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+        await holder.release();
+      }
       expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
       const repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {

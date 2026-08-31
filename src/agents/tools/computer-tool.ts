@@ -15,11 +15,7 @@ import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { buildComputerToolDescription } from "./computer-tool-guidance.js";
 import { ComputerToolSession } from "./computer-tool-node.js";
-import {
-  buildComputerActParams,
-  isComputerActAction,
-  isReadOnlyComputerActAction,
-} from "./computer-tool-request.js";
+import { buildComputerActParams, isComputerActAction } from "./computer-tool-request.js";
 import {
   computerActResultText,
   projectComputerActResult,
@@ -38,7 +34,11 @@ import type {
   ResolvedComputerTarget,
   ScreenshotCapture,
 } from "./computer-tool-shared.js";
-import { AFTER_ACTION_SCREENSHOT_DELAY_MS, MAX_WAIT_SECONDS } from "./computer-tool-shared.js";
+import {
+  AFTER_ACTION_SCREENSHOT_DELAY_MS,
+  isComputerObservationAction,
+  MAX_WAIT_SECONDS,
+} from "./computer-tool-shared.js";
 import { readGatewayCallOptions } from "./gateway.js";
 
 export type { ComputerContextEpoch, ComputerToolTransport } from "./computer-tool-shared.js";
@@ -229,7 +229,7 @@ export function createComputerTool(options?: {
           toolCallId,
           signal,
         });
-        if (actResult.observation || isReadOnlyComputerActAction(action)) {
+        if (actResult.observation || isComputerObservationAction(action, params.dialogAction)) {
           session.recordObservation(resolved, actResult);
           session.setTarget(resolved.target);
           return await projectComputerActResult({

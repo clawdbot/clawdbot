@@ -127,6 +127,49 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer controls", () => {
+  it("shows actionable connecting guidance in a visible status region", () => {
+    const detail =
+      "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.";
+    const { container } = renderComposer({
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "connecting",
+      realtimeTalkDetail: detail,
+      onToggleRealtimeTalk: vi.fn(),
+    });
+    const pending = container.querySelector('.agent-chat__talk-status[role="status"]');
+    expect(pending?.textContent).toContain(detail);
+    expect(pending?.closest(".sr-only")).toBeNull();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(button(container, t("chat.composer.stopVoiceInput")).disabled).toBe(false);
+  });
+
+  it("shows the same microphone guidance while dictation waits for access", async () => {
+    vi.useFakeTimers();
+    openMicrophoneMock.mockReturnValue(new Promise(() => {}));
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({
+      gatewayClient: {
+        request: vi.fn(async () => ({ transcription: { ready: true } })),
+      } as unknown as GatewayBrowserClient,
+      onToggleRealtimeTalk: vi.fn(),
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+    await vi.advanceTimersByTimeAsync(0);
+    button(container, t("chat.composer.startVoiceInput")).dispatchEvent(
+      dictationPointer("pointerdown", 15),
+    );
+    await vi.advanceTimersByTimeAsync(800);
+    expect(
+      container.querySelector('.agent-chat__talk-status[role="status"]')?.textContent,
+    ).toContain(
+      "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
+    );
+    expect(container.querySelector(".agent-chat__dictation-phase")).toBeNull();
+  });
+
   it("labels the message input independently of its placeholder", () => {
     const { container } = renderComposer();
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
@@ -152,28 +195,37 @@ describe("renderChatComposer controls", () => {
     expect(textarea.matches(":placeholder-shown")).toBe(true);
   });
 
-  it("keeps an unsaved queued-row edit open when normal composer text is double-clicked", () => {
-    const onCancel = vi.fn();
-    const { container } = renderComposer({
-      draft: "select this composer text",
-      queue: [{ id: "queued", text: "original queued text", createdAt: 1 }],
-      queuedEdit: {
-        editingId: "queued",
-        editingText: "unsaved queued edit",
-        onCancel,
-      },
-    });
-    const composer = container.querySelector<HTMLTextAreaElement>(
-      ".agent-chat__composer-combobox textarea",
-    );
+  it.each([true, false])(
+    "keeps the unsaved row edit visible and cancellable (source retained: %s)",
+    (retained) => {
+      const onCancel = vi.fn();
+      const source = { id: "queued", text: "original queued text", createdAt: 1 };
+      const { container } = renderComposer({
+        draft: "select this composer text",
+        queue: retained ? [source] : [],
+        queuedEdit: {
+          editingId: "queued",
+          editingText: "unsaved queued edit",
+          source,
+          onCancel,
+        },
+      });
+      const composer = container.querySelector<HTMLTextAreaElement>(
+        ".agent-chat__composer-combobox textarea",
+      );
 
-    composer?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      composer?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
 
-    expect(onCancel).not.toHaveBeenCalled();
-    expect(container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")?.value).toBe(
-      "unsaved queued edit",
-    );
-  });
+      expect(onCancel).not.toHaveBeenCalled();
+      expect(container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")?.value).toBe(
+        "unsaved queued edit",
+      );
+      container
+        .querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")
+        ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      expect(onCancel).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps composing enabled and explains queued delivery while offline", () => {
     const { container } = renderComposer({

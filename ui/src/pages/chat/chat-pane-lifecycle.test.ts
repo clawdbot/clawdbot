@@ -1035,7 +1035,7 @@ describe("chat pane connection lifecycle", () => {
 
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
-      expect.objectContaining({ limit: 100, sessionKey: state.sessionKey }),
+      expect.objectContaining({ limit: 800, sessionKey: state.sessionKey }),
     );
     expect(deferHydration).toHaveBeenCalledWith(state.sessionKey, expect.any(Promise));
   });

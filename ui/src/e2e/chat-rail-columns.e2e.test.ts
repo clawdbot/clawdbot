@@ -310,7 +310,7 @@ suite.define(() => {
         async ({ page }) => {
           await seedDockReservationRegression(page, dock);
           await installMockGateway(page, scenario());
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.locator(".chat-group").first().waitFor();
 
           await page.locator(".chat-browser-panel-toggle").click();
@@ -379,7 +379,7 @@ suite.define(() => {
         async ({ page }) => {
           await seedSettings(page, themeMode);
           const gateway = await installMockGateway(page, scenario());
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.locator(".chat-group").first().waitFor();
 
           const topbarButtons = page.locator(".chat-pane__actions .chat-icon-btn");

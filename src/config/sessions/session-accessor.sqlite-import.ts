@@ -170,18 +170,7 @@ function importSqliteSessionRowsInTransaction(
     transcriptEvents = appendTranscriptEventsInTransaction(
       database,
       transcriptScope,
-      (function* (): Generator<TranscriptEvent, void, boolean> {
-        for (const row of stage.rows(source)) {
-          if (stage.hasSeen(row.eventJson)) {
-            continue;
-          }
-          // SAFETY: staging serialized the caller's TranscriptEvent without transforming its contents.
-          const inserted = yield JSON.parse(row.eventJson) as TranscriptEvent;
-          if (inserted) {
-            stage.addSeen(row.eventJson);
-          }
-        }
-      })(),
+      stage.iterateUnseenEvents(source),
       { allowStoredAlias: true, scheduleProjectionReconcile: false, touchMutation: false },
     );
     // Doctor imports run outside gateway requests and must finish with a complete projection.

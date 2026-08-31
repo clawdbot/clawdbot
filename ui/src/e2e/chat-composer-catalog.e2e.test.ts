@@ -92,7 +92,7 @@ suite.define(() => {
               scope: "agent",
             },
             messages: [],
-            sessionId: "control-ui-e2e-session",
+            sessionId: "session:agent:main:main",
             thinkingLevel: null,
           },
           "chat.metadata": {

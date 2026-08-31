@@ -46,6 +46,8 @@ export function createDispatchTestHarness(
     connId?: string;
     extraHandlers?: GatewayWsMessageHandlerParams["extraHandlers"];
     buildRequestContext?: () => unknown;
+    isClosed?: () => boolean;
+    getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   } = {},
 ) {
   const sentResponses: GatewayTestResponseFrame[] = [];
@@ -77,7 +79,8 @@ export function createDispatchTestHarness(
       buildRequestContext: () => (options.buildRequestContext?.() ?? {}) as never,
       send: sendForDispatcher,
       close,
-      isClosed: () => false,
+      isClosed: options.isClosed ?? (() => false),
+      getRequiredSharedGatewaySessionGeneration: options.getRequiredSharedGatewaySessionGeneration,
       setCloseCause,
       logGateway,
     } as unknown as GatewayWsMessageHandlerParams,
@@ -95,5 +98,15 @@ export function createDispatchTestHarness(
     responseWaiters.push({ id, deferred });
     return deferred.promise;
   };
-  return { awaitResponseFrame, close, dispatcher, logGateway, send, setCloseCause };
+  return {
+    awaitResponseFrame,
+    close,
+    dispatcher: {
+      dispatch: (frame: unknown, client: GatewayWsClient) =>
+        dispatcher.dispatch(frame, client, Buffer.byteLength(JSON.stringify(frame))),
+    },
+    logGateway,
+    send,
+    setCloseCause,
+  };
 }

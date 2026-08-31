@@ -491,6 +491,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           buildEmbeddedMessageActionDiscoveryInput({
             cfg: params.config,
             channel: runtimeChannel,
+            chatType: params.chatType,
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,

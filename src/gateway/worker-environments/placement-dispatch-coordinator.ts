@@ -11,6 +11,7 @@ export function coordinateWorkerPlacementDispatch(
   type PlacementFence = { promise: Promise<void> };
   type ReconciliationSweep = PlacementFence & {
     predecessor: PlacementFence | undefined;
+    full: boolean;
     acceptingJoins: boolean;
     joinedRecoveries: Set<Promise<void>>;
   };
@@ -19,7 +20,7 @@ export function coordinateWorkerPlacementDispatch(
   // A sweep can join an environment pass that began before the sweep. Keep its predecessor
   // separate from the fence tail so recovery waits for older exclusive work, never the sweep
   // it completes or exclusive work queued behind that sweep.
-  let reconciliationSweep: ReconciliationSweep | undefined;
+  const reconciliationSweeps = new Set<ReconciliationSweep>();
   const dispatchIdleWaiters = new Set<() => void>();
   const waitForDispatchIdle = (): Promise<void> => {
     if (activeDispatchCount === 0) {
@@ -29,13 +30,15 @@ export function coordinateWorkerPlacementDispatch(
       dispatchIdleWaiters.add(resolve);
     });
   };
-  const runReconciliation = (operation: () => Promise<void>): Promise<void> => {
-    if (reconciliationSweep) {
-      return reconciliationSweep.promise;
+  const runReconciliation = (operation: () => Promise<void>, full = true): Promise<void> => {
+    const existing = full && [...reconciliationSweeps].find((sweep) => sweep.full);
+    if (existing) {
+      return existing.promise;
     }
     const predecessor = placementFence;
     const sweep: ReconciliationSweep = {
       predecessor,
+      full,
       promise: Promise.resolve(),
       acceptingJoins: true,
       joinedRecoveries: new Set(),
@@ -51,16 +54,14 @@ export function coordinateWorkerPlacementDispatch(
         // Close admission before draining so late recoveries queue behind the existing fence.
         sweep.acceptingJoins = false;
         await Promise.allSettled(sweep.joinedRecoveries);
-        if (reconciliationSweep === sweep) {
-          reconciliationSweep = undefined;
-        }
+        reconciliationSweeps.delete(sweep);
         if (placementFence === sweep) {
           placementFence = undefined;
         }
       }
     })();
     sweep.promise = current;
-    reconciliationSweep = sweep;
+    reconciliationSweeps.add(sweep);
     placementFence = sweep;
     return current;
   };
@@ -121,6 +122,15 @@ export function coordinateWorkerPlacementDispatch(
       operation: ReturnType<WorkerPlacementDispatchService["move"]>;
     }
   >();
+  const reclaimsInFlight = new Map<string, Set<Promise<unknown>>>();
+  const afterSessionReclaims = async <T>(sessionId: string, run: () => Promise<T>): Promise<T> => {
+    // Later caller mutations cannot replace the worker while Stop prepares. Recovery
+    // bypasses this session intent so it can release the very run Stop is draining.
+    while (reclaimsInFlight.has(sessionId)) {
+      await Promise.allSettled(reclaimsInFlight.get(sessionId)!);
+    }
+    return await run();
+  };
   const joinOperation = async <T>(operation: Promise<T>, authorize?: () => void): Promise<T> => {
     // Shared placement work must never inherit another caller's authority across an await.
     authorize?.();
@@ -130,7 +140,9 @@ export function coordinateWorkerPlacementDispatch(
   };
   return {
     isPlacementOperationInFlight: (sessionId) =>
-      dispatchInFlight.has(sessionId) || moveInFlight.has(sessionId),
+      dispatchInFlight.has(sessionId) ||
+      moveInFlight.has(sessionId) ||
+      reclaimsInFlight.has(sessionId),
     dispatch: async (request, onTransition, authorize) => {
       const inFlight = dispatchInFlight.get(request.sessionId);
       if (inFlight) {
@@ -139,8 +151,8 @@ export function coordinateWorkerPlacementDispatch(
         }
         return await joinOperation(inFlight.operation, authorize);
       }
-      const operation = runPlacementOperation(() =>
-        service.dispatch(request, onTransition, authorize),
+      const operation = afterSessionReclaims(request.sessionId, () =>
+        runPlacementOperation(() => service.dispatch(request, onTransition, authorize)),
       );
       dispatchInFlight.set(request.sessionId, { request, operation });
       try {
@@ -163,8 +175,8 @@ export function coordinateWorkerPlacementDispatch(
         }
         return await joinOperation(inFlight.operation, authorize);
       }
-      const operation = runExclusivePlacementOperation(() =>
-        service.move(request, onTransition, authorize),
+      const operation = afterSessionReclaims(request.sessionId, () =>
+        runExclusivePlacementOperation(() => service.move(request, onTransition, authorize)),
       );
       moveInFlight.set(request.sessionId, { request, operation });
       try {
@@ -175,16 +187,36 @@ export function coordinateWorkerPlacementDispatch(
         }
       }
     },
-    reclaim: async (request, authorize, beforeDrain) =>
-      await runExclusivePlacementOperation(() => service.reclaim(request, authorize, beforeDrain)),
+    reclaim: async (request, authorize, beforeDrain) => {
+      // Cancellation may need coordinated recovery. Reserve exclusivity only after it drains.
+      const operation = service.reclaim(
+        request,
+        authorize,
+        beforeDrain,
+        runExclusivePlacementOperation,
+      );
+      const pending = reclaimsInFlight.get(request.sessionId) ?? new Set();
+      pending.add(operation);
+      reclaimsInFlight.set(request.sessionId, pending);
+      try {
+        return await operation;
+      } finally {
+        pending.delete(operation);
+        if (pending.size === 0) {
+          reclaimsInFlight.delete(request.sessionId);
+        }
+      }
+    },
     reconcile: (mode) => runReconciliation(() => service.reconcile(mode)),
     reconcileActive: (environmentId) =>
       environmentId === undefined
         ? runReconciliation(() => service.reconcileActive())
-        : runExclusivePlacementOperation(() => service.reconcileActive(environmentId)),
+        : runReconciliation(() => service.reconcileActive(environmentId), false),
     resumeProvisioning: (placement, reconcileEnvironmentCore) => {
-      const sweep = reconciliationSweep;
-      if (sweep?.acceptingJoins) {
+      // Insertion order matters: a later queued sweep must not steal a provisioning join
+      // from the earlier sweep already awaiting that environment pass.
+      const sweep = [...reconciliationSweeps].find((candidate) => candidate.acceptingJoins);
+      if (sweep) {
         const recovery = (async () => {
           if (sweep.predecessor) {
             await sweep.predecessor.promise.catch(() => undefined);

@@ -1,10 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
+import type { WorkerProvider } from "../../plugins/types.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import { requireProviderOperationTimeoutMs } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 
 export function createWorkerProviderOwnerLifecycle(
-  options: Pick<WorkerProviderLifecycleOptions, "store" | "tunnelManager" | "serviceError">,
+  options: Pick<
+    WorkerProviderLifecycleOptions,
+    "store" | "tunnelManager" | "serviceError" | "callProvider" | "providerCallTimeoutMs"
+  >,
 ) {
   const { store, serviceError } = options;
   const tunnels = options.tunnelManager;
@@ -43,5 +48,29 @@ export function createWorkerProviderOwnerLifecycle(
     return requireCurrentOwner(record);
   };
 
-  return { requireCurrentOwner, stopOwner };
+  const destroyLease = async (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    lease: Parameters<WorkerProvider["destroy"]>[0],
+  ) => {
+    requireCurrentOwner(record);
+    const timeoutMs =
+      options.providerCallTimeoutMs === undefined
+        ? requireProviderOperationTimeoutMs(
+            "destroy",
+            provider.resolveDestroyTimeoutMs?.(lease.profile),
+          )
+        : undefined;
+    await options.callProvider(
+      record.environmentId,
+      () => {
+        // An earlier timed-out operation can keep this call queued across owner changes.
+        requireCurrentOwner(record);
+        return provider.destroy(lease);
+      },
+      timeoutMs,
+    );
+  };
+
+  return { requireCurrentOwner, stopOwner, destroyLease };
 }

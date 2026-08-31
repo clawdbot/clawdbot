@@ -1,6 +1,10 @@
 // Covers safety timeouts around embedded-agent compaction calls.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { markRuntimeCompactionDelegate } from "../context-engine/compaction-watchdog.js";
+import {
+  bindContextEngineCompaction,
+  inheritRuntimeCompactionDelegate,
+  markRuntimeCompactionDelegate,
+} from "../context-engine/compaction-watchdog.js";
 import { isRuntimeCompactionDelegate } from "../context-engine/delegate.js";
 import { LegacyContextEngine } from "../context-engine/legacy.js";
 import type { CompactResult, ContextEngine } from "../context-engine/types.js";
@@ -239,18 +243,84 @@ describe("compactContextEngineWithSafetyTimeout", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("returns the plugin compact() result when it settles in time", async () => {
-    const result: CompactResult = {
-      ok: true,
-      compacted: true,
-      result: { tokensBefore: 1000, tokensAfter: 200 },
-    };
-    const compact = vi.fn<CompactFn>(async () => result);
+  it.each([
+    { marked: false, outcome: "result" },
+    { marked: true, outcome: "result" },
+    { marked: false, outcome: "error" },
+    { marked: true, outcome: "error" },
+  ] as const)(
+    "binds one captured compactor to its receiver and preserves child params ($marked, $outcome)",
+    async ({ marked, outcome }) => {
+      vi.useFakeTimers();
+      const result: CompactResult = {
+        ok: true,
+        compacted: true,
+        result: { tokensBefore: 1000, tokensAfter: 200 },
+      };
+      const error = new Error("engine compaction failed");
+      const compact = vi.fn(function (
+        this: { result: CompactResult; error: Error },
+        _params: Parameters<CompactFn>[0],
+      ) {
+        return outcome === "error" ? Promise.reject(this.error) : Promise.resolve(this.result);
+      });
+      const replacement = vi.fn<CompactFn>(async () => {
+        throw new Error("replacement compactor must not be invoked");
+      });
+      const captured = marked ? markRuntimeCompactionDelegate(compact) : compact;
+      const later = marked ? replacement : markRuntimeCompactionDelegate(replacement);
+      let reads = 0;
+      const engine = {
+        result,
+        error,
+        get compact() {
+          reads += 1;
+          return reads === 1 ? captured : later;
+        },
+      };
+      const bound = bindContextEngineCompaction(engine);
+      const forward = vi.fn<CompactFn>((params) => bound(params));
+      const ownedCompact = inheritRuntimeCompactionDelegate(bound, forward);
+      const controller = new AbortController();
+      const runtimeContext = { tokenBudget: 100_000 };
+      const request = { ...baseParams, runtimeContext };
+      const pending = compactContextEngineWithSafetyTimeout(
+        makeEngine(ownedCompact),
+        request,
+        30,
+        controller.signal,
+      );
 
-    await expect(
-      compactContextEngineWithSafetyTimeout(makeEngine(compact), baseParams, 30),
-    ).resolves.toBe(result);
-  });
+      if (outcome === "error") {
+        await expect(pending).rejects.toBe(error);
+      } else {
+        await expect(pending).resolves.toBe(result);
+      }
+      expect(reads).toBe(1);
+      expect(compact).toHaveBeenCalledOnce();
+      expect(compact.mock.contexts[0]).toBe(engine);
+      expect(replacement).not.toHaveBeenCalled();
+      expect(forward).toHaveBeenCalledOnce();
+      const backendParams = forward.mock.calls[0]?.[0];
+      expect(compact.mock.calls[0]?.[0]).toBe(backendParams);
+      expect(backendParams).toMatchObject(request);
+      expect(backendParams).not.toBe(request);
+      expect(backendParams?.abortSignal).toBeInstanceOf(AbortSignal);
+      expect(backendParams?.abortSignal).not.toBe(controller.signal);
+      expect(backendParams?.abortSignal?.aborted).toBe(false);
+      expect(isRuntimeCompactionDelegate(bound)).toBe(marked);
+      expect(isRuntimeCompactionDelegate(ownedCompact)).toBe(marked);
+      expect(typeof backendParams?.runtimeContext?.compactionTimeoutReset).toBe(
+        marked ? "function" : "undefined",
+      );
+      if (marked) {
+        expect(backendParams?.runtimeContext).not.toBe(runtimeContext);
+      } else {
+        expect(backendParams?.runtimeContext).toBe(runtimeContext);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("keeps a non-owning custom engine bounded", async () => {
     vi.useFakeTimers();
@@ -333,30 +403,43 @@ describe("compactContextEngineWithSafetyTimeout", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("refreshes the built-in watchdog when native compaction reports progress", async () => {
-    vi.useFakeTimers();
-    let resolveCompact!: (result: CompactResult) => void;
-    let resetTimeout!: () => void;
-    const result: CompactResult = { ok: true, compacted: false };
-    const compact = markRuntimeCompactionDelegate(
-      vi.fn<CompactFn>((params) => {
-        resetTimeout = (params.runtimeContext as { compactionTimeoutReset: () => void })
-          .compactionTimeoutReset;
+  it.each([false, true])(
+    "honors progress resets only for marked bound compactors (marked=%s)",
+    async (marked) => {
+      vi.useFakeTimers();
+      let resolveCompact!: (result: CompactResult) => void;
+      let resetTimeout: unknown;
+      const result: CompactResult = { ok: true, compacted: false };
+      const compact = vi.fn<CompactFn>((params) => {
+        resetTimeout = params.runtimeContext?.compactionTimeoutReset;
         return new Promise<CompactResult>((resolve) => {
           resolveCompact = resolve;
         });
-      }),
-    );
-    const pending = compactContextEngineWithSafetyTimeout(makeEngine(compact), baseParams, 30);
+      });
+      const engine = makeEngine(marked ? markRuntimeCompactionDelegate(compact) : compact);
+      const bound = bindContextEngineCompaction(engine);
+      const ownedCompact = inheritRuntimeCompactionDelegate(bound, (params) => bound(params));
+      const pending = compactContextEngineWithSafetyTimeout(
+        makeEngine(ownedCompact),
+        baseParams,
+        30,
+      );
+      const assertion = marked
+        ? expect(pending).resolves.toBe(result)
+        : expect(pending).rejects.toThrow("Compaction timed out");
 
-    await vi.advanceTimersByTimeAsync(20);
-    resetTimeout();
-    await vi.advanceTimersByTimeAsync(20);
-    resolveCompact(result);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(typeof resetTimeout).toBe(marked ? "function" : "undefined");
+      if (typeof resetTimeout === "function") {
+        resetTimeout();
+      }
+      await vi.advanceTimersByTimeAsync(20);
+      resolveCompact(result);
 
-    await expect(pending).resolves.toBe(result);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+      await assertion;
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("threads a signal that follows the run abort signal into the plugin compact() params", async () => {
     // Plugin context engines receive an abort signal derived from the run signal
@@ -430,16 +513,5 @@ describe("compactContextEngineWithSafetyTimeout", () => {
     controller.abort(abortError);
     await assertion;
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("preserves a thrown plugin compaction error", async () => {
-    const error = new Error("engine compaction failed");
-    const compact = vi.fn<CompactFn>(async () => {
-      throw error;
-    });
-
-    await expect(
-      compactContextEngineWithSafetyTimeout(makeEngine(compact), baseParams, 30),
-    ).rejects.toBe(error);
   });
 });

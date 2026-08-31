@@ -7,6 +7,7 @@ import type {
   SessionContextBudgetStatus,
   SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
@@ -292,6 +293,7 @@ export type EmbeddedAgentCompactResult = {
   result?: {
     /** Identifies summaryless provider compaction in RPC and UI consumers. */
     kind?: "server-endpoint";
+    sessionTarget?: ContextEngineSessionTarget;
     /** Server-endpoint compaction has no transcript summary or first-kept entry. */
     summary?: string;
     firstKeptEntryId?: string;

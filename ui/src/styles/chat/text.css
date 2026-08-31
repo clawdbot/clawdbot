@@ -570,7 +570,7 @@
   line-break: anywhere;
 }
 
-:is(.chat-text, .sidebar-markdown) a.markdown-session-link {
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link {
   display: inline;
   padding: 0.1em 0.2em;
   border: 1px solid var(--border-strong);
@@ -585,12 +585,12 @@
   word-break: break-word;
 }
 
-:is(.chat-text, .sidebar-markdown) a.markdown-session-link:hover,
-:is(.chat-text, .sidebar-markdown) a.markdown-session-link:focus-visible {
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:hover,
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link:focus-visible {
   text-decoration: underline;
 }
 
-:is(.chat-text, .sidebar-markdown) a.markdown-session-link--titled {
+:is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link--titled {
   display: inline-block;
   max-width: min(28em, 100%);
   padding: 0.08em 0.45em;

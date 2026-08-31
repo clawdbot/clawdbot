@@ -20,6 +20,15 @@ export function inheritRuntimeCompactionDelegate(
   return runtimeCompactionDelegates.has(source) ? markRuntimeCompactionDelegate(wrapped) : wrapped;
 }
 
+export function bindContextEngineCompaction(owner: {
+  readonly compact: ContextEngine["compact"];
+}): ContextEngine["compact"] {
+  // Projection proxies can return a fresh method on each read. Bind and tag
+  // the same captured method so watchdog ownership matches the invoked backend.
+  const compact = owner.compact;
+  return inheritRuntimeCompactionDelegate(compact, compact.bind(owner));
+}
+
 export function isRuntimeCompactionDelegate(compact: ContextEngine["compact"]): boolean {
   return runtimeCompactionDelegates.has(compact);
 }

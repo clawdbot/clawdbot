@@ -10,6 +10,8 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   listSessionEntriesCore,
+  loadSessionEntry,
+  patchSessionEntryCore,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -18,6 +20,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
 import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
+import { acceptCompactionSuccessor } from "./embedded-agent-runner/compaction-successor.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
@@ -30,14 +33,7 @@ type RunSessionCompaction =
   (typeof import("../auto-reply/reply/agent-runner-memory.js"))["runSessionCompactionIfNeeded"];
 type CaptureSessionDiffBaseline =
   (typeof import("../sessions/session-diff.js"))["captureSessionDiffBaseline"];
-type CliCompactionParams = {
-  pluginGeneration?: unknown;
-  sessionId: string;
-  sessionEntry?: SessionEntry;
-  sessionKey: string;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-};
+type CliCompaction = typeof import("./command/cli-compaction.js").runCliTurnCompactionLifecycle;
 
 const compactionTestState = vi.hoisted(() => ({
   cfg: undefined as OpenClawConfig | undefined,
@@ -48,9 +44,7 @@ const compactionTestState = vi.hoisted(() => ({
   normalizeProviderModelIdWithRuntimeMock: vi.fn(
     (_params: ProviderModelNormalizationParams) => undefined,
   ),
-  runCliTurnCompactionLifecycleMock: vi.fn(
-    async (params: CliCompactionParams) => params.sessionEntry,
-  ),
+  runCliTurnCompactionLifecycleMock: vi.fn<CliCompaction>(async (params) => params.sessionEntry),
   runMemoryFlushIfNeededMock: vi.fn(async (params: { sessionEntry?: SessionEntry }) => ({
     sessionEntry: params.sessionEntry,
     outcome: "completed" as const,
@@ -76,17 +70,18 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./agent-runtime-config.js", () => ({
-  resolveAgentRuntimeConfig: async () => ({
-    loadedRaw: compactionTestState.cfg,
-    sourceConfig: compactionTestState.cfg,
-    cfg: compactionTestState.cfg,
-  }),
+  resolveAgentRuntimeConfig: async () => compactionTestState.cfg,
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  isPluginMetadataSnapshotCompatible: () => false,
-  resolvePluginMetadataSnapshot: () => ({ plugins: [] }),
-}));
+vi.mock("../plugins/plugin-metadata-snapshot.js", async () => {
+  const { createPluginMetadataSnapshot } =
+    await import("../config/plugin-auto-enable.test-helpers.js");
+  return {
+    isPluginMetadataSnapshotCompatible: () => false,
+    resolvePluginMetadataSnapshot: () =>
+      createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
+  };
+});
 
 vi.mock("./agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
@@ -208,8 +203,8 @@ vi.mock("./command/attempt-execution.runtime.js", async () => {
 });
 
 vi.mock("./command/cli-compaction.js", () => ({
-  runCliTurnCompactionLifecycle: (params: CliCompactionParams) =>
-    compactionTestState.runCliTurnCompactionLifecycleMock(params),
+  runCliTurnCompactionLifecycle: (...args: Parameters<CliCompaction>) =>
+    compactionTestState.runCliTurnCompactionLifecycleMock(...args),
 }));
 
 vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
@@ -365,6 +360,9 @@ const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined, {}] as const;
 // Vitest rewrites imported references, but not re-export specifiers. Materialize
 // these runtime bindings after its hoisted mocks register, or exports become undefined.
 const compactionTestRuntime = {
+  acceptCompactionSuccessor,
+  loadSessionEntry,
+  patchSessionEntryCore,
   appendTranscriptEvent,
   appendTranscriptMessage,
   createAgentRunRestartAbortError,

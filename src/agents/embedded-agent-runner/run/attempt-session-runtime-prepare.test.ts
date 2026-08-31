@@ -170,7 +170,10 @@ function createFixture() {
       resolveActiveContextEnginePluginId: vi.fn(),
       sessionAgentId: "main",
       transcriptLifecycle: {},
-      withOwnedTranscriptWrite: vi.fn(),
+      withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => {
+        order.push("owned-boundary");
+        return await operation();
+      }),
     },
     agentSession: {
       agentCoreThinkingLevel: "medium",
@@ -228,6 +231,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       "own-manager",
       "agent-session",
       "own-session",
+      "owned-boundary",
       "boundary",
       "prompt-state",
       "settle-tracker",
@@ -263,6 +267,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     });
     expect(mocks.prepareSessionBoundary).toHaveBeenCalledWith(
       expect.objectContaining({
+        abortSignal: fixture.input.agentSession.runAbortSignal,
         getUserTranscriptContexts: fixture.getUserTranscriptContexts,
         preparedUserTurnMessage: { role: "user", content: "hello" },
       }),

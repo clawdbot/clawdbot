@@ -116,7 +116,7 @@ overrides:
   '@aws-sdk/xml-builder': 3.972.40
   '@hono/node-server': 2.1.1
   axios: 1.19.0
-  fast-uri: 4.1.2
+  fast-uri: 4.1.3
   follow-redirects: 1.16.0
   defu: 6.1.7
   fast-xml-parser: 5.11.0
@@ -147,6 +147,7 @@ packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
 patchedDependencies:
   '@vitest/runner@4.1.11': 55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93
+  matrix-js-sdk@42.2.0: 9e97147d99b86977d6665a676cdf853434ef61eee7cfb176bb66c9c48da599b4
   vitest@4.1.11: c21477c229514823498ab3a08311070cec46b1811e866bc1b3f6ff3f5720da2e
 
 importers:
@@ -176,10 +177,10 @@ importers:
         version: 2.18.0(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(supports-color@10.2.2)
       '@grammyjs/runner':
         specifier: 2.0.3
-        version: 2.0.3(grammy@1.45.1(supports-color@10.2.2))
+        version: 2.0.3(grammy@1.46.0(supports-color@10.2.2))
       '@grammyjs/transformer-throttler':
         specifier: 1.2.1
-        version: 1.2.1(grammy@1.45.1(supports-color@10.2.2))
+        version: 1.2.1(grammy@1.46.0(supports-color@10.2.2))
       '@homebridge/ciao':
         specifier: 1.3.12
         version: 1.3.12(supports-color@10.2.2)
@@ -247,8 +248,8 @@ importers:
         specifier: 22.0.2
         version: 22.0.2(supports-color@10.2.2)
       grammy:
-        specifier: 1.45.1
-        version: 1.45.1(supports-color@10.2.2)
+        specifier: 1.46.0
+        version: 1.46.0(supports-color@10.2.2)
       highlight.js:
         specifier: 11.12.0
         version: 11.12.0
@@ -1353,7 +1354,7 @@ importers:
         version: 15.0.0
       matrix-js-sdk:
         specifier: 42.2.0
-        version: 42.2.0
+        version: 42.2.0(patch_hash=9e97147d99b86977d6665a676cdf853434ef61eee7cfb176bb66c9c48da599b4)
       music-metadata:
         specifier: 11.15.0
         version: 11.15.0(supports-color@10.2.2)
@@ -1974,13 +1975,13 @@ importers:
     dependencies:
       '@grammyjs/runner':
         specifier: 2.0.3
-        version: 2.0.3(grammy@1.45.1(supports-color@10.2.2))
+        version: 2.0.3(grammy@1.46.0(supports-color@10.2.2))
       '@grammyjs/transformer-throttler':
         specifier: 1.2.1
-        version: 1.2.1(grammy@1.45.1(supports-color@10.2.2))
+        version: 1.2.1(grammy@1.46.0(supports-color@10.2.2))
       grammy:
-        specifier: 1.45.1
-        version: 1.45.1(supports-color@10.2.2)
+        specifier: 1.46.0
+        version: 1.46.0(supports-color@10.2.2)
       typebox:
         specifier: 1.3.16
         version: 1.3.16
@@ -3555,8 +3556,8 @@ packages:
     peerDependencies:
       grammy: ^1.0.0
 
-  '@grammyjs/types@4.0.0':
-    resolution: {integrity: sha512-Z8lDLTvOlo12e5Vnly/vQh3JC9ppaitS1dGZ3w068gNitOd/y8tTSiib+Xm38aBGbtYGmUZwOc6afYrLs2CSTg==}
+  '@grammyjs/types@5.0.0':
+    resolution: {integrity: sha512-iq1Qrq1iPKkB8yAa0qSuIURMZOCuqTY5pWy5gHpCeL1oQ+GPadGhw/cDTVE8waJwuCzacUzuIjRv1sESvk7u7A==}
 
   '@grpc/grpc-js@1.14.4':
     resolution: {integrity: sha512-k9Dj3DV/itK9D06Y8f190Qgop7/Ui+D0njFV3LHMPwPT75DpXLQohE9Wmz0QElrJnzsjB7KPWiKJbOl7IPDArQ==}
@@ -6727,8 +6728,8 @@ packages:
   fast-string-width@3.0.2:
     resolution: {integrity: sha512-gX8LrtNEI5hq8DVUfRQMbr5lpaS4nMIWV+7XEbXk2b8kiQIizgnlr12B4dA3ZEx3308ze0O4Q1R+cHts8kyUJg==}
 
-  fast-uri@4.1.2:
-    resolution: {integrity: sha512-TyGmBcbDTZXcb2cj5MV89DrF42DKvb3y5DDUNh95iO+IMeAzMkVSxK1PZRrRIpc9yg8U2GhGdbofNa0LS/a4Bw==}
+  fast-uri@4.1.3:
+    resolution: {integrity: sha512-7+72G6vLt7jjNas8SmSATx2qeyRIjxeqO3i4IkmDTxlqYZRKANhOe1bnovcp4WZmvsYrp60WyqPyHqgRiX0yXw==}
 
   fast-wrap-ansi@0.2.2:
     resolution: {integrity: sha512-7F2Fl+TjRSenLqlU3UjSH0iyqopqoZIu7eZVpEirP2g1GtWa2G/ecEmBdgz31+Mxr+ELclgg6sokpSFIQiZ02Q==}
@@ -6928,8 +6929,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  grammy@1.45.1:
-    resolution: {integrity: sha512-Y4VL/hqJMZZxwlUr5ZgM68CFu2iIeEkNLR1cY3+Ww68CIvWARDsoXFix7+31rmyC0+7L85ZI+Pq3E5JSG5+nLQ==}
+  grammy@1.46.0:
+    resolution: {integrity: sha512-/8Qw+iisrUdOMk+p2mjEHouMm/BBdBEN1DHh16wiTpRUZkxDG3PxexdjCvR+wvK3LWPdrEvnQbdrwpU954sPhg==}
     engines: {node: ^12.20.0 || >=14.13.1}
 
   guid-typescript@1.0.9:
@@ -10800,17 +10801,17 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@grammyjs/runner@2.0.3(grammy@1.45.1(supports-color@10.2.2))':
+  '@grammyjs/runner@2.0.3(grammy@1.46.0(supports-color@10.2.2))':
     dependencies:
       abort-controller: 3.0.0
-      grammy: 1.45.1(supports-color@10.2.2)
+      grammy: 1.46.0(supports-color@10.2.2)
 
-  '@grammyjs/transformer-throttler@1.2.1(grammy@1.45.1(supports-color@10.2.2))':
+  '@grammyjs/transformer-throttler@1.2.1(grammy@1.46.0(supports-color@10.2.2))':
     dependencies:
       bottleneck: 2.19.5
-      grammy: 1.45.1(supports-color@10.2.2)
+      grammy: 1.46.0(supports-color@10.2.2)
 
-  '@grammyjs/types@4.0.0': {}
+  '@grammyjs/types@5.0.0': {}
 
   '@grpc/grpc-js@1.14.4':
     dependencies:
@@ -13093,7 +13094,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 4.1.2
+      fast-uri: 4.1.3
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -13882,7 +13883,7 @@ snapshots:
     dependencies:
       fast-string-truncated-width: 3.0.3
 
-  fast-uri@4.1.2: {}
+  fast-uri@4.1.3: {}
 
   fast-wrap-ansi@0.2.2:
     dependencies:
@@ -14116,9 +14117,9 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  grammy@1.45.1(supports-color@10.2.2):
+  grammy@1.46.0(supports-color@10.2.2):
     dependencies:
-      '@grammyjs/types': 4.0.0
+      '@grammyjs/types': 5.0.0
       abort-controller: 3.0.0
       debug: 4.4.3(supports-color@10.2.2)
       node-fetch: 2.7.0
@@ -14907,7 +14908,7 @@ snapshots:
 
   matrix-events-sdk@0.0.1: {}
 
-  matrix-js-sdk@42.2.0:
+  matrix-js-sdk@42.2.0(patch_hash=9e97147d99b86977d6665a676cdf853434ef61eee7cfb176bb66c9c48da599b4):
     dependencies:
       '@babel/runtime': 8.0.0
       '@matrix-org/matrix-sdk-crypto-wasm': 18.5.0

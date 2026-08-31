@@ -44,7 +44,11 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
   const sessionAcpMeta = sessionStoreEntry.sessionKey
-    ? readAcpSessionMeta({ sessionKey: sessionStoreEntry.sessionKey })
+    ? readAcpSessionMeta({
+        cfg,
+        agentId: sessionStoreEntry.agentId,
+        sessionKey: sessionStoreEntry.sessionKey,
+      })
     : undefined;
   const sessionEntryWithAcp =
     sessionAcpMeta && sessionStoreEntry.entry
@@ -109,6 +113,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
     normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
       cfg,
+      agentId: state.sessionAgentId,
       sessionKey: state.acpDispatchSessionKey,
       workspaceDir: state.workspaceDir,
       messageProvider: deliveryChannel,
@@ -170,6 +175,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
+      agentId: state.sessionAgentId,
       sessionKey: agentRuntimeSessionKey,
       policySessionKey:
         options?.sessionKey ?? resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,

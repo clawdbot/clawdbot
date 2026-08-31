@@ -38,6 +38,13 @@ their current ephemeral-token and WebRTC data-channel flow.
 
 Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
 
+OpenAI GA browser Talk keeps provider conversation order even when an assistant
+reply finishes before the user's transcription or item announcements arrive out
+of order. Text streams immediately in the call view; late predecessor metadata
+places it beside the correct reply. Stopping a call drains finalized speech,
+skips unfinished transcriptions, and records a browser console warning for
+missing transcriptions or unresolved conversation links.
+
 Google Live saves complete utterances during the call, including Gemini 3.1
 transcriptions that omit an explicit transcription-finished flag. Partial text
 stays provisional until the provider's completion boundary.
@@ -46,6 +53,8 @@ Voice-originated consult runs require a new, exact spoken confirmation before hi
 
 Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
 
+Transcription providers can advertise their model choices in `talk.catalog.transcription.providers[].models`. Pass `model` to `talk.session.create` to override the configured transcription model for that session. Omitting it keeps the provider configuration, then the matching `agents.defaults.voiceModel`, then the provider's own default.
+
 Browser Video Talk is available for OpenAI Realtime WebRTC and Google Live
 provider-WebSocket sessions. OpenAI gets a single bounded JPEG when
 `describe_view` asks for visual context; it does not receive a continuous
@@ -53,6 +62,21 @@ camera track. Google Live receives bounded JPEG frames directly from the
 browser at up to one frame per second, while `describe_view` reports the
 camera-stream state. In both cases, camera frames bypass the Gateway, and
 stopping Talk releases the camera and microphone tracks.
+
+Browser Talk shows startup progress while preparing the session, waiting for
+microphone access, and connecting. Talk and dictation show microphone guidance
+while the browser's capture request is pending: bring the tab to the foreground
+and allow access if prompted. The browser can keep an unanswered permission
+request pending. In Talk, **Stop voice input** cancels startup and releases any
+microphone stream granted after cancellation.
+
+Browser Talk acquires the microphone before creating the provider session, so
+time spent granting permission does not consume a short-lived connection token.
+If session creation fails, Talk releases the microphone before reporting the error.
+
+If OpenAI cannot transcribe an utterance, browser Talk shows the provider's error
+without ending the call or inventing a transcript. You can speak again; audio
+responses continue independently of input transcription.
 
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore

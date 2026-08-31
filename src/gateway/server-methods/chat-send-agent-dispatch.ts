@@ -168,7 +168,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     context,
     runId: clientRunId,
     controller: activeRunAbort.controller,
-    sessionId: admittedSessionId,
+    sessionBinding: admission.sessionBinding,
     sessionKey,
     agentId: selectedAgent.agentId,
     ownerConnId: client?.connId,
@@ -225,8 +225,16 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     }
     emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs);
   };
+  const dispatchAdmission = {
+    run: <T>(operation: () => Promise<T>) =>
+      gatewayWorkAdmission.run(() =>
+        userTurnRecorder.withPendingInput
+          ? userTurnRecorder.withPendingInput(operation)
+          : operation(),
+      ),
+  };
   const dispatch = replyDispatch
-    .runAgentMediaTranscript(gatewayWorkAdmission, () =>
+    .runAgentMediaTranscript(dispatchAdmission, () =>
       measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
@@ -310,11 +318,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     ? { expectedExistingSessionId: entry.sessionId }
                     : {}),
                 resumeRequestedSession: reconnectResumeRequested,
-                onSessionPrepared: (binding) => {
-                  if (binding.sessionKey === sessionKey) {
-                    userTurn.setAcceptedSessionId(binding.sessionId);
-                  }
-                },
+                onSessionPrepared: admission.onSessionPrepared,
                 abortSignal: activeRunAbort.controller.signal,
                 // Keep a Gateway-owned cancel identity after this chat.send
                 // terminalizes while the prompt waits in followup/collect queue.

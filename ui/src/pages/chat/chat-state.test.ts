@@ -13,7 +13,8 @@ import {
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-store.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -922,9 +923,8 @@ describe("canonical session message recovery", () => {
       ]);
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith("chat.history", {
-          agentId: "main",
           sessionKey: state.sessionKey,
-          limit: 100,
+          limit: 800,
         }),
       );
       await vi.waitFor(() => expect(state.chatLoading).toBe(false));
@@ -2231,9 +2231,8 @@ describe("canonical session message recovery", () => {
 
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith("chat.history", {
-        agentId: "main",
         sessionKey: state.sessionKey,
-        limit: 100,
+        limit: 800,
       });
     });
     expect(state.chatRunId).toBe("active-run");
@@ -3497,7 +3496,7 @@ describe("loadPageAssistantIdentity", () => {
       },
       gateway: { snapshot: { client, connected: true, hello: null } },
       initialUserMessage: createInitialUserMessageHandoff(),
-      sessions: {},
+      sessions: { refresh: vi.fn().mockResolvedValue(undefined) },
     } as unknown as ApplicationContext;
     const state = createPageState(
       context,
@@ -3968,6 +3967,7 @@ describe("refreshChatModelAuthStatus", () => {
       });
       const staleMainStatus = { ts: 1, providers: [] };
       const workStatus = { ts: 2, providers: [] };
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
       const state = {
         client: { request },
         connected: true,
@@ -3987,6 +3987,7 @@ describe("refreshChatModelAuthStatus", () => {
         sessions: {
           state: { modelOverrides: {} },
           retireModelOverride: vi.fn(),
+          refresh: refreshSessions,
         },
       } as unknown as ChatPageHost;
 
@@ -4000,6 +4001,9 @@ describe("refreshChatModelAuthStatus", () => {
         ["models.authStatus", { agentId: "main" }],
         ["models.authStatus", { agentId: "work" }],
       ]);
+      expect(refreshSessions).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work", force: true }),
+      );
 
       workResponse.resolve(workStatus);
       await vi.waitFor(() => expect(state.modelAuthStatusResult).toBe(workStatus));

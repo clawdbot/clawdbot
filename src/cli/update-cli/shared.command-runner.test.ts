@@ -9,6 +9,7 @@ import {
   ensureGitCheckout,
   parseTimeoutMsOrExit,
   resolveUpdateRoot,
+  runUpdateStep,
 } from "./shared.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
@@ -91,6 +92,32 @@ describe("update CLI shared helpers", () => {
       error.mockRestore();
       exit.mockRestore();
     }
+  });
+
+  it("keeps failed command diagnostics in both progress and the final result", async () => {
+    runCommandWithTimeout.mockResolvedValueOnce({
+      ...successfulCommandResult,
+      code: 1,
+      stdout: `${"x".repeat(10_000)}\nBuild type error`,
+      stderr: "Command failed",
+    });
+    const onStepComplete = vi.fn();
+    const result = await runUpdateStep({
+      name: "build",
+      argv: ["pnpm", "build"],
+      timeoutMs: 1200,
+      progress: { onStepComplete },
+    });
+
+    expect(result.stdoutTail).toContain("Build type error");
+    expect(result.stdoutTail?.length).toBeLessThanOrEqual(8001); // includes the truncation marker
+    expect(onStepComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stdoutTail: result.stdoutTail,
+        stderrTail: "Command failed",
+        exitCode: 1,
+      }),
+    );
   });
 
   it("parses complete positive integer timeout values as milliseconds", () => {

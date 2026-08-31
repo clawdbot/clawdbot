@@ -20,12 +20,9 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
-import {
-  applyChatAgentsList,
-  getChatHistoryLoadState,
-  resumePendingChatHistoryLoad,
-  syncSelectedSessionMessageSubscription,
-} from "./chat-history.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import {
   applySelectedSessionProjection,
@@ -40,6 +37,7 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
@@ -52,7 +50,7 @@ import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
@@ -109,6 +107,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       connectionGeneration: scope.generation,
       gatewaySnapshot: scope.context.gateway.snapshot,
       reclaimingKey: this.headerPlacementReclaimingKey,
+      placementStartup: scope.context.placementStartup,
       row,
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       onReclaimingChange,
@@ -132,8 +131,14 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     for (const { key, agentId } of stateValue.deletedSessions) {
       clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
     }
-    state.sessionsResult = stateValue.result;
-    state.sessionsResultAgentId = stateValue.agentId;
+    // A list for another agent must not overwrite this pane's global history.
+    if (
+      !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      stateValue.agentId === resolveChatAgentId(state)
+    ) {
+      state.sessionsResult = stateValue.result;
+      state.sessionsResultAgentId = stateValue.agentId;
+    }
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     this.refreshSwarmRoster();
@@ -173,7 +178,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (reconciledLocalCompletion) {
       void retryReconnectableQueuedChatSends(state);
     } else if (this.presented) {
-      state.requestUpdate?.();
+      // Share the event handler's frame; synchronous roster publication must
+      // not force a transcript redraw for every incoming session update.
+      requestChatPageUpdate(state, "animation-frame");
     }
   }
 

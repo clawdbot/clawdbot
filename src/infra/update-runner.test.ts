@@ -703,20 +703,58 @@ describe("runGatewayUpdate", () => {
     };
   }
 
-  it("skips git update when worktree is dirty", async () => {
-    await setupGitCheckout();
-    const beforeGitMutation = vi.fn<() => Promise<void>>();
-    const { runner, calls } = createRunner({
-      ...buildGitWorktreeProbeResponses({ status: " M README.md" }),
-    });
+  it.each([
+    {
+      name: "dirty",
+      code: 0,
+      stdout: " M README.md",
+      stderr: "",
+      status: "skipped",
+      reason: "dirty",
+    },
+    {
+      name: "unreadable",
+      code: 128,
+      stdout: "",
+      stderr: "fatal: unable to read index",
+      status: "error",
+      reason: "clean-check-failed",
+    },
+    {
+      name: "timed out",
+      code: null,
+      stdout: "",
+      stderr: "git status timed out",
+      status: "error",
+      reason: "clean-check-failed",
+    },
+  ])(
+    "stops git update when the worktree is $name",
+    async ({ code, stdout, stderr, status, reason }) => {
+      await setupGitCheckout();
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
+      const { runner, calls } = createRunner({
+        ...buildGitWorktreeProbeResponses(),
+        [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { code, stdout, stderr },
+      });
 
-    const result = await runWithRunner(runner, { beforeGitMutation });
+      const result = await runWithRunner(runner, { beforeGitMutation });
 
-    expect(result.status).toBe("skipped");
-    expect(result.reason).toBe("dirty");
-    expect(beforeGitMutation).not.toHaveBeenCalled();
-    expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
-  });
+      expect(result.status).toBe(status);
+      expect(result.reason).toBe(reason);
+      expect(result.steps).toMatchObject([
+        {
+          name: "clean check",
+          exitCode: code,
+          stdoutTail: stdout || null,
+          stderrTail: stderr || null,
+        },
+      ]);
+      expect(beforeGitMutation).not.toHaveBeenCalled();
+      expect(calls.some((call) => call.includes(" fetch "))).toBe(false);
+      expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
+    },
+  );
 
   it("uses the supplied update cwd when the process cwd disappeared", async () => {
     await setupGitCheckout();
@@ -2031,7 +2069,7 @@ describe("runGatewayUpdate", () => {
           " M extensions/browser/chrome-extension/modules/copilot-runtime.js\n?? generated-build-output.tmp",
       }),
     );
-    expect(calls.filter((call) => call === statusCommand)).toHaveLength(2);
+    expect(calls.filter((call) => call === statusCommand)).toHaveLength(3);
     expect(calls).not.toContain("pnpm ui:build");
     expect(calls).toContain(`git -C ${tempDir} reset --hard`);
     expect(calls).toContain(`git -C ${tempDir} clean -fd -e dist/control-ui/`);
@@ -3364,11 +3402,33 @@ describe("runGatewayUpdate", () => {
   });
 
   it.each([
-    { bundle: "complete", missingRollbackStartupAsset: false, serviceRestartSafe: true },
-    { bundle: "incomplete", missingRollbackStartupAsset: true, serviceRestartSafe: false },
+    {
+      bundle: "complete",
+      missingRollbackStartupAsset: false,
+      rollbackBuildStatus: null,
+      serviceRestartSafe: true,
+    },
+    {
+      bundle: "incomplete",
+      missingRollbackStartupAsset: true,
+      rollbackBuildStatus: null,
+      serviceRestartSafe: false,
+    },
+    {
+      bundle: "dirty rollback build",
+      missingRollbackStartupAsset: false,
+      rollbackBuildStatus: " M pnpm-lock.yaml\n",
+      serviceRestartSafe: false,
+    },
+    {
+      bundle: "untracked rollback output",
+      missingRollbackStartupAsset: false,
+      rollbackBuildStatus: "?? generated.tmp\n",
+      serviceRestartSafe: false,
+    },
   ])(
     "rolls pnpm 12 back to 11 and allows restart only with a $bundle startup bundle",
-    async ({ missingRollbackStartupAsset, serviceRestartSafe }) => {
+    async ({ missingRollbackStartupAsset, rollbackBuildStatus, serviceRestartSafe }) => {
       await setupGitCheckout({ packageManager: "pnpm@11.22.0" });
       const beforeSha = "a".repeat(40);
       const targetSha = "b".repeat(40);
@@ -3378,6 +3438,7 @@ describe("runGatewayUpdate", () => {
       const calls: string[] = [];
       const buildEnvs: NodeJS.ProcessEnv[] = [];
       const managerVersions: string[] = [];
+      const statusCommand = `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`;
       const doctorNodePath = await resolveStableNodePath(process.execPath);
       const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
       const writeRuntime = async (head: string) => {
@@ -3452,6 +3513,9 @@ describe("runGatewayUpdate", () => {
           await writeRuntime(currentHead);
           return toCommandResult();
         }
+        if (key === statusCommand && rollbackBuildStatus && buildCount >= 2) {
+          return toCommandResult({ stdout: rollbackBuildStatus });
+        }
         if (key === doctorCommand) {
           return toCommandResult({ code: 1, stderr: "doctor failed after build" });
         }
@@ -3476,7 +3540,12 @@ describe("runGatewayUpdate", () => {
         reason: "doctor-failed",
         recovery: serviceRestartSafe
           ? { serviceRestartSafe: true }
-          : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          : {
+              serviceRestartSafe: false,
+              reason: rollbackBuildStatus
+                ? "rollback-checkout-dirty"
+                : "runtime-verification-failed",
+            },
       });
       expect(buildCount).toBe(2);
       expect(buildEnvs).toEqual([
@@ -3491,6 +3560,15 @@ describe("runGatewayUpdate", () => {
         name: "git rollback runtime verify",
         exitCode: serviceRestartSafe ? 0 : 1,
       });
+      if (rollbackBuildStatus) {
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({
+            name: "git rollback build clean check",
+            exitCode: 0,
+            stdoutTail: rollbackBuildStatus.trimEnd(),
+          }),
+        );
+      }
       expect(calls.indexOf(doctorCommand)).toBeLessThan(
         calls.lastIndexOf(`git -C ${tempDir} rev-parse HEAD`),
       );

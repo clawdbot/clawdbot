@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import type { Transport } from "../../llm/types.js";
@@ -118,6 +118,8 @@ export type SettingsScope = "global" | "project";
 export const SETTINGS_SCOPES: SettingsScope[] = ["global", "project"];
 
 export interface SettingsStorage {
+  /** Pure scope reads; existing custom backends may serve reads through withLock. */
+  readSettingsScope?(scope: SettingsScope): string | undefined;
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
 }
 
@@ -136,25 +138,42 @@ export class FileSettingsStorage implements SettingsStorage {
     };
   }
 
+  readSettingsScope(scope: SettingsScope): string | undefined {
+    const path = this.paths[scope];
+    // Observe ownership before absence: a first writer may commit between probes.
+    // Existing lock names and reclaim guards still go through the canonical lock checks.
+    if (
+      !lstatSync(`${path}.lock`, { throwIfNoEntry: false }) &&
+      !lstatSync(`${path}.lock.reclaim`, { throwIfNoEntry: false }) &&
+      !existsSync(path)
+    ) {
+      return undefined;
+    }
+    let content: string | undefined;
+    this.withLock(scope, (current) => {
+      content = current;
+      return undefined;
+    });
+    return content;
+  }
+
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
     const path = this.paths[scope];
     const dir = dirname(path);
 
     let release: (() => void) | undefined;
     try {
-      // Only create directory and lock if file exists or we need to write
-      const fileExists = existsSync(path);
-      if (fileExists) {
+      const directoryExists = existsSync(dir);
+      if (directoryExists) {
         release = acquireFileLockSyncWithRetry(path);
       }
-      const current = fileExists ? readFileSync(path, "utf-8") : undefined;
+      // Missing-directory reads stay side-effect free. Concurrent external first creators
+      // remain unsupported because they can derive writes before a lock path exists.
+      const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
       const next = fn(current);
       if (next !== undefined) {
-        // Only create directory when we actually need to write
-        if (!existsSync(dir)) {
+        if (!directoryExists) {
           mkdirSync(dir, { recursive: true });
-        }
-        if (!release) {
           release = acquireFileLockSyncWithRetry(path);
         }
         writeFileSync(path, next, "utf-8");

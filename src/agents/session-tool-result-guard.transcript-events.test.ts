@@ -7,8 +7,17 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  listSessionPendingInputs,
+} from "../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginHookBeforeMessageWriteEvent } from "../plugins/types.js";
 import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
@@ -18,6 +27,7 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const listeners: Array<() => void> = [];
@@ -33,11 +43,12 @@ async function openPersistedSessionManager() {
     sessionKey: `agent:main:${sessionId}`,
     storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
   };
+  const sessionEntry = { sessionId, updatedAt: Date.now() };
   await upsertSessionEntry({
     ...target,
-    entry: { sessionId, updatedAt: Date.now() },
+    entry: sessionEntry,
   });
-  return { root, sessionManager: SessionManager.open(target, root), target };
+  return { root, sessionManager: SessionManager.open(target, root), target, sessionEntry };
 }
 
 afterEach(() => {
@@ -49,6 +60,81 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  it("consumes a steered source under its own custody and does not repeat its approval hook", async () => {
+    const { root, target, sessionEntry } = await openPersistedSessionManager();
+    const recorderTarget = { ...target, sessionEntry };
+    const ambient = createUserTurnTranscriptRecorder({
+      input: { text: "Active turn", timestamp: 1, idempotencyKey: "active:user" },
+      target: recorderTarget,
+    });
+    const source = createUserTurnTranscriptRecorder({
+      input: { text: "Steered source", timestamp: 2, idempotencyKey: "steered:user" },
+      target: recorderTarget,
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+    });
+    try {
+      await ambient.stageApproved!({ runId: "active", assertCurrent: () => {} });
+      await ambient.persistApproved();
+      const approvalHook = vi.fn(({ message }: PluginHookBeforeMessageWriteEvent) => {
+        if (message.role !== "user") {
+          return undefined;
+        }
+        return {
+          message: {
+            ...message,
+            content: `[approved] ${typeof message.content === "string" ? message.content : ""}`,
+          },
+        };
+      });
+      const registry = createEmptyPluginRegistry();
+      registry.typedHooks.push({
+        pluginId: "steered-input-approval",
+        hookName: "before_message_write",
+        source: "test",
+        handler: approvalHook,
+      });
+      initializeGlobalHookRunner(registry);
+      expect(await source.stageApproved!({ runId: "steered", assertCurrent: () => {} })).toBe(true);
+      const approved = await source.resolveMessage();
+      if (!approved) {
+        throw new Error("Expected approved steering input");
+      }
+      const pending = listSessionPendingInputs(target);
+      expect(pending.total).toBe(1);
+      const guarded = guardSessionManager(SessionManager.open(target, root), {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+      });
+      const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
+        { role: "user", content: "Rendered steering prompt", timestamp: 2 },
+        { message: approved, recorder: source },
+      );
+
+      // The already-running turn's async context is not the steered input's custody.
+      const entryId = ambient.withPendingInput!(() => guarded.appendMessage(runtimeMessage));
+
+      expect(entryId).toBe(pending.items[0]?.id);
+      expect(guarded.getEntry(entryId)).toMatchObject({ message: approved });
+      expect(source.getAdmissionReceipt()).toMatchObject({ entryId });
+      expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
+      expect(approvalHook).toHaveBeenCalledOnce();
+
+      const unstagedId = guarded.appendMessage({
+        role: "user",
+        content: "Unstaged source",
+        timestamp: 3,
+      });
+      expect(approvalHook).toHaveBeenCalledTimes(2);
+      expect(guarded.getEntry(unstagedId)).toMatchObject({
+        message: { role: "user", content: "[approved] Unstaged source" },
+      });
+    } finally {
+      source.finishPendingInput?.("interrupted");
+      ambient.finishPendingInput?.("interrupted");
+      resetGlobalHookRunner();
+    }
+  });
+
   it("records the admission anchor when adopting an ingress-persisted user", async () => {
     const { root, target } = await openPersistedSessionManager();
     const message = {
@@ -154,9 +240,9 @@ describe("guardSessionManager transcript updates", () => {
       ).toHaveLength(1);
       expect(updates).toEqual([]);
       expect(markRuntimePersisted).toHaveBeenCalledTimes(1);
-      expect(markRuntimePersisted).toHaveBeenCalledWith(
-        expect.objectContaining({ idempotencyKey: "canonical-run:user" }),
-      );
+      expect(markRuntimePersisted.mock.calls[0]?.[0]).toMatchObject({
+        idempotencyKey: "canonical-run:user",
+      });
     },
   );
 
@@ -218,9 +304,11 @@ describe("guardSessionManager transcript updates", () => {
 
     guarded.appendMessage(runtimeMessage as Parameters<typeof guarded.appendMessage>[0]);
 
-    expect(markRuntimePersisted).toHaveBeenCalledWith(
-      expect.objectContaining({ display: false, role: "user" }),
-    );
+    expect(markRuntimePersisted).toHaveBeenCalledTimes(1);
+    expect(markRuntimePersisted.mock.calls[0]?.[0]).toMatchObject({
+      display: false,
+      role: "user",
+    });
   });
 
   it("does not hide ordinary messages that mention memory flushes", () => {

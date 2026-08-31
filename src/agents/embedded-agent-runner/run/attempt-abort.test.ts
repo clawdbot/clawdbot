@@ -212,9 +212,15 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     }
   });
 
-  it("cleans prepared resources before rejecting a pre-fired signal", async () => {
+  it.each([
+    ["stage-start", false],
+    ["prep-cleanup", false],
+    ["stage-start", true],
+    ["prep-cleanup", true],
+  ] as const)("classifies abort at %s (timeout=%s)", async (checkpoint, timeout) => {
     const source = new AbortController();
     const reason = new Error("cancelled during setup");
+    reason.name = timeout ? "TimeoutError" : "AbortError";
     source.abort(reason);
     const cleanupAfterEarlyAbort = vi.fn(async () => {});
     const state = createAbortState();
@@ -226,12 +232,22 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
       state: state.port,
     });
 
-    await expect(controller.throwIfFiredAfterPrepCleanup()).rejects.toBe(reason);
+    if (checkpoint === "stage-start") {
+      expect(() => controller.throwIfFired()).toThrow(reason);
+    } else {
+      await expect(controller.throwIfFiredAfterPrepCleanup()).rejects.toBe(reason);
+    }
 
-    expect(cleanupAfterEarlyAbort).toHaveBeenCalledTimes(1);
+    expect(cleanupAfterEarlyAbort).toHaveBeenCalledTimes(checkpoint === "stage-start" ? 0 : 1);
     expect(state.markAborted).toHaveBeenCalledTimes(1);
     expect(state.markExternalAbort).toHaveBeenCalledTimes(1);
     expect(state.setPromptError).toHaveBeenCalledWith(reason);
+    expect(state.markTimedOut).toHaveBeenCalledTimes(timeout ? 1 : 0);
+    controller.arm();
+    expect(() => controller.throwIfFired()).toThrow(reason);
+    expect(state.markExternalAbort).toHaveBeenCalledTimes(1);
+    expect(state.markTimedOut).toHaveBeenCalledTimes(timeout ? 1 : 0);
+    controller.dispose();
   });
 });
 

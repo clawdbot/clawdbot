@@ -67,6 +67,7 @@ import {
 import {
   activateGatewaySetupInference,
   runSystemAgentGatewayTask,
+  verifyGatewaySetupInference,
 } from "./system-agent-execution.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -269,7 +270,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     respond(true, await detectSetupInferenceIsolated(params), undefined);
   },
   /** Re-run the exact current default-agent inference route without mutating setup. */
-  "openclaw.setup.verify": async ({ params, respond }) => {
+  "openclaw.setup.verify": async ({ params, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -281,8 +282,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       return;
     }
     await runSystemAgentGatewayTask(async () => {
-      const { verifySetupInference } = await import("../../system-agent/setup-inference.js");
-      respond(true, await verifySetupInference({ runtime: defaultRuntime, ...params }), undefined);
+      const result = await verifyGatewaySetupInference({
+        runtime: defaultRuntime,
+        context,
+        ...params,
+      });
+      respond(true, result, undefined);
     });
   },
   /** Start one provider-owned OAuth/device-code login over the shared wizard transport. */

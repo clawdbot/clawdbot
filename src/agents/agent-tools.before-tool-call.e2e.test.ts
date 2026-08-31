@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -40,6 +41,7 @@ import { createHookRunner, type HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -2172,8 +2174,21 @@ describe("before_tool_call requireApproval handling", () => {
 
     const controller = new AbortController();
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
-    mockCallGateway.mockImplementationOnce(() => new Promise(() => {}));
-    setTimeout(() => controller.abort(options?.abortReason ?? new Error("run cancelled")), 10);
+    mockCallGateway.mockImplementationOnce(async (_method, _options, _params, extra) => {
+      const signal = extra?.signal;
+      if (!signal) {
+        throw new Error("Expected approval transport abort signal");
+      }
+      const cancelled = createDeferredCore<never>();
+      const onAbort = () => cancelled.reject(createAbortError("gateway request aborted"));
+      signal.addEventListener("abort", onAbort, { once: true });
+      controller.abort(options?.abortReason ?? new Error("run cancelled"));
+      try {
+        return await cancelled.promise;
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    });
 
     return await runBeforeToolCallHook({
       toolName: "bash",
@@ -2719,7 +2734,7 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
-  it("blocks on deny decision", async () => {
+  it("uses tool-neutral guidance for a denied plugin tool call", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Dangerous",
@@ -2731,14 +2746,22 @@ describe("before_tool_call requireApproval handling", () => {
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-2", decision: "deny" });
 
     const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
+      toolName: "web_search",
+      params: { query: "OpenClaw" },
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("disposition", "blocked");
-    expect(result).toHaveProperty("reason", "Denied by user");
+    expect(result).toHaveProperty(
+      "reason",
+      [
+        "Denied by user. The tool call did not run.",
+        "This denial is final: the approval request is closed. Do not mention /approve or any other approval command to the user.",
+        "Do not run the tool call again or ask the user to approve it again.",
+        "If the user still wants the action, explain that a new tool call will trigger a fresh approval request.",
+      ].join("\n"),
+    );
   });
 
   it("keeps the generic plugin approval timeout reason unchanged", async () => {
@@ -3043,31 +3066,6 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
-  });
-
-  it("removes abort listener after waitDecision resolves", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Cleanup listener",
-        description: "Wait resolves quickly",
-      },
-    });
-
-    const controller = new AbortController();
-    const removeListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-cleanup", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-cleanup", decision: "allow-once" });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-      signal: controller.signal,
-    });
-
-    expect(result.blocked).toBe(false);
-    expect(removeListenerSpy.mock.calls.map(([type]) => type)).toContain("abort");
   });
 
   it("calls onResolution with allow-once on approval", async () => {

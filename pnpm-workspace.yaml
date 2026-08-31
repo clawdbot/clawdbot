@@ -12,6 +12,9 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - "@openai/codex"
   - "@openai/codex-*"
+  # Bot API 10.3 types replace OpenClaw's temporary rich-message bridge.
+  - "@grammyjs/types@5.0.0"
+  - "grammy@1.46.0"
 
 nodeLinker: hoisted
 # GWTs share node_modules; script commands must not reconcile that shared install.
@@ -29,7 +32,7 @@ overrides:
   "@aws-sdk/xml-builder": 3.972.40
   "@hono/node-server": 2.1.1
   axios: 1.19.0
-  fast-uri: 4.1.2
+  fast-uri: 4.1.3
   follow-redirects: 1.16.0
   defu: 6.1.7
   fast-xml-parser: 5.11.0
@@ -89,3 +92,4 @@ packageExtensions:
 patchedDependencies:
   "@vitest/runner@4.1.11": patches/@vitest__runner@4.1.11.patch
   "vitest@4.1.11": patches/vitest@4.1.11.patch
+  "matrix-js-sdk@42.2.0": patches/matrix-js-sdk@42.2.0.patch

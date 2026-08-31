@@ -370,24 +370,29 @@ describe("sandbox/tool-policy", () => {
     expect(runtime.sandboxed).toBe(false);
   });
 
-  it("rejects a classification agent that conflicts with its session key", () => {
-    const cfg = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, worker: {} },
-      },
-    } satisfies OpenClawConfig;
+  it.each([
+    { classificationSessionKey: "agent:worker:main", classificationAgentId: "main" },
+    { classificationSessionKey: "global", classificationAgentId: undefined },
+  ])(
+    "rejects ambiguous or conflicting independent classification: $classificationSessionKey",
+    (classification) => {
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, worker: {} },
+        },
+      } satisfies OpenClawConfig;
 
-    expect(() =>
-      resolveSandboxRuntimeStatus({
-        cfg,
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        classificationSessionKey: "agent:worker:main",
-        classificationAgentId: "main",
-      }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-  });
+      expect(() =>
+        resolveSandboxRuntimeStatus({
+          cfg,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          ...classification,
+        }),
+      ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    },
+  );
 
   it("keeps the session identity as the sandbox classification when none is supplied", () => {
     const cfg = {

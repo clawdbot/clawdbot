@@ -89,6 +89,27 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
+  it("routes process-start identity and every consumer of it to Windows", () => {
+    // The owner, the Windows probe behind it, and the consumers that admit or
+    // recover work from that identity. The real-host proof only runs on this
+    // lane, so if any of them stops routing here a Windows regression merges
+    // unchecked. The proof itself is included: it is test-only, and test-only
+    // paths do not reach the lane through the general Windows scope.
+    for (const identityPath of [
+      "src/shared/pid-alive.ts",
+      "test/e2e/windows-cron-process-identity.e2e.test.ts",
+      "src/infra/windows-process-start.ts",
+      "src/infra/gateway-lock.ts",
+      "src/node-host/node-worker-process-identity.ts",
+      "src/cron/store/run-receipt-store.ts",
+    ]) {
+      expect(detectChangedScope([identityPath]), identityPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes core SQLite state changes to Windows", () => {
     for (const sqlitePath of [
       "src/commands/doctor-sqlite-compact.ts",

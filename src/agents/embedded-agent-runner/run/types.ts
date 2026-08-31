@@ -183,6 +183,18 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptAbort?: () => void;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+  /** Run-owned permission changes survive native attempt replacement, never user cancellation. */
+  permissionChange?: {
+    readonly owner: object;
+    readonly baseExecOverrides: Readonly<NonNullable<RunEmbeddedAgentParams["execOverrides"]>>;
+    readonly notice?: string;
+    request: (
+      mode: NonNullable<RunEmbeddedAgentParams["permissionMode"]> | null,
+    ) => Promise<boolean>;
+    /** False means a newer permission request superseded this prepared attempt. */
+    applied: () => boolean;
+    recordApplied: (mode: NonNullable<RunEmbeddedAgentParams["permissionMode"]> | null) => void;
+  };
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;

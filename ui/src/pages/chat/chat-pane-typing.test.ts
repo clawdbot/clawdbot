@@ -48,7 +48,7 @@ describe("chat pane typing presence", () => {
       pane.handleSessionTypingEvent({
         sessionKey: state.sessionKey,
         sessionId: "session-a",
-        agentId: "main",
+        agentId: "work",
         actor: { type: "human", ...actor },
         typing: true,
         ...(actor.preview ? { preview: actor.preview } : {}),
@@ -62,7 +62,7 @@ describe("chat pane typing presence", () => {
 
     const event = (message: unknown, sessionKey = state.sessionKey) => ({
       sessionKey,
-      agentId: "main",
+      agentId: "work",
       message,
     });
     pane.clearTypingActorForSessionMessage(
@@ -72,7 +72,7 @@ describe("chat pane typing presence", () => {
       event({ role: "assistant", __openclaw: { senderId: aliceId } }),
     );
     pane.clearTypingActorForSessionMessage(
-      event({ role: "user", __openclaw: { senderId: aliceId } }, "agent:main:other"),
+      event({ role: "user", __openclaw: { senderId: aliceId } }, "agent:work:other"),
     );
     expect([...pane.typingActors.keys()]).toEqual([aliceId, "bob"]);
 
