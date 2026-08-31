@@ -725,6 +725,7 @@ summary,
 [role="button"]:not(a),
 [role="tab"],
 .btn,
+.settings-row--toggle,
 .sidebar,
 .settings-sidebar {
   user-select: none;

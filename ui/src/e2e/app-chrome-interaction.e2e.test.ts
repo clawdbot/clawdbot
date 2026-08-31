@@ -212,6 +212,9 @@ suite.define(() => {
         expect(await dragAcross(page, settingsTitle)).toBe("");
         const sectionTitle = page.locator(".settings-section__heading").first();
         expect(await dragAcross(page, sectionTitle)).not.toBe("");
+        const toggleRow = page.locator(".settings-row--toggle").first();
+        await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
+        expect(await dragAcross(page, toggleRow.locator(".settings-row__title"))).toBe("");
         await settingsSearch.selectText();
         expect(
           await settingsSearch.evaluate(
