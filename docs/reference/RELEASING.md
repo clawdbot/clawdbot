@@ -690,7 +690,9 @@ gh workflow run openclaw-release-publish.yml \
   -f npm_dist_tag=latest
 ```
 
-Use the lower-level `Plugin NPM Release` and `Plugin ClawHub Release` workflows only for focused repair or republish work. `OpenClaw Release Publish` rejects `plugin_publish_scope=selected` when `publish_openclaw_npm=true` so the core package cannot ship without every publishable official plugin, including `@openclaw/diffs-language-pack`. For a selected plugin repair, set `publish_openclaw_npm=false` with `plugin_publish_scope=selected` and `plugins=@openclaw/name`, or dispatch the child workflow directly.
+For a selected plugin repair, use `OpenClaw Release Publish` with `publish_openclaw_npm=false`, `plugin_publish_scope=selected`, and `plugins=@openclaw/name`. The parent rejects selected scope when `publish_openclaw_npm=true` so the core package cannot ship without every publishable official plugin, including `@openclaw/diffs-language-pack`. `Plugin NPM Release` also supports direct focused repair dispatch.
+
+ClawHub OIDC publication requires the executing release parent to authorize the exact child run, attempt, and package inventories. A direct `Plugin ClawHub Release` dry run can prepare packages without publication authority, but a standalone publish cannot replace the parent. A new recovery child cannot reuse an earlier child's receipt, and a completed parent cannot issue a new one. Failed-parent recovery therefore needs a separately approved ClawHub owner recovery contract; an environment approval alone does not supply the missing receipt. Do not retry publication with copied receipts or treat staging as completed publication.
 
 First-publish ClawHub bootstrap is the exception: dispatch `Plugin ClawHub New`
 from trusted `main` and pass the full target release SHA through `ref`.
