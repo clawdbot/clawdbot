@@ -60,8 +60,6 @@ type UpdateMetadataMemoryWikiMutation = {
 
 type ApplyMemoryWikiMutation = CreateSynthesisMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
 
-type MemoryWikiMutationInputOp = ApplyMemoryWikiMutation["op"] | "synthesis" | "metadata";
-
 type ApplyMemoryWikiMutationResult = {
   changed: boolean;
   operation: ApplyMemoryWikiMutation["op"];
@@ -91,29 +89,21 @@ function normalizeMutationConfidence(
   });
 }
 
-function normalizeMemoryWikiMutationOp(
-  op: MemoryWikiMutationInputOp,
-): ApplyMemoryWikiMutation["op"] {
-  if (op === "synthesis") {
+function normalizeMemoryWikiMutationOp(op: unknown): ApplyMemoryWikiMutation["op"] {
+  if (op === "synthesis" || op === "create_synthesis") {
     return "create_synthesis";
   }
-  if (op === "metadata") {
+  if (op === "metadata" || op === "update_metadata") {
     return "update_metadata";
   }
-  if (op === "create_synthesis" || op === "update_metadata") {
-    return op;
-  }
-  // Provider tool schemas do not guarantee enum enforcement, so an unknown op
-  // reaches here at runtime. Fail closed: silently treating it as
-  // update_metadata would write to a page the caller never targeted.
   throw new Error(
-    `wiki mutation op must be one of "create_synthesis", "update_metadata" (aliases: "synthesis", "metadata"); received ${JSON.stringify(op)}.`,
+    'wiki mutation op must be one of "create_synthesis", "update_metadata" (aliases: "synthesis", "metadata").',
   );
 }
 
 export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
   const params = asNonArrayRecord(rawParams) as {
-    op: MemoryWikiMutationInputOp;
+    op: unknown;
     title?: string;
     body?: string;
     lookup?: string;
