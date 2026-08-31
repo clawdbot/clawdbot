@@ -289,6 +289,33 @@ function adaptStepForBaseline(
     }
     return null;
   }
+  if (step.id === "agents") {
+    const agentsJson = step.argv[3];
+    if (agentsJson === undefined) {
+      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+    }
+    const agents = JSON.parse(agentsJson);
+    // Modern config writes stamp explicit ownership when adding a second agent.
+    // Older baselines need their default marker for ownership migration on upgrade.
+    for (const agent of agents.list ?? []) {
+      if (baselineVersion && !isReleaseBefore(baselineVersion, "2026.8.1")) {
+        delete agent.default;
+      }
+      if (isReleaseBefore(baselineVersion, "2026.4.0")) {
+        delete agent.thinkingDefault;
+        delete agent.fastModeDefault;
+        delete agent.skills;
+      }
+    }
+    if (isReleaseBefore(baselineVersion, "2026.4.0")) {
+      delete agents.defaults?.skills;
+      summary.skippedIntents.push("agent-modern-preferences");
+    }
+    return {
+      ...step,
+      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
+    };
+  }
   if (!isReleaseBefore(baselineVersion, "2026.4.0")) {
     return step;
   }
@@ -297,24 +324,6 @@ function adaptStepForBaseline(
       summary.skippedIntents.push("feishu-channel");
     }
     return null;
-  }
-  if (step.id === "agents") {
-    const agentsJson = step.argv[3];
-    if (agentsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
-    }
-    const agents = JSON.parse(agentsJson);
-    delete agents.defaults?.skills;
-    for (const agent of agents.list ?? []) {
-      delete agent.thinkingDefault;
-      delete agent.fastModeDefault;
-      delete agent.skills;
-    }
-    summary.skippedIntents.push("agent-modern-preferences");
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
-    };
   }
   if (step.intent === "plugins") {
     const pluginsJson = step.argv[3];
