@@ -113,6 +113,7 @@ describe("restart health", () => {
       });
       probeGateway.mockResolvedValue({
         ok: false,
+        gatewayReached: true,
         close: { code: 1008, reason: "device identity required" },
       });
       const previousLockIdentity = mockGatewayLockReplacement({ pid: 4300 });

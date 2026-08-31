@@ -427,6 +427,32 @@ describe("prepareCodexAttemptConnection", () => {
     expect(connection.appServer.approvalPolicy).toBe("never");
   });
 
+  it("rejects native execution denied by the retained global policy owner", async () => {
+    const workspaceDir = path.join(tempDir, "policy-workspace");
+    const sessionFile = path.join(tempDir, "policy-session.jsonl");
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentId = "main";
+    params.agentDir = path.join(tempDir, "main-agent");
+    params.sandboxSessionKey = "global";
+    params.sandboxAgentId = "policy";
+    params.config = {
+      agents: {
+        entries: {
+          main: {},
+          policy: { tools: { exec: { mode: "deny" } } },
+        },
+      },
+    };
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+    await expect(
+      prepareCodexAttemptConnection({
+        params,
+        options: { bindingStore: testCodexAppServerBindingStore },
+      }),
+    ).rejects.toThrow("effective tools.exec.mode=deny");
+  });
+
   it("prepares one Guardian policy when requirements clamp an explicitly full session", async () => {
     vi.mocked(codexRequirements.readCodexRequirementsToml).mockReturnValue(
       [

@@ -1,30 +1,52 @@
 /* @vitest-environment jsdom */
-// Contract for the full-message fetch flag: the Gateway marks every display-
-// capped projection (user rows included), but the expander that consumes this
-// flag renders loaded content for assistant rows alone.
+// Contract for full-message eligibility: the Gateway marks every display-
+// capped projection; pending inputs share assistant expansion without gaining
+// transcript mutation actions.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderUserMessageMarkdown, resolveMessageActionDetails } from "./chat-message-markdown.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { renderMessageMarkdown, resolveMessageActionDetails } from "./chat-message-markdown.ts";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
 
-describe("resolveMessageActionDetails full-message fetch flag", () => {
+describe("resolveMessageActionDetails full-message eligibility", () => {
   it.each([
-    { role: "assistant", shouldFetch: true },
-    { role: "user", shouldFetch: false },
-  ])(
-    "role=$role capped by metadata -> shouldFetchFullMessage=$shouldFetch",
-    ({ role, shouldFetch }) => {
-      const details = resolveMessageActionDetails({
-        message: { role, content: "Preview\n...(truncated)...", __openclaw: cappedMeta },
-        messageId: "msg-1",
-        canFetchFullMessage: true,
-        onReply: () => {},
-        senderLabel: role,
-      });
-      expect(details?.shouldFetchFullMessage).toBe(shouldFetch);
-    },
-  );
+    { role: "assistant", id: "msg-1", shouldFetch: true },
+    { role: "user", id: "msg-1", shouldFetch: false },
+    { role: "user", id: "pending:input-1", shouldFetch: true },
+  ])("role=$role capped by metadata -> eligible=$shouldFetch", ({ role, id, shouldFetch }) => {
+    const details = resolveMessageActionDetails({
+      message: { role, content: "Preview\n...(truncated)...", __openclaw: { ...cappedMeta, id } },
+      messageId: "msg-1",
+      canFetchFullMessage: true,
+      onReply: () => {},
+      senderLabel: role,
+    });
+    expect(details?.fullMessage?.messageId).toBe(shouldFetch ? id : undefined);
+  });
+
+  it("expands accepted user text without granting transcript reply or rewind identity", () => {
+    const message = {
+      role: "user",
+      content: "Preview",
+      __openclaw: { ...cappedMeta, id: "pending:input-1" },
+    };
+    const details = resolveMessageActionDetails({
+      message,
+      messageId: "pending-render",
+      canFetchFullMessage: true,
+      getAssistantMessageExpansion: () => ({
+        status: "loaded",
+        markdown: "<think>literal user input</think>",
+        revision: 1,
+      }),
+      onReply: vi.fn(),
+      senderLabel: "user",
+    });
+    expect(details?.markdown).toBe("<think>literal user input</think>");
+    expect(details?.replyTarget).toBeUndefined();
+    expect(persistedMessageEntryId(message)).toBeNull();
+  });
 
   it("does not fetch an assistant message that merely contains the sentinel text", () => {
     // The in-band "...(truncated)..." is ordinary Markdown to the UI; without the
@@ -39,7 +61,7 @@ describe("resolveMessageActionDetails full-message fetch flag", () => {
       canFetchFullMessage: true,
       senderLabel: "assistant",
     });
-    expect(details?.shouldFetchFullMessage).toBe(false);
+    expect(details?.fullMessage).toBeUndefined();
   });
 
   it("does not fetch an untruncated assistant message", () => {
@@ -49,7 +71,7 @@ describe("resolveMessageActionDetails full-message fetch flag", () => {
       canFetchFullMessage: true,
       senderLabel: "assistant",
     });
-    expect(details?.shouldFetchFullMessage).toBe(false);
+    expect(details?.fullMessage).toBeUndefined();
   });
 
   it("projects an oversized assistant marker to a notice without disabling recovery", () => {
@@ -66,7 +88,7 @@ describe("resolveMessageActionDetails full-message fetch flag", () => {
       senderLabel: "assistant",
     });
 
-    expect(details?.shouldFetchFullMessage).toBe(true);
+    expect(details?.fullMessage?.messageId).toBe("msg-oversized");
     expect(details?.markdown).toBe("This message is too large to display here.");
     expect(details?.replyTarget?.text).toBe("This message is too large to display here.");
 
@@ -83,7 +105,7 @@ describe("resolveMessageActionDetails full-message fetch flag", () => {
       senderLabel: "assistant",
     });
 
-    expect(loaded?.shouldFetchFullMessage).toBe(true);
+    expect(loaded?.fullMessage?.messageId).toBe("msg-oversized");
     expect(loaded?.markdown).toBe("Recovered full assistant content.");
     expect(loaded?.replyTarget?.text).toBe("Recovered full assistant content.");
   });
@@ -109,10 +131,10 @@ describe("user message disclosure", () => {
     const container = document.createElement("div");
 
     render(
-      renderUserMessageMarkdown(
+      renderMessageMarkdown(
         markdown,
         "message",
-        { isStreaming: false, onToggleUserMessageExpanded: vi.fn() },
+        { role: "user", isStreaming: false, onToggleUserMessageExpanded: vi.fn() },
         {},
       ),
       container,

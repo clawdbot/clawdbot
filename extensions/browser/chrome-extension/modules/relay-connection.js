@@ -30,6 +30,9 @@ export function openAuthenticatedRelaySocket({
           throw new Error("relay did not negotiate Browser Relay Authentication v2");
         }
         const authClient = await authClientPromise;
+        if (!isCurrent(ws) || ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
         ws.send(JSON.stringify(authClient.start()));
       } catch (error) {
         onAuthenticationFailure(ws, error);

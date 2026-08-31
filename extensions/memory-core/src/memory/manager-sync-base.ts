@@ -43,6 +43,7 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import {
   markMemoryVectorRebuildRequired,
   memoryTableExists,
@@ -134,6 +135,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
+  // A success clears only the failure visible when it started. This keeps a
+  // concurrent failure visible even when older or no-op work settles later.
+  protected readonly syncOutcomes = new MemorySyncOutcomeLedger();
   protected memorySourceProvenanceRepairPending = false;
   // Failed full memory reindexes must retry as full rebuilds, not incremental
   // dirty syncs that can skip unchanged files against the still-live index.
@@ -179,6 +183,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<MemorySourceSyncPlan>;
+
   protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
     for (const item of items) {
       await this.indexFile(item.entry, { source: item.source });
@@ -198,6 +203,15 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       sessionsReconcileDirty: this.sessionsReconcileDirty,
       sessionsDirtyFiles: new Set(this.sessionsDirtyFiles),
     };
+  }
+
+  protected takeReindexRetryStateForMaintenance(): MemoryReindexRetryState {
+    const snapshot = this.snapshotReindexRetryState();
+    // The detached generation owns only the state observed here. New watcher or
+    // session events remain dirty on this manager and trigger a later generation.
+    this.clearMemoryRetryState();
+    this.clearSessionRetryState();
+    return snapshot;
   }
 
   protected restoreReindexRetryState(snapshot: MemoryReindexRetryState): void {

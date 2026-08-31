@@ -5,17 +5,16 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
+import type { FallbackStatus } from "./tool-stream-contract.ts";
+import { handleSessionOperationEvent } from "./tool-stream-status.ts";
 import {
   agentEvent,
   createHost,
   TOOL_STREAM_TEST_NOW,
   useToolStreamFakeTimers,
 } from "./tool-stream.test-helpers.ts";
-import {
-  handleAgentEvent,
-  handleSessionOperationEvent,
-  type FallbackStatus,
-} from "./tool-stream.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 function expectCompactionCompleteAndAutoClears(host: ReturnType<typeof createHost>) {
   expect(host.compactionStatus).toEqual({
@@ -226,7 +225,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       const host = createHost({
         sessionKey: key,
         assistantAgentId: agentId,
-        agentsList: { defaultId: "main" },
+        agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
         sessions,
       });
       const event = {
@@ -260,7 +259,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
         createHost({
           sessionKey: key,
           assistantAgentId: agentId,
-          agentsList: { defaultId: "main" },
+          agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
           sessions,
         }),
         event,
@@ -381,6 +380,43 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.chatStream).toBeNull();
     vi.useRealTimers();
   });
+
+  it.each(["run-1", "run-2", undefined])(
+    "replaces only the commentary owned by persisted run %s",
+    (runId) => {
+      const state = createHost({
+        chatStreamSegments: [
+          { itemId: "shared-item", runId: "run-1", text: "First run", ts: 1 },
+          { itemId: "shared-item", runId: "run-2", text: "Second run", ts: 2 },
+        ],
+      });
+      const originalSegments = [...state.chatStreamSegments];
+      const persisted = {
+        role: "assistant",
+        content: "Completed progress",
+        __openclaw: { id: "persisted-commentary", seq: 3, ...(runId ? { runId } : {}) },
+        openclawStreamFallback: { itemId: "shared-item", source: "segment" },
+      };
+      prunePersistedAssistantStreamSegments(state, persisted);
+      expect(state.chatStreamSegments).toEqual(
+        runId ? originalSegments.filter((segment) => segment.runId !== runId) : [],
+      );
+      if (runId) {
+        state.chatMessages = [persisted];
+        handleAgentEvent(
+          state,
+          agentEvent(runId, 4, "item", {
+            kind: "preamble",
+            itemId: "shared-item",
+            progressText: "Completed progress",
+          }),
+        );
+        expect(state.chatStreamSegments).toEqual(
+          originalSegments.filter((segment) => segment.runId !== runId),
+        );
+      }
+    },
+  );
 
   it.each([
     { progressText: "Another run's commentary", name: "replace" },
@@ -788,7 +824,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({
       sessionKey: "agent:work:main",
-      agentsList: { defaultId: "main" },
+      agentsList: { defaultId: "main", scope: "global" },
     });
 
     handleAgentEvent(host, {

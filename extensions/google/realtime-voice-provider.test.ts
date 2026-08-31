@@ -763,7 +763,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onTranscript = vi.fn();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "gemini-key" },
+      providerConfig: {
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+        apiKey: "gemini-key",
+      },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onTranscript,
@@ -971,7 +974,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const onEvent = vi.fn();
     const onTranscript = vi.fn();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "gemini-key" },
+      providerConfig: {
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+        apiKey: "gemini-key",
+      },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onEvent,
@@ -1010,7 +1016,11 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onTranscript = vi.fn();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "gemini-key", sessionResumption: false },
+      providerConfig: {
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+        apiKey: "gemini-key",
+        sessionResumption: false,
+      },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onTranscript,
@@ -1041,7 +1051,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       const onEvent = vi.fn();
       const onTranscript = vi.fn();
       const bridge = provider.createBridge({
-        providerConfig: { apiKey: "gemini-key" },
+        providerConfig: {
+          model: "gemini-2.5-flash-native-audio-preview-12-2025",
+          apiKey: "gemini-key",
+        },
         onAudio: vi.fn(),
         onClearAudio: vi.fn(),
         onClose,
@@ -1110,7 +1123,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   it("does not finalize or merge a hypothesis across a fresh automatic reconnect", async () => {
     vi.useFakeTimers();
     const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({ onTranscript });
+    const bridge = createGoogleLiveBridge({
+      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
+      onTranscript,
+    });
 
     await bridge.connect();
     const firstSession = lastConnectParams().callbacks;
@@ -1144,7 +1160,6 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
       serverContent: {
         outputTranscription: { text: "Before " },
-        turnComplete: true,
       },
     });
     await vi.advanceTimersByTimeAsync(500);
@@ -1164,7 +1179,11 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     vi.useFakeTimers();
     const onClose = vi.fn();
     const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({ onClose, onTranscript });
+    const bridge = createGoogleLiveBridge({
+      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
+      onClose,
+      onTranscript,
+    });
 
     await bridge.connect();
     const firstSession = lastConnectParams().callbacks;
@@ -1231,7 +1250,11 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const onReady = vi.fn();
     const onTranscript = vi.fn();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "gemini-key", sessionResumption: false },
+      providerConfig: {
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+        apiKey: "gemini-key",
+        sessionResumption: false,
+      },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onEvent,
@@ -1772,7 +1795,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
   it("honors a finish-only transcription message", async () => {
     const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({ onTranscript });
+    const bridge = createGoogleLiveBridge({
+      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
+      onTranscript,
+    });
 
     await bridge.connect();
     const onmessage = lastConnectParams().callbacks.onmessage;
@@ -1789,7 +1815,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onTranscript = vi.fn();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "gemini-key" },
+      providerConfig: {
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+        apiKey: "gemini-key",
+      },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onTranscript,
@@ -1826,7 +1855,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const onClose = vi.fn();
     const onTranscript = vi.fn();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "gemini-key" },
+      providerConfig: {
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+        apiKey: "gemini-key",
+      },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onError,
@@ -1864,9 +1896,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     );
   });
 
-  it("retains unordered transcript chunks until a protocol terminal or close", async () => {
+  it("finalizes assistant turns without finalizing independently ordered 2.5 input", async () => {
     const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({ onTranscript });
+    const bridge = createGoogleLiveBridge({
+      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
+      onTranscript,
+    });
 
     await bridge.connect();
     const onmessage = lastConnectParams().callbacks.onmessage;
@@ -1882,18 +1917,25 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       },
     });
 
-    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([]);
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["assistant", "Interrupted response", true],
+      ["assistant", "ending", true],
+    ]);
 
     bridge.close();
     expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["assistant", "Interrupted response", true],
+      ["assistant", "ending", true],
       ["user", "Earlier question. New question", true],
-      ["assistant", "Interrupted response ending", true],
     ]);
   });
 
   it("flushes pending transcripts when the bridge closes", async () => {
     const onTranscript = vi.fn();
-    const bridge = createGoogleLiveBridge({ onTranscript });
+    const bridge = createGoogleLiveBridge({
+      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
+      onTranscript,
+    });
 
     await bridge.connect();
     lastConnectParams().callbacks.onmessage({
@@ -1908,6 +1950,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const callbackError = new Error("transcript persistence failed");
     const onError = vi.fn();
     const bridge = createGoogleLiveBridge({
+      providerConfig: { model: "gemini-2.5-flash-native-audio-preview-12-2025" },
       onError,
       onTranscript: vi.fn((_role, _text, isFinal) => {
         if (isFinal) {

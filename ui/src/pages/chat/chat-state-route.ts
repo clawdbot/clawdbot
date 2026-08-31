@@ -1,13 +1,9 @@
 import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
-  areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
-  isUiGlobalScopeConfigured,
   normalizeAgentId,
-  resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
@@ -27,20 +23,13 @@ export function canCreateChatSession(state: ChatPageHost) {
 
 export function selectedChatSessionRow(state: ChatPageHost) {
   const rows = state.sessionsResult?.sessions ?? [];
-  const exact = rows.find((candidate) =>
-    areUiSessionKeysEquivalent(candidate.key, state.sessionKey),
+  const row = rows.find((candidate) =>
+    uiSessionRowMatchesSelectedChat(state, candidate.key, state.sessionKey, candidate.agentId),
   );
-  const row =
-    exact ??
-    (isUiGlobalScopeConfigured(state)
-      ? rows.find((candidate) =>
-          uiSessionRowMatchesSelectedChat(state, candidate.key, state.sessionKey),
-        )
-      : undefined);
   if (!row || !isUiGlobalSessionKey(row.key)) {
     return row;
   }
-  const selectedAgentId = resolveUiSelectedGlobalAgentId(state);
+  const selectedAgentId = resolveChatAgentId(state);
   if (
     state.sessionsResultAgentId &&
     normalizeAgentId(state.sessionsResultAgentId) !== selectedAgentId
@@ -64,15 +53,6 @@ export function saveRouteSessionSettings(state: ChatPageHost, sessionKey: string
     return;
   }
   state.settings = patchSettings({ sessionKey, lastActiveSessionKey: sessionKey });
-}
-
-export function patchChatSessionLabel(
-  state: ChatPageHost,
-  sessions: Pick<SessionCapability, "patch">,
-  sessionKey: string,
-  label: string | null,
-) {
-  return sessions.patch(sessionKey, { label }, { agentId: resolveChatAgentId(state) });
 }
 
 export function resolveChatAvatarUrl(state: ChatPageHost): string | null {

@@ -1,5 +1,5 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
-import { readAvatarGatewayContext, registerAvatarGatewayReset } from "./identity-avatar.ts";
+import { readAvatarGatewayContext, registerAvatarGatewayReset } from "./identity-avatar-context.ts";
 
 /** Coarse placement for one address, plus the credit its data license requires. */
 export type ClientGeolocation = {

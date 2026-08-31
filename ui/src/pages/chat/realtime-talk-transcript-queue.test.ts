@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useRealtimeTalkMicrophoneFixture } from "./realtime-talk-input.test-support.ts";
 import type { RealtimeTalkTransportContext } from "./realtime-talk-shared.ts";
 
 const transportMock = vi.hoisted(() => ({
@@ -25,6 +26,8 @@ vi.mock("./realtime-talk-webrtc.ts", () => ({
 }));
 
 import { RealtimeTalkSession } from "./realtime-talk.ts";
+
+useRealtimeTalkMicrophoneFixture();
 
 describe("RealtimeTalkSession transcript queue", () => {
   beforeEach(() => {

@@ -117,7 +117,7 @@ describe("logs local port selection", () => {
   );
 
   it.each(["text", "json"])(
-    "reports the selected port when the RPC fails in %s mode",
+    "reports the rejection reason and selected port when the RPC fails in %s mode",
     async (mode) => {
       await withLogsGateway({ denied: true }, async ({ port, requests, stderr }) => {
         const args = [
@@ -130,12 +130,16 @@ describe("logs local port selection", () => {
         await expect(runLogs(args)).rejects.toBeInstanceOf(ExitError);
         expect(requests).toEqual(["connect", "logs.tail"]);
         const output = stderr.join("");
+        expect(output).toContain("logs unavailable for this client");
         if (mode === "json") {
           expect(JSON.parse(output)).toMatchObject({
             type: "error",
+            message: "Gateway not reachable. Is it running and accessible?",
+            error: "logs unavailable for this client",
             details: { url: `ws://127.0.0.1:${port}` },
           });
         } else {
+          expect(output).not.toContain("Gateway not reachable");
           expect(output).toContain(`Gateway target: ws://127.0.0.1:${port}`);
         }
       });

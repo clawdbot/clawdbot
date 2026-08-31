@@ -24,6 +24,10 @@ import {
   type WorkerPlacementMoveBarrier,
 } from "./placement-move-service.js";
 import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
+import type {
+  WorkerPlacementReclaimBarriers,
+  WorkerReclaimPlacement,
+} from "./placement-reclaim-contract.js";
 import { placementTurnOwner } from "./placement-record.js";
 import {
   completeMovedWorkspaceTeardown,
@@ -70,31 +74,6 @@ type WorkerLocalDispatchBarrier = (params: {
 }) => Promise<WorkerDispatchPlacement>;
 
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
-type WorkerReclaimPlacement = Extract<WorkerDispatchPlacement, { state: "local" | "reclaimed" }>;
-type WorkerPlacementReclaimBarrier = (
-  params: WorkerPlacementReclaimRequest & {
-    authorize?: WorkerPlacementAuthorization;
-    beforeDrain?: WorkerPlacementAuthorization;
-    begin: () => WorkerDrainingDispatchPlacement;
-    reclaim: (
-      localPath: string,
-      placement: WorkerDrainingDispatchPlacement,
-      authorize?: WorkerPlacementAuthorization,
-    ) => Promise<WorkerReclaimPlacement>;
-  },
-) => Promise<WorkerReclaimPlacement>;
-
-type WorkerPlacementFailedReclaimBarrier = (
-  params: WorkerPlacementReclaimRequest & {
-    authorize?: WorkerPlacementAuthorization;
-    reclaim: (authorize?: WorkerPlacementAuthorization) => Promise<WorkerReclaimPlacement>;
-  },
-) => Promise<WorkerReclaimPlacement>;
-
-export type WorkerPlacementReclaimBarriers = {
-  runReclaimBarrier: WorkerPlacementReclaimBarrier;
-  runFailedReclaimBarrier: WorkerPlacementFailedReclaimBarrier;
-};
 
 type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
   placements: WorkerDispatchPlacementStore;
@@ -149,6 +128,7 @@ function isExactAttachedEnvironment(
     environment &&
     environment.environmentId === placement.environmentId &&
     environment.state === "attached" &&
+    environment.destroyRequestedAtMs === null &&
     environment.ownerEpoch === placement.activeOwnerEpoch &&
     environment.attachedSessionIds.length === 1 &&
     environment.attachedSessionIds[0] === placement.sessionId,
@@ -285,12 +265,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             idempotencyKey,
             request.machineClass,
             request.executionMode,
+            localPath,
           )
         : await environments.create(
             request.profileId,
             idempotencyKey,
             request.machineClass,
             request.executionMode,
+            localPath,
           );
       return await startup.continueProvisionedDispatch({
         request,
@@ -345,6 +327,15 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       beforeDrain,
       begin: () => {
         const current = placements.get(request.sessionId);
+        // A queued stop can observe the previous stop's completion only after
+        // entering the lifecycle fence; joining an outside promise can deadlock it.
+        if (
+          current?.state === "reclaimed" &&
+          current.sessionKey === request.sessionKey &&
+          current.agentId === request.agentId
+        ) {
+          return current;
+        }
         if ((current?.state !== "active" && current?.state !== "draining") || current.turnClaim) {
           throw new Error(
             `Session ${request.sessionKey} cannot stop cloud worker from placement ${current?.state ?? "missing"}`,
@@ -369,6 +360,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         return draining;
       },
       reclaim: async (localPath, current, reauthorize) => {
+        if (current.state === "reclaimed") {
+          return current;
+        }
         const journalOwner = {
           sessionId: current.sessionId,
           environmentId: current.environmentId,
@@ -476,7 +470,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               }
               reauthorize?.();
               const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
-              let destroyed = false;
               try {
                 reauthorize?.();
                 const reconciliation = await tunnel.reconcileWorkspace({
@@ -542,7 +535,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                   beforeComplete: async () => {
                     reauthorize?.();
                     await environments.destroy(current.environmentId);
-                    destroyed = true;
                   },
                   complete: () => {
                     // Destroy is the final privileged effect. Once it commits, durable placement
@@ -572,10 +564,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                   },
                 });
               } finally {
-                if (
-                  !destroyed &&
-                  isExactAttachedEnvironment(environments.get(current.environmentId), current)
-                ) {
+                if (isExactAttachedEnvironment(environments.get(current.environmentId), current)) {
                   await quiescence.resume();
                 }
               }
@@ -609,36 +598,45 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             );
           if (pendingReclaimResult && pendingReclaimResult.workspaceAcceptedAtMs !== null) {
             placements.handoffWorkspaceResultRecovery(reclaimClaim);
-            await recovery.reconcileActive(current.environmentId).catch(() => undefined);
+            // The tracked sweep retries cleanup after this lifecycle/placement fence releases.
+            // Awaiting it here can join provisioning recovery queued behind our own fence.
           }
           throw error;
         }
       },
     });
 
-  const reclaimInFlight = new Map<string, Promise<WorkerReclaimPlacement>>();
-  const reclaim = async (
+  const reclaimCurrent = async (
     request: WorkerPlacementReclaimRequest,
     authorize?: WorkerPlacementAuthorization,
     beforeDrain?: WorkerPlacementAuthorization,
+    initial?: WorkerDispatchPlacement,
   ): Promise<WorkerReclaimPlacement> => {
+    authorize?.();
     beforeDrain?.();
     const current = placements.get(request.sessionId);
     if (current?.state === "reclaimed") {
       return current;
     }
-    const inFlight = reclaimInFlight.get(request.sessionId);
-    if (inFlight) {
-      return await inFlight;
-    }
-    const operation = (async () => {
-      const owned = placements.get(request.sessionId);
+    try {
+      // The preparation/placement wait can span another completed failed cleanup.
+      // Its old generation classifies an idempotent result, never authorizes new teardown.
+      const owned = current?.state === "local" && initial?.state === "failed" ? initial : current;
       if (owned?.state === "failed") {
         return await options.runFailedReclaimBarrier({
           ...request,
           authorize,
           reclaim: async (reauthorize) => {
             const failedPlacement = placements.get(request.sessionId);
+            // A preceding cleanup can finish while this request waits for the lifecycle fence.
+            if (
+              failedPlacement?.state === "local" &&
+              failedPlacement.generation === owned.generation + 1 &&
+              failedPlacement.sessionKey === request.sessionKey &&
+              failedPlacement.agentId === request.agentId
+            ) {
+              return failedPlacement;
+            }
             if (failedPlacement?.state !== "failed") {
               throw new Error("Failed cloud worker placement changed during reclaim");
             }
@@ -669,7 +667,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         });
       }
       return await reclaimOnce(request, undefined, authorize, beforeDrain);
-    })().catch((error: unknown) => {
+    } catch (error) {
       // Another teardown path can win after this call has crossed its durable completion fence.
       // Report the committed terminal state instead of leaking a stale tunnel error to callers.
       const completed = placements.get(request.sessionId);
@@ -677,15 +675,25 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         return completed;
       }
       throw error;
-    });
-    reclaimInFlight.set(request.sessionId, operation);
-    try {
-      return await operation;
-    } finally {
-      if (reclaimInFlight.get(request.sessionId) === operation) {
-        reclaimInFlight.delete(request.sessionId);
-      }
     }
+  };
+
+  const reclaim = async (
+    request: WorkerPlacementReclaimRequest,
+    authorize?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementAuthorization,
+    serialize: (
+      run: () => Promise<WorkerReclaimPlacement>,
+    ) => Promise<WorkerReclaimPlacement> = async (run) => await run(),
+  ): Promise<WorkerReclaimPlacement> => {
+    const initial = placements.get(request.sessionId);
+    return await options.runReclaimPreparation({
+      ...request,
+      authorize,
+      beforeDrain,
+      run: (reauthorize) =>
+        serialize(() => reclaimCurrent(request, reauthorize, beforeDrain, initial)),
+    });
   };
 
   const abandonment = createWorkerPlacementMoveAbandonment(options);

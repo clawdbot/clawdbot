@@ -1,9 +1,12 @@
 // Onboard custom config tests cover provider-specific config merging and context-window bounds.
+import { setCurrentManifestModelIdNormalizationRecords } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
+import * as providerModelNormalizationRuntime from "../agents/provider-model-normalization.runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as currentPluginMetadataSnapshot from "../plugins/current-plugin-metadata-snapshot.js";
 import * as manifestContractEligibility from "../plugins/manifest-contract-eligibility.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
@@ -14,6 +17,19 @@ import {
 } from "./onboard-custom-config.js";
 
 const EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+const manifestPlugins = [
+  {
+    modelIdNormalization: {
+      providers: {
+        custom: {
+          aliases: {
+            latest: "modern-model",
+          },
+        },
+      },
+    },
+  },
+] satisfies Array<Pick<PluginManifestRecord, "modelIdNormalization">>;
 
 function buildCustomProviderConfig(contextWindow?: number) {
   if (contextWindow === undefined) {
@@ -124,6 +140,7 @@ it("rejects custom aliases already used by the selected agent", () => {
 });
 
 it("validates authored and inherited aliases without discovering plugin metadata", () => {
+  setCurrentManifestModelIdNormalizationRecords(undefined);
   const currentSnapshot = vi
     .spyOn(currentPluginMetadataSnapshot, "getCurrentPluginMetadataSnapshot")
     .mockImplementation(() => {
@@ -134,9 +151,20 @@ it("validates authored and inherited aliases without discovering plugin metadata
     .mockImplementation(() => {
       throw new Error("authored alias validation must not load plugin metadata");
     });
+  const runtimeNormalization = vi
+    .spyOn(providerModelNormalizationRuntime, "normalizeProviderModelIdWithRuntime")
+    .mockImplementation(() => {
+      throw new Error("authored alias validation must not load provider runtime");
+    });
   const cfg = {
     agents: {
-      defaults: { models: { "anthropic/global": { alias: "Global" } } },
+      defaults: {
+        models: {
+          "anthropic/global": { alias: "Global" },
+          "custom/latest": { alias: "Legacy" },
+          "custom/modern-model": { alias: "Canonical" },
+        },
+      },
       entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
     },
   } as OpenClawConfig;
@@ -147,7 +175,8 @@ it("validates authored and inherited aliases without discovering plugin metadata
         raw: "Operations",
         cfg,
         agentId: "ops",
-        modelRef: "custom/new-model",
+        modelRef: { provider: "custom", model: "new-model" },
+        manifestPlugins,
       }),
     ).toBe("Alias Operations already points to openai/ops.");
     expect(
@@ -155,7 +184,8 @@ it("validates authored and inherited aliases without discovering plugin metadata
         raw: "Global",
         cfg,
         agentId: "ops",
-        modelRef: "custom/new-model",
+        modelRef: { provider: "custom", model: "new-model" },
+        manifestPlugins,
       }),
     ).toBe("Alias Global already points to anthropic/global.");
     expect(
@@ -163,12 +193,33 @@ it("validates authored and inherited aliases without discovering plugin metadata
         raw: "Operations",
         cfg,
         agentId: "ops",
-        modelRef: "openai/ops",
+        modelRef: { provider: "openai", model: "ops" },
+        manifestPlugins,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveCustomModelAliasError({
+        raw: "Legacy",
+        cfg,
+        agentId: "ops",
+        modelRef: { provider: "custom", model: "modern-model" },
+        manifestPlugins,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveCustomModelAliasError({
+        raw: "Canonical",
+        cfg,
+        agentId: "ops",
+        modelRef: { provider: "custom", model: "latest" },
+        manifestPlugins,
       }),
     ).toBeUndefined();
   } finally {
+    setCurrentManifestModelIdNormalizationRecords(undefined);
     currentSnapshot.mockRestore();
     loadedSnapshot.mockRestore();
+    runtimeNormalization.mockRestore();
   }
 });
 

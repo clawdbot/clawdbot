@@ -52,7 +52,7 @@ const GROUP_HINTS = [
 const SECTION_DOCS_URLS = {
   accessGroups: "https://docs.openclaw.ai/channels/access-groups",
   messages: "https://docs.openclaw.ai/concepts/messages",
-  tts: "https://docs.openclaw.ai/tts",
+  tts: "https://docs.openclaw.ai/tools/tts",
   commands: "https://docs.openclaw.ai/tools/slash-commands",
   hooks: "https://docs.openclaw.ai/automation/hooks",
   cron: "https://docs.openclaw.ai/automation/cron-jobs",
@@ -158,6 +158,12 @@ export function buildBaseHints(): ConfigUiHints {
         hints[path] = { ...hints[path], [field]: value };
       }
     }
+  }
+  for (const path of ["agents.defaults.models.*", "agents.entries.*.models.*"]) {
+    const runtimePath = `${path}.agentRuntime`;
+    const codeModePath = `${path}.codeMode`;
+    hints[runtimePath] = { ...hints[runtimePath], order: -2 };
+    hints[codeModePath] = { ...hints[codeModePath], order: -1, placeholder: "Default" };
   }
   return applyDerivedTags(applyConfigTierHints(hints));
 }

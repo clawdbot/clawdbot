@@ -1699,6 +1699,120 @@ describe("openai-completions stop-reason tool-call guard", () => {
     });
   });
 
+  it("replaces the stored function name on a same-id fragmented continuation", async () => {
+    // A stable tool-call id that repeats across deltas signals a continuation of
+    // the same call, so the latest nonempty function-name snapshot must replace
+    // the stored name — mirroring the pinned OpenAI SDK and the managed
+    // transport. Without this the first fragment (e.g. "get_") freezes and the
+    // call is published under a stale, partial name.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_name", "get_", '{"city":'),
+      makeToolCallChunk("call_name", "weather", '"Paris"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_name",
+      name: "weather",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("replaces the stored name when an index-resolved continuation omits the id", async () => {
+    // A continuation delta that re-uses the established index but omits the id
+    // is still the same tool call — the block was already resolved by index
+    // above, so an absent id is a continuation, not a conflicting identity. The
+    // latest nonempty function-name snapshot must replace the stored name,
+    // matching the pinned OpenAI SDK accumulator. Only an explicitly conflicting
+    // id (next test) keeps the first name.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_A", "first", '{"city":'),
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, function: { name: "second", arguments: '"Paris"}' }, type: "function" },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_A",
+      name: "second",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("keeps the first name when a continuation carries a conflicting id", async () => {
+    // A continuation whose id explicitly conflicts with the established block
+    // id is not the same call, so in direct mode the first tool identity wins
+    // and the stored name is preserved.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_A", "first", '{"city":'),
+      makeToolCallChunk("call_B", "second", '"Paris"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_A",
+      name: "first",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("does not erase the stored name when a continuation carries an empty name", async () => {
+    // An empty function-name snapshot must not replace the stored name — the
+    // guard checks truthiness, so "" is skipped. This mirrors the pinned SDK
+    // (which only replaces on nonempty fn.name) and satisfies the issue's
+    // "empty-name continuation" assertion requirement.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_name", "get_weather", '{"city":'),
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, function: { name: "", arguments: '"Paris"}' }, type: "function" },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_name",
+      name: "get_weather",
+      arguments: { city: "Paris" },
+    });
+  });
+
   it("publishes post-tool text immediately and closes blocks in their original order", async () => {
     mockChunksRef.chunks = [
       makeToolCallChunk("call_1", "lookup", '{"value":1}'),

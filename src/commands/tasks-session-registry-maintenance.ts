@@ -102,10 +102,10 @@ export async function runSessionRegistryMaintenance(params: {
       continue;
     }
     const result = await runSessionRegistryMaintenanceForStore({
+      ...target,
       apply: params.apply,
       retentionMs: SESSION_REGISTRY_RETENTION_MS,
       runningCronJobIds: runningCronJobs.ids,
-      storePath: target.storePath,
     });
     stores.push({
       agentId: target.agentId,

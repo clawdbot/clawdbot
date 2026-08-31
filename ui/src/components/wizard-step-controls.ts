@@ -24,11 +24,25 @@ type WizardStepControlsProps = {
   presentation?: "channels";
   channelSelect?: boolean;
   answerLabel?: string;
+  busyLabel?: string;
   confirmAffirmativeLabel?: string;
   leadingAction?: TemplateResult;
   sensitiveRevealed?: boolean;
   onToggleSensitiveVisibility?: () => void;
 };
+
+export function renderWizardBusyButton(
+  statusLabel: string,
+  buttonLabel = t("modelSetup.wizard.continue"),
+) {
+  return html`
+    <button type="button" class="btn primary" disabled aria-busy="true" aria-label=${buttonLabel}>
+      <span class="btn__label">${buttonLabel}</span>
+      <span class="btn__spinner" aria-hidden="true"></span>
+      <span class="sr-only" role="status" aria-live="polite">${statusLabel}</span>
+    </button>
+  `;
+}
 
 function stepClass(props: WizardStepControlsProps, name: string): string {
   return `${props.presentation === "channels" ? "channels-wizard" : "wizard-step"}__${name}`;
@@ -97,6 +111,12 @@ function renderAnswerButton(
   onClick?: () => void,
   disabled = props.busy,
 ) {
+  const buttonLabel = props.answerLabel ?? label;
+  if (props.presentation === "channels" && props.busy) {
+    return html`<div class="channels-wizard__footer">
+      ${renderWizardBusyButton(props.busyLabel ?? buttonLabel)}
+    </div>`;
+  }
   const button = html`
     <button
       type=${onClick ? "button" : "submit"}
@@ -104,7 +124,7 @@ function renderAnswerButton(
       ?disabled=${disabled}
       @click=${onClick}
     >
-      ${props.answerLabel ?? label}
+      ${buttonLabel}
     </button>
   `;
   if (props.presentation === "channels") {
@@ -267,6 +287,9 @@ function renderOptionsStep(props: WizardStepControlsProps) {
         disabled: props.busy,
         onChange: (value) => props.onAnswer(channels ? value : options[Number(value)]?.value),
       })}
+      ${props.busy
+        ? renderAnswerButton(props, t("modelSetup.wizard.continue"), undefined, true)
+        : nothing}
     `;
   }
   const answer = multiple
@@ -298,16 +321,18 @@ function renderConfirmStep(props: WizardStepControlsProps) {
         : actionClass}
     >
       ${props.presentation === "channels" ? nothing : (props.leadingAction ?? nothing)}
-      ${[false, true].map(
-        (answer) => html`<button
-          type="button"
-          class=${answer ? "btn primary" : "btn"}
-          ?disabled=${props.busy}
-          @click=${() => props.onAnswer(answer)}
-        >
-          ${answer ? (props.confirmAffirmativeLabel ?? t("common.yes")) : t("common.no")}
-        </button>`,
-      )}
+      ${props.presentation === "channels" && props.busy
+        ? renderWizardBusyButton(props.busyLabel ?? t("common.loading"))
+        : [false, true].map(
+            (answer) => html`<button
+              type="button"
+              class=${answer ? "btn primary" : "btn"}
+              ?disabled=${props.busy}
+              @click=${() => props.onAnswer(answer)}
+            >
+              ${answer ? (props.confirmAffirmativeLabel ?? t("common.yes")) : t("common.no")}
+            </button>`,
+          )}
     </div>
   `;
 }

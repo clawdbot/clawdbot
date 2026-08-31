@@ -11,8 +11,10 @@ import {
   createReplyOperation,
   markReplyOperationExecutionStarted,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
   buildProjectedAgentRunIndex,
+  getAgentRunLifecycleGeneration,
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
@@ -24,7 +26,7 @@ import {
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
 
-it("projects admitted work as queued until execution starts", () => {
+it("projects ordinary startup as active before execution starts", () => {
   const sessionKey = "agent:main:queued";
   const sessionId = "queued-session";
   const runId = "queued-run";
@@ -47,11 +49,38 @@ it("projects admitted work as queued until execution starts", () => {
       agentId: "main",
     });
 
-  expect(state()).toEqual({ active: true, runIds: [runId], status: "queued" });
+  expect(state()).toEqual({ active: true, runIds: [runId] });
   expect(registration.markExecutionStarted()).toBe(true);
   expect(state()).toEqual({ active: true, runIds: [runId] });
   expect(registration.markExecutionStarted()).toBe(false);
-  registration.cleanup({ force: true });
+  registration.cleanup();
+});
+
+it("keeps terminal persistence visible only to chat history", () => {
+  const terminal = {
+    sessionKey: "agent:main:main",
+    sessionId: "session-main",
+    projectSessionActive: false,
+    projectSessionTerminalPending: true,
+  };
+  const context = { chatAbortControllers: new Map([["run-terminal", terminal]]) } as never;
+  const params = {
+    context,
+    requestedKey: terminal.sessionKey,
+    canonicalKey: terminal.sessionKey,
+    sessionId: terminal.sessionId,
+    agentId: "main",
+  };
+
+  expect(resolveVisibleActiveSessionRunState(params)).toEqual({ active: false, runIds: [] });
+  expect(
+    resolveVisibleActiveSessionRunState({ ...params, includeTerminalPersistence: true }),
+  ).toEqual({ active: true });
+
+  terminal.projectSessionTerminalPending = false;
+  expect(
+    resolveVisibleActiveSessionRunState({ ...params, includeTerminalPersistence: true }),
+  ).toEqual({ active: false, runIds: [] });
 });
 
 it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
@@ -224,7 +253,7 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, status: "queued" });
+    ).toEqual({ active: true });
 
     operation.markWaitingForGlobalLane();
     expect(
@@ -234,7 +263,7 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, status: "queued" });
+    ).toEqual({ active: true });
     operation.markGlobalLaneWaitEnded();
 
     operation.setPhase("running");
@@ -246,7 +275,7 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, status: "queued" });
+    ).toEqual({ active: true });
     operation.markGlobalLaneWaitEnded();
     markReplyOperationExecutionStarted(operation);
     expect(
@@ -512,5 +541,73 @@ it("resolves projected ownerless bare runs through the stable default owner", ()
     ).toBe(false);
   } finally {
     clearAgentRunContext("projected-ownerless");
+  }
+});
+
+it("projects only recorded capacity waits as queued and preserves independent running owners", () => {
+  const sessionKey = "agent:main:capacity-wait";
+  const sessionId = "capacity-wait-session";
+  const runId = "capacity-wait-run";
+  registerAgentRunContext(runId, { sessionKey, sessionId, agentId: "main" });
+  const chatAbortControllers = new Map();
+  const registration = registerChatAbortController({
+    chatAbortControllers,
+    runId,
+    sessionKey,
+    sessionId,
+    agentId: "main",
+    timeoutMs: 60_000,
+    kind: "agent",
+  });
+  const state = () =>
+    resolveVisibleActiveSessionRunState({
+      context: { chatAbortControllers },
+      requestedKey: sessionKey,
+      canonicalKey: sessionKey,
+      sessionId,
+    });
+  const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+  try {
+    expect(state()).toEqual({ active: true, status: "queued", runIds: [runId] });
+    registration.markExecutionStarted();
+    expect(state()).toEqual({ active: true, status: "queued", runIds: [runId] });
+    registerAgentRunContext("capacity-independent", {
+      sessionKey,
+      sessionId,
+      projectSessionActive: true,
+    });
+    expect(state()).toEqual({ active: true });
+    clearAgentRunContext("capacity-independent");
+    expect(state()).toEqual({ active: true, status: "queued", runIds: [runId] });
+    releaseWait?.();
+    expect(state()).toEqual({ active: true, runIds: [runId] });
+  } finally {
+    releaseWait?.();
+    registration.cleanup();
+    clearAgentRunContext(runId);
+    clearAgentRunContext("capacity-independent");
+  }
+});
+
+it.each([
+  { isControlUiVisible: false },
+  { projectSessionActive: false },
+  { projectSessionLifecycle: false },
+])("capacity evidence does not make a hidden maintenance run visible: %j", (visibility) => {
+  const runId = "hidden-capacity";
+  const sessionKey = "agent:main:hidden-capacity";
+  registerAgentRunContext(runId, { sessionKey, ...visibility });
+  const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+  try {
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+      }),
+    ).toEqual({ active: false, runIds: [] });
+  } finally {
+    releaseWait?.();
+    clearAgentRunContext(runId);
   }
 });

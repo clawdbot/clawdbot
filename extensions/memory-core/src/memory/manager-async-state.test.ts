@@ -67,19 +67,21 @@ describe("memory manager async state", () => {
     expect(syncMock).not.toHaveBeenCalled();
   });
 
-  it("reports background search sync failures", async () => {
+  it("reports and settles background search sync failures", async () => {
     const syncError = new Error("sync failed");
     const onError = vi.fn();
 
-    await startAsyncSearchSync({
-      enabled: true,
-      dirty: false,
-      sessionsDirty: true,
-      sync: vi.fn(async () => {
-        throw syncError;
+    await expect(
+      startAsyncSearchSync({
+        enabled: true,
+        dirty: false,
+        sessionsDirty: true,
+        sync: vi.fn(async () => {
+          throw syncError;
+        }),
+        onError,
       }),
-      onError,
-    });
+    ).resolves.toBeUndefined();
 
     await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(syncError));
   });
@@ -92,13 +94,15 @@ describe("memory manager async state", () => {
     const syncMock = vi.fn(async () => await pendingSync);
     let settled = false;
 
-    const searchSync = startAsyncSearchSync({
-      enabled: true,
-      dirty: true,
-      sessionsDirty: false,
-      sync: syncMock,
-      onError: vi.fn(),
-    }).then(() => {
+    const searchSync = Promise.resolve(
+      startAsyncSearchSync({
+        enabled: true,
+        dirty: true,
+        sessionsDirty: false,
+        sync: syncMock,
+        onError: vi.fn(),
+      }),
+    ).then(() => {
       settled = true;
     });
 

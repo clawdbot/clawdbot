@@ -58,7 +58,6 @@ describe("appendDiscoveredRows projection", () => {
       configuredByKey: new Map(),
       discoveredKeys: new Set(["bench/model-1"]),
       filter: {},
-      skipRuntimeModelSuppression: true,
     };
 
     await appendDiscoveredRows({

@@ -8,7 +8,7 @@ import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { applyAutoLocalModelLean } from "../../../config/local-model-lean-auto.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { enablePluginInConfig } from "../../../plugins/enable.js";
+import { enablePluginWithCapabilityConsent } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
 import { resolveManifestProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import {
@@ -86,6 +86,24 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       workspaceDir,
       includeUntrustedWorkspacePlugins: false,
     }));
+  const trustedManifestMatch = resolveManifestProviderAuthChoice(params.authChoice, {
+    config: nextConfig,
+    workspaceDir,
+    includeUntrustedWorkspacePlugins: false,
+  });
+  if (trustedManifestMatch) {
+    const enabled = await enablePluginWithCapabilityConsent(
+      nextConfig,
+      trustedManifestMatch.pluginId,
+      {
+        workspaceDir,
+      },
+    );
+    if (!enabled.enabled) {
+      return reject(enabled.reason ?? "Provider plugin could not be enabled.");
+    }
+    nextConfig = enabled.config;
+  }
   // Provider discovery is lazy so non-plugin auth choices do not pull plugin
   // runtime code into the basic non-interactive setup path.
   const {
@@ -123,11 +141,6 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       );
     }
     // Keep mismatch diagnostics metadata-only so untrusted workspace plugins are not loaded.
-    const trustedManifestMatch = resolveManifestProviderAuthChoice(params.authChoice, {
-      config: nextConfig,
-      workspaceDir,
-      includeUntrustedWorkspacePlugins: false,
-    });
     const untrustedOnlyManifestMatch =
       !trustedManifestMatch &&
       resolveManifestProviderAuthChoice(params.authChoice, {
@@ -209,9 +222,10 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     }
   }
 
-  const enableResult = enablePluginInConfig(
+  const enableResult = await enablePluginWithCapabilityConsent(
     nextConfig,
     providerChoice.provider.pluginId ?? providerChoice.provider.id,
+    { workspaceDir },
   );
   if (!enableResult.enabled) {
     return reject(

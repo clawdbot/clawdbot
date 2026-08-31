@@ -170,6 +170,7 @@ function createExtensionRelayFixture(name = "chrome") {
     lastTargetId: "shared-tab",
   });
   const relay = {
+    ownership: "owned",
     port: 18799,
     token: "persistent-relay-test-key",
     allowLegacyAuth: true,
@@ -318,10 +319,9 @@ describe("server-context hot-reload profiles", () => {
   it("keeps only exact live relay credentials stable across repeated profile refreshes", () => {
     const { state, runtime, relay } = createExtensionRelayFixture();
     const expectedUrl = runtime.profile.cdpUrl;
-    const freshPersistentKey = resolveBrowserConfig(buildConfig().browser).extensionRelayToken;
     state.resolved = {
       ...state.resolved,
-      extensionRelayToken: "stale-persistent-key",
+      extensionRelayToken: relay.token,
       extensionRelayInternalTokens: {
         chrome: relay.internalToken,
         orphaned: "closed-relay-credential",
@@ -340,7 +340,7 @@ describe("server-context hot-reload profiles", () => {
       expect(state.resolved.extensionRelayInternalTokens).toEqual({
         chrome: relay.internalToken,
       });
-      expect(state.resolved.extensionRelayToken).toBe(freshPersistentKey);
+      expect(state.resolved.extensionRelayToken).toBe(relay.token);
       expect(getProfileLifecycle(runtime).configRevision).toBe(0);
       expect(runtime.lastTargetId).toBe("shared-tab");
     }
