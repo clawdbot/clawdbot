@@ -16,9 +16,10 @@ function isJsonOpeningDelimiter(
 function extractBalancedJsonAt(
   raw: string,
   opts: { openers?: readonly JsonOpeningDelimiter[] },
-  start: number,
+  offset: number,
 ): BalancedJsonFragment | null {
   const openers = opts.openers ?? (["{", "["] as const);
+  let start = offset;
   while (start < raw.length && !isJsonOpeningDelimiter(raw[start], openers)) {
     start += 1;
   }
