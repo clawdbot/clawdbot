@@ -9,11 +9,11 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
-const { incrementPresenceVersionMock, loadConfigMock, upsertPresenceMock } = vi.hoisted(() => ({
-  incrementPresenceVersionMock: vi.fn(() => 2),
+const { loadConfigMock, upsertPresenceMock } = vi.hoisted(() => ({
   loadConfigMock: vi.fn(() => ({ gateway: { auth: { mode: "none" } } })),
   upsertPresenceMock: vi.fn(),
 }));
@@ -27,6 +27,7 @@ vi.mock("../../../config/io.js", () => ({
 }));
 vi.mock("../../../infra/system-presence.js", () => ({
   upsertPresence: upsertPresenceMock,
+  listSystemPresence: vi.fn(() => []),
 }));
 vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: vi.fn(() => ({
@@ -43,7 +44,6 @@ vi.mock("../health-state.js", () => ({
   })),
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
-  incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
@@ -69,7 +69,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     callback?.();
   });
   const socket = {
-    _receiver: {},
+    _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
     send: socketSend,
     on: vi.fn((event: string, handler: (data: string) => void) => {
       if (event === "message") {
@@ -111,6 +111,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
+    // Backend admission cases never publish presence; hello is mocked above.
     buildRequestContext: () => ({}) as GatewayRequestContext,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
@@ -266,7 +267,6 @@ describe("WebSocket connect suspension admission", () => {
     expect(harness.client).toBeNull();
     expect(harness.setClient).not.toHaveBeenCalled();
     expect(upsertPresenceMock).not.toHaveBeenCalled();
-    expect(incrementPresenceVersionMock).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(harness.close).toHaveBeenCalledWith(1013, "gateway suspension in progress");
     });

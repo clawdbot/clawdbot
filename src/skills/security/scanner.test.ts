@@ -768,6 +768,18 @@ describe("scanDirectoryWithSummary", () => {
         findingCount: 0,
       },
     },
+    {
+      name: "excludes test helper source when test files are excluded",
+      files: {
+        "runtime.ts": `export const ok = true;`,
+        "worker.test-helper.ts": `import { spawn } from "node:child_process"; spawn("node");`,
+      },
+      options: { excludeTestFiles: true },
+      expected: {
+        scannedFiles: 1,
+        findingCount: 0,
+      },
+    },
   ];
 
   it("summarizes directory scan results", async () => {

@@ -15,29 +15,21 @@ function isSourceFile(filePath: string): boolean {
   return filePath.endsWith(".ts") && !filePath.endsWith(".test.ts") && !filePath.endsWith(".d.ts");
 }
 
-function listSourceFiles(dir: string): string[] {
-  const externalFiles = listExternalSourceFiles(dir);
-  if (externalFiles) {
-    return externalFiles;
+function listSourceFiles(): string[] {
+  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: SCAN_ROOTS });
+  if (files) {
+    const sourceFiles = files.filter(isSourceFile);
+    return SCAN_ROOTS.flatMap((root) =>
+      sourceFiles
+        .filter((file) => file.startsWith(`${root}/`))
+        .map((file) => path.join(REPO_ROOT, file))
+        .toSorted(),
+    );
   }
-  return walkSourceFiles(dir);
-}
-
-function listExternalSourceFiles(dir: string): string[] | null {
-  const repoPath = toRepoRelativePath(REPO_ROOT, dir);
-  return listGitSourceFiles(repoPath) ?? listFindSourceFiles(dir);
-}
-
-function listGitSourceFiles(repoPath: string): string[] | null {
-  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: repoPath });
-  if (!files) {
-    return null;
-  }
-  return files
-    .map((filePath) => path.join(REPO_ROOT, filePath))
-    .filter((filePath) => fs.existsSync(filePath))
-    .filter(isSourceFile)
-    .toSorted();
+  return SCAN_ROOTS.flatMap((root) => {
+    const dir = path.join(REPO_ROOT, root);
+    return listFindSourceFiles(dir) ?? walkSourceFiles(dir);
+  });
 }
 
 function listFindSourceFiles(dir: string): string[] | null {
@@ -80,7 +72,7 @@ function walkSourceFiles(dir: string): string[] {
 describe("fs-safe import boundary", () => {
   it("lists source files without scanning boundary roots in-process", () => {
     expectNoReaddirSyncDuring(() => {
-      const files = SCAN_ROOTS.flatMap((root) => listSourceFiles(path.join(REPO_ROOT, root)));
+      const files = listSourceFiles();
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.every(isSourceFile)).toBe(true);
@@ -88,7 +80,7 @@ describe("fs-safe import boundary", () => {
   });
 
   it("keeps direct fs-safe imports behind OpenClaw policy wrappers", () => {
-    const violations = SCAN_ROOTS.flatMap((root) => listSourceFiles(path.join(REPO_ROOT, root)))
+    const violations = listSourceFiles()
       .map((filePath) => toRepoRelativePath(REPO_ROOT, filePath))
       .filter((filePath) => {
         if (ALLOWED_PREFIXES.some((prefix) => filePath.startsWith(prefix))) {

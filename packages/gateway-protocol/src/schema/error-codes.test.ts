@@ -17,8 +17,8 @@ import {
   readMissingScopeErrorDetails,
   readCronJobNotFoundError,
   UnknownAgentIdErrorDetailsSchema,
-  WizardNotFoundErrorDetailsSchema,
 } from "./error-codes.js";
+import { ErrorShapeSchema } from "./frames.js";
 
 describe("gateway error details", () => {
   it("validates and reads cron job lookup misses", () => {
@@ -71,13 +71,20 @@ describe("gateway error details", () => {
     expect(Value.Check(UnknownAgentIdErrorDetailsSchema, { ...details, agentId: "" })).toBe(false);
   });
 
-  it("validates missing wizard details", () => {
-    const details = { code: GatewayErrorDetailCodes.WIZARD_NOT_FOUND };
-    expect(Value.Check(WizardNotFoundErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
-    expect(Value.Check(WizardNotFoundErrorDetailsSchema, { ...details, sessionId: "stale" })).toBe(
-      false,
+  it.each(["WIZARD_NOT_FOUND", "SETUP_ADMISSION_BUSY"])("validates closed %s details", (code) => {
+    const details = { code };
+    expect(Value.Check(ErrorShapeSchema, { code: "UNAVAILABLE", message: "busy", details })).toBe(
+      true,
     );
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, { ...details, sessionId: "stale" })).toBe(false);
+    expect(
+      Value.Check(ErrorShapeSchema, {
+        code: "UNAVAILABLE",
+        message: "other failure",
+        details: { code: "future_detail", context: 1 },
+      }),
+    ).toBe(true);
   });
 
   it("validates typed project clone failures", () => {

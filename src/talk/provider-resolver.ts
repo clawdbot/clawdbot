@@ -100,7 +100,6 @@ export function resolveConfiguredRealtimeVoiceProvider(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): ResolvedRealtimeVoiceProvider {
   const cfgForResolve = params.cfgForResolve ?? params.cfg ?? ({} as OpenClawConfig);
-  const providers = params.providers ?? listRealtimeVoiceProviders(params.cfg);
   const resolution = resolveConfiguredCapabilityProvider({
     configuredProviderId: params.configuredProviderId,
     providerConfigs: params.providerConfigs,
@@ -109,7 +108,9 @@ export function resolveConfiguredRealtimeVoiceProvider(
     getConfiguredProvider: (providerId) =>
       params.providers?.find((entry) => entry.id === providerId) ??
       getRealtimeVoiceProvider(providerId, params.cfg),
-    listProviders: () => providers,
+    listProviders: () =>
+      params.providers ??
+      listRealtimeVoiceProviders(params.cfg, Object.keys(params.providerConfigs ?? {})),
     isProviderAvailable: params.isProviderAvailable
       ? ({ provider }) => params.isProviderAvailable?.(provider) === true
       : undefined,

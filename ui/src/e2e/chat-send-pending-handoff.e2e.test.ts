@@ -220,7 +220,7 @@ function isHealthyImageFrame(frame: FrameSample): boolean {
 }
 
 suite.define(() => {
-  it("keeps a submitted image visible through run completion and history reload", async () => {
+  it("keeps a submitted image visible when queued execution changes its run ID", async () => {
     await suite.withPage(
       { viewport: { height: 800, width: 1200 } },
       async ({ page: currentPage }) => {
@@ -262,7 +262,12 @@ suite.define(() => {
           ],
           role: "user",
           timestamp: Date.now(),
-          __openclaw: { id: USER_ECHO_ENTRY_ID, idempotencyKey: runId, seq: 2 },
+          __openclaw: {
+            id: USER_ECHO_ENTRY_ID,
+            idempotencyKey: runId,
+            runId: "queued-execution",
+            seq: 2,
+          },
         });
 
         const keyTimeline = analyzeFrameContinuity(frames, isHealthyImageFrame);

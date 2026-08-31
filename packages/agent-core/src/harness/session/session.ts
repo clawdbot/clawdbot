@@ -12,6 +12,23 @@ import { selectResetKeptEntries } from "./tool-result-pairing.js";
 type ContextBoundary = CompactionEntry | ResetEntry;
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
 
+/** The same semantic cut is used before payload acquisition and when building messages. */
+export function resolveSessionContextWindow(
+  entries: readonly { id: string; type: string; firstKeptEntryId?: string }[],
+): { boundaryIndex: number; firstKeptIndex: number } {
+  const boundaryIndex = entries.findLastIndex(
+    (entry) => entry.type === "reset" || entry.type === "compaction",
+  );
+  const firstKeptIndex = entries.findIndex(
+    (entry) => entry.id === entries[boundaryIndex]?.firstKeptEntryId,
+  );
+  return {
+    boundaryIndex,
+    firstKeptIndex:
+      firstKeptIndex >= 0 && firstKeptIndex < boundaryIndex ? firstKeptIndex : boundaryIndex,
+  };
+}
+
 /** Project persisted session entries into the message shared by replay and summarization. */
 export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessage | undefined {
   switch (entry.type) {
@@ -106,8 +123,8 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
         messages.push(summary);
       }
     }
-    const boundaryIdx = pathEntries.findIndex((entry) => entry.id === boundary.id);
-    const firstKeptIdx = pathEntries.findIndex((entry) => entry.id === boundary.firstKeptEntryId);
+    const { boundaryIndex: boundaryIdx, firstKeptIndex: firstKeptIdx } =
+      resolveSessionContextWindow(pathEntries);
     const keptEntries =
       firstKeptIdx >= 0 && firstKeptIdx < boundaryIdx
         ? pathEntries.slice(firstKeptIdx, boundaryIdx)

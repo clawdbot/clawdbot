@@ -11,7 +11,8 @@ import {
   collectEntrySpoolPaths,
   pruneOrphanedDeliveryQueueMedia,
 } from "./delivery-queue-media-spool.js";
-import { ackDelivery, loadPendingDeliveries } from "./delivery-queue-storage.js";
+import { ackDelivery } from "./delivery-queue-storage.js";
+import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 const CHILD_SCRIPT = fileURLToPath(

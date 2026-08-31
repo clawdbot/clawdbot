@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { verifyReleasePreflightToolingIdentity } from "../../scripts/npm-preflight-tooling-identity.mjs";
 import {
   resolveReleaseToolingIdentity,
   validateReleasePublishParentRun,
@@ -206,6 +207,14 @@ describe("release tooling identity", () => {
           workflowSha: SHA,
         }),
       ).toMatchObject({ route: "main", sha: SHA });
+      expect(runGh).toHaveBeenCalledWith([
+        "api",
+        `repos/openclaw/openclaw/compare/${SHA}...main`,
+        "--method",
+        "GET",
+        "--jq",
+        "{status}",
+      ]);
     },
   );
 
@@ -276,9 +285,9 @@ describe("release tooling identity", () => {
         id: Number(PARENT_RUN_ID),
         run_attempt: Number(PARENT_RUN_ATTEMPT),
         repository: { full_name: "openclaw/openclaw" },
-        path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
+        path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
         event: "workflow_dispatch",
-        head_branch: REF,
+        head_branch: "main",
         head_sha: SHA,
         status: "in_progress",
         conclusion: null,
@@ -288,7 +297,9 @@ describe("release tooling identity", () => {
     expect(
       verifyReleaseToolingIdentity({
         ...protectedIdentity(),
+        releasePublishFullRef: "refs/heads/main",
         releasePublishParentStatePolicy: "active",
+        releasePublishRef: "main",
         releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
         releasePublishRunId: PARENT_RUN_ID,
         runGh,
@@ -306,6 +317,10 @@ describe("release tooling identity", () => {
   it.each([
     ["active", "in_progress", null, true],
     ["active", "completed", "success", false],
+    ["active-or-failure", "in_progress", null, true],
+    ["active-or-failure", "completed", "failure", true],
+    ["active-or-failure", "completed", "success", false],
+    ["active-or-failure", "completed", "cancelled", false],
     ["active-or-success", "in_progress", null, true],
     ["active-or-success", "completed", "success", true],
     ["active-or-success", "completed", "failure", false],
@@ -319,7 +334,9 @@ describe("release tooling identity", () => {
       const validate = () =>
         validateReleasePublishParentRun({
           identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
+          releasePublishFullRef: "refs/heads/main",
           releasePublishParentStatePolicy,
+          releasePublishRef: "main",
           releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
           releasePublishRunId: PARENT_RUN_ID,
           repository: "openclaw/openclaw",
@@ -327,9 +344,9 @@ describe("release tooling identity", () => {
             id: Number(PARENT_RUN_ID),
             run_attempt: Number(PARENT_RUN_ATTEMPT),
             repository: { full_name: "openclaw/openclaw" },
-            path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
+            path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
             event: "workflow_dispatch",
-            head_branch: REF,
+            head_branch: "main",
             head_sha: SHA,
             status,
             conclusion,
@@ -356,6 +373,108 @@ describe("release tooling identity", () => {
             object: { sha: SHA, type: "commit" },
           }),
       }),
-    ).toThrow("run id, attempt, and parent state policy must be provided together");
+    ).toThrow("run id, attempt, ref, full ref, and parent state policy must be provided together");
+  });
+
+  it.each([
+    ["wrong parent branch", "release/2026.8.1", "refs/heads/main"],
+    ["wrong parent full ref", "main", "refs/heads/release/2026.8.1"],
+    ["untrusted parent ref", "feature/release", "refs/heads/feature/release"],
+  ])("rejects %s independently of protected child identity", (_label, parentRef, parentFullRef) => {
+    expect(() =>
+      validateReleasePublishParentRun({
+        identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
+        releasePublishFullRef: parentFullRef,
+        releasePublishParentStatePolicy: "active",
+        releasePublishRef: parentRef,
+        releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
+        releasePublishRunId: PARENT_RUN_ID,
+        repository: "openclaw/openclaw",
+        run: {
+          id: Number(PARENT_RUN_ID),
+          run_attempt: Number(PARENT_RUN_ATTEMPT),
+          repository: { full_name: "openclaw/openclaw" },
+          path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
+          event: "workflow_dispatch",
+          head_branch: "main",
+          head_sha: SHA,
+          status: "in_progress",
+          conclusion: null,
+        },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("historical npm preflight tooling", () => {
+  function proof(overrides: Record<string, unknown> = {}) {
+    const responses: Record<string, unknown> = {
+      [`git/ref/tags/${REF}`]: { ref: FULL_REF, object: { sha: SHA, type: "commit" } },
+      [`git/matching-refs/heads/${REF}`]: [],
+      [`compare/${SHA}...main`]: { status: "ahead" },
+      [`compare/${SHA}...${OTHER_SHA}`]: { status: "ahead" },
+      ...overrides,
+    };
+    const runGh = vi.fn((args: string[]) => {
+      const route = args[1]?.replace("repos/openclaw/openclaw/", "");
+      if (!route || !(route in responses)) throw new Error("unavailable provenance");
+      return JSON.stringify(responses[route]);
+    });
+    return { ...protectedIdentity(), publisherSha: OTHER_SHA, runGh };
+  }
+
+  it("accepts an unchanged historical producer under a distinct descendant publisher", () => {
+    const options = proof();
+    expect(verifyReleasePreflightToolingIdentity(options)).toMatchObject({
+      ref: REF,
+      sha: SHA,
+      route: "protected-tag",
+    });
+    expect(options.runGh.mock.calls.map(([args]) => args[1])).toEqual([
+      `repos/openclaw/openclaw/git/ref/tags/${REF}`,
+      `repos/openclaw/openclaw/git/matching-refs/heads/${REF}`,
+      `repos/openclaw/openclaw/compare/${SHA}...main`,
+      `repos/openclaw/openclaw/compare/${SHA}...${OTHER_SHA}`,
+    ]);
+  });
+
+  it.each([
+    ["missing tag", `git/ref/tags/${REF}`, null],
+    [
+      "moved tag",
+      `git/ref/tags/${REF}`,
+      { ref: FULL_REF, object: { sha: OTHER_SHA, type: "commit" } },
+    ],
+    ["annotated tag", `git/ref/tags/${REF}`, { ref: FULL_REF, object: { sha: SHA, type: "tag" } }],
+    ["ambiguous branch", `git/matching-refs/heads/${REF}`, [{ ref: `refs/heads/${REF}` }]],
+    ["malformed branches", `git/matching-refs/heads/${REF}`, {}],
+    ["malformed branch entry", `git/matching-refs/heads/${REF}`, [{}]],
+    ["producer outside main", `compare/${SHA}...main`, { status: "diverged" }],
+    ["producer newer than publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "behind" }],
+    ["unrelated publisher", `compare/${SHA}...${OTHER_SHA}`, { status: "diverged" }],
+    ["missing ancestry", `compare/${SHA}...${OTHER_SHA}`, {}],
+  ])("rejects %s", (_name, route, response) => {
+    expect(() =>
+      verifyReleasePreflightToolingIdentity(proof({ [String(route)]: response })),
+    ).toThrow();
+  });
+
+  it("fails closed when provenance cannot be read", () => {
+    expect(() =>
+      verifyReleasePreflightToolingIdentity({
+        ...proof(),
+        runGh: () => {
+          throw new Error("HTTP 503");
+        },
+      }),
+    ).toThrow("HTTP 503");
+  });
+
+  it.each([
+    { publisherSha: "invalid" },
+    { workflowFullRef: `refs/heads/${REF}` },
+    { workflowSha: OTHER_SHA },
+  ])("rejects invalid producer or publisher identity %j", (override) => {
+    expect(() => verifyReleasePreflightToolingIdentity({ ...proof(), ...override })).toThrow();
   });
 });

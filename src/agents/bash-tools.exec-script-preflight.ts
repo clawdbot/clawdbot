@@ -1,7 +1,7 @@
-/** Safely reads script files and rejects common shell-to-script bleed. */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+/** Safely reads script files and rejects common shell-to-script bleed. */
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { shouldFailClosedInterpreterPreflight } from "./bash-tools.exec-script-ambiguity.js";
@@ -39,6 +39,115 @@ const fsSafeModuleLoader = createLazyImportLoader<FsSafeModule>(
 
 async function loadFsSafeModule(): Promise<FsSafeModule> {
   return await fsSafeModuleLoader.load();
+}
+
+function findPythonShellVariable(content: string): RegExpExecArray | null {
+  const shellVariable = /\$[A-Z_][A-Z0-9_]*/y;
+  const pythonIdentifierCharacter = /[\p{ID_Continue}]/u;
+  const contexts: Array<
+    | { kind: "code"; delimiters: string[] | null; lambda: boolean }
+    | { kind: "string"; quote: "'" | '"'; triple: boolean; formatted: boolean }
+    | { kind: "format" }
+  > = [{ kind: "code", delimiters: null, lambda: false }];
+  let index = 0;
+  while (index < content.length) {
+    const context = contexts.at(-1)!;
+    const char = content[index]!;
+    if (context.kind === "string") {
+      const delimiter = context.quote.repeat(context.triple ? 3 : 1);
+      if (content.startsWith(delimiter, index)) {
+        contexts.pop();
+        index += delimiter.length;
+      } else if (context.formatted && char === "\\" && content[index + 1] === "{") {
+        index += 1;
+      } else if (char === "\\") {
+        index += content[index + 1] === "\r" && content[index + 2] === "\n" ? 3 : 2;
+      } else if (!context.triple && (char === "\n" || char === "\r")) {
+        contexts.pop();
+        index += 1;
+      } else if (
+        context.formatted &&
+        ((char === "{" && content[index + 1] === "{") ||
+          (char === "}" && content[index + 1] === "}"))
+      ) {
+        index += 2;
+      } else if (context.formatted && char === "{") {
+        contexts.push({ kind: "code", delimiters: ["}"], lambda: false });
+        index += 1;
+      } else {
+        index += 1;
+      }
+      continue;
+    }
+    if (context.kind === "format") {
+      if (char === "{") {
+        contexts.push({ kind: "code", delimiters: ["}"], lambda: false });
+      } else if (char === "}") {
+        contexts.pop();
+      }
+      index += 1;
+      continue;
+    }
+    if (char === "#") {
+      const newline = content.slice(index + 1).search(/[\r\n]/);
+      index = newline === -1 ? content.length : index + newline + 2;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      const prefix = content.slice(Math.max(0, index - 3), index);
+      contexts.push({
+        kind: "string",
+        quote: char,
+        triple: content.startsWith(char.repeat(3), index),
+        formatted: /(?:^|[^A-Z0-9_])(?:F|FR|RF)$/i.test(prefix),
+      });
+      index += content.startsWith(char.repeat(3), index) ? 3 : 1;
+      continue;
+    }
+    if (context.delimiters) {
+      if (
+        context.delimiters.length === 1 &&
+        !pythonIdentifierCharacter.test(content.charAt(index - 1)) &&
+        content.startsWith("lambda", index) &&
+        !pythonIdentifierCharacter.test(content.charAt(index + 6))
+      ) {
+        context.lambda = true;
+      }
+      const closer = char === "(" ? ")" : char === "[" ? "]" : char === "{" ? "}" : null;
+      if (closer) {
+        context.delimiters.push(closer);
+      } else if (context.delimiters.at(-1) === char) {
+        context.delimiters.pop();
+        if (context.delimiters.length === 0) {
+          contexts.pop();
+        }
+      } else if (char === ":" && context.delimiters.length === 1) {
+        if (context.lambda) {
+          context.lambda = false;
+        } else {
+          contexts[contexts.length - 1] = { kind: "format" };
+        }
+      }
+    }
+    if (char === "$") {
+      shellVariable.lastIndex = index;
+      const match = shellVariable.exec(content);
+      if (match) {
+        return match;
+      }
+    }
+    index += 1;
+  }
+  return null;
+}
+
+function findShellVariable(content: string, kind: "python" | "node"): RegExpExecArray | null {
+  if (kind === "python") {
+    // F-strings alternate literal text with executable replacement fields. Keep a lexical stack
+    // so valid text stays invisible while nested replacement code uses the normal token check.
+    return findPythonShellVariable(content);
+  }
+  return /\$[A-Z_][A-Z0-9_]+/.exec(content);
 }
 
 function shouldSkipScriptPreflightPathError(
@@ -175,14 +284,11 @@ export async function validateScriptFileForShellBleed(params: {
       throw error;
     }
 
-    // Common failure mode: shell env var syntax leaking into Python/JS.
-    // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
-    const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
-    const first = envVarRegex.exec(content);
+    const first = findShellVariable(content, target.kind);
     if (first) {
       const idx = first.index;
       const before = content.slice(0, idx);
-      const line = before.split("\n").length;
+      const line = before.split(/\r\n?|\n/).length;
       const token = first[0];
       throw new Error(
         [

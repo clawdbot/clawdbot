@@ -1,4 +1,5 @@
 // Builds CI node/Vitest shard plans from the full suite configuration.
+import { statSync } from "node:fs";
 import { matchesGlob, relative } from "node:path";
 import {
   agentVitestProjectOwners,
@@ -21,7 +22,14 @@ import {
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { boundaryTestFiles, isUnitConfigTestFile } from "../../test/vitest/vitest.unit-paths.mjs";
+import { buildVitestRunPlans, isTestFileTarget } from "../test-projects.test-support.mts";
+import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { listTrackedTestFiles } from "./list-test-files.mts";
+import {
+  listVitestRuntimeConsumerFiles,
+  resolveVitestPretestBuildMode,
+  type VitestPretestBuildMode as NodeTestPretestBuildMode,
+} from "./vitest-build-prerequisites.mts";
 
 type NodeTestShardGroup = {
   shard_name: string;
@@ -49,6 +57,7 @@ type NodeTestShard = {
 };
 
 type NodeTestPlanOptions = {
+  changedPaths?: readonly string[];
   includeReleaseOnlyPluginShards?: boolean;
   compact?: boolean;
   compactMode?: CompactNodeTestPlanMode;
@@ -58,15 +67,6 @@ type NodeTestPlanOptions = {
 };
 
 type CompactNodeTestPlanMode = "pull-request" | "push";
-type NodeTestPretestBuildMode = "private-qa" | "runtime";
-
-const PRETEST_RUNTIME_BUILD_FILES = new Set([
-  "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
-]);
-
-function resolvePretestBuildMode(paths: readonly string[]): NodeTestPretestBuildMode | undefined {
-  return paths.some((file) => PRETEST_RUNTIME_BUILD_FILES.has(file)) ? "runtime" : undefined;
-}
 
 type PolicyTestWatch = {
   ownerGlobs?: readonly string[];
@@ -137,7 +137,7 @@ type CompactNodeTestShard = Omit<NodeTestShard, "configs" | "groups"> & {
   groups: NodeTestShardGroup[];
 };
 
-type NodeTestSplitShard = Omit<NodeTestShard, "checkName" | "runner"> & {
+type NodeTestSplitShard = Omit<NodeTestShard, "checkName" | "runner" | "pretestBuildMode"> & {
   includeExternalConfigs?: boolean;
   runner?: string;
 };
@@ -172,8 +172,9 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const AGENTS_EMBEDDED_AGENT_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
 };
+const COMPACT_EMBEDDED_BASE_GROUP_NAME = "agentic-agents-embedded-base";
 const COMPACT_EMBEDDED_GROUP_NAMES = [
-  "agentic-agents-embedded-base",
+  COMPACT_EMBEDDED_BASE_GROUP_NAME,
   "agentic-agents-embedded-incomplete-turn",
   "agentic-agents-embedded-overflow-compaction",
   "agentic-agents-embedded-run",
@@ -211,14 +212,14 @@ const AGENTIC_GATEWAY_CORE_STRIPES = 3;
 const CORE_RUNTIME_MEDIA_UI_STRIPES = 3;
 const CORE_UNIT_SRC_SECURITY_STRIPES = 3;
 const UNIT_FAST_NODE_TEST_STRIPES = 2;
-// Advisory runtime estimates (seconds) per split shard: median [shard:*]
-// begin->end wall across nine successful hosted compact runs (31684307744,
-// 31683213137, 31682494259, 31682258389, 31681118857, 31680010311,
-// 31678309660, 31678086868, 31677305067). Admission and 4-vCPU striping
-// retain these weights so the bounded job count and runner advisory stay fixed.
-// agentic-commands-agent-channel uses the sole post-#122955 sample from run
-// 31684307744 because that landing removed a 79.5s test. Unknown shards fall
-// back to a per-file estimate.
+// The embedded base config owns 107 serial files and measured 258.1s/256.4s/
+// 253.7s/269.4s on main runs 33319465485, 33318725438, 33319958268, and
+// 33319413324 - the tallest compact job on every one of them. Three stripes
+// keep every stripe under COMPACT_GITHUB_MAX_PREDICTED_SECONDS on both runner
+// classes, so the hosted splitter never has to divide them again.
+const EMBEDDED_BASE_NODE_TEST_STRIPES = 3;
+// Cold-start fallback when committed CI measurements are missing. Refresh
+// config/ci-test-timings.json with pnpm ci:timings:refit, not these literals.
 const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-auth", 30],
   ["agentic-agents-core-isolated", 18],
@@ -234,8 +235,10 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-tools", 39],
   // The composite hint sets the job count before its independent configs are
   // striped across those jobs; its estimate is the sum of the split medians.
-  ["agentic-agents-embedded", 166],
-  ["agentic-agents-embedded-base", 81],
+  ["agentic-agents-embedded", 343],
+  ["agentic-agents-embedded-base-1", 86],
+  ["agentic-agents-embedded-base-2", 86],
+  ["agentic-agents-embedded-base-3", 86],
   ["agentic-agents-embedded-incomplete-turn", 19],
   ["agentic-agents-embedded-overflow-compaction", 20],
   ["agentic-agents-embedded-run", 46],
@@ -277,6 +280,12 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-control-plane-startup-core", 31],
   ["agentic-control-plane-startup-health-runtime", 11],
   ["agentic-control-plane-startup-restart-close", 10],
+  // This group is small, but its job also runs `pnpm build:ci-artifacts`
+  // (~275s measured, run 33215955822). Weight it near the packing cap so the
+  // packer stops stacking partners onto the one job that pays that build, and
+  // keep it under COMPACT_GITHUB_MAX_PREDICTED_SECONDS so it is never striped
+  // into two jobs that would each build.
+  ["agentic-gateway-core-runtime", 145],
   ["agentic-gateway-core-1", 99],
   ["agentic-gateway-core-2", 99],
   ["agentic-gateway-core-3", 99],
@@ -381,7 +390,9 @@ const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-runtime", 119],
   ["agentic-agents-core-subagents", 21],
   ["agentic-agents-core-tools", 47],
-  ["agentic-agents-embedded-base", 79],
+  ["agentic-agents-embedded-base-1", 86],
+  ["agentic-agents-embedded-base-2", 86],
+  ["agentic-agents-embedded-base-3", 86],
   ["agentic-agents-embedded-incomplete-turn", 20],
   ["agentic-agents-embedded-overflow-compaction", 21],
   ["agentic-agents-embedded-run", 47],
@@ -426,7 +437,7 @@ const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
 const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-auth", 50],
   ["agentic-agents-core-isolated", 23],
-  ["agentic-agents-core-models", 72],
+  ["agentic-agents-core-models", 198],
   ["agentic-agents-core-runner-cli-1", 16],
   ["agentic-agents-core-runner-cli-2", 25],
   ["agentic-agents-core-runner-cli-3", 23],
@@ -436,8 +447,10 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-runtime", 185],
   ["agentic-agents-core-subagents", 29],
   ["agentic-agents-core-tools", 83],
-  ["agentic-agents-embedded", 234],
-  ["agentic-agents-embedded-base", 139],
+  ["agentic-agents-embedded", 510],
+  ["agentic-agents-embedded-base-1", 138],
+  ["agentic-agents-embedded-base-2", 138],
+  ["agentic-agents-embedded-base-3", 138],
   ["agentic-agents-embedded-incomplete-turn", 3],
   ["agentic-agents-embedded-overflow-compaction", 31],
   ["agentic-agents-embedded-run", 62],
@@ -455,7 +468,7 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-commands-doctor-gateway", 8],
   ["agentic-commands-doctor-platform", 7],
   ["agentic-commands-doctor-plugins-tools", 21],
-  ["agentic-commands-doctor-sessions-cron", 60],
+  ["agentic-commands-doctor-sessions-cron", 87],
   ["agentic-commands-doctor-shared", 61],
   ["agentic-commands-doctor-whatsapp", 2],
   ["agentic-commands-doctor-workspace", 3],
@@ -478,17 +491,23 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-control-plane-startup-core", 51],
   ["agentic-control-plane-startup-health-runtime", 31],
   ["agentic-control-plane-startup-restart-close", 28],
-  ["agentic-gateway-core-1", 128],
+  // This group is small, but its job also runs `pnpm build:ci-artifacts`
+  // (~275s measured, run 33215955822). Weight it near the packing cap so the
+  // packer stops stacking partners onto the one job that pays that build, and
+  // keep it under COMPACT_GITHUB_MAX_PREDICTED_SECONDS so it is never striped
+  // into two jobs that would each build.
+  ["agentic-gateway-core-runtime", 145],
+  ["agentic-gateway-core-1", 176],
   ["agentic-gateway-core-2", 149],
   ["agentic-gateway-core-3", 141],
   ["agentic-gateway-methods", 169],
   ["agentic-plugin-sdk", 70],
   ["auto-reply-core-top-level", 43],
-  ["auto-reply-reply-agent-runner", 114],
+  ["auto-reply-reply-agent-runner", 169],
   ["auto-reply-reply-commands-1", 53],
   ["auto-reply-reply-commands-2", 26],
   ["auto-reply-reply-commands-3", 48],
-  ["auto-reply-reply-dispatch", 30],
+  ["auto-reply-reply-dispatch", 55],
   ["auto-reply-reply-dispatch-core", 75],
   ["auto-reply-reply-dispatch-delivery", 70],
   ["auto-reply-reply-dispatch-lifecycle", 20],
@@ -532,7 +551,7 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-runtime-infra-system-runtime", 69],
   ["core-runtime-media-ui-1", 97],
   ["core-runtime-media-ui-2", 78],
-  ["core-runtime-media-ui-3", 54],
+  ["core-runtime-media-ui-3", 71],
   ["core-runtime-media-ui-support", 101],
   ["core-runtime-secrets", 73],
   ["core-runtime-shared", 92],
@@ -595,6 +614,14 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/auto-reply/reply/commands-plugins.install.test.ts", 6],
   ["src/auto-reply/reply/commands-status.test.ts", 12],
   ["src/auto-reply/reply/commands-system-prompt.test.ts", 8],
+  // Embedded base stripe anchors: per-test sums from main run 33319465485's
+  // 258.07s group wall. Three files own 169s of it, so without these the
+  // equal-weight default packs them into one stripe and rebuilds the whale.
+  ["src/agents/embedded-agent-runner/compact.hooks.test.ts", 39],
+  ["src/agents/embedded-agent-runner/model.test.ts", 13],
+  ["src/agents/embedded-agent-runner/run.compaction-runtime.test.ts", 53],
+  ["src/agents/embedded-agent-runner/run.harness-auth-failover.test.ts", 8],
+  ["src/agents/embedded-agent-runner/run.shared-integration.test.ts", 77],
   ["src/gateway/dashboard-session-title.test.ts", 23],
   // Successful run 32172905415: 26.9s and 15.9s. Without direct hints the
   // hosted agent-chat splitter prices both at 3s and puts them in one stripe.
@@ -610,18 +637,22 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/gateway/managed-image-attachments.test.ts", 24],
   ["src/gateway/session-message-events.test.ts", 26],
   ["src/gateway/tool-resolution.test.ts", 43],
-  ["src/scripts/test-projects.test.ts", 21],
+  ["test/scripts/test-projects-routing.test.ts", 21],
   ["ui/src/components/app-sidebar.test.ts", 28],
   ["ui/src/pages/chat/chat-responsive.browser.test.ts", 30],
   // Focused cold proof is ~34s after right-sizing and concurrent crash phases.
   ["test/scripts/bench-sqlite-reliability.test.ts", 34],
   ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
   ["test/scripts/changed-lanes.test.ts", 5],
+  // PR run 33360253877: keep the process proofs apart instead of pricing each
+  // at 3s. Git-owner's serial baseline remains a conservative packing weight.
+  ["test/scripts/ci-git-owner.test.ts", 367],
   ["test/scripts/ci-workflow-guards.test.ts", 12],
   ["test/scripts/crabbox-wrapper.test.ts", 19],
   ["test/scripts/find-reusable-release-validation.test.ts", 8],
   ["test/scripts/install-sh.test.ts", 6],
   ["test/scripts/kitchen-sink-rpc-walk.test.ts", 5],
+  ["test/scripts/managed-child-process.test.ts", 52],
   ["test/scripts/openclaw-live-updater.test.ts", 18],
   ["test/scripts/parallels-smoke-model.test.ts", 8],
   ["test/scripts/plugin-clawhub-release.test.ts", 5],
@@ -629,6 +660,8 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/plugin-sdk-surface-report.test.ts", 6],
   ["test/scripts/pr-operation-lock.test.ts", 27],
   ["test/scripts/test-projects.test.ts", 8],
+  ["test/scripts/vitest-worker-artifacts.test.ts", 181],
+  ["test/scripts/vitest-worker-artifacts.transforms.test.ts", 70],
 ]);
 const DEFAULT_STRIPE_FILE_SECONDS = 3;
 
@@ -646,12 +679,16 @@ const COMPACT_PUSH_EXCLUDED_SHARDS = new Set([
 // concurrent sibling Vitest run competes for the 4 vCPU runner. Pack them
 // into bins the shard runner executes at concurrency 1.
 const EXCLUSIVE_COMPACT_GROUP_RE =
-  /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$/u;
+  /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^agentic-gateway-core-runtime$/u;
 // Exclusive bins run serially, so their packed estimate is their wall clock.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 
+export function isExclusiveCompactShardName(shardName: string): boolean {
+  return EXCLUSIVE_COMPACT_GROUP_RE.test(shardName);
+}
+
 function isExclusiveCompactGroup(group: NodeTestShardGroup): boolean {
-  return EXCLUSIVE_COMPACT_GROUP_RE.test(group.shard_name);
+  return isExclusiveCompactShardName(group.shard_name);
 }
 
 // Spawn/signal/PTY-timing suites also flake under high in-process worker
@@ -670,7 +707,9 @@ function applyCompactGroupWorkerPins(group: NodeTestShardGroup): NodeTestShardGr
 }
 
 function estimateDefaultCompactGroupSeconds(group: NodeTestShardGroup): number {
-  const hint = COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name);
+  const hint =
+    readCompactGroupTimings("blacksmith")[group.shard_name] ??
+    COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name);
   if (hint !== undefined) {
     return hint;
   }
@@ -684,13 +723,27 @@ function usesExpandedRunnerProfile(runnerBackend: string | undefined): boolean {
   return runnerBackend === "github" || runnerBackend === "hybrid";
 }
 
+// Hand-fitted tables stand in only until a group has direct Blacksmith samples,
+// so a committed measurement owns the weight and the table covers the rest.
+// Reading the tables first made every pinned group immune to the nightly refit:
+// pins stale-low kept packing partners onto the tallest bins, and pins
+// stale-high kept splitting groups that had since become cheap.
+function readUnmeasuredCompactHint(
+  group: NodeTestShardGroup,
+  hints: ReadonlyMap<string, number>,
+): number | undefined {
+  return readCompactGroupTimings("blacksmith")[group.shard_name] === undefined
+    ? hints.get(group.shard_name)
+    : undefined;
+}
+
 function estimateHybridCompactGroupSeconds(group: NodeTestShardGroup, seconds: number): number {
   // The 4,723s Blacksmith push hint sum measured 3,742.046s/3,756.674s
   // (79.230%/79.540%) in runs 31945998653/31949756966. A 0.87 scale keeps
   // 9.379% headroom above the higher ratio. With direct outlier hints, it sits
   // one point above the 0.86 packing cliff.
   return (
-    COMPACT_HYBRID_GROUP_SECONDS_HINTS.get(group.shard_name) ??
+    readUnmeasuredCompactHint(group, COMPACT_HYBRID_GROUP_SECONDS_HINTS) ??
     Math.round(seconds * COMPACT_HYBRID_GROUP_SECONDS_SCALE)
   );
 }
@@ -710,6 +763,7 @@ function estimateCompactGroupSeconds(
     return defaultSeconds;
   }
   return (
+    readCompactGroupTimings("github")[group.shard_name] ??
     COMPACT_GITHUB_GROUP_SECONDS_HINTS.get(group.shard_name) ??
     Math.round(defaultSeconds * COMPACT_GITHUB_GROUP_SECONDS_SCALE)
   );
@@ -723,7 +777,7 @@ function estimateCompactStripeSeconds(
     return estimateCompactGroupSeconds(group, runnerBackend);
   }
   const blacksmithSeconds =
-    COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS.get(group.shard_name) ??
+    readUnmeasuredCompactHint(group, COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS) ??
     estimateDefaultCompactGroupSeconds(group);
   return runnerBackend === "hybrid"
     ? estimateHybridCompactGroupSeconds(group, blacksmithSeconds)
@@ -733,7 +787,7 @@ function estimateCompactStripeSeconds(
 // Equal-weight sibling stripes can otherwise land in one bin and recreate the
 // indivisible critical-path floor that striping removes.
 function compactGiantStripeFamily(group: NodeTestShardGroup): string | undefined {
-  return /^(agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+$/u.exec(
+  return /^(agentic-agents-embedded-base|agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+$/u.exec(
     group.shard_name,
   )?.[1];
 }
@@ -752,11 +806,28 @@ function expandCompactGroup(group: NodeTestShardGroup): NodeTestShardGroup[] {
     if (!shardName) {
       throw new Error("embedded compact group name is missing");
     }
-    expandedGroups.push({
-      ...group,
-      configs: [config],
-      shard_name: shardName,
-    });
+    if (shardName !== COMPACT_EMBEDDED_BASE_GROUP_NAME) {
+      expandedGroups.push({ ...group, configs: [config], shard_name: shardName });
+      continue;
+    }
+    const stripes = createStripedBatches(
+      listAgentEmbeddedBaseTestFiles(),
+      EMBEDDED_BASE_NODE_TEST_STRIPES,
+      stripeFileWeight,
+    );
+    for (const [stripeIndex, includePatterns] of stripes.entries()) {
+      // An empty include list makes the shard runner drop the include file and
+      // run the whole config, so every stripe would replay the entire suite.
+      if (includePatterns.length === 0) {
+        throw new Error("embedded base stripe cannot be empty");
+      }
+      expandedGroups.push({
+        ...group,
+        configs: [config],
+        includePatterns,
+        shard_name: `${shardName}-${stripeIndex + 1}`,
+      });
+    }
   }
   return expandedGroups;
 }
@@ -1588,19 +1659,12 @@ function createToolingSplitShards(): NodeTestSplitShard[] {
       listCompactToolingTestFiles(),
       COMPACT_TOOLING_NODE_TEST_GROUPS,
       stripeFileWeight,
-    ).map((includePatterns, index) => {
-      const pretestBuildMode = resolvePretestBuildMode(includePatterns);
-      const shard: NodeTestSplitShard = {
-        shardName: `core-tooling-${index + 1}`,
-        configs: [TOOLING_CONFIG],
-        includePatterns,
-        requiresDist: false,
-      };
-      if (pretestBuildMode) {
-        shard.pretestBuildMode = pretestBuildMode;
-      }
-      return shard;
-    }),
+    ).map((includePatterns, index) => ({
+      shardName: `core-tooling-${index + 1}`,
+      configs: [TOOLING_CONFIG],
+      includePatterns,
+      requiresDist: false,
+    })),
     {
       shardName: "core-tooling-isolated",
       configs: ["test/vitest/vitest.tooling-docker.config.ts", TOOLING_ISOLATED_CONFIG],
@@ -1701,15 +1765,35 @@ function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
   const packageFiles = ["packages/gateway-client/src", "packages/gateway-protocol/src"]
     .flatMap((rootDir) => listTestFiles(rootDir))
     .filter((file) => isStripeEligibleTestFile(file, unitFastFiles));
-  return createStripedSplitShards({
-    configs: [
-      "test/vitest/vitest.gateway-core.config.ts",
-      "test/vitest/vitest.gateway-client.config.ts",
-    ],
-    files: [...gatewayFiles, ...packageFiles],
-    shardName: "agentic-gateway-core",
-    stripeCount: AGENTIC_GATEWAY_CORE_STRIPES,
-  });
+  const configs = [
+    "test/vitest/vitest.gateway-core.config.ts",
+    "test/vitest/vitest.gateway-client.config.ts",
+  ];
+  // The pretest runtime build is charged per job, so a stripe holding one of
+  // these files pays it for the whole stripe. Striping spreads them, which made
+  // every gateway-core job pay a 275s build to run ~120s of tests. Keep them in
+  // one shard so exactly one job builds.
+  const runtimeFiles = new Set(listVitestRuntimeConsumerFiles(configs));
+  const allFiles = [...gatewayFiles, ...packageFiles];
+  const runtimeShardFiles = allFiles.filter((file) => runtimeFiles.has(file));
+  return [
+    ...createStripedSplitShards({
+      configs,
+      files: allFiles.filter((file) => !runtimeFiles.has(file)),
+      shardName: "agentic-gateway-core",
+      stripeCount: AGENTIC_GATEWAY_CORE_STRIPES,
+    }),
+    ...(runtimeShardFiles.length > 0
+      ? [
+          {
+            configs,
+            includePatterns: runtimeShardFiles,
+            requiresDist: false,
+            shardName: "agentic-gateway-core-runtime",
+          },
+        ]
+      : []),
+  ];
 }
 
 const SPLIT_NODE_SHARDS = new Map<string, NodeTestSplitShard[]>([
@@ -1880,6 +1964,17 @@ function formatNodeTestShardCheckName(shardName: string): string {
 /** Create node test shard descriptors for CI, optionally excluding release-only plugin shards. */
 export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTestShard[] {
   const includeReleaseOnlyPluginShards = options.includeReleaseOnlyPluginShards ?? true;
+  const changedTestPlans = includeReleaseOnlyPluginShards
+    ? []
+    : (options.changedPaths ?? [])
+        .map(normalizeChangedPath)
+        .filter(
+          (file) =>
+            isTestFileTarget(file) &&
+            !file.endsWith(".live.test.ts") &&
+            statSync(file, { throwIfNoEntry: false })?.isFile(),
+        )
+        .flatMap((file) => buildVitestRunPlans([file]));
 
   return fullSuiteVitestShards.flatMap((shard) => {
     if (EXCLUDED_FULL_SUITE_SHARDS.has(shard.config)) {
@@ -1894,13 +1989,6 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
     const splitShards = SPLIT_NODE_SHARDS.get(shard.name);
     if (splitShards) {
       return splitShards.flatMap((splitShard) => {
-        if (
-          RELEASE_ONLY_PLUGIN_SHARDS.has(splitShard.shardName) &&
-          !includeReleaseOnlyPluginShards
-        ) {
-          return [];
-        }
-
         const splitConfigs = splitShard.includeExternalConfigs
           ? splitShard.configs
           : splitShard.configs.filter((config) => configs.includes(config));
@@ -1908,16 +1996,37 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
           return [];
         }
 
+        let includePatterns = splitShard.includePatterns;
+        if (
+          RELEASE_ONLY_PLUGIN_SHARDS.has(splitShard.shardName) &&
+          !includeReleaseOnlyPluginShards
+        ) {
+          // PR fallback must retain directly edited tests without enabling the
+          // release sweep or stealing files from their canonical Vitest owners.
+          includePatterns = [
+            ...new Set(
+              changedTestPlans
+                .filter((plan) => splitConfigs.includes(plan.config))
+                .flatMap((plan) => plan.includePatterns ?? []),
+            ),
+          ].toSorted();
+          if (includePatterns.length === 0) {
+            return [];
+          }
+        }
+
+        const pretestBuildMode = resolveVitestPretestBuildMode([
+          { configs: splitConfigs, includePatterns },
+        ]);
+
         return [
           {
             checkName: formatNodeTestShardCheckName(splitShard.shardName),
             shardName: splitShard.shardName,
             configs: splitConfigs,
             ...(splitShard.env ? { env: splitShard.env } : {}),
-            ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
-            ...(splitShard.pretestBuildMode
-              ? { pretestBuildMode: splitShard.pretestBuildMode }
-              : {}),
+            ...(includePatterns ? { includePatterns } : {}),
+            ...(pretestBuildMode ? { pretestBuildMode } : {}),
             runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,
           },
@@ -1925,11 +2034,13 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
       });
     }
 
+    const pretestBuildMode = resolveVitestPretestBuildMode([{ configs }]);
     return [
       {
         checkName: formatNodeTestShardCheckName(shard.name),
         shardName: shard.name,
         configs,
+        ...(pretestBuildMode ? { pretestBuildMode } : {}),
         runner: DEFAULT_NODE_TEST_RUNNER,
         requiresDist: DIST_DEPENDENT_NODE_SHARD_NAMES.has(shard.name),
       },
@@ -2181,13 +2292,28 @@ export function createNodeTestShardBundles(
   return [...unbundled, ...bundled].toSorted(compareFullNodeTestAdmissionOrder);
 }
 
-function listAgentSupportTestFiles(): string[] {
-  const owner = agentVitestProjectOwners.support;
+function listAgentOwnerTestFiles(owner: {
+  root: string;
+  include: string[];
+  exclude: string[];
+}): string[] {
+  // Scoped configs drop unit-fast files, so a lister that keeps them prices
+  // stripes on files the shard never runs and hands Vitest inert patterns.
+  const unitFastFiles = new Set(getUnitFastTestFiles());
   return listTestFiles(owner.root).filter(
     (file) =>
+      isStripeEligibleTestFile(file, unitFastFiles) &&
       owner.include.some((pattern) => matchesGlob(file, pattern)) &&
       !owner.exclude.some((pattern) => matchesGlob(file, pattern)),
   );
+}
+
+function listAgentSupportTestFiles(): string[] {
+  return listAgentOwnerTestFiles(agentVitestProjectOwners.support);
+}
+
+function listAgentEmbeddedBaseTestFiles(): string[] {
+  return listAgentOwnerTestFiles(agentVitestProjectOwners.embedded);
 }
 
 // Whole-config groups the hosted splitter may stripe by file: each lister
@@ -2262,9 +2388,14 @@ function createCompactNodeTestShardBundles(
       : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     for (const planned of plannedGroups) {
       groups.push(planned.group);
-      // Synthesized hosted stripes need their divided parent weight. Native
-      // groups must reach the runner-specific stripe estimator during rebalance.
-      if (planned.group.shard_name !== group.shard_name) {
+      // A divided parent estimate covers only unmeasured hosted stripes. Once
+      // sampled, the child's runner-specific timing owns admission and rebalance.
+      if (
+        planned.group.shard_name !== group.shard_name &&
+        readCompactGroupTimings(options.runnerBackend === "github" ? "github" : "blacksmith")[
+          planned.group.shard_name
+        ] === undefined
+      ) {
         synthesizedSplitSeconds.set(planned.group.shard_name, planned.seconds);
       }
     }

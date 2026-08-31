@@ -4,6 +4,7 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   assertDirectPluginRegistrationReplacement,
+  getPluginRegistryForContext,
   requireActivePluginRegistry,
   resolveDirectPluginRegistrationOwner,
 } from "../../plugins/runtime.js";
@@ -19,7 +20,7 @@ const log = createSubsystemLogger("agents/harness");
 const CODEX_NATIVE_COMPACTION_OWNER_ID = "codex";
 
 function getAgentHarnesses() {
-  return requireActivePluginRegistry().agentHarnesses;
+  return getPluginRegistryForContext()?.agentHarnesses ?? [];
 }
 
 /** Registers or replaces an agent harness under its trimmed id. */
@@ -28,7 +29,7 @@ export function registerAgentHarness(
   options?: AgentHarnessRegistrationOptions & { ownerPluginId?: string },
 ): void {
   const id = harness.id.trim();
-  const harnesses = getAgentHarnesses();
+  const harnesses = requireActivePluginRegistry().agentHarnesses;
   const pluginId = resolveDirectPluginRegistrationOwner(options?.ownerPluginId) ?? "core";
   if (id === "openclaw") {
     throw new Error('agent harness id "openclaw" is reserved for the built-in runtime');

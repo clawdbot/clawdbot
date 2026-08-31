@@ -13,6 +13,7 @@ import {
   type PreparedMessageToolCatalog,
 } from "../../plugins/prepared-message-tool-catalog.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { ChatType } from "../chat-type.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, getLoadedChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -41,6 +42,7 @@ export const listMessageActionDiscoveryChannels = (
 export type ChannelMessageActionDiscoveryInput = {
   cfg?: OpenClawConfig;
   channel?: string | null;
+  chatType?: ChatType | null;
   currentChannelProvider?: string | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
@@ -82,6 +84,7 @@ export function createMessageActionDiscoveryContext(
   );
   return {
     cfg: params.cfg ?? ({} as OpenClawConfig),
+    ...(params.chatType ? { chatType: params.chatType } : {}),
     currentChannelId: params.currentChannelId,
     currentChannelProvider,
     currentThreadTs: params.currentThreadTs,
@@ -349,6 +352,15 @@ export function resolveChannelMessageToolSchemaProperties(
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);
   const discoveryBase = createMessageActionDiscoveryContext(params);
+  // Account IDs belong to the current provider. Other plugins must discover
+  // schemas from their configured-account union, not a foreign account name.
+  const contextForPlugin = (pluginId: string) => ({
+    ...discoveryBase,
+    accountId:
+      !currentChannel || resolveMessageActionDiscoveryChannelId(pluginId) === currentChannel
+        ? params.accountId
+        : undefined,
+  });
   const seenPluginIds = new Set<string>();
 
   const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
@@ -360,7 +372,7 @@ export function resolveChannelMessageToolSchemaProperties(
     for (const contribution of resolveMessageActionDiscoveryForPlugin({
       pluginId: plugin.id,
       actions: plugin.actions,
-      context: discoveryBase,
+      context: contextForPlugin(plugin.id),
       includeSchema: true,
     }).schemaContributions) {
       const visibility = contribution.visibility ?? "current-channel";
@@ -384,7 +396,7 @@ export function resolveChannelMessageToolSchemaProperties(
       for (const contribution of resolveMessageActionDiscoveryForPlugin({
         pluginId: currentActions.pluginId,
         actions: currentActions.actions,
-        context: discoveryBase,
+        context: contextForPlugin(currentActions.pluginId),
         includeSchema: true,
       }).schemaContributions) {
         const visibility = contribution.visibility ?? "current-channel";

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
+import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
   assertAgentHarnessRunAdmission,
   buildContextEngineCompactionSessionTarget,
@@ -11,6 +14,8 @@ import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 const sessionAccessorMocks = vi.hoisted(() => ({
   listSessionEntriesCore: vi.fn(() => []),
   loadSessionEntry: vi.fn(),
+  patchSessionEntryCore:
+    vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
   updateSessionEntry: vi.fn(async () => undefined),
 }));
 
@@ -19,8 +24,47 @@ vi.mock("../../../config/sessions/session-accessor.js", () => sessionAccessorMoc
 beforeEach(() => {
   sessionAccessorMocks.listSessionEntriesCore.mockReset().mockReturnValue([]);
   sessionAccessorMocks.loadSessionEntry.mockReset();
+  sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
   sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
 });
+
+it.each([0, 2])(
+  "retains compaction facts across cancellation with %s ingress records",
+  async (recordedCompactionCount) => {
+    const persistence = createDeferred();
+    const controller = new AbortController();
+    const cancelled = new Error("cancelled while user persistence was pending");
+    const contextRecoveryState = createEmbeddedRunContextRecoveryState();
+    contextRecoveryState.autoCompactionCount = recordedCompactionCount;
+    contextRecoveryState.lastCompactionTokensAfter = recordedCompactionCount > 0 ? 60 : undefined;
+    // Cancellation exits before model normalization; only the completed-attempt boundary is live.
+    const normalization = normalizeEmbeddedRunAttempt({
+      runInput: {
+        runParams: { abortSignal: controller.signal },
+        laneController: { throwIfAborted: () => controller.signal.throwIfAborted() },
+      },
+      preparedRuntime: { snapshot: () => ({}) },
+      recordedCompactionCount,
+      dispatchedAttempt: {
+        rawAttempt: { compactionCount: 2, compactionTokensAfter: 40.9 },
+        cancellationRequested: true,
+      },
+      sessionPromptState: {
+        activePrompt: { persisted: true },
+        waitForCurrentUserMessagePersistence: () => persistence.promise,
+      },
+      contextRecoveryState,
+    } as never);
+
+    controller.abort(cancelled);
+    persistence.resolve();
+    await expect(normalization).rejects.toBe(cancelled);
+    expect(contextRecoveryState).toMatchObject({
+      autoCompactionCount: 2,
+      lastCompactionTokensAfter: recordedCompactionCount > 0 ? 60 : 40,
+    });
+  },
+);
 
 describe("buildContextEngineCompactionSessionTarget", () => {
   it("leaves the key absent when a marker has no stored mapping", () => {
@@ -127,19 +171,43 @@ describe("fixed-store session bootstrap", () => {
     session: { store: "/tmp/shared-sessions.json" },
   };
 
-  it("carries the persisted owner into token snapshot resets", async () => {
-    await resetNoRealConversationTokenSnapshot({ config, sessionKey: "global" });
-
-    expect(sessionAccessorMocks.updateSessionEntry).toHaveBeenCalledWith(
-      {
+  it.each([false, true])(
+    "keeps the prepared reset target and its commit owner (closed=%s)",
+    async (closeBeforeCommit) => {
+      const sessionTarget = {
         agentId: "ops",
+        sessionId: "ops-session",
         sessionKey: "global",
-        storePath: "/tmp/shared-sessions.json",
-      },
-      expect.any(Function),
-      expect.objectContaining({ skipMaintenance: true }),
-    );
-  });
+        storePath: "/tmp/explicit-openclaw-agent.sqlite",
+      };
+      const callerError = new Error("reset owner closed while waiting for commit");
+      let closed = false;
+      const assertActive = () => {
+        if (closed) {
+          throw callerError;
+        }
+      };
+      sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(
+        async (_scope, _update, options) => {
+          closed = closeBeforeCommit;
+          options?.assertCommitAllowed?.();
+          return null;
+        },
+      );
+
+      const reset = resetNoRealConversationTokenSnapshot({ sessionTarget, assertActive });
+      if (closeBeforeCommit) {
+        await expect(reset).rejects.toBe(callerError);
+      } else {
+        await reset;
+      }
+      expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledWith(
+        sessionTarget,
+        expect.any(Function),
+        expect.objectContaining({ skipMaintenance: true, assertCommitAllowed: assertActive }),
+      );
+    },
+  );
 
   it("carries the persisted owner into harness admission", () => {
     assertAgentHarnessRunAdmission({

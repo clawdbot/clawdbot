@@ -128,10 +128,12 @@ export function registerModelsCli(program: Command) {
     .command("refresh")
     .description("Refresh the hosted model catalog")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (opts, command: Command) => {
+      const runtime = await loadModelsRuntime();
+      runtime.rejectAgentScopedModelCommand(command, "refresh");
+      await runtime.runModelsCommand(async () => {
         const { modelsRefreshCommand } = await import("../commands/models/refresh.js");
-        await modelsRefreshCommand({ json: hasJsonOutput(opts) }, defaultRuntime);
+        await modelsRefreshCommand({ json: hasJsonOutput(opts) }, runtime.defaultRuntime);
       });
     });
 

@@ -21,8 +21,6 @@ export class CodexRestrictedToolSurfaceAttestationError extends Error {
   }
 }
 
-export class CodexThreadBindingConflictAfterCleanupError extends CodexThreadBindingConflictError {}
-
 export class CodexAdoptedThreadActiveError extends Error {
   constructor() {
     super("Codex session became active in another runner; wait for it to finish before continuing");

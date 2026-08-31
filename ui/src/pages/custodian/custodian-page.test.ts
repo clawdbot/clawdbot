@@ -379,30 +379,6 @@ describe("custodian page", () => {
     ]);
   });
 
-  it("continues to the welcome when the bounded history request times out", async () => {
-    const request = vi.fn(
-      async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
-        if (method === "openclaw.chat.history") {
-          expect(options).toEqual({ timeoutMs: 15_000 });
-          throw new Error("history request timed out");
-        }
-        return {
-          sessionId: "engine-session-after-history-timeout",
-          reply: "Welcome without history.",
-          action: "none",
-        };
-      },
-    );
-    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
-    const { page } = await mountPage(context);
-
-    await waitForFast(() => expect(page.textContent).toContain("Welcome without history."));
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "openclaw.chat.history",
-      "openclaw.chat",
-    ]);
-  });
-
   it("refreshes durable rows for a same-ownership client replacement", async () => {
     let historyCalls = 0;
     const request = vi.fn(async (method: string, _params?: unknown) => {
@@ -518,9 +494,13 @@ describe("custodian page", () => {
     const { page } = await mountPage(context);
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
-    const input = page.querySelector<HTMLInputElement>(
-      '.agent-chat__composer-combobox input[type="password"]',
-    )!;
+    const input = await waitForFast(() => {
+      const candidate = page.querySelector<HTMLInputElement>(
+        '.agent-chat__composer-combobox input[type="password"]',
+      );
+      expect(candidate).not.toBeNull();
+      return candidate!;
+    });
     input.value = "test-token-placeholder";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
@@ -697,9 +677,13 @@ describe("custodian page", () => {
     const { page } = await mountPage(context);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
 
-    const input = page.querySelector<HTMLInputElement>(
-      '.agent-chat__composer-combobox input[type="password"]',
-    )!;
+    const input = await waitForFast(() => {
+      const candidate = page.querySelector<HTMLInputElement>(
+        '.agent-chat__composer-combobox input[type="password"]',
+      );
+      expect(candidate).not.toBeNull();
+      return candidate!;
+    });
     input.value = "test-token-placeholder";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;

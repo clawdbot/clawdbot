@@ -12,10 +12,7 @@ import {
   normalizeConfiguredProviderCatalogModelId,
 } from "../../agents/model-ref-shared.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
-import {
-  shouldSuppressBuiltInModelCore,
-  shouldSuppressBuiltInModelFromManifest,
-} from "../../agents/model-suppression.js";
+import { shouldSuppressBuiltInModelCore } from "../../agents/model-suppression.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -196,14 +193,6 @@ function shouldSuppressListModel(params: {
   model: { provider: string; id: string; baseUrl?: string };
   context: RowBuilderContext;
 }): boolean {
-  if (params.context.skipRuntimeModelSuppression) {
-    return shouldSuppressBuiltInModelFromManifest({
-      provider: params.model.provider,
-      id: params.model.id,
-      baseUrl: params.model.baseUrl,
-      config: params.context.cfg,
-    });
-  }
   return shouldSuppressBuiltInModelCore({
     provider: params.model.provider,
     id: params.model.id,
