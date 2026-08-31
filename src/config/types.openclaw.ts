@@ -165,6 +165,9 @@ export type OpenClawConfig = {
         | "beacon"
         | "phosphor"
         | "crt"
+        | "manuscript"
+        | "rose"
+        | "miami"
         | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";

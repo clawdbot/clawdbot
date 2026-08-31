@@ -266,21 +266,8 @@ export function isLikelyHttpErrorText(raw: string): boolean {
   return Boolean(
     status &&
     status.code >= 400 &&
-    (classifyFailoverReason(raw) !== null ||
+    (classifyFailoverReason(raw, { providerPlugin: null }) !== null ||
       classifyProviderRequestFacets({ status: status.code, message: raw }) !== null),
-  );
-}
-
-function shouldRewriteContextOverflowText(raw: string): boolean {
-  if (classifyFailoverReason(raw) !== "context_overflow") {
-    return false;
-  }
-  const status = extractLeadingHttpStatus(raw);
-  return (
-    isRawApiErrorPayload(raw) ||
-    Boolean(status && status.code >= 400) ||
-    ERROR_PREFIX_RE.test(raw) ||
-    CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
   );
 }
 
@@ -325,10 +312,18 @@ export function renderSanitizedUserFacingText(
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return "Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
   }
-  if (shouldRewriteContextOverflowText(trimmed)) {
+  const reason = classifyFailoverReason(trimmed, { providerPlugin: null });
+  const status = extractLeadingHttpStatus(trimmed);
+  const rawPayload = isRawApiErrorPayload(trimmed);
+  if (
+    reason === "context_overflow" &&
+    (rawPayload ||
+      (status && status.code >= 400) ||
+      ERROR_PREFIX_RE.test(trimmed) ||
+      CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
+  ) {
     return renderFailoverBaseCopy("context_overflow") ?? trimmed;
   }
-  const reason = classifyFailoverReason(trimmed);
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
     return renderFailoverBaseCopy(reason, { raw: trimmed }) ?? trimmed;
   }
@@ -338,8 +333,7 @@ export function renderSanitizedUserFacingText(
   if (isInvalidStreamingEventOrderError(trimmed)) {
     return "LLM request failed: provider returned an invalid streaming response. Please try again.";
   }
-  const status = extractLeadingHttpStatus(trimmed);
-  if (isRawApiErrorPayload(trimmed) || (status && status.code >= 400 && reason)) {
+  if (rawPayload || (status && status.code >= 400 && reason)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
   if (isStreamingJsonParseError(trimmed)) {

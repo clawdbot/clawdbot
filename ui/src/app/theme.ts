@@ -9,6 +9,9 @@ export type ThemeName =
   | "beacon"
   | "phosphor"
   | "crt"
+  | "manuscript"
+  | "rose"
+  | "miami"
   | "custom";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme =
@@ -28,6 +31,12 @@ export type ResolvedTheme =
   | "phosphor-light"
   | "crt"
   | "crt-light"
+  | "manuscript"
+  | "manuscript-light"
+  | "rose"
+  | "rose-light"
+  | "miami"
+  | "miami-light"
   | "custom"
   | "custom-light";
 
@@ -40,6 +49,9 @@ const VALID_THEME_NAMES = new Set<ThemeName>([
   "beacon",
   "phosphor",
   "crt",
+  "manuscript",
+  "rose",
+  "miami",
   "custom",
 ]);
 

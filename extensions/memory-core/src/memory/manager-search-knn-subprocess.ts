@@ -4,6 +4,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
+import { vectorKnnProcessEntrypoint } from "./manager-search-knn-entrypoint.js";
 import type { VectorKnnChildInput, VectorKnnChildResult } from "./manager-search-knn.child.js";
 import {
   isVectorKnnRow,
@@ -25,14 +26,6 @@ class VectorKnnSubprocessError extends Error {
     super(message);
     this.name = "VectorKnnSubprocessError";
   }
-}
-
-function resolveVectorKnnChildUrl(): URL {
-  return resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "manager-search-knn.child",
-    distWorkerPath: "extensions/memory-core/memory-search-knn.child.js",
-  });
 }
 
 function buildChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -184,7 +177,7 @@ export async function runVectorKnnInSubprocess(
   }
   let child;
   try {
-    const childUrl = resolveVectorKnnChildUrl();
+    const childUrl = resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint);
     child = spawn(process.execPath, resolveRuntimeWorkerArgv(childUrl), {
       env: buildChildEnv(),
       shell: false,

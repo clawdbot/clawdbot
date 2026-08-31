@@ -497,8 +497,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       onSelectProject: (projectId) => this.place.selectProjectId(projectId),
       onProjectQueryInput: (query) => this.browser.changeProjectQuery(query),
       onSelectRemoteProject: (project) => this.place.selectRemoteProject(project),
-      onApplyFolder: (folder) =>
-        this.place.applyFolder(folder, this.browser.browserListing?.path === folder),
+      onApplyFolder: (folder) => this.place.applyFolder(folder),
       onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
       onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
       onBrowse: () =>

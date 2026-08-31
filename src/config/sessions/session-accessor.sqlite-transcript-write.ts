@@ -393,12 +393,37 @@ function resolveTranscriptAppendRefusal(
   };
 }
 
+function assertLockedTranscriptWriteAllowed(
+  database: OpenClawAgentDatabase,
+  resolved: ResolvedTranscriptScope,
+  scope: SessionTranscriptWriteScope,
+): void {
+  const fencedScope = {
+    ...scope,
+    sessionId: resolved.sessionId,
+    sessionKey: resolved.sessionKey,
+  };
+  assertOwnedTranscriptWriteCommit(fencedScope);
+  if (
+    fencedScope.expectedLifecycleRevision === undefined &&
+    fencedScope.expectedWriterRunId === undefined
+  ) {
+    return;
+  }
+  const fresh = readSessionEntryRow(database, resolved.sessionKey);
+  const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
+  if (refusal) {
+    throw new SessionTranscriptWriterClaimReboundError(refusal);
+  }
+}
+
 /** Runs read/append transcript work under one SQLite writer-queue critical section. */
 export async function withTranscriptWriteLock<T>(
   scope: SessionTranscriptWriteScope,
   run: (context: SqliteTranscriptWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
-  const resolved = resolveSqliteTranscriptScope(scope);
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const resolved = resolveSqliteTranscriptScope(fencedScope);
   const databaseOptions = toDatabaseOptions(resolved);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let transcriptSnapshot: SqliteTranscriptSnapshotState | undefined;
@@ -419,6 +444,7 @@ export async function withTranscriptWriteLock<T>(
         }
         const expectedSnapshot = transcriptSnapshot?.rows;
         const nextSnapshot = runOpenClawAgentWriteTransaction((writeDatabase) => {
+          assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
           if (expectedSnapshot !== undefined) {
             // The writer queue is process-local. Revalidate after BEGIN IMMEDIATE
             // so a committed cross-process append cannot be deleted by the rewrite.
@@ -429,7 +455,9 @@ export async function withTranscriptWriteLock<T>(
             );
           }
           replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, events);
-          return readTranscriptEventRows(writeDatabase, resolved.sessionId);
+          const nextRows = readTranscriptEventRows(writeDatabase, resolved.sessionId);
+          assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
+          return nextRows;
         }, databaseOptions);
         transcriptSnapshot = { kind: "current", rows: nextSnapshot };
       },
@@ -438,6 +466,7 @@ export async function withTranscriptWriteLock<T>(
         const snapshotState = transcriptSnapshot;
         let nextSnapshotState = snapshotState;
         runOpenClawAgentWriteTransaction((writeDatabase) => {
+          assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
           const snapshotStillCurrent =
             snapshotState?.kind === "current"
               ? isSqliteTranscriptSnapshotUnchanged(
@@ -455,6 +484,7 @@ export async function withTranscriptWriteLock<T>(
                 }
               : { kind: "stale" };
           }
+          assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
         }, databaseOptions);
         transcriptSnapshot = nextSnapshotState;
         return result as TranscriptMessageAppendResult<typeof options.message> | undefined;
@@ -463,6 +493,7 @@ export async function withTranscriptWriteLock<T>(
         let result: TranscriptMessageAppendResult<unknown> | undefined;
         let messageSeq: number | undefined;
         runOpenClawAgentWriteTransaction((writeDatabase) => {
+          assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
           result = appendTranscriptMessageInTransaction(writeDatabase, resolved, options);
           if (result) {
             rememberCommittedTranscriptMessageSequencesInTransaction(
@@ -472,6 +503,7 @@ export async function withTranscriptWriteLock<T>(
             );
             messageSeq = readCommittedTranscriptMessageSequence(result);
           }
+          assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
         }, databaseOptions);
         return {
           ...(messageSeq !== undefined ? { messageSeq } : {}),

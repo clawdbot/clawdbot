@@ -11,6 +11,7 @@ import {
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { logConfigWarningsOnce } from "../config/io.warnings.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -19,6 +20,7 @@ import type {
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -410,6 +412,22 @@ export async function runDoctorConfigPreflight(
       throwStartupMigrationGuardRejected();
     }
     if (stateDirMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
+      if (options.doctorOnlyStateMigrations === true) {
+        const { detectLegacyExecApprovals, migrateLegacyExecApprovals } =
+          await import("../infra/state-migrations.exec-approvals.js");
+        const stateDir = resolveStateDir(process.env);
+        // Exec approvals are state-root policy. Repair them before config validity
+        // decides which config-dependent migration graph is safe to run.
+        noteStartupStateMigrationResult(
+          await measurePreflightStep("exec-approvals-migration", () =>
+            migrateLegacyExecApprovals({
+              detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
+              stateDir,
+              env: process.env,
+            }),
+          ),
+        );
+      }
       if (gatewayStartupCheckpointRequired && (snapshot.valid || automaticStartupRepair)) {
         if (!startupMigrationLease) {
           throw new Error("Startup plugin host-link repair requires the startup migration lease.");
@@ -605,6 +623,19 @@ export async function runDoctorConfigPreflight(
       ) {
         throwStartupMigrationGuardRejected();
       }
+      refreshMigrationCheckpoint(migrationCheckpoint, configSnapshotRead);
+    }
+    if (
+      migrationCheckpoint &&
+      shouldPersistRefreshedPluginIndex &&
+      configSnapshotRead.pluginMetadataSnapshot?.policyHash !==
+        resolveInstalledPluginIndexPolicyHash(baseConfig, startupMigrationEnv)
+    ) {
+      // State migration can change activation policy after the initial index was derived.
+      // Persist only a generation that describes the post-migration policy.
+      configSnapshotRead = await readConfigSnapshotForPreflight(false);
+      snapshot = configSnapshotRead.snapshot;
+      baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
       refreshMigrationCheckpoint(migrationCheckpoint, configSnapshotRead);
     }
     if (

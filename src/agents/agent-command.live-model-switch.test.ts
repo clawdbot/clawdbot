@@ -3477,18 +3477,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
-  it.each([
-    {
-      name: "does not overwrite another active run's restart recovery context",
-      attemptResult: makeEmptyResult("openai", "gpt-5.4"),
-    },
-    {
-      name: "does not clear another active run's restart recovery context",
-      attemptResult: makeEmptyResult("openai", "gpt-5.4"),
-    },
-  ])("$name", async ({ attemptResult }) => {
+  it("does not overwrite another active run's restart recovery context", async () => {
     setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(attemptResult);
+    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
     const staleEntry = createCommandSessionEntry();
     const laterRunEntry = createCommandSessionEntry({
       updatedAt: 2,

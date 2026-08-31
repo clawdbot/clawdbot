@@ -916,7 +916,7 @@ export const listManagedPlugins = withManagedPluginCache(
     const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
     const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
     const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
-      const enabled = isInstalledPluginEnabled(metadata.index, record.pluginId, params.config);
+      const enabled = isInstalledPluginEnabled(metadata.index, record.pluginId, params.config, env);
       const manifest = metadata.byPluginId.get(record.pluginId);
       const localCatalog = normalizeCatalogMetadata(manifest?.catalog);
       const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);

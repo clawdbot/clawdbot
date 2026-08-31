@@ -500,6 +500,7 @@ function supportsPreparedOpenAIAuth(ctx: Parameters<AgentHarness["supports"]>[0]
 function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
   return runBtwSideQuestion({
     cfg: { agents: { entries: { main: { default: true } } } } as never,
+    agentId: "main",
     agentDir: DEFAULT_AGENT_DIR,
     provider: DEFAULT_PROVIDER,
     model: DEFAULT_MODEL,
@@ -871,6 +872,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runBtwSideQuestion({
       cfg: { agents: { entries: { main: { default: true } } } } as never,
+      agentId: "main",
       agentDir: DEFAULT_AGENT_DIR,
       provider: DEFAULT_PROVIDER,
       model: DEFAULT_MODEL,
@@ -913,21 +915,48 @@ describe("runBtwSideQuestion", () => {
     });
   });
 
-  it("resolves the prepared runtime the way gateway-published owners are keyed", async () => {
-    // Gateway startup publishes configured owners with allowGatewaySubagentBinding
-    // (server-startup-post-attach.ts), and that flag is part of the owner key
-    // (prepared-model-runtime.owner.ts). A gateway-hosted BTW request that omits
-    // it matches no owner, and standalone activation is refused while the gateway
-    // lifecycle is active, so the side question fails with "owner was not published".
-    mockDoneAnswer("Final answer.");
+  it.each([
+    { harness: "openclaw", sandboxSessionKey: undefined },
+    { harness: "codex", sandboxSessionKey: undefined },
+    { harness: "codex", sandboxSessionKey: "agent:main:policy" },
+  ])(
+    "retains the selected global agent for $harness with policy $sandboxSessionKey",
+    async ({ harness, sandboxSessionKey }) => {
+      // Gateway startup publishes configured owners with allowGatewaySubagentBinding
+      // (server-startup-post-attach.ts), and that flag is part of the owner key
+      // (prepared-model-runtime.owner.ts). A gateway-hosted BTW request that omits
+      // it matches no owner, and standalone activation is refused while the gateway
+      // lifecycle is active, so the side question fails with "owner was not published".
+      mockDoneAnswer("Final answer.");
+      resolveSessionAgentIdMock.mockImplementation(
+        (await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js"))
+          .resolveSessionAgentId,
+      );
+      const sideQuestion = harness === "codex" ? registerCodexSideQuestionHarness() : undefined;
 
-    await runSideQuestion({ allowGatewaySubagentBinding: true });
+      await runSideQuestion({
+        agentId: "work",
+        cfg: {
+          agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+          session: { scope: "global" },
+        },
+        sessionKey: "global",
+        sandboxSessionKey,
+        allowGatewaySubagentBinding: true,
+      });
 
-    expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).toMatchObject({
-      agentDir: DEFAULT_AGENT_DIR,
-      allowGatewaySubagentBinding: true,
-    });
-  });
+      expect(mockCall(loadPreparedModelRuntimeSnapshotMock)?.[0]).toMatchObject({
+        agentDir: DEFAULT_AGENT_DIR,
+        agentId: "work",
+        allowGatewaySubagentBinding: true,
+      });
+      if (sideQuestion) {
+        expect(sideQuestion).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "work", sessionKey: "global" }),
+        );
+      }
+    },
+  );
 
   it("keeps gateway subagent binding off for local callers such as the embedded TUI", async () => {
     // The embedded TUI calls runBtwSideQuestion directly and must not borrow the
@@ -2490,6 +2519,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runBtwSideQuestion({
       cfg: {} as never,
+      agentId: "main",
       agentDir: DEFAULT_AGENT_DIR,
       provider: "amazon-bedrock",
       model: "us.anthropic.claude-sonnet-4-5-v1:0",

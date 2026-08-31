@@ -60,7 +60,6 @@ export {
 export {
   isContextOverflowError,
   isLikelyContextOverflowError,
-  isProviderRequestSizeCeilingError,
   isReasoningConstraintErrorMessage,
 } from "./context-overflow.js";
 export {
@@ -69,6 +68,7 @@ export {
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
+  isProviderRequestSizeCeilingError,
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
@@ -279,7 +279,7 @@ function mergeMessageAndDetailClassification(
 
 export function classifyFailoverSignal(
   signal: FailoverSignal,
-  opts?: { providerPlugin?: PreparedProviderFailoverOwner },
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
 ): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus =
@@ -421,7 +421,7 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
 
 export function classifyFailoverReason(
   raw: string,
-  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner },
+  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner | null },
 ): FailoverReason | null {
   return failoverReasonFromClassification(
     classifyFailoverSignal(

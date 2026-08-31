@@ -223,7 +223,7 @@ extensions/codex/src/app-server/sandbox-exec-server/processes.ts	1
 extensions/codex/src/app-server/sandbox-guard.ts	2
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
 extensions/codex/src/app-server/session-binding.ts	4
-extensions/codex/src/app-server/session-history.ts	6
+extensions/codex/src/app-server/session-history.ts	4
 extensions/codex/src/app-server/settled-turn-context.ts	3
 extensions/codex/src/app-server/shared-client.ts	4
 extensions/codex/src/app-server/side-question.ts	8
@@ -978,7 +978,6 @@ extensions/qa-lab/src/bus-state.ts	2
 extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
 extensions/qa-lab/src/cli.runtime.ts	9
-extensions/qa-lab/src/cli.ts	1
 extensions/qa-lab/src/codex-plugin.fixture.ts	2
 extensions/qa-lab/src/confidence-report.ts	2
 extensions/qa-lab/src/crabline-transport.ts	6
@@ -1865,7 +1864,7 @@ src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
 src/agents/execution-auth-binding.ts	1
-src/agents/failover-error.ts	22
+src/agents/failover-error.ts	15
 src/agents/failover/retry-evidence.ts	1
 src/agents/failover/signal-details.ts	1
 src/agents/fallback-skip-cache.ts	1
@@ -1967,7 +1966,7 @@ src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	24
-src/agents/session-transcript-repair.ts	15
+src/agents/session-transcript-repair.ts	14
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
 src/agents/sessions/agent-session-inspection.ts	2
@@ -2206,7 +2205,7 @@ src/auto-reply/reply/session.ts	3
 src/auto-reply/reply/source-reply-delivery-runtime.ts	2
 src/auto-reply/reply/source-turn-id.ts	4
 src/auto-reply/reply/stage-sandbox-media.ts	1
-src/auto-reply/reply/strip-inbound-meta.ts	5
+src/auto-reply/reply/strip-inbound-meta.ts	4
 src/auto-reply/reply/system-event-session-key.ts	1
 src/auto-reply/templating.ts	1
 src/auto-reply/thinking.ts	1
@@ -2700,7 +2699,6 @@ src/config/sessions/session-sqlite-target.ts	3
 src/config/sessions/session-store-config.ts	2
 src/config/sessions/session-suggestion-store.ts	4
 src/config/sessions/session-transcript-projection-rebuild.ts	6
-src/config/sessions/session-transcript-read-fence.ts	1
 src/config/sessions/session-transcript-reconcile.worker.ts	1
 src/config/sessions/session-transcript-search.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
@@ -3258,7 +3256,7 @@ src/infra/system-run-approval-context.ts	6
 src/infra/tailscale.ts	9
 src/infra/terminal-file-upload.ts	2
 src/infra/tmp-openclaw-dir.ts	3
-src/infra/unhandled-rejections.ts	7
+src/infra/unhandled-rejections.ts	6
 src/infra/update-check-package-target.ts	3
 src/infra/update-doctor-result.ts	2
 src/infra/update-global.ts	3
@@ -3294,7 +3292,6 @@ src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
 src/logging/logger.ts	14
-src/logging/node-require.ts	2
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	3
@@ -3603,7 +3600,7 @@ src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
 src/projects/project-registry.ts	1
-src/provider-runtime/operation-retry.ts	4
+src/provider-runtime/operation-retry.ts	3
 src/proxy-capture/env.ts	1
 src/proxy-capture/runtime.ts	10
 src/proxy-capture/store.sqlite.ts	27

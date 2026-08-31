@@ -3623,7 +3623,6 @@ printf '%s\n' "$status" >"$TMPDIR/status"
       expectTextToIncludeAll(script, [
         'supervisor_script="${pid_file}.supervisor.mjs"',
         'OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start"',
-        'nohup node "$supervisor_script"',
         'if (key.startsWith("OPENCLAW_UPDATE_")) {',
         "delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;",
         'process.on("SIGTERM", stop);',

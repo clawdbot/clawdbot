@@ -612,6 +612,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "plugins-list" },
   },
+  // Authoring commands operate on a target package, not operator config, and a
+  // scaffolded plugin build can run through an older CLI; the startup guard
+  // would abort them on a host config they never read.
+  { commandPath: ["plugins", "build"], exact: true, policy: { configGuard: "skip" } },
+  { commandPath: ["plugins", "validate"], exact: true, policy: { configGuard: "skip" } },
+  { commandPath: ["plugins", "init"], exact: true, policy: { configGuard: "skip" } },
   {
     commandPath: ["onboard"],
     exact: true,

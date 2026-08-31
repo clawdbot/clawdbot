@@ -55,6 +55,7 @@ export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => Chan
  */
 export type ChannelMessageActionDiscoveryContext = {
   cfg: OpenClawConfig;
+  chatType?: ChatType | null;
   currentChannelId?: string | null;
   currentChannelProvider?: string | null;
   currentThreadTs?: string | null;
@@ -865,6 +866,7 @@ export type ChannelPollContext = Pick<
   | "isAnonymous"
   | "gatewayClientScopes"
   | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
 > & {
   content?: string;
   /** Trusted originating turn context for channel-owned delivery correlation. */

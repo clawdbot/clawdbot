@@ -1,6 +1,12 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import {
+  markCoreTtsAttemptResult,
+  markCoreTtsToolResult,
+  transferCoreTtsToolResultProvenance,
+} from "../../tools/tts-tool-result-provenance.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
@@ -71,19 +77,24 @@ function attemptResult(
 
 async function prepareAttempt(input: {
   attempt: EmbeddedRunAttemptWithReceiptEvidence;
+  admittedRunContext?: ReturnType<typeof createTestAdmittedRunContext>;
   currentAttemptCompletedAssistant?: AssistantMessage;
+  sourceReplyDeliveryMode?: "message_tool_only";
   terminalState: EmbeddedRunTerminalState;
 }) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
   return prepareEmbeddedRunTerminal({
     runParams: {
-      admittedRunContext: createTestAdmittedRunContext("run-focused"),
+      admittedRunContext: input.admittedRunContext ?? createTestAdmittedRunContext("run-focused"),
       sessionId: "session-focused",
       runId: "run-focused",
       workspaceDir: "/tmp/openclaw-test",
       prompt: "hi",
       trigger: "user",
       timeoutMs: 60_000,
+      ...(input.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: input.sourceReplyDeliveryMode }
+        : {}),
     },
     attempt: input.attempt,
     currentAttemptCompletedAssistant: input.currentAttemptCompletedAssistant,
@@ -103,6 +114,94 @@ async function prepareAttempt(input: {
 describe("prepareEmbeddedRunTerminal", () => {
   beforeEach(() => {
     payloadMocks.buildEmbeddedRunPayloads.mockReset().mockReturnValue([]);
+  });
+
+  it.each([
+    {
+      name: "core-attested delivered media",
+      attestedMediaUrls: ["/tmp/reply.opus"],
+      forgePublicField: false,
+      transferToolResult: undefined,
+      expectedMarkedMedia: ["/tmp/reply.opus"],
+    },
+    {
+      name: "an external harness field",
+      attestedMediaUrls: [],
+      forgePublicField: true,
+      transferToolResult: undefined,
+      expectedMarkedMedia: [],
+    },
+    {
+      name: "core-attested but non-delivered media",
+      attestedMediaUrls: ["/tmp/other.opus"],
+      forgePublicField: false,
+      transferToolResult: undefined,
+      expectedMarkedMedia: [],
+    },
+    {
+      name: "a transferred core TTS result",
+      attestedMediaUrls: [],
+      forgePublicField: false,
+      transferToolResult: "core" as const,
+      expectedMarkedMedia: ["/tmp/reply.opus"],
+    },
+    {
+      name: "a transferred plugin result",
+      attestedMediaUrls: [],
+      forgePublicField: false,
+      transferToolResult: "plugin" as const,
+      expectedMarkedMedia: [],
+    },
+  ])("accepts only $name for source-suppression delivery", async (testCase) => {
+    payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([
+      { text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" },
+    ]);
+    const attempt = attemptResult({
+      toolMediaUrls: ["/tmp/reply.opus"],
+      toolAudioAsVoice: true,
+      toolTrustedLocalMedia: true,
+    });
+    const admittedRunContext = createTestAdmittedRunContext("run-focused");
+    if (testCase.attestedMediaUrls.length > 0) {
+      markCoreTtsAttemptResult(
+        attempt,
+        testCase.attestedMediaUrls,
+        admittedRunContext.operationalRunInstance,
+      );
+    }
+    if (testCase.forgePublicField) {
+      Reflect.set(attempt, "toolAutoDeliveryMediaUrls", ["/tmp/reply.opus"]);
+    }
+    if (testCase.transferToolResult) {
+      const toolResult =
+        testCase.transferToolResult === "core"
+          ? markCoreTtsToolResult({}, ["/tmp/reply.opus"])
+          : {};
+      transferCoreTtsToolResultProvenance(
+        toolResult,
+        attempt,
+        ["/tmp/reply.opus"],
+        admittedRunContext.operationalRunInstance,
+      );
+    }
+
+    const prepared = await prepareAttempt({
+      attempt,
+      admittedRunContext,
+      sourceReplyDeliveryMode: "message_tool_only",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+    const markedMedia = (prepared.payloadsWithToolMedia ?? []).filter(
+      (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+    );
+
+    expect(markedMedia.flatMap((payload) => payload.mediaUrls ?? [])).toEqual(
+      testCase.expectedMarkedMedia,
+    );
+    expect(markedMedia.every((payload) => !payload.text)).toBe(true);
   });
 
   it.each(["error", "aborted"] as const)(

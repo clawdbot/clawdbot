@@ -19,6 +19,7 @@ import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -215,7 +216,7 @@ describe("current plugin metadata snapshot", () => {
     outerRegistry.providers.push({
       pluginId: "outer",
       source: "test",
-      provider: { id: "outer", label: "Outer", auth: [] },
+      provider: { id: "outer", label: "Outer", auth: [], classifyFailoverReason: () => "billing" },
     });
     outerRegistry.trustedToolPolicies = [
       {
@@ -260,6 +261,12 @@ describe("current plugin metadata snapshot", () => {
                   [],
                 );
                 expect(resolveProviderRuntimePlugin({ provider: "outer" })).toBeUndefined();
+                expect(
+                  classifyProviderFailoverSignalWithPlugin({
+                    provider: "outer",
+                    context: { provider: "outer", errorMessage: "fixture failure" },
+                  }),
+                ).toBeUndefined();
                 expect(getGlobalHookRunnerRegistry()?.trustedToolPolicies).toEqual([]);
                 throw new Error("inner generation failed");
               },
@@ -274,6 +281,12 @@ describe("current plugin metadata snapshot", () => {
           ).toBe(outerSnapshot);
           expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(outerRegistry);
           expect(resolveProviderRuntimePlugin({ provider: "outer" })?.id).toBe("outer");
+          expect(
+            classifyProviderFailoverSignalWithPlugin({
+              provider: "outer",
+              context: { provider: "outer", errorMessage: "fixture failure" },
+            }),
+          ).toBe("billing");
           expect(
             getGlobalHookRunnerRegistry()?.trustedToolPolicies?.map((entry) => entry.policy.id),
           ).toEqual(["outer-policy"]);

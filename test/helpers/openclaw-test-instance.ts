@@ -726,7 +726,6 @@ export const testing = {
   appendLogChunk,
   createBoundedStringLog,
   formatLogs,
-  hasChildExited,
   isGatewayMigrationConvergenceRefusal,
   signalOpenClawTestProcess,
   stopGatewayProcess,

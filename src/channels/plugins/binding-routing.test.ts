@@ -141,6 +141,42 @@ describe("runtime conversation binding route", () => {
     expect(result.route).toBe(route);
   });
 
+  it.each([
+    { targetSessionKey: "global", metadata: { agentId: "review" }, agentId: "review" },
+    { targetSessionKey: "global", metadata: undefined, agentId: "main" },
+    {
+      targetSessionKey: "agent:review:session-1",
+      metadata: { agentId: "other" },
+      agentId: "review",
+    },
+  ])("resolves $targetSessionKey to owner $agentId", ({ targetSessionKey, metadata, agentId }) => {
+    const binding = createBinding({ targetSessionKey, metadata });
+    registerAdapter(binding);
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route: createRoute(),
+      conversation: binding.conversation,
+    });
+
+    expect(result.route).toMatchObject({ sessionKey: targetSessionKey, agentId });
+    expect(result.boundAgentId).toBe(agentId);
+  });
+
+  it("rejects an opaque target when its plugin ownership metadata is missing", () => {
+    const binding = createBinding({
+      targetSessionKey: "plugin-thread-1",
+      metadata: { agentId: "review" },
+    });
+    registerAdapter(binding);
+
+    expect(() =>
+      resolveRuntimeConversationBindingRoute({
+        route: createRoute(),
+        conversation: binding.conversation,
+      }),
+    ).toThrow();
+  });
+
   it("inspects a runtime-bound route without touching the binding", () => {
     const { touch } = registerAdapter(createBinding());
 

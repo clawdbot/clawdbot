@@ -1029,13 +1029,17 @@ describe("hasProviderRequestSizeCeiling", () => {
     expect(hasProviderRequestSizeCeiling(new Error(GROQ_REQUEST_CEILING_413))).toBe(true);
   });
 
-  it("finds the fact through a wrapping error", () => {
-    const wrapped = new Error("agent run failed", {
-      cause: new FailoverError("Context overflow: prompt too large for the model.", {
-        reason: "context_overflow",
-        rawError: GROQ_REQUEST_CEILING_413,
-      }),
+  it.each(["error", "cause", "aggregate"])("finds the fact through a %s wrapper", (kind) => {
+    const ceiling = new FailoverError("Context overflow: prompt too large for the model.", {
+      reason: "context_overflow",
+      rawError: GROQ_REQUEST_CEILING_413,
     });
+    const wrapped =
+      kind === "aggregate"
+        ? new AggregateError([new Error("unrelated"), { cause: ceiling }], "agent run failed")
+        : kind === "cause"
+          ? new Error("agent run failed", { cause: ceiling })
+          : { error: ceiling };
     expect(hasProviderRequestSizeCeiling(wrapped)).toBe(true);
   });
 

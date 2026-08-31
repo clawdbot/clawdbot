@@ -32,6 +32,7 @@ import {
   replaceTabs,
   shortenPath,
   str,
+  trimTrailingEmptyLines,
 } from "./render-utils.js";
 import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -246,14 +247,6 @@ function updateWriteHighlightCacheIncremental(
   }
   refreshWriteHighlightPrefix(cache);
   return cache;
-}
-
-function trimTrailingEmptyLines(lines: string[]): string[] {
-  let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") {
-    end--;
-  }
-  return lines.slice(0, end);
 }
 
 function formatWriteCall(

@@ -232,7 +232,8 @@ openclaw sessions cleanup --json
 - Cleanup also prunes unreferenced legacy/archive transcript artifacts,
   compaction checkpoints, and trajectory sidecars older than
   `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
-  session rows are preserved.
+  session rows are preserved. Eligible empty files count as removed artifacts
+  in both dry-run and applied summaries, even though they free zero bytes.
 - Cleanup reports short-lived Gateway model-run probe cleanup separately as
   `modelRunPruned`. This only matches strict explicit keys shaped like
   `agent:*:explicit:model-run-<uuid>`. Retention is a fixed `24h` and is

@@ -6,10 +6,13 @@ import { performance } from "node:perf_hooks";
 import pMap from "p-map";
 import { waitForever } from "../src/cli/wait.ts";
 import { formatMs } from "./lib/check-timing-summary.mts";
+import { runWithFailedTrailer, writeFailedTrailer } from "./lib/failed-trailer.mts";
+import { signalExitCode } from "./lib/managed-child-process.mts";
 import {
   prepareE2eVitestRuntime,
   prepareVitestRuntime,
 } from "./lib/vitest-build-prerequisites.mts";
+import { isVitestWorkerMetadataRequest } from "./lib/vitest-cli-mode.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
@@ -21,6 +24,7 @@ import {
   readShardTimings,
   writeShardTimings,
 } from "./lib/vitest-shard-timings.mts";
+import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import {
   resolveVitestCliEntry,
   resolveVitestNodeArgs,
@@ -51,7 +55,11 @@ import {
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mts";
 
-type VitestRunSpec = BaseVitestRunSpec & { continueOnFailure?: boolean; reportIndex?: number };
+type VitestRunSpec = BaseVitestRunSpec & {
+  continueOnFailure?: boolean;
+  reportIndex?: number;
+  workerRun?: VitestWorkerRun;
+};
 type VitestCommandOutcome = {
   code: number;
   noOutputTimedOut: boolean;
@@ -90,10 +98,11 @@ function cleanupVitestRunSpec(spec: VitestRunSpec) {
   }
 }
 
-function runPnpmSpecCommand(spec: VitestRunSpec, pnpmArgs: string[]) {
+function runPnpmSpecCommand(spec: VitestRunSpec, pnpmArgs: string[], workerRun?: VitestWorkerRun) {
   let noOutputTimedOut = false;
   return new Promise<VitestCommandOutcome>((resolve, reject) => {
     const { completion, getForwardedSignal } = spawnWatchedVitestProcess({
+      workerRun,
       pnpmArgs,
       env: spec.env,
       onNoOutputTimeout: () => {
@@ -138,7 +147,7 @@ async function runVitestSpec(spec: VitestRunSpec, reports: VitestReportOwner) {
     }
     const attempt = reports?.attempt(spec.reportIndex!, spec.pnpmArgs);
     try {
-      const result = await runPnpmSpecCommand(spec, attempt?.args ?? spec.pnpmArgs);
+      const result = await runPnpmSpecCommand(spec, attempt?.args ?? spec.pnpmArgs, spec.workerRun);
       attempt?.complete(result);
       return result;
     } catch (error) {
@@ -184,11 +193,7 @@ async function runLoggedVitestSpec(spec: VitestRunSpec, reports: VitestReportOwn
   }
   if (result.signal) {
     console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
-    if (reports) {
-      return { ...result, timing: null };
-    }
-    process.kill(process.pid, result.signal);
-    return null;
+    return { ...result, timing: null };
   }
   return {
     ...result,
@@ -227,55 +232,46 @@ async function runVitestSpecs(
   let stopScheduling = false;
   const failures: FailedVitestShard[] = [];
   const timings: ShardTiming[] = [];
-  const started: Promise<unknown>[] = [];
-  let interrupted = false;
-
-  try {
-    await pMap(
-      specs,
-      (spec, index) => {
-        const running = (async () => {
-          if (stopScheduling || termination.signal) {
-            return;
-          }
-          const result = await runLoggedVitestSpec(spec, reports);
-          if (!result) {
-            // A forwarded termination signal must not admit replacement shards during shutdown.
-            stopScheduling = true;
-            interrupted = true;
-            return;
-          }
-          if (result.signal) {
-            termination.signal ??= result.signal;
-            stopScheduling = true;
-          }
-          if (result.code !== 0) {
-            exitCode = exitCode || result.code;
-            if (concurrency === 1 && spec.continueOnFailure !== true) {
-              stopScheduling = true;
-            }
-            failures.push({
-              code: result.code,
-              config: spec.config,
-              includePatterns: spec.includePatterns,
-              noOutputTimedOut: result.noOutputTimedOut,
-              order: index,
-              signal: result.signal,
-            });
-          }
-          if (result.timing) {
-            timings.push(result.timing);
-          }
-        })();
-        started.push(running);
-        return running;
-      },
-      { concurrency, stopOnError: true },
-    );
-  } finally {
-    await Promise.allSettled(started);
-  }
-  return { exitCode, failures, timings, stopScheduling, interrupted };
+  await pMap(
+    specs,
+    async (spec, index) => {
+      if (stopScheduling || termination.signal) {
+        return;
+      }
+      let result: Awaited<ReturnType<typeof runLoggedVitestSpec>>;
+      try {
+        result = await runLoggedVitestSpec(spec, reports);
+      } catch (error) {
+        stopScheduling = true;
+        throw error;
+      }
+      if (result.signal) {
+        // A forwarded termination signal must not admit replacement shards during shutdown.
+        termination.signal ??= result.signal;
+        stopScheduling = true;
+      }
+      if (result.code !== 0) {
+        exitCode ||= result.code;
+        if (concurrency === 1 && spec.continueOnFailure !== true) {
+          stopScheduling = true;
+        }
+        failures.push({
+          code: result.code,
+          config: spec.config,
+          includePatterns: spec.includePatterns,
+          noOutputTimedOut: result.noOutputTimedOut,
+          order: index,
+          signal: result.signal,
+        });
+      }
+      if (result.timing) {
+        timings.push(result.timing);
+      }
+    },
+    // Join already-admitted shards even when another shard's group join fails.
+    { concurrency, stopOnError: false },
+  );
+  return { exitCode, failures, timings, stopScheduling };
 }
 
 async function main() {
@@ -359,11 +355,11 @@ async function main() {
   const onSignal = (signal: NodeJS.Signals) => {
     termination.signal ??= signal;
   };
-  if (reports) {
-    process.on("SIGTERM", onSignal);
-    process.on("SIGINT", onSignal);
-  }
+  process.on("SIGTERM", onSignal);
+  process.on("SIGINT", onSignal);
+  let workers: VitestWorkerRun | undefined;
   let reportFailure: string | undefined;
+  let printCompletedSummary: (() => void) | undefined;
   try {
     const e2eSpecs = runSpecs.filter((spec) => spec.config === "test/vitest/vitest.e2e.config.ts");
     if (e2eSpecs.length > 0) {
@@ -383,6 +379,12 @@ async function main() {
       }
     }
 
+    if (!runSpecs.some((spec) => spec.watchMode) && !isVitestWorkerMetadataRequest(args)) {
+      workers = createVitestWorkerRun();
+      for (const spec of runSpecs) {
+        spec.workerRun = workers;
+      }
+    }
     const isFullSuiteRun =
       targetArgs.length === 0 &&
       changedTargetArgs === null &&
@@ -422,18 +424,19 @@ async function main() {
     }
 
     const result = await runVitestSpecs(scheduledSpecs, concurrency, reports, termination);
-    if (result.interrupted || (concurrency === 1 && termination.signal)) {
+    if (concurrency === 1 && termination.signal) {
       return;
     }
     if (concurrency > 1 || !result.stopScheduling) {
       writeShardTimings(result.timings, process.cwd(), baseEnv);
     }
-    printTestSummary(
-      result.exitCode === 0 ? "passed" : "failed",
-      concurrency > 1 ? scheduledSpecs.length : result.timings.length,
-      performance.now() - suiteStartedAt,
-      concurrency > 1 ? "Vitest summaries above are per-shard, not aggregate totals." : undefined,
-    );
+    printCompletedSummary = () =>
+      printTestSummary(
+        process.exitCode ? "failed" : "passed",
+        concurrency > 1 ? scheduledSpecs.length : result.timings.length,
+        performance.now() - suiteStartedAt,
+        concurrency > 1 ? "Vitest summaries above are per-shard, not aggregate totals." : undefined,
+      );
     if (concurrency > 1) {
       for (const line of formatFailedShardDigest(result.failures)) {
         console.error(line);
@@ -446,12 +449,17 @@ async function main() {
     reportFailure = String(error);
     throw error;
   } finally {
-    if (reports) {
-      try {
+    try {
+      await workers?.dispose().catch((error: unknown) => {
+        reportFailure ??= String(error);
+        process.exitCode ||= 1;
+        console.error(error);
+      });
+      if (reports) {
         const reportCode = await reports.finish(
           async (mergeArgs) => {
-            // Per-spec include files have been cleaned up. Replay loads the selected
-            // configs with the caller environment; blobs own the exact executed selection.
+            // Replay is source-only: selected configs load after all compiled
+            // borrowers close; report blobs own the exact executed selection.
             const outcome = await runPnpmSpecCommand({ ...runSpecs[0]!, env: baseEnv }, [
               "exec",
               "node",
@@ -467,15 +475,17 @@ async function main() {
         if (reportCode) {
           process.exitCode ||= reportCode;
         }
-      } finally {
-        process.off("SIGTERM", onSignal);
-        process.off("SIGINT", onSignal);
-        if (termination.signal) {
-          process.kill(process.pid, termination.signal);
-          // Keep the loop alive for dependency signal handlers to finish cleanup
-          // and re-raise; a numeric return can win the race with signal delivery.
-          await waitForever();
-        }
+      }
+      printCompletedSummary?.();
+    } finally {
+      process.off("SIGTERM", onSignal);
+      process.off("SIGINT", onSignal);
+      if (termination.signal) {
+        writeFailedTrailer("test", signalExitCode(termination.signal));
+        process.kill(process.pid, termination.signal);
+        // Keep the loop alive for dependency signal handlers to finish cleanup
+        // and re-raise; a numeric return can win the race with signal delivery.
+        await waitForever();
       }
     }
   }
@@ -493,7 +503,4 @@ function printTestSummary(
   );
 }
 
-main().catch((error: unknown) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+void runWithFailedTrailer("test", main);

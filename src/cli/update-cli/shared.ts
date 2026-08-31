@@ -181,6 +181,14 @@ export function resolveNodeRunner(): string {
   return "node";
 }
 
+export function tryResolveInvocationCwd(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    return undefined;
+  }
+}
+
 /** Locate the installed OpenClaw package root that should receive update operations. */
 export async function resolveUpdateRoot(): Promise<string> {
   // Preserve the lexical package path from the invoking shim. pnpm 11 package
