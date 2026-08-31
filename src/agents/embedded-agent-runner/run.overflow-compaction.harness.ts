@@ -69,6 +69,12 @@ type MockCompactionResult =
       result?: undefined;
     };
 
+type MockContextEngine = {
+  info: { ownsCompaction: boolean };
+  compact: Mock<(params: unknown) => Promise<MockCompactionResult>>;
+  maintain: ContextEngine["maintain"];
+};
+
 type MockResolvedModel = {
   id: string;
   provider: string;
@@ -182,14 +188,14 @@ export const mockedGlobalHookRunner = {
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
-export const mockedContextEngine = {
+export const mockedContextEngine: MockContextEngine = {
   info: { ownsCompaction: false as boolean },
   compact: vi.fn<(params: unknown) => Promise<MockCompactionResult>>(async () => ({
     ok: false as const,
     compacted: false as const,
     reason: "nothing to compact",
   })),
-  maintain: undefined as ContextEngine["maintain"],
+  maintain: undefined,
 };
 
 type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {

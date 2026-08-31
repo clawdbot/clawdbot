@@ -87,9 +87,7 @@ async function persistUserTurnTranscript(
     },
     {
       ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.config
-        ? { config: params.config as SessionTranscriptTurnPersistOptions["config"] }
-        : {}),
+      ...(params.config ? { config: params.config } : {}),
       ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
       ...(params.initialSessionEntry ? { initialSessionEntry: params.initialSessionEntry } : {}),
       ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
@@ -485,7 +483,7 @@ export function createUserTurnTranscriptRecorder(
         pendingInput = await stageSessionPendingInput(target, {
           ...options,
           message: candidate,
-          config: target.config as SessionTranscriptTurnPersistOptions["config"],
+          config: target.config,
           prepareMessageAfterIdempotencyCheck: (next) =>
             preparePersistedUserTurnMessageForTranscriptWrite(next, {
               ...target,

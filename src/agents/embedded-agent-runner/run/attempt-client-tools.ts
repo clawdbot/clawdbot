@@ -123,13 +123,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
       }),
     );
     const coreBuiltinToolNames = collectCoreBuiltinToolNames(params.uncompactedEffectiveTools, {
-      isPluginTool: (tool) =>
-        Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
+      isPluginTool: (tool) => Boolean(getPluginToolMeta(tool)),
     });
     const trustedPluginLocalMediaToolNames = new Set(
       params.uncompactedEffectiveTools.flatMap((tool) => {
         const name = tool.name?.trim();
-        const meta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
+        const meta = getPluginToolMeta(tool);
         return name && meta?.trustedLocalMedia === true ? [name] : [];
       }),
     );
@@ -183,10 +182,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
     const sideEffectToolOwners = collectSideEffectToolOwners(
       [...params.uncompactedEffectiveTools, ...clientToolDefs],
       {
-        declaredOwner: (tool) =>
-          getPluginToolSideEffectOwnerKey(
-            tool as Parameters<typeof getPluginToolSideEffectOwnerKey>[0],
-          ),
+        declaredOwner: (tool) => getPluginToolSideEffectOwnerKey(tool),
       },
     );
     const addClientToolsToCatalog = params.codeModeControlsEnabledForRun

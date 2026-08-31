@@ -45,9 +45,9 @@ export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set
   return names;
 }
 
-export function collectCoreBuiltinToolNames(
-  tools: Array<{ name?: string }>,
-  options?: { isPluginTool?: (tool: { name?: string }) => boolean },
+export function collectCoreBuiltinToolNames<T extends { name?: string }>(
+  tools: T[],
+  options?: { isPluginTool?: (tool: T) => boolean },
 ): Set<string> {
   const names = new Set<string>();
   for (const tool of tools) {

@@ -27,8 +27,8 @@ const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
 
 type NamedTool = { name?: string };
 
-function groupUniqueToolsByName(tools: NamedTool[]): Map<string, NamedTool | undefined> {
-  const toolsByName = new Map<string, NamedTool | undefined>();
+function groupUniqueToolsByName<T extends NamedTool>(tools: T[]): Map<string, T | undefined> {
+  const toolsByName = new Map<string, T | undefined>();
   for (const tool of tools) {
     const name = normalizeToolPolicyName(tool.name ?? "");
     if (!name) {
@@ -87,9 +87,9 @@ export function collectReplaySafeToolNames(
 }
 
 /** Bind name-only terminal events to the one concrete owner-declared side-effecting tool. */
-export function collectSideEffectToolOwners(
-  tools: NamedTool[],
-  options: { declaredOwner: (tool: NamedTool) => string | undefined },
+export function collectSideEffectToolOwners<T extends NamedTool>(
+  tools: T[],
+  options: { declaredOwner: (tool: T) => string | undefined },
 ): Map<string, string> {
   const owners = new Map<string, string>();
   for (const [name, tool] of groupUniqueToolsByName(tools)) {
