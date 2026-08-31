@@ -48,7 +48,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
         webhookPath: resolveLineWebhookPath(account.config.webhookPath),
       });
       if (delivery) {
-        ctx.log?.warn?.(`[${account.accountId}] ${delivery.message} Fix: ${delivery.fix}.`);
+        ctx.log?.warn(`[${account.accountId}] ${delivery.message} Fix: ${delivery.fix}.`);
       }
     } catch (err) {
       if (getLineRuntime().logging.shouldLogVerbose()) {

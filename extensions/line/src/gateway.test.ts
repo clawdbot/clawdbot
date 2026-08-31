@@ -16,17 +16,19 @@ const { probeLineBotMock, monitorLineProviderMock } = vi.hoisted(() => ({
 vi.mock("./probe.runtime.js", () => ({ probeLineBot: probeLineBotMock }));
 vi.mock("./monitor.runtime.js", () => ({ monitorLineProvider: monitorLineProviderMock }));
 
-const account = {
-  accountId: "default",
-  enabled: true,
-  channelAccessToken: "token",
-  channelSecret: "secret",
-  tokenSource: "config",
-  config: {},
-} as unknown as ResolvedLineAccount;
+function lineAccount(config: ResolvedLineAccount["config"] = {}): ResolvedLineAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    channelAccessToken: "token",
+    channelSecret: "secret",
+    tokenSource: "config",
+    config,
+  };
+}
 
 // The helper types `log` as the plain sink, so the test owns the sink it asserts on.
-async function startWithProbe(probe: LineProbeResult) {
+async function startWithProbe(probe: LineProbeResult, account = lineAccount()) {
   probeLineBotMock.mockResolvedValue(probe);
   const warn = vi.fn<(msg: string) => void>();
   await lineGatewayAdapter.startAccount?.({
@@ -80,10 +82,25 @@ describe("lineGatewayAdapter.startAccount", () => {
     },
     { name: "the probe reported no webhook state", probe: { ok: true } },
     { name: "the probe failed", probe: { ok: false, error: "timeout" } },
-  ] as const)("starts without a webhook warning when $name", async ({ probe }) => {
-    const warn = await startWithProbe(probe as LineProbeResult);
+  ] satisfies { name: string; probe: LineProbeResult }[])(
+    "starts without a webhook warning when $name",
+    async ({ probe }) => {
+      const warn = await startWithProbe(probe);
 
-    expect(warn).not.toHaveBeenCalled();
-    expect(monitorLineProviderMock).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled();
+      expect(monitorLineProviderMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  // Nothing asserted that the warning names this account's route: hardcoding the default
+  // in gateway.ts left the whole extension suite green.
+  it("names the account's own route when the webhook is unregistered", async () => {
+    const warn = await startWithProbe(
+      { ok: true, webhook: { status: "unset" } },
+      lineAccount({ webhookPath: "/hooks/line-primary" }),
+    );
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("/hooks/line-primary");
   });
 });

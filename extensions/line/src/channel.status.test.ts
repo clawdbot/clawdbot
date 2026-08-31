@@ -12,6 +12,39 @@ function collectIssues(accounts: ChannelAccountSnapshot[]) {
 }
 
 describe("linePlugin status.collectStatusIssues", () => {
+  // The route is published by resolveAccountSnapshot and read back by the issue
+  // collector. Every other case writes the field onto a fixture, so a rename on either
+  // side would fall back to the default in silence; this one goes through both.
+  it("carries the account's configured route from the snapshot into the warning", async () => {
+    const snapshot = await lineStatusAdapter.buildAccountSnapshot?.({
+      cfg: {},
+      account: {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        signingSecretSource: "config",
+        tokenStatus: "available",
+        signingSecretStatus: "available",
+        config: { webhookPath: "hooks/line-primary/" },
+      } as never,
+      probe: { ok: true, webhook: { status: "unset" } },
+    });
+
+    expect(collectIssues([snapshot as ChannelAccountSnapshot])).toEqual([
+      {
+        channel: "line",
+        accountId: "default",
+        kind: "config",
+        message:
+          "LINE is not delivering webhook events: this channel has no webhook URL registered.",
+        fix: "register your gateway's public HTTPS URL ending in /hooks/line-primary in the channel's Messaging API tab in the LINE Developers Console, then turn Use webhook on",
+      },
+    ]);
+  });
+
   it("projects lifecycle from the runtime status record", async () => {
     const snapshot = await lineStatusAdapter.buildAccountSnapshot?.({
       cfg: {},

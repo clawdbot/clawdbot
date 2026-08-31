@@ -8,6 +8,7 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   buildTokenChannelStatusSummary,
+  collectIssuesForEnabledAccounts,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
   createDependentCredentialStatusIssueCollector,
@@ -25,12 +26,6 @@ const collectLineCredentialIssues = createDependentCredentialStatusIssueCollecto
   missingPrimaryMessage: "LINE channel access token not configured",
   missingDependentMessage: "LINE channel secret not configured",
 });
-
-/** The resolved route this account serves, published by resolveAccountSnapshot below.
- *  Snapshots built elsewhere may not carry it, so the account's own default stands in. */
-function readSnapshotWebhookPath(account: ChannelAccountSnapshot): string {
-  return account.webhookPath?.trim() ? account.webhookPath : LINE_DEFAULT_WEBHOOK_PATH;
-}
 
 function readProbeWebhookState(probe: unknown): LineProbeWebhookState | undefined {
   if (!isRecord(probe) || !isRecord(probe.webhook)) {
@@ -84,24 +79,20 @@ export function describeLineWebhookDelivery(params: {
 // This is deliberately not `ingressUnavailable`: that flag means our own durable
 // queue failed and is remedied by a restart, which cannot change a console setting.
 function collectLineWebhookIssues(accounts: ChannelAccountSnapshot[]): ChannelStatusIssue[] {
-  return accounts.flatMap((account) => {
-    if (account.enabled === false || account.configured === false) {
-      return [];
-    }
-    const delivery = describeLineWebhookDelivery({
-      webhook: readProbeWebhookState(account.probe),
-      webhookPath: readSnapshotWebhookPath(account),
-    });
-    return delivery
-      ? [
-          {
-            channel: "line" as const,
-            accountId: account.accountId,
-            kind: "config" as const,
-            ...delivery,
-          },
-        ]
-      : [];
+  return collectIssuesForEnabledAccounts({
+    accounts,
+    readAccount: (account) => (account.configured === false ? null : account),
+    collectIssues: ({ account, accountId, issues }) => {
+      const delivery = describeLineWebhookDelivery({
+        webhook: readProbeWebhookState(account.probe),
+        // resolveAccountSnapshot publishes the resolved route; snapshots built
+        // elsewhere may not carry it, so the account's own default stands in.
+        webhookPath: account.webhookPath?.trim() ? account.webhookPath : LINE_DEFAULT_WEBHOOK_PATH,
+      });
+      if (delivery) {
+        issues.push({ channel: "line", accountId, kind: "config", ...delivery });
+      }
+    },
   });
 }
 

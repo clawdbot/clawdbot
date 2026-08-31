@@ -104,7 +104,6 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
   );
   return {
     ...actual,
-    normalizePluginHttpPath: (path: string | undefined, fallback: string) => path ?? fallback,
     registerWebhookTargetWithPluginRoute: registerWebhookTargetWithPluginRouteMock,
   };
 });
