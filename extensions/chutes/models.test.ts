@@ -31,21 +31,13 @@ function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
 async function withLiveChutesDiscovery<T>(
   fetchMock: ReturnType<typeof vi.fn>,
   run: () => Promise<T>,
-  options?: { now?: string },
 ): Promise<T> {
-  if (options?.now) {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(options.now));
-  }
   vi.stubGlobal("fetch", fetchMock);
 
   try {
     return await run();
   } finally {
     vi.unstubAllGlobals();
-    if (options?.now) {
-      vi.useRealTimers();
-    }
   }
 }
 
