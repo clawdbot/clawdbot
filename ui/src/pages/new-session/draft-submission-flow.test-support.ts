@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -68,12 +69,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       get: vi.fn(() => undefined),
       hasPendingTurn: vi.fn(() => false),
     },
-    initialUserMessage: {
-      prepare: vi.fn(),
-      read: vi.fn(() => null),
-      retire: vi.fn(),
-      clear: vi.fn(),
-    },
+    chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
     config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
     navigateAndWait: vi.fn(async () => undefined),
