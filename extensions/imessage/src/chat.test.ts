@@ -17,14 +17,14 @@ const accountWithService = (service?: string): ResolvedIMessageAccount =>
   }) as ResolvedIMessageAccount;
 
 // Chat actions only exercise `request`; the RPC client's lifecycle surface is
-// irrelevant here, so the mock asserts the narrow slice it implements.
-const chatClient = () =>
-  ({
-    request: vi.fn(async () => ({ ok: true })),
-    stop: vi.fn(),
-  }) as unknown as IMessageRpcClient;
+// irrelevant here. The mock is held in a standalone variable so assertions
+// never reference the method through the typed client (unbound-method).
+const chatClient = (): { client: IMessageRpcClient; request: ReturnType<typeof vi.fn> } => {
+  const request = vi.fn(async () => ({ ok: true }));
+  return { client: { request, stop: vi.fn() } as unknown as IMessageRpcClient, request };
+};
 
-const chatOpts = (client: ReturnType<typeof chatClient>, service?: string) => ({
+const chatOpts = (client: ReturnType<typeof chatClient>["client"], service?: string) => ({
   cfg: { channels: { imessage: {} } } as OpenClawConfig,
   account: accountWithService(service),
   client,
@@ -32,9 +32,9 @@ const chatOpts = (client: ReturnType<typeof chatClient>, service?: string) => ({
 
 describe("imessage chat actions", () => {
   it("lets a configured SMS account reach bare short codes for typing", async () => {
-    const client = chatClient();
+    const { client, request } = chatClient();
     await sendIMessageTyping("12345", true, chatOpts(client, "sms"));
-    expect(client.request).toHaveBeenCalledWith(
+    expect(request).toHaveBeenCalledWith(
       "typing",
       expect.objectContaining({ to: "12345", service: "sms", typing: true }),
       expect.anything(),
@@ -42,11 +42,11 @@ describe("imessage chat actions", () => {
   });
 
   it("lets a configured SMS account reach bare short codes for read receipts", async () => {
-    const client = chatClient();
+    const { client, request } = chatClient();
     await markIMessageChatRead("12345", chatOpts(client, "sms"));
     // Read RPCs carry no service field; the resolved service only gates the
     // deliverability verdict.
-    expect(client.request).toHaveBeenCalledWith(
+    expect(request).toHaveBeenCalledWith(
       "read",
       expect.objectContaining({ to: "12345" }),
       expect.anything(),
@@ -54,25 +54,25 @@ describe("imessage chat actions", () => {
   });
 
   it("still rejects bare short codes when no service resolves to sms", async () => {
-    const client = chatClient();
+    const { client, request } = chatClient();
     await expect(sendIMessageTyping("12345", true, chatOpts(client))).rejects.toThrow(
       /not a deliverable handle/,
     );
-    expect(client.request).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("still rejects bare short codes on the default imessage service", async () => {
-    const client = chatClient();
+    const { client, request } = chatClient();
     await expect(markIMessageChatRead("12345", chatOpts(client, "imessage"))).rejects.toThrow(
       /not a deliverable handle/,
     );
-    expect(client.request).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("keeps explicit sms short codes deliverable", async () => {
-    const client = chatClient();
+    const { client, request } = chatClient();
     await sendIMessageTyping("sms:12345", true, chatOpts(client));
-    expect(client.request).toHaveBeenCalledWith(
+    expect(request).toHaveBeenCalledWith(
       "typing",
       expect.objectContaining({ to: "12345", service: "sms" }),
       expect.anything(),
@@ -82,9 +82,9 @@ describe("imessage chat actions", () => {
   it("lets an explicit auto short code reach Messages selection", async () => {
     // `auto:<contact>` is the documented form that lets Messages choose
     // iMessage or SMS; the verdict must not reject it before delivery.
-    const client = chatClient();
+    const { client, request } = chatClient();
     await sendIMessageTyping("auto:12345", true, chatOpts(client));
-    expect(client.request).toHaveBeenCalledWith(
+    expect(request).toHaveBeenCalledWith(
       "typing",
       expect.objectContaining({ to: "12345", service: "auto" }),
       expect.anything(),
