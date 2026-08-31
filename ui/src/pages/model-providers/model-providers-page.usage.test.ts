@@ -129,6 +129,132 @@ describe("ModelProvidersPage usage convergence", () => {
     await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
   });
 
+  it("reloads auth status while account usage is pending", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const harness = createHarness("main");
+    harness.setAccountUsagePending(true);
+    const pendingCost = deferred<unknown>();
+    const originalRequest = harness.request.getMockImplementation()!;
+    let costSignal: AbortSignal | undefined;
+    harness.request.mockImplementation(
+      async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+        if (method === "sessions.usage") {
+          costSignal = options?.signal;
+          return pendingCost.promise;
+        }
+        return originalRequest(method);
+      },
+    );
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+    await vi.waitFor(() => expect(requestCount(harness.request, "models.authStatus")).toBe(1));
+    await vi.waitFor(() => expect(requestCount(harness.request, "sessions.usage")).toBe(1));
+
+    harness.setAccountUsagePending(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(requestCount(harness.request, "models.authStatus")).toBe(2);
+    expect(requestCount(harness.request, "sessions.usage")).toBe(1);
+    expect(costSignal?.aborted).toBe(false);
+    expect(page.data?.authStatus?.usageRefreshPending).toBeUndefined();
+
+    pendingCost.resolve({ aggregates: { byProvider: [] } });
+    await vi.waitFor(() => expect(page.data?.costByProvider).toEqual([]));
+  });
+
+  it("exhausts the retry budget when account-usage polls reject", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const harness = createHarness("main");
+    harness.setAccountUsagePending(true);
+    const originalRequest = harness.request.getMockImplementation()!;
+    let authStatusCalls = 0;
+    harness.request.mockImplementation(async (method: string) => {
+      if (method === "models.authStatus") {
+        authStatusCalls += 1;
+        if (authStatusCalls > 1) {
+          throw new Error("models.authStatus unavailable");
+        }
+      }
+      return originalRequest(method);
+    });
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+    await advanceUsageRetries();
+    await page.updateComplete;
+
+    expect(authStatusCalls).toBe(4);
+    expect(page.textContent ?? "").toContain("did not finish loading");
+  });
+
+  it("keeps a saved profile order when an older account-usage poll finishes afterward", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const harness = createHarness("main");
+    const originalRequest = harness.request.getMockImplementation()!;
+    const staleStatus = deferred<unknown>();
+    const authStatus = {
+      ts: 1,
+      usageRefreshPending: true,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "ok" as const,
+          profiles: [
+            { profileId: "openai:one", type: "oauth" as const, status: "ok" as const },
+            { profileId: "openai:two", type: "oauth" as const, status: "ok" as const },
+          ],
+          profileOrder: ["openai:one", "openai:two"],
+        },
+      ],
+    };
+    const refreshedStatus = {
+      ...authStatus,
+      ts: 2,
+      usageRefreshPending: undefined,
+      providers: [
+        {
+          ...authStatus.providers[0],
+          profileOrder: ["openai:two", "openai:one"],
+        },
+      ],
+    };
+    let authStatusCalls = 0;
+    harness.request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "models.authStatus") {
+        authStatusCalls += 1;
+        return authStatusCalls === 1
+          ? authStatus
+          : authStatusCalls === 2
+            ? staleStatus.promise
+            : refreshedStatus;
+      }
+      if (method === "models.authOrderSet") {
+        return {};
+      }
+      void params;
+      return originalRequest(method);
+    });
+    const page = appendPage(harness.context);
+    await page.updateComplete;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(authStatusCalls).toBe(2);
+
+    page.setProfileOrder("openai", "openai", ["openai:two", "openai:one"]);
+    await vi.waitFor(() => expect(requestCount(harness.request, "models.authOrderSet")).toBe(1));
+    await vi.waitFor(() => expect(authStatusCalls).toBe(3));
+    await vi.waitFor(() => expect(page.profileOrders.openai).toBeUndefined());
+    expect(page.data?.authStatus?.providers[0]?.profileOrder).toEqual(["openai:two", "openai:one"]);
+
+    staleStatus.resolve(authStatus);
+    await vi.advanceTimersByTimeAsync(0);
+    await page.updateComplete;
+
+    expect(page.data?.authStatus?.providers[0]?.profileOrder).toEqual(["openai:two", "openai:one"]);
+  });
+
   it("does not warn about a stall while disconnected", async () => {
     vi.useFakeTimers();
     const harness = createHarness("main");

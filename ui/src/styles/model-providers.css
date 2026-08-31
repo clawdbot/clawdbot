@@ -36,8 +36,7 @@
 .model-providers__local-cost {
   display: grid;
   gap: var(--space-1);
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  padding-top: var(--space-3);
+  padding: var(--space-2) 0 var(--space-3);
 }
 
 .model-providers__global-metrics {
@@ -83,10 +82,19 @@
 .model-providers__profile-copy strong {
   overflow: hidden;
   color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.model-providers__profiles-heading-copy strong {
+  font-size: var(--control-ui-text-sm);
+  font-weight: 650;
+}
+
+.model-providers__profile-copy strong {
+  font-size: var(--control-ui-text-md);
+  font-weight: 600;
+  line-height: 1.3;
 }
 
 .model-providers__profiles-heading-copy span,
@@ -105,9 +113,18 @@
   gap: var(--space-2);
 }
 
+@media (pointer: coarse) {
+  .model-providers__profiles-heading-actions .btn {
+    min-height: 44px;
+  }
+}
+
 .model-providers__profile {
   position: relative;
   display: grid;
+  grid-template-areas:
+    "grip avatar copy status logout"
+    ". . usage usage .";
   grid-template-columns: 44px 28px minmax(0, 1fr) 96px 44px;
   align-items: center;
   gap: var(--space-3);
@@ -162,6 +179,14 @@
   place-items: center;
 }
 
+.model-providers__profile-grip {
+  grid-area: grip;
+}
+
+.model-providers__profile-logout {
+  grid-area: logout;
+}
+
 .model-providers__profile-grip-spacer {
   pointer-events: none;
 }
@@ -188,6 +213,7 @@
 }
 
 .model-providers__profile-avatar {
+  grid-area: avatar;
   display: grid;
   width: 28px;
   height: 28px;
@@ -201,11 +227,120 @@
 }
 
 .model-providers__profile-copy {
+  grid-area: copy;
   gap: 2px;
 }
 
 .model-providers__profile-status {
+  grid-area: status;
   justify-self: end;
+}
+
+.model-providers__profile-status .settings-status {
+  font-size: var(--control-ui-text-xs);
+}
+
+.model-providers__profile-usage {
+  display: block;
+  grid-area: usage;
+  min-width: 0;
+  padding-bottom: var(--space-3);
+}
+
+.model-providers__profile-usage .provider-usage-windows--grouped {
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+}
+
+.model-providers__profile-usage .provider-usage-window-group {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.model-providers__profile-usage .provider-usage-window-group__title {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.model-providers__profile-usage .provider-usage-window-group__windows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.model-providers__profile-usage .provider-usage-window-group__windows > :only-child {
+  grid-column: 1 / -1;
+}
+
+.model-providers__profile-usage .provider-usage-window__meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-2);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+}
+
+.model-providers__profile-usage .provider-usage-window {
+  gap: var(--space-1);
+}
+
+.model-providers__profile-usage .provider-usage-window__cadence {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-providers__profile-usage .provider-usage-window__meta strong,
+.model-providers__profile-usage .provider-usage-billing-row strong {
+  color: var(--text);
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.model-providers__profile-usage .provider-usage-window__meta strong {
+  grid-column: 2;
+}
+
+.model-providers__profile-usage .provider-usage-progress {
+  height: 4px;
+}
+
+.model-providers__profile-usage .provider-usage-reset,
+.model-providers__profile-usage .provider-usage-billing-row {
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+}
+
+.model-providers__profile-usage .provider-usage-reset {
+  font-variant-numeric: tabular-nums;
+}
+
+.model-providers__profile-usage .provider-usage-billing {
+  margin-top: var(--space-3);
+}
+
+.model-providers__profile-usage .provider-usage-error {
+  overflow-wrap: anywhere;
+}
+
+.model-providers__profile-usage-empty {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.model-providers__profile-usage-refreshing {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
 }
 
 .model-providers__profile-logout:hover:not(:disabled),
@@ -219,6 +354,17 @@
   }
 }
 
+@container provider-profiles (min-width: 780px) {
+  .model-providers__profile {
+    grid-template-areas: "grip avatar copy usage status logout";
+    grid-template-columns: 44px 28px minmax(170px, 0.75fr) minmax(280px, 1.25fr) 96px 44px;
+  }
+
+  .model-providers__profile-usage {
+    padding-bottom: 0;
+  }
+}
+
 @container provider-profiles (max-width: 620px) {
   .model-providers__profiles-heading-copy {
     grid-template-columns: 1fr;
@@ -226,12 +372,25 @@
   }
 
   .model-providers__profile {
+    grid-template-areas:
+      "grip copy status logout"
+      ". usage usage .";
     grid-template-columns: 44px minmax(0, 1fr) max-content 44px;
     gap: var(--space-2);
   }
 
   .model-providers__profile-avatar {
     display: none;
+  }
+}
+
+@container provider-profiles (max-width: 400px) {
+  .model-providers__profile-usage .provider-usage-window-group__windows {
+    grid-template-columns: 1fr;
+  }
+
+  .model-providers__profile-usage .provider-usage-window-group__windows > :only-child {
+    grid-column: auto;
   }
 }
 

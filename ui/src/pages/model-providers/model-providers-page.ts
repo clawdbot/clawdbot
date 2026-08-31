@@ -32,7 +32,6 @@ import {
   readModelProviderConfig,
   type DefaultModelSelection,
   type ModelProviderPendingLogout,
-  type ModelProviderLogoutTarget,
 } from "./data.ts";
 import {
   EMPTY_MODEL_PROVIDERS_DATA,
@@ -107,13 +106,20 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     },
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => this.loadClient !== null || this.supplemental.usageLoading,
-    // Usage convergence must not restart the independent local-cost request.
-    reload: () => this.supplemental.loadUsage(),
+    isLoading: () =>
+      this.loadClient !== null ||
+      this.supplemental.authStatusLoading ||
+      this.supplemental.usageLoading,
+    // Account usage is part of auth status; provider-only convergence can stay supplemental.
+    reload: () =>
+      this.data?.authStatus?.usageRefreshPending === true
+        ? this.supplemental.loadAuthStatus(this.selectedAgentId)
+        : this.supplemental.loadUsage(),
     onIncompleteUsageExhausted: () => this.requestUpdate(),
   });
   private readonly supplemental = new ModelProviderSupplementalLoader(this, {
     getGateway: () => this.gateway,
+    getAgentId: () => this.selectedAgentId,
     getData: () => this.data,
     getDataClient: () => this.dataClient,
     setData: (data) => (this.data = data),
@@ -151,17 +157,14 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     setOrders: (orders) => (this.profileOrders = orders),
     clearMessage: (cardId) => this.setMessage(cardId, null),
     canMutate: () => this.canMutate(),
-    cancelRefresh: () => this.cancelCoreRefresh(),
+    cancelRefresh: () => this.cancelProfileRefreshes(),
     refresh: () => this.refresh({ force: true }),
     isCurrentClient: (client, epoch) => this.isCurrentClient(client, epoch),
     isBusy: (key) => Boolean(this.busy[key]),
     setBusy: (key, value) => this.setBusy(key, value),
     clearProbe: (cardId) => this.clearProbe(cardId),
-    clearPendingLogout: (cardId) => {
-      if (this.pendingLogout?.cardId === cardId) {
-        this.pendingLogout = null;
-      }
-    },
+    clearPendingLogout: (cardId) =>
+      (this.pendingLogout = this.pendingLogout?.cardId === cardId ? null : this.pendingLogout),
     setLogoutSuccess: (cardId) =>
       this.setMessage(cardId, { kind: "success", text: t("modelProviders.logout.done") }),
   });
@@ -249,8 +252,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     void this.refreshTask.run([null, this.selectedAgentId, false]);
   }
 
-  private invalidateRequests() {
+  private cancelProfileRefreshes() {
     this.cancelCoreRefresh();
+    this.supplemental.cancelAuthStatus();
+  }
+
+  private invalidateRequests() {
+    this.cancelProfileRefreshes();
     this.supplemental.invalidate();
   }
 
@@ -511,13 +519,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     }
   }
 
-  private async logout(cardId: string, targets: ModelProviderLogoutTarget[]) {
-    await this.profileActions.logout(cardId, targets);
-  }
-
-  private setProfileOrder(cardId: string, provider: string, profileIds: string[] | null) {
-    this.profileActions.setOrder(cardId, provider, profileIds);
-  }
+  private readonly logout = this.profileActions.logout.bind(this.profileActions);
+  private readonly setProfileOrder = this.profileActions.setOrder.bind(this.profileActions);
 
   private async addProvider() {
     const provider = this.addProviderId;

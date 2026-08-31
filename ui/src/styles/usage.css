@@ -134,11 +134,15 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(
-    90deg,
-    var(--accent),
-    color-mix(in srgb, var(--accent) 65%, var(--warn))
-  );
+  background: var(--ok);
+}
+
+.provider-usage-progress--warn span {
+  background: var(--warn);
+}
+
+.provider-usage-progress--danger span {
+  background: var(--danger);
 }
 
 .provider-usage-billing {

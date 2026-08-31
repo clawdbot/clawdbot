@@ -59,6 +59,7 @@ export function createHarness(initialScopeId: string) {
     });
     return () => releaseAuthStatus?.();
   };
+  let accountUsagePending = false;
   let usageStatus: unknown = { updatedAt: 1, providers: [] };
   let usageStatusRejects = false;
   const request = vi.fn(async (method: string): Promise<unknown> => {
@@ -72,6 +73,7 @@ export function createHarness(initialScopeId: string) {
         return {
           ts: 1,
           providers: [],
+          ...(accountUsagePending ? { usageRefreshPending: true } : {}),
           providerCapabilities: [
             { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
           ],
@@ -192,6 +194,9 @@ export function createHarness(initialScopeId: string) {
     publishPhase: (phase: ApplicationGatewaySnapshot["phase"]) => {
       snapshot.phase = phase;
       gatewaySource.publish({ ...snapshot });
+    },
+    setAccountUsagePending: (value: boolean) => {
+      accountUsagePending = value;
     },
     setUsageStatus: (value: unknown) => {
       usageStatus = value;

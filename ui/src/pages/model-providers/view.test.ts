@@ -3,114 +3,10 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import type { ModelProviderCard } from "./data.ts";
+import { button, card, mount, props, text } from "./view.test-support.ts";
 import { renderModelProviders } from "./view.ts";
 
-type ModelProvidersViewProps = Parameters<typeof renderModelProviders>[0];
 type SegmentedGroup = HTMLElement & { disabled: boolean; value: string };
-
-function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
-  return {
-    id: "openai",
-    displayName: "OpenAI",
-    profiles: [],
-    profileProviderIds: {},
-    profileOrders: {},
-    profileOrderStoredProviders: [],
-    profileOrderLockedProviders: [],
-    credentialProviderIds: ["openai"],
-    logoutTargets: [],
-    hasConfigApiKey: false,
-    modelCount: 1,
-    availableModelCount: 1,
-    apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
-    ...overrides,
-  };
-}
-
-function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProvidersViewProps {
-  return {
-    connected: true,
-    loading: false,
-    refreshing: false,
-    error: null,
-    providerUsageFailed: false,
-    supplementalLoading: false,
-    updatedAt: 1,
-    costDays: 30,
-    credentialAgentLabel: "Writer",
-    cards: [card()],
-    configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
-    defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
-    defaultModelsDirty: false,
-    thinkingLevel: "off",
-    thinkingOverridden: true,
-    fastMode: false,
-    fastModeOverridden: true,
-    configBusy: false,
-    quickAddSupported: true,
-    unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
-    canViewProfiles: true,
-    canMutate: true,
-    mutationBlockedReason: null,
-    providerUsageStalled: false,
-    probeAvailable: true,
-    busy: {},
-    messages: {},
-    probeResults: {},
-    keyEditorProvider: null,
-    keyDraft: "",
-    pendingLogout: null,
-    profileOrders: {},
-    addProviderOpen: false,
-    addProviderId: "",
-    addProviderKey: "",
-    onRefresh: () => undefined,
-    onOpenKeyEditor: () => undefined,
-    onCloseKeyEditor: () => undefined,
-    onKeyDraftChange: () => undefined,
-    onSaveKey: () => undefined,
-    onRemoveKey: () => undefined,
-    onProbe: () => undefined,
-    onRequestLogout: () => undefined,
-    onCancelLogout: () => undefined,
-    onLogout: () => undefined,
-    onProfileOrderChange: () => undefined,
-    onAddProviderToggle: () => undefined,
-    onAddProviderIdChange: () => undefined,
-    onAddProviderKeyChange: () => undefined,
-    onAddProvider: () => undefined,
-    onPrimaryChange: () => undefined,
-    onFallbackAdd: () => undefined,
-    onFallbackRemove: () => undefined,
-    onUtilityChange: () => undefined,
-    onDefaultModelsSave: () => undefined,
-    onDefaultModelsReset: () => undefined,
-    onThinkingChange: () => undefined,
-    onThinkingReset: () => undefined,
-    onFastModeChange: () => undefined,
-    onFastModeReset: () => undefined,
-    onOpenModelSetup: () => undefined,
-    ...overrides,
-  };
-}
-
-function mount(viewProps: ModelProvidersViewProps): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(renderModelProviders(viewProps), container);
-  return container;
-}
-
-function text(element: Element | null): string {
-  return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
-}
-
-function button(container: Element, label: string): HTMLButtonElement | undefined {
-  return [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) =>
-    text(entry).includes(label),
-  );
-}
 
 function settingsRow(container: Element, label: string): HTMLElement {
   const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
@@ -501,7 +397,7 @@ describe("renderModelProviders", () => {
     );
     const provider = container.querySelector('[data-provider-id="openai"]');
     expect(text(provider)).toContain("Credentials for Writer");
-    expect(text(provider)).toContain("Global usage and cost");
+    expect(text(provider)).toContain("Usage and cost");
     expect(text(provider)).toContain("API key from environment (OPENAI_API_KEY)");
     expect(text(provider)).toContain("Connected");
     expect(text(provider)).toContain("145 ms");
@@ -622,7 +518,7 @@ describe("renderModelProviders", () => {
     expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
   });
 
-  it("labels provider usage and session cost as global", () => {
+  it("labels provider usage and session cost without implying account aggregation", () => {
     const container = mount(
       props({
         cards: [
@@ -635,8 +531,190 @@ describe("renderModelProviders", () => {
 
     const provider = container.querySelector('[data-provider-id="openai"]');
     expect(text(provider)).toContain("Credentials for Writer");
-    expect(text(provider)).toContain("Global usage and cost");
-    expect(text(provider)).toContain("Global session spend · 30d");
+    expect(text(provider)).toContain("Usage and cost");
+    expect(text(provider)).toContain("Session spend · 30d");
+    expect(text(provider?.querySelector(".model-providers__head") ?? null)).toContain("Default");
+  });
+
+  it("marks only the provider that owns the saved primary model as default", () => {
+    const container = mount(
+      props({
+        cards: [card(), card({ id: "anthropic", displayName: "Anthropic" })],
+      }),
+    );
+
+    expect(
+      text(container.querySelector('[data-provider-id="openai"] .model-providers__head')),
+    ).toContain("Default");
+    expect(
+      text(container.querySelector('[data-provider-id="anthropic"] .model-providers__head')),
+    ).not.toContain("Default");
+  });
+
+  it("keeps provider usage visible for API-key profiles without account snapshots", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            profiles: [{ profileId: "openai:key", type: "api_key", status: "static" }],
+            usage: {
+              provider: "openai",
+              displayName: "OpenAI",
+              windows: [{ label: "Monthly", usedPercent: 25 }],
+              billing: [{ type: "balance", amount: 12, unit: "credits" }],
+            },
+          }),
+        ],
+      }),
+    );
+
+    const metrics = container.querySelector(".model-providers__global-metrics");
+    expect(text(metrics)).toContain("Monthly");
+    expect(text(metrics)).toContain("12 credits");
+  });
+
+  it("keeps API-key usage beside account-specific OAuth usage", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            profiles: [
+              {
+                profileId: "openai:oauth",
+                type: "oauth",
+                status: "ok",
+                usage: {
+                  providerId: "openai",
+                  windows: [{ label: "Weekly", usedPercent: 10 }],
+                },
+              },
+            ],
+            usage: {
+              provider: "openai",
+              displayName: "OpenAI",
+              windows: [{ label: "Monthly API key", usedPercent: 25 }],
+              billing: [{ type: "balance", amount: 12, unit: "credits" }],
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(text(container.querySelector(".model-providers__profile-usage"))).toContain("Weekly");
+    const metrics = container.querySelector(".model-providers__global-metrics");
+    expect(text(metrics)).toContain("Monthly API key");
+    expect(text(metrics)).toContain("12 credits");
+  });
+
+  it("groups compact account quotas by family with short windows first", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            profiles: [
+              {
+                profileId: "openai:oauth",
+                type: "oauth",
+                status: "ok",
+                usage: {
+                  providerId: "openai",
+                  windows: [
+                    { label: "Week", usedPercent: 5 },
+                    { label: "5h", usedPercent: 10 },
+                    {
+                      label: "GPT 5.3 Codex Spark · 5h",
+                      groupLabel: "GPT 5.3 Codex Spark",
+                      windowLabel: "5h",
+                      usedPercent: 20,
+                    },
+                    {
+                      label: "GPT 5.3 Codex Spark · Week",
+                      groupLabel: "GPT 5.3 Codex Spark",
+                      windowLabel: "Week",
+                      usedPercent: 30,
+                    },
+                    {
+                      label: "codex other · Week",
+                      groupLabel: "codex other",
+                      windowLabel: "Week",
+                      usedPercent: 35,
+                    },
+                    {
+                      label: "codex other · 15m",
+                      groupLabel: "codex other",
+                      windowLabel: "15m",
+                      usedPercent: 40,
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+
+    const groups = [...container.querySelectorAll<HTMLElement>(".provider-usage-window-group")];
+    expect(groups).toHaveLength(3);
+    expect(text(groups[0]?.querySelector(".provider-usage-window-group__title") ?? null)).toBe(
+      "Normal limit",
+    );
+    expect(
+      [...(groups[0]?.querySelectorAll(".provider-usage-window__cadence") ?? [])].map(text),
+    ).toEqual(["5h", "Week"]);
+    expect(text(groups[1]?.querySelector(".provider-usage-window-group__title") ?? null)).toBe(
+      "GPT 5.3 Codex Spark",
+    );
+    expect(
+      [...(groups[1]?.querySelectorAll(".provider-usage-window__cadence") ?? [])].map(text),
+    ).toEqual(["5h", "Week"]);
+    const progress = groups[1]?.querySelector<HTMLElement>("[role='progressbar']");
+    expect(progress?.getAttribute("aria-valuenow")).toBe("80");
+    expect(progress?.getAttribute("aria-valuetext")).toBe("80% left");
+    expect(progress?.classList.contains("provider-usage-progress--ok")).toBe(true);
+    expect(progress?.querySelector<HTMLElement>("span")?.style.width).toBe("80%");
+    expect(text(groups[2]?.querySelector(".provider-usage-window-group__title") ?? null)).toBe(
+      "codex other",
+    );
+    expect(
+      [...(groups[2]?.querySelectorAll(".provider-usage-window__cadence") ?? [])].map(text),
+    ).toEqual(["15m", "Week"]);
+  });
+
+  it("keeps provider-scoped usage beside OAuth usage without an inference API key", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            apiKey: undefined,
+            usageScope: "provider",
+            profiles: [
+              {
+                profileId: "openai:oauth",
+                type: "oauth",
+                status: "ok",
+                usage: {
+                  providerId: "openai",
+                  windows: [{ label: "Weekly account", usedPercent: 10 }],
+                },
+              },
+            ],
+            usage: {
+              provider: "openai",
+              displayName: "OpenAI",
+              windows: [{ label: "Admin organization", usedPercent: 25 }],
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(text(container.querySelector(".model-providers__profile-usage"))).toContain(
+      "Weekly account",
+    );
+    expect(text(container.querySelector(".model-providers__global-metrics"))).toContain(
+      "Admin organization",
+    );
   });
 
   it("preserves complete graphemes in custom provider fallback icons", () => {
@@ -850,232 +928,5 @@ describe("renderModelProviders", () => {
     );
     button(container, "Test connection")?.click();
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
-  });
-
-  it("confirms one profile logout from its quiet icon action", () => {
-    const profileCard = card({
-      credentialProviderIds: ["openai", "agent-openai-alias"],
-      logoutTargets: [{ provider: "agent-openai-alias", profileIds: ["openai:oauth"] }],
-      profileProviderIds: { "openai:oauth": "openai" },
-      profileOrders: { openai: ["openai:oauth"] },
-      profiles: [
-        {
-          profileId: "openai:oauth",
-          type: "oauth",
-          status: "ok",
-          logoutSupported: true,
-          email: "owner@example.com",
-        },
-      ],
-    });
-    const onRequestLogout = vi.fn();
-    const container = mount(props({ cards: [profileCard], onRequestLogout }));
-    expect(container.querySelector(".model-providers__confirm")).toBeNull();
-    container.querySelector<HTMLButtonElement>('[aria-label="Log out owner@example.com"]')?.click();
-    const pendingLogout = {
-      cardId: "openai",
-      label: "owner@example.com",
-      targets: [{ provider: "agent-openai-alias", profileIds: ["openai:oauth"] }],
-    };
-    expect(onRequestLogout).toHaveBeenCalledWith(pendingLogout);
-
-    const onLogout = vi.fn();
-    const confirmation = mount(props({ cards: [profileCard], pendingLogout, onLogout }));
-    button(confirmation, "Log out")?.click();
-    expect(onLogout).toHaveBeenCalledWith("openai", pendingLogout.targets);
-  });
-
-  it("reorders profiles from the keyboard even while provider data refreshes", () => {
-    const onProfileOrderChange = vi.fn();
-    const container = mount(
-      props({
-        refreshing: true,
-        cards: [
-          card({
-            profiles: [
-              { profileId: "openai:one", type: "oauth", status: "ok", email: "one@example.com" },
-              { profileId: "openai:two", type: "oauth", status: "ok", email: "two@example.com" },
-            ],
-            profileProviderIds: {
-              "openai:one": "openai",
-              "openai:two": "openai",
-            },
-            profileOrders: { openai: ["openai:one", "openai:two"] },
-          }),
-        ],
-        onProfileOrderChange,
-      }),
-    );
-    const secondGrip = container.querySelectorAll<HTMLButtonElement>(
-      ".model-providers__profile-grip",
-    )[1];
-
-    secondGrip?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
-
-    expect(secondGrip?.disabled).toBe(false);
-    expect(onProfileOrderChange).toHaveBeenCalledWith("openai", "openai", [
-      "openai:two",
-      "openai:one",
-    ]);
-  });
-
-  it("disables reordering when a stored order omits visible profiles", () => {
-    const onProfileOrderChange = vi.fn();
-    const container = mount(
-      props({
-        cards: [
-          card({
-            profiles: [
-              { profileId: "openai:one", type: "oauth", status: "ok" },
-              { profileId: "openai:two", type: "oauth", status: "ok" },
-              { profileId: "openai:excluded", type: "oauth", status: "ok" },
-            ],
-            profileProviderIds: {
-              "openai:one": "openai",
-              "openai:two": "openai",
-              "openai:excluded": "openai",
-            },
-            profileOrders: { openai: ["openai:one", "openai:two"] },
-            profileOrderStoredProviders: ["openai"],
-          }),
-        ],
-        onProfileOrderChange,
-      }),
-    );
-    const grips = container.querySelectorAll<HTMLButtonElement>(".model-providers__profile-grip");
-
-    expect([...grips].every((grip) => grip.disabled)).toBe(true);
-    expect(grips[0]?.title).toContain("Reset");
-    grips[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
-
-    expect(onProfileOrderChange).not.toHaveBeenCalled();
-  });
-
-  it("removes reorder controls when priority rotates across provider routes", () => {
-    const onProfileOrderChange = vi.fn();
-    const sharedOrder = ["shared:one", "shared:two", "shared:three"];
-    const container = mount(
-      props({
-        cards: [
-          card({
-            id: "route-one",
-            profiles: [
-              { profileId: "shared:one", type: "oauth", status: "ok" },
-              { profileId: "shared:two", type: "oauth", status: "ok" },
-            ],
-            profileProviderIds: {
-              "shared:one": "shared-owner",
-              "shared:two": "shared-owner",
-            },
-            profileOrders: { "shared-owner": sharedOrder },
-          }),
-          card({
-            id: "route-two",
-            profiles: [{ profileId: "shared:three", type: "oauth", status: "ok" }],
-            profileProviderIds: { "shared:three": "shared-owner" },
-            profileOrders: { "shared-owner": sharedOrder },
-          }),
-        ],
-        onProfileOrderChange,
-      }),
-    );
-    expect(container.querySelectorAll(".model-providers__profile-grip")).toHaveLength(0);
-    expect(container.querySelectorAll(".model-providers__profile-grip-spacer")).toHaveLength(3);
-    expect(container.textContent).toContain(
-      "Priority rotates automatically across provider routes",
-    );
-
-    expect(onProfileOrderChange).not.toHaveBeenCalled();
-  });
-
-  it("does not expose profile identity when provider settings are read-only", () => {
-    const container = mount(
-      props({
-        canViewProfiles: false,
-        canMutate: false,
-        mutationBlockedReason: "Operator admin access required",
-        cards: [
-          card({
-            profiles: [
-              {
-                profileId: "openai:owner@example.com",
-                type: "oauth",
-                status: "ok",
-                logoutSupported: true,
-              },
-            ],
-            profileProviderIds: { "openai:owner@example.com": "openai" },
-            profileOrders: { openai: ["openai:owner@example.com"] },
-            profileOrderStoredProviders: ["openai"],
-          }),
-        ],
-      }),
-    );
-
-    expect(container.querySelector(".model-providers__profiles")).toBeNull();
-    expect(text(container)).not.toContain("owner@example.com");
-    expect(text(container.querySelector(".model-providers__credentials"))).toContain(
-      "OAuth profiles: 1",
-    );
-  });
-
-  it("uses the original config key for credential mutations", () => {
-    const onSaveKey = vi.fn();
-    const onRemoveKey = vi.fn();
-    const container = mount(
-      props({
-        cards: [
-          card({
-            configKey: "OpenAI",
-            apiKey: { source: "config" },
-            hasConfigApiKey: true,
-          }),
-        ],
-        keyEditorProvider: "openai",
-        keyDraft: "replacement",
-        onSaveKey,
-        onRemoveKey,
-      }),
-    );
-    const provider = container.querySelector('[data-provider-id="openai"]');
-    expect(provider).not.toBeNull();
-    button(provider!, "Save")?.click();
-    button(provider!, "Remove key")?.click();
-    expect(onSaveKey).toHaveBeenCalledWith("openai", "OpenAI");
-    expect(onRemoveKey).toHaveBeenCalledWith("openai", "OpenAI");
-  });
-
-  it("shows the current key-operation failure over an older card success", () => {
-    const container = mount(
-      props({
-        messages: {
-          openai: { kind: "success", text: "Older success" },
-          "key:openai": { kind: "error", text: "Current failure" },
-        },
-      }),
-    );
-    expect(text(container.querySelector('[data-provider-id="openai"] .callout'))).toBe(
-      "Current failure",
-    );
-  });
-
-  it("disables API-key mutations for explicit non-API-key auth modes", () => {
-    const container = mount(
-      props({
-        cards: [card({ configAuthMode: "oauth" })],
-      }),
-    );
-    const setKey = button(container, "Set API key");
-    expect(setKey?.disabled).toBe(true);
-    expect(setKey?.title).toContain('auth mode is "oauth"');
-  });
-
-  it("hides API-key setup for providers that explicitly do not support it", () => {
-    const container = mount(
-      props({
-        cards: [card({ apiKeySupported: false })],
-      }),
-    );
-    expect(button(container, "Set API key")).toBeUndefined();
   });
 });

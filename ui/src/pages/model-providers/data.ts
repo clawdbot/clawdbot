@@ -74,6 +74,8 @@ export type ModelProviderCard = {
   catalogStatus?: ModelCatalogProviderOutcome["status"];
   /** Live provider-reported usage (quota windows, billing, cost history). */
   usage?: ProviderUsageSnapshot;
+  /** Scope recorded by the provider-usage owner. */
+  usageScope?: ModelAuthStatusProvider["usageScope"];
   /** Locally-computed session spend for the requested window. */
   localCost?: ModelProviderLocalCost;
 };
@@ -303,7 +305,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     draft.card.apiKey ??= provider.apiKey;
     draft.hasAuthRow = true;
     const usage = provider.usage;
-    if (usage && !draft.card.usage) {
+    const duplicatesProfileUsage =
+      provider.usageScope === "account" && provider.profiles.some((profile) => profile.usage);
+    if (usage && !draft.card.usage && !duplicatesProfileUsage) {
       draft.card.usage = {
         provider: usage.providerId,
         displayName: provider.displayName,
@@ -311,7 +315,10 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         ...(usage.summary ? { summary: usage.summary } : {}),
         ...(usage.plan ? { plan: usage.plan } : {}),
         ...(usage.billing?.length ? { billing: usage.billing } : {}),
+        ...(usage.costHistory ? { costHistory: usage.costHistory } : {}),
+        ...(usage.error ? { error: usage.error } : {}),
       };
+      draft.card.usageScope = provider.usageScope;
     }
   }
 
@@ -344,9 +351,15 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       findDraft(drafts, [id]) ??
       ensureDraft(drafts, id, snapshot.displayName || providerDisplayLabel(id));
     draft.ids.add(id);
+    // usage.status is scoped to the ambient auth owner. Without an account ID,
+    // its email cannot safely identify a selected agent's profile.
+    if (snapshot.accountEmail && draft.card.profiles.length > 0) {
+      continue;
+    }
     // usage.status snapshots carry cost history and errors that the
     // auth-status embed drops, so they win when both are present.
     draft.card.usage = snapshot;
+    draft.card.usageScope = snapshot.accountEmail ? "account" : "provider";
     draft.hasUsageSnapshot = true;
   }
 

@@ -56,6 +56,20 @@ describe("UsageRefreshPolicy", () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
+  it("retries when account usage is pending after provider usage completed", async () => {
+    const { policy, reload } = createPolicy();
+    policy.markProviderUsage(
+      { ok: true, value: { updatedAt: NOW_MS, providers: [] } },
+      NOW_MS,
+      "connection",
+      true,
+    );
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
   it("retries interrupted work once active despite a fresh payload", () => {
     let loading = true;
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");

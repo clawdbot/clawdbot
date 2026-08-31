@@ -93,6 +93,25 @@ describe("fetchCodexUsage", () => {
     ]);
   });
 
+  it("labels a weekly primary window as Week", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        rate_limit: {
+          primary_window: {
+            limit_window_seconds: 604_800,
+            used_percent: 10,
+            reset_at: 1_700_500_000,
+          },
+        },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.windows).toEqual([
+      { label: "Week", usedPercent: 10, resetAt: 1_700_500_000_000 },
+    ]);
+  });
+
   it("labels secondary window as Week when reset cadence clearly exceeds one day", async () => {
     const primaryReset = 1_700_000_000;
     const weeklyLikeSecondaryReset = primaryReset + 5 * 24 * 60 * 60;
@@ -191,15 +210,15 @@ describe("fetchCodexUsage", () => {
       },
       {
         label: "GPT 5.3 Codex Spark · 5h",
-        groupLabel: "GPT 5.3 Codex",
-        windowLabel: "Spark · 5h",
+        groupLabel: "GPT 5.3 Codex Spark",
+        windowLabel: "5h",
         usedPercent: 20,
         resetAt: 1_700_001_800_000,
       },
       {
         label: "GPT 5.3 Codex Spark · Week",
-        groupLabel: "GPT 5.3 Codex",
-        windowLabel: "Spark · Week",
+        groupLabel: "GPT 5.3 Codex Spark",
+        windowLabel: "Week",
         usedPercent: 30,
         resetAt: 1_700_604_800_000,
       },

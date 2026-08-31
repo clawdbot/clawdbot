@@ -7,6 +7,7 @@ import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 const WEEKLY_RESET_GAP_SECONDS = 3 * 24 * 60 * 60;
+const WEEK_MINUTES = 7 * 24 * 60;
 
 function readFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -59,6 +60,9 @@ function resolveSecondaryWindowLabel(params: {
 
 function formatWindowDuration(seconds: number): string {
   const minutes = Math.round(seconds / 60);
+  if (minutes === WEEK_MINUTES) {
+    return "Week";
+  }
   if (minutes < 60) {
     return `${minutes}m`;
   }
@@ -68,63 +72,30 @@ function formatWindowDuration(seconds: number): string {
   return `${minutes}m`;
 }
 
-type RateLimitLabels = {
-  fullLabel: string;
-  groupLabel: string;
-  windowPrefix?: string;
-};
-
 function normalizeRateLimitLabel(value: string | undefined): string | undefined {
   const normalized = value?.replace(/[_-]+/gu, " ").replace(/\s+/gu, " ").trim();
   return normalized || undefined;
 }
 
-function resolveAdditionalRateLimitLabels(
+function resolveAdditionalRateLimitLabel(
   limitName: string | undefined,
   meteredFeature: string | undefined,
-): RateLimitLabels | undefined {
-  const fullLabel = normalizeRateLimitLabel(limitName ?? meteredFeature);
-  if (!fullLabel) {
-    return undefined;
-  }
-  const featureLabel = normalizeRateLimitLabel(meteredFeature);
-  const featurePrefix = "codex ";
-  if (!featureLabel?.toLowerCase().startsWith(featurePrefix)) {
-    return { fullLabel, groupLabel: fullLabel };
-  }
-  const familyMatch = /\bcodex\b/giu.exec(fullLabel);
-  if (!familyMatch) {
-    return { fullLabel, groupLabel: fullLabel };
-  }
-  const familyEnd = familyMatch.index + familyMatch[0].length;
-  const groupLabel = fullLabel.slice(0, familyEnd).trim();
-  const windowPrefix = fullLabel.slice(familyEnd).trim();
-  // metered_feature variants are opaque (for example codex_bengalfox), so
-  // limit_name owns the display split. Bare codex_other remains one family.
-  if (!windowPrefix || groupLabel.toLowerCase() === "codex") {
-    return { fullLabel, groupLabel: fullLabel };
-  }
-  return {
-    fullLabel,
-    groupLabel,
-    windowPrefix,
-  };
+): string | undefined {
+  return normalizeRateLimitLabel(limitName ?? meteredFeature);
 }
 
 function appendRateLimitWindows(
   windows: UsageWindow[],
   rawRateLimit: unknown,
-  labels?: RateLimitLabels,
+  limitLabel?: string,
 ): void {
   const rateLimit = asOptionalRecord(rawRateLimit);
   const windowFields = (windowLabel: string) => ({
-    label: labels ? `${labels.fullLabel} · ${windowLabel}` : windowLabel,
-    ...(labels
+    label: limitLabel ? `${limitLabel} · ${windowLabel}` : windowLabel,
+    ...(limitLabel
       ? {
-          groupLabel: labels.groupLabel,
-          windowLabel: labels.windowPrefix
-            ? `${labels.windowPrefix} · ${windowLabel}`
-            : windowLabel,
+          groupLabel: limitLabel,
+          windowLabel,
         }
       : {}),
   });
@@ -210,7 +181,7 @@ export async function fetchCodexUsage(
     appendRateLimitWindows(
       windows,
       additional.rate_limit,
-      resolveAdditionalRateLimitLabels(limitName, meteredFeature),
+      resolveAdditionalRateLimitLabel(limitName, meteredFeature),
     );
   }
 

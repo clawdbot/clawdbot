@@ -69,9 +69,12 @@ export class UsageRefreshPolicy {
     result: ProviderUsageRequestResult | null,
     value: number | null,
     connection: unknown,
+    additionalIncomplete = false,
   ): UsageRetryState {
     const incomplete =
-      result?.ok === false || (result?.ok === true && isUsageIncomplete(result.value));
+      additionalIncomplete ||
+      result?.ok === false ||
+      (result?.ok === true && isUsageIncomplete(result.value));
     return this.applyLoadState(value, incomplete, connection);
   }
 

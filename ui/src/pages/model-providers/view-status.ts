@@ -35,8 +35,16 @@ function renderAuthStatus(card: ModelProviderCard) {
   `;
 }
 
-function hasProviderCredentials(card: ModelProviderCard): boolean {
-  return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
+function hasApiKeyCredential(card: ModelProviderCard): boolean {
+  return (
+    card.hasConfigApiKey ||
+    Boolean(card.apiKey) ||
+    card.profiles.some((profile) => profile.type === "api_key")
+  );
+}
+
+export function hasProviderCredentials(card: ModelProviderCard): boolean {
+  return hasApiKeyCredential(card) || card.profiles.length > 0;
 }
 
 export function hasVerifiedProvider(card: ModelProviderCard): boolean {

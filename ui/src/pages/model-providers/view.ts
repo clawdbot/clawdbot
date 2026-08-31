@@ -20,20 +20,26 @@ import { t } from "../../i18n/index.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
-import type {
-  DefaultModelSelection,
-  ModelPickerEntry,
-  ModelProviderCard,
-  ModelProviderPendingLogout,
-  ModelProviderLogoutTarget,
-  ProviderOption,
+import {
+  modelCatalogRef,
+  type DefaultModelSelection,
+  type ModelPickerEntry,
+  type ModelProviderCard,
+  type ModelProviderPendingLogout,
+  type ModelProviderLogoutTarget,
+  type ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
 import { renderProviderProfiles } from "./profiles-view.ts";
-import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
+import {
+  hasProviderCredentials,
+  hasVerifiedProvider,
+  renderProviderStatus,
+} from "./view-status.ts";
 
 export type ModelProviderRowMessage = {
   kind: "success" | "error";
@@ -228,6 +234,40 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
   `;
 }
 
+function renderProviderMetrics(card: ModelProviderCard, supplementalLoading: boolean) {
+  const hasProfiles = card.profiles.length > 0;
+  const usage = card.usage;
+  if (!usage && hasProfiles) {
+    return nothing;
+  }
+  return html`
+    <div
+      class="model-providers__global-metrics"
+      aria-busy=${supplementalLoading ? "true" : "false"}
+    >
+      <div class="model-providers__global-metrics-title">${t("modelProviders.globalUsage")}</div>
+      ${usage
+        ? renderProviderUsageDetails(usage)
+        : !hasProfiles
+          ? html`<div class="model-providers__no-stats">
+              ${t(supplementalLoading ? "common.loading" : "modelProviders.noStats")}
+            </div>`
+          : nothing}
+    </div>
+  `;
+}
+
+function providerOwnsDefaultModel(
+  card: ModelProviderCard,
+  props: ModelProvidersViewProps,
+): boolean {
+  const primary = props.defaultModels.primary;
+  const configured = props.configuredModels.find((model) => modelCatalogRef(model) === primary);
+  const separator = primary.indexOf("/");
+  const provider = configured?.provider ?? (separator > 0 ? primary.slice(0, separator) : "");
+  return provider.length > 0 && canonicalModelAuthProviderId(provider) === card.id;
+}
+
 function renderCredentialSummary(card: ModelProviderCard, agentLabel: string) {
   const oauthCount = card.profiles.filter((profile) => profile.type === "oauth").length;
   const tokenCount = card.profiles.filter((profile) => profile.type === "token").length;
@@ -344,7 +384,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
   const credentialProviders = card.credentialProviderIds.length
     ? card.credentialProviderIds
     : [card.id];
-  const isConfigured = card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
+  const isConfigured = hasProviderCredentials(card);
   const canLogout = card.profiles.length === 0 && card.logoutTargets.length > 0;
   const probeBusy = Boolean(props.busy[`probe:${card.id}`]);
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
@@ -458,10 +498,16 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
           </div>
         </div>
         <div class="settings-row__control">
-          ${card.usage?.plan ? renderSettingsValue(card.usage.plan) : nothing}
+          ${providerOwnsDefaultModel(card, props)
+            ? renderSettingsValue(t("quickSettings.model.default"))
+            : nothing}
+          ${card.usageScope === "provider" && card.usage?.plan
+            ? renderSettingsValue(card.usage.plan)
+            : nothing}
           ${renderProviderStatus(card)}
         </div>
       </div>
+      ${renderLocalCost(card, props.costDays)}
       ${card.profiles.length > 0 && props.canViewProfiles
         ? renderProviderProfiles(card, {
             busy: props.busy,
@@ -473,18 +519,7 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
             onRequestLogout: props.onRequestLogout,
           })
         : renderCredentialSummary(card, props.credentialAgentLabel)}
-      <div
-        class="model-providers__global-metrics"
-        aria-busy=${props.supplementalLoading ? "true" : "false"}
-      >
-        <div class="model-providers__global-metrics-title">${t("modelProviders.globalUsage")}</div>
-        ${card.usage
-          ? renderProviderUsageDetails(card.usage)
-          : html`<div class="model-providers__no-stats">
-              ${t(props.supplementalLoading ? "common.loading" : "modelProviders.noStats")}
-            </div>`}
-        ${renderLocalCost(card, props.costDays)}
-      </div>
+      ${renderProviderMetrics(card, props.supplementalLoading)}
       ${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}
       ${renderProbeResult(props.probeResults[card.id])} ${renderMutationMessage(message)}
     </div>

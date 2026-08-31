@@ -723,8 +723,9 @@ describe("ModelProvidersPage agent scope", () => {
 
     firstSave.resolve({});
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(2));
-    const orderCalls = request.mock.calls.filter(([method]) => method === "models.authOrderSet");
-    expect(orderCalls.at(-1)).toEqual([
+    expect(
+      request.mock.calls.filter(([method]) => method === "models.authOrderSet").at(-1),
+    ).toEqual([
       "models.authOrderSet",
       {
         provider: "openai",
