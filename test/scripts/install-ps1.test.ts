@@ -1533,6 +1533,7 @@ try {
     expect(portableGitBody).toContain(
       'Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600',
     );
+    expect(portableGitBody).toContain("Invoke-WebRequest -UseBasicParsing");
     expect(portableGitBody).toContain("@downloadTimeouts");
     expect(portableGitDownloadBody).toContain("'^MinGit-.*-arm64\\.zip$'");
     expect(portableGitDownloadBody).toContain("'^MinGit-.*-64-bit\\.zip$'");
