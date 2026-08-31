@@ -54,7 +54,7 @@ describe("reset boundary concurrency", () => {
       reset: async (scope: { sessionId: string; sessionKey: string; storePath: string }) =>
         resetSessionEntryLifecycle({
           buildNextEntry: () => ({ sessionId: "next-single", updatedAt: 20 }),
-          resetBoundaryReason: "reset",
+          resetBoundary: { context: "preserve-tail", reason: "reset" },
           storePath: scope.storePath,
           target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
         }),
@@ -68,7 +68,7 @@ describe("reset boundary concurrency", () => {
           upserts: [
             {
               entry: { sessionId: "next-bulk", updatedAt: 20 },
-              resetBoundaryReason: "reset",
+              resetBoundary: { context: "preserve-tail", reason: "reset" },
               sessionKey: scope.sessionKey,
             },
           ],

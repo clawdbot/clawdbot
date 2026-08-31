@@ -12,6 +12,16 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 
 const chatSessionProjections = new WeakMap<object, SessionProjectionState>();
+// Display ownership outlives active-state cleanup. It is not the foreground
+// terminal fence: an unowned final cannot suppress authoritative active rows.
+const chatRunOwners = new WeakMap<object, string>();
+const CHAT_PROJECTION_SCOPE_KEYS = [
+  "sessionKey",
+  "sessionId",
+  "agentId",
+  "lifecycleRevision",
+  "activeLeafEntryId",
+] as const;
 
 type ChatSessionProjectionOwner = {
   sessionKey: string;
@@ -55,6 +65,16 @@ export function readChatSessionProjectionScope(
   };
 }
 
+function chatProjectionScopeChanged(
+  previous: SessionProjectionScope,
+  scope: SessionProjectionScope,
+) {
+  return CHAT_PROJECTION_SCOPE_KEYS.some(
+    (key) =>
+      Object.hasOwn(scope, key) && previous[key] !== undefined && previous[key] !== scope[key],
+  );
+}
+
 /** One pane owns its shared-reducer projection; split panes never share live state. */
 export function getChatSessionProjection(
   owner: object,
@@ -62,26 +82,14 @@ export function getChatSessionProjection(
   scope: SessionProjectionScope = {},
 ): SessionProjectionState {
   const current = chatSessionProjections.get(owner);
-  const scopeChanged =
-    current !== undefined &&
-    (
-      ["sessionKey", "sessionId", "agentId", "lifecycleRevision", "activeLeafEntryId"] as const
-    ).some((key) => {
-      if (!Object.hasOwn(scope, key)) {
-        return false;
-      }
-      const previous = current.scope[key];
-      return previous !== undefined && previous !== scope[key];
-    });
+  const scopeChanged = current !== undefined && chatProjectionScopeChanged(current.scope, scope);
   if (!current || scopeChanged) {
     const projection = createSessionProjection(scope, messages);
-    chatSessionProjections.set(owner, projection);
+    setChatSessionProjection(owner, projection);
     return projection;
   }
 
-  const bindsScope = (
-    ["sessionKey", "sessionId", "agentId", "lifecycleRevision", "activeLeafEntryId"] as const
-  ).some(
+  const bindsScope = CHAT_PROJECTION_SCOPE_KEYS.some(
     (key) =>
       Object.hasOwn(scope, key) && current.scope[key] === undefined && scope[key] !== undefined,
   );
@@ -97,12 +105,33 @@ export function getChatSessionProjection(
     ? scopedProjection
     : reconcileSessionProjectionSnapshot(scopedProjection, messages, scope);
   if (projection !== current) {
-    chatSessionProjections.set(owner, projection);
+    setChatSessionProjection(owner, projection);
   }
   return projection;
 }
 
+export function getChatRunOwner(owner: object): string | undefined {
+  return chatRunOwners.get(owner);
+}
+
+export function setChatRunOwner(owner: object, runId: string | undefined): void {
+  if (runId === undefined) {
+    chatRunOwners.delete(owner);
+  } else {
+    chatRunOwners.set(owner, runId);
+  }
+}
+
 export function setChatSessionProjection(owner: object, projection: SessionProjectionState): void {
+  const current = chatSessionProjections.get(owner);
+  const runId = chatRunOwners.get(owner);
+  if (
+    runId !== undefined &&
+    (!Object.hasOwn(projection.runs, runId) ||
+      (current && chatProjectionScopeChanged(current.scope, projection.scope)))
+  ) {
+    chatRunOwners.delete(owner);
+  }
   chatSessionProjections.set(owner, projection);
 }
 
@@ -169,32 +198,26 @@ export function publishChatSessionProjectionMessages(
   return projection;
 }
 
-function adoptInitialUserMessage(
+/** Reuse one submission's retained display bytes, without borrowing its local metadata. */
+export function adoptInitialUserMessage(
   message: unknown,
-  envelope: SessionMessageEnvelope | undefined,
   handoff: InitialUserMessageHandoffEntry,
+  submissionId: string | null | undefined,
 ): unknown {
-  const identity = readSessionMessageIdentity(message, envelope);
-  const handoffSequence = handoff.message["__openclaw"]?.seq ?? null;
-  if (
-    identity?.role !== "user" ||
-    identity.isImported ||
-    identity.runId !== handoff.pendingRunId ||
-    (handoffSequence !== null && identity.sequence !== handoffSequence)
-  ) {
+  const identity = readSessionMessageIdentity(message);
+  if (identity?.role !== "user" || identity.isImported || submissionId !== handoff.pendingRunId) {
     return message;
   }
   const authoritative = asNullableRecord(message) ?? {};
+  // Inline content replaces the managed-media display carrier; rendering both
+  // would duplicate the attachment. The received authoritative object is untouched.
   const { media: _media, ...authoritativeMetadata } =
     asNullableRecord(authoritative["__openclaw"]) ?? {};
   return {
     ...handoff.message,
     ...authoritative,
     content: handoff.message.content,
-    __openclaw: {
-      ...handoff.message["__openclaw"],
-      ...authoritativeMetadata,
-    },
+    __openclaw: authoritativeMetadata,
   };
 }
 
@@ -204,7 +227,7 @@ export function admitInitialUserMessageHandoff(
   sessionKey: string,
 ): boolean {
   const handoff = owner.initialUserMessage?.read(sessionKey, owner.client ?? null);
-  if (!handoff) {
+  if (!handoff?.pending) {
     return false;
   }
   const scope = readChatSessionProjectionScope(owner, { sessionKey });
@@ -233,7 +256,13 @@ export function reduceChatSessionProjection(
   const handoff = owner.initialUserMessage?.read(sessionKey, owner.client ?? null) ?? null;
   let adopted = false;
   const adopt = (message: unknown, envelope?: SessionMessageEnvelope) => {
-    const next = handoff ? adoptInitialUserMessage(message, envelope, handoff) : message;
+    const next = handoff
+      ? adoptInitialUserMessage(
+          message,
+          handoff,
+          readSessionMessageIdentity(message, envelope)?.sendId,
+        )
+      : message;
     adopted ||= next !== message;
     return next;
   };
@@ -244,7 +273,12 @@ export function reduceChatSessionProjection(
         ? { ...event, messages: event.messages.map((message) => adopt(message)) }
         : event;
   let projection = current;
-  if (event.type === "snapshotLoaded" && handoff && !adopted && options.runActive !== false) {
+  if (
+    event.type === "snapshotLoaded" &&
+    handoff?.pending &&
+    !adopted &&
+    options.runActive !== false
+  ) {
     projection = reduceSessionProjection(projection, {
       type: "sendPending",
       runId: handoff.pendingRunId,
@@ -253,6 +287,31 @@ export function reduceChatSessionProjection(
     });
   }
   projection = reduceSessionProjection(projection, { ...preparedEvent, scope });
+  // Without a transcript anchor this is best-effort display chronology, assuming
+  // comparable browser/Gateway clocks. Never assign a sequence or reorder canonical
+  // rows; older or untimestamped history stays ahead until authoritative adoption.
+  const initialIndex = handoff?.pending
+    ? projection.entries.findIndex(
+        (entry) => entry.pending && entry.pendingRunId === handoff.pendingRunId,
+      )
+    : -1;
+  const initial = projection.entries[initialIndex];
+  if (handoff && initial && initialIndex > 0) {
+    const outputIndex = projection.entries.findIndex((entry, index) => {
+      const message = asNullableRecord(entry.message);
+      return (
+        index < initialIndex &&
+        message?.role !== "user" &&
+        typeof message?.timestamp === "number" &&
+        message.timestamp >= handoff.message.timestamp
+      );
+    });
+    if (outputIndex >= 0) {
+      const entries = projection.entries.toSpliced(initialIndex, 1);
+      entries.splice(outputIndex, 0, initial);
+      projection = { ...projection, entries, messages: entries.map((entry) => entry.message) };
+    }
+  }
   const renderedMessagesMatch =
     owner.chatMessages.length === projection.messages.length &&
     owner.chatMessages.every((message, index) => message === projection.messages[index]);
@@ -262,7 +321,10 @@ export function reduceChatSessionProjection(
   if (!renderedMessagesMatch) {
     owner.chatMessages = [...projection.messages];
   }
-  if (adopted && options.runActive === false) {
+  if (adopted && handoff) {
+    owner.initialUserMessage?.retire(sessionKey, owner.client ?? null, handoff.pendingRunId);
+  }
+  if (handoff && !handoff.pending && options.runActive === false) {
     owner.initialUserMessage?.clear(sessionKey);
   }
   return projection;

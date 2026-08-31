@@ -24,6 +24,29 @@ function normalizePathPattern(pathPattern: string): string[] {
   return normalizeStringEntries(pathPattern.split("."));
 }
 
+/** Match declared migration sources without widening a scoped config edit. */
+export function hasPluginConfigMigrationSource(params: {
+  root: unknown;
+  pathPatterns?: readonly string[];
+  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
+}): boolean {
+  return (
+    params.pathPatterns?.some((pathPattern) => {
+      const pattern = normalizePathPattern(pathPattern);
+      const touched =
+        !params.touchedPaths ||
+        params.touchedPaths.some((parts) =>
+          pattern
+            .slice(0, parts.length)
+            .every((segment, index) => segment === "*" || segment === parts[index]),
+        );
+      return (
+        touched && collectPluginConfigContractMatches({ root: params.root, pathPattern }).length > 0
+      );
+    }) ?? false
+  );
+}
+
 function parseCanonicalArrayIndex(segment: string, length: number): number | null {
   const index = parseConfigPathArrayIndex(segment);
   return index !== undefined && index < length ? index : null;

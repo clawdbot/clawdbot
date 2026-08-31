@@ -11,7 +11,7 @@ export function validateWorkerProviderContract(
   provider: WorkerProvider,
   declaredIds: readonly string[],
 ): WorkerProviderValidation {
-  const missingMethod = (["provision", "inspect", "destroy"] as const).find(
+  const missingMethod = (["resolveAllocation", "provision", "inspect", "destroy"] as const).find(
     (method) => typeof provider[method] !== "function",
   );
   if (missingMethod) {

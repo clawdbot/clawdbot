@@ -1,12 +1,6 @@
 // Runtime web-channel plugin helpers expose web-channel tools through activated plugin runtimes.
 import path from "node:path";
 import { getDefaultLocalRootsCore } from "../../media/web-media.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugin-metadata-lifecycle.js";
-import {
-  clearPluginModuleLoaderLifecycleCache,
-  createPluginModuleLoaderCache,
-  type PluginModuleLoaderCache,
-} from "../plugin-module-loader-cache.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import {
   loadPluginBoundaryModule,
@@ -55,42 +49,13 @@ type WebChannelHeavyRuntimeModule = {
   extractText: (...args: unknown[]) => unknown;
 };
 
-type WebChannelRuntimeModuleKind = "heavy" | "light";
-type CachedWebChannelRuntimeModule = {
-  module: WebChannelHeavyRuntimeModule | WebChannelLightRuntimeModule;
-};
-
-const webChannelRuntimeModuleCache = new Map<
-  WebChannelRuntimeModuleKind,
-  CachedWebChannelRuntimeModule
->();
-
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-const moduleRoots = new Map<string, string>();
-// Light and heavy modules belong to one metadata generation; resolving their
-// shared record separately repeats full manifest discovery.
-let webChannelPluginRecord: WebChannelPluginRecord | undefined;
-
-registerPluginMetadataProcessMemoLifecycleClear(() => {
-  webChannelPluginRecord = undefined;
-  webChannelRuntimeModuleCache.clear();
-  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots });
-});
-
 /** Resolves the active web-channel plugin record that provides runtime APIs. */
 function resolveWebChannelPluginRecord(): WebChannelPluginRecord {
-  if (webChannelPluginRecord) {
-    return webChannelPluginRecord;
-  }
-  webChannelPluginRecord = resolvePluginRuntimeRecordByEntryBaseNames(
-    ["light-runtime-api", "runtime-api"],
-    () => {
-      throw new Error(
-        "web channel plugin runtime is unavailable: missing plugin that provides light-runtime-api and runtime-api",
-      );
-    },
-  ) as WebChannelPluginRecord;
-  return webChannelPluginRecord;
+  return resolvePluginRuntimeRecordByEntryBaseNames(["light-runtime-api", "runtime-api"], () => {
+    throw new Error(
+      "web channel plugin runtime is unavailable: missing plugin that provides light-runtime-api and runtime-api",
+    );
+  }) as WebChannelPluginRecord;
 }
 
 function resolveWebChannelRuntimeModulePath(
@@ -103,40 +68,24 @@ function resolveWebChannelRuntimeModulePath(
   if (!modulePath) {
     throw new Error(`web channel plugin runtime is unavailable: missing ${entryBaseName}`);
   }
-  moduleRoots.set(modulePath, record.rootDir ?? path.dirname(record.source));
   return modulePath;
 }
 
-function getCachedWebChannelRuntimeModule<T extends CachedWebChannelRuntimeModule["module"]>(
-  kind: WebChannelRuntimeModuleKind,
-  load: () => T,
-): T {
-  const cached = webChannelRuntimeModuleCache.get(kind);
-  if (cached) {
-    return cached.module as T;
-  }
-  const loaded = load();
-  webChannelRuntimeModuleCache.set(kind, { module: loaded });
-  return loaded;
-}
-
 function loadWebChannelLightModule(): WebChannelLightRuntimeModule {
-  return getCachedWebChannelRuntimeModule("light", () => {
-    const record = resolveWebChannelPluginRecord();
-    const modulePath = resolveWebChannelRuntimeModulePath(record, "light-runtime-api");
-    return loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, moduleLoaders, {
-      origin: record.origin,
-    });
+  const record = resolveWebChannelPluginRecord();
+  const modulePath = resolveWebChannelRuntimeModulePath(record, "light-runtime-api");
+  return loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, {
+    origin: record.origin,
+    rootDir: record.rootDir ?? path.dirname(record.source),
   });
 }
 
 function loadWebChannelHeavyModuleSync(): WebChannelHeavyRuntimeModule {
-  return getCachedWebChannelRuntimeModule("heavy", () => {
-    const record = resolveWebChannelPluginRecord();
-    const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
-    return loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
-      origin: record.origin,
-    });
+  const record = resolveWebChannelPluginRecord();
+  const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
+  return loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, {
+    origin: record.origin,
+    rootDir: record.rootDir ?? path.dirname(record.source),
   });
 }
 

@@ -11,6 +11,7 @@ import { digestClawAgentConfig } from "./agent-config-digest.js";
 import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   rowToPackageRef,
+  toPackageRefExtensionSqlParams,
   type ClawPackageOrigin,
   type ClawPackageRefStatus,
   type ClawPackageRelationship,
@@ -552,14 +553,7 @@ export function persistClawPackageRef(
           relationship: record.relationship,
           origin: record.origin,
           independent_owner: record.independentOwner ? 1 : 0,
-          extension_id: record.extension?.id ?? null,
-          extension_format: record.extension?.format ?? null,
-          extension_detected_format: record.extension?.detectedFormat ?? null,
-          extension_mapped_json: record.extension ? JSON.stringify(record.extension.mapped) : null,
-          extension_unavailable_json: record.extension
-            ? JSON.stringify(record.extension.unavailable)
-            : null,
-          extension_adapter_identity: record.extension?.adapterIdentity ?? null,
+          ...toPackageRefExtensionSqlParams(record.extension),
           updated_at_ms: record.updatedAtMs,
         });
       return;
@@ -596,14 +590,7 @@ export function persistClawPackageRef(
         relationship: record.relationship,
         origin: record.origin,
         independent_owner: record.independentOwner ? 1 : 0,
-        extension_id: record.extension?.id ?? null,
-        extension_format: record.extension?.format ?? null,
-        extension_detected_format: record.extension?.detectedFormat ?? null,
-        extension_mapped_json: record.extension ? JSON.stringify(record.extension.mapped) : null,
-        extension_unavailable_json: record.extension
-          ? JSON.stringify(record.extension.unavailable)
-          : null,
-        extension_adapter_identity: record.extension?.adapterIdentity ?? null,
+        ...toPackageRefExtensionSqlParams(record.extension),
         installed_at_ms: record.installedAtMs,
         updated_at_ms: record.updatedAtMs,
       });

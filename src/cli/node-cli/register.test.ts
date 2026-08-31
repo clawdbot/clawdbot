@@ -138,7 +138,7 @@ describe("registerNodeCli", () => {
     await program.parseAsync(["node", "run", "--ephemeral"], { from: "user" });
 
     expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
-      expect.objectContaining({ forceWorkerRuns: true }),
+      expect.objectContaining({ forceWorkerRuns: true, ephemeral: true }),
     );
     const nodeCommand = program.commands.find((command) => command.name() === "node");
     const runCommand = nodeCommand?.commands.find((command) => command.name() === "run");

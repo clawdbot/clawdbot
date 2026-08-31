@@ -10,7 +10,7 @@ const DOCKER_E2E_CHUNKS = [
   },
   {
     chunk_id: "package-update-openai",
-    label: "package/update OpenAI",
+    label: "package/update OpenAI and recovery",
     timeout_minutes: 45,
     profiles: "beta minimum stable full",
   },

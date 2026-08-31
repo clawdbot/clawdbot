@@ -79,9 +79,11 @@ describe("command lane capacity groups", () => {
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(7);
 
     // The 8th slot is the hook's hard reservation: cron must not take it.
+    const waiting: string[] = [];
     const extra = gate();
     const blockedCron = enqueueCommandInLane(CRON, async () => await extra.promise, {
       priority: "foreground",
+      onQueued: () => waiting.push(CRON),
     });
     await settle();
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(7);
@@ -91,10 +93,12 @@ describe("command lane capacity groups", () => {
     const hookGate = gate();
     const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise, {
       priority: "background",
+      onQueued: () => waiting.push(HOOK),
     });
     await settle();
     expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(1);
     expect(getCommandLaneSnapshot(HOOK).groupActive).toBe(8);
+    expect(waiting).toEqual([CRON]);
 
     hookGate.release();
     await hookRun;

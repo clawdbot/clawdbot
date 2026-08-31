@@ -1,6 +1,8 @@
 // Doctor-only import for the retired exec approvals JSON store.
 import { isDeepStrictEqual } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   resolveExecApprovalsPath,
@@ -42,6 +44,34 @@ type MigrationDecision =
   | "legacy-imported"
   | "malformed-legacy-preserved"
   | "receipt-authoritative";
+
+function normalizeLegacyNullableUsageMetadata(raw: string): string {
+  const parsed = safeParseJsonRecord(raw);
+  if (!parsed || !isRecord(parsed.agents)) {
+    return raw;
+  }
+
+  let changed = false;
+  for (const agent of Object.values(parsed.agents)) {
+    if (!isRecord(agent) || !Array.isArray(agent.allowlist)) {
+      continue;
+    }
+    for (const entry of agent.allowlist) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      // Legacy files can contain null usage metadata. Repair only these fields at
+      // import so canonical policy validation remains strict.
+      for (const key of ["lastUsedAt", "lastUsedCommand"]) {
+        if (entry[key] === null) {
+          delete entry[key];
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed ? JSON.stringify(parsed) : raw;
+}
 
 /** Detect retired approvals only when an explicit Doctor flow opts in. */
 export function detectLegacyExecApprovals(params: {
@@ -87,7 +117,9 @@ function decideAndRecordMigration(params: {
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
   const legacyFile =
-    params.snapshot.raw === null ? null : tryParsePersistedExecApprovals(params.snapshot.raw);
+    params.snapshot.raw === null
+      ? null
+      : tryParsePersistedExecApprovals(normalizeLegacyNullableUsageMetadata(params.snapshot.raw));
 
   return runOpenClawStateWriteTransaction(
     ({ db }) => {

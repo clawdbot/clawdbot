@@ -1,7 +1,7 @@
 // Control UI tests cover guided model setup against a mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,7 +11,13 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("model-setup", artifactRoot)
+    : undefined;
+});
 const localPrepareOptions = [
   {
     id: "ollama",
@@ -146,7 +152,7 @@ suite.define(() => {
     );
   });
 
-  it("completes device-code sign-in and re-detects the configured model", async () => {
+  it("completes device-code sign-in from its verified activation result", async () => {
     await suite.withPage(
       {
         ...(artifactDir
@@ -215,7 +221,11 @@ suite.define(() => {
                     deviceCode: { code: "ABCD-1234", expiresInMinutes: 14 },
                   },
                 },
-                { done: true, status: "done" },
+                {
+                  done: true,
+                  status: "done",
+                  modelActivation: { modelRef: "provider/verified-model" },
+                },
               ],
             },
           },
@@ -235,7 +245,6 @@ suite.define(() => {
         await page.getByText("ABCD-1234").waitFor();
         await page.getByText("Working…").waitFor();
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             path: path.join(artifactDir, "model-setup-refresh-pending.png"),
           });
@@ -269,12 +278,6 @@ suite.define(() => {
         await page.getByRole("button", { name: "Continue" }).waitFor();
         await page.getByRole("button", { name: "Cancel" }).waitFor();
 
-        await gateway.setMethodResponse("openclaw.setup.detect", {
-          ...initialDetection,
-          authOptions: [],
-          configuredModel: "provider/verified-model",
-          setupComplete: true,
-        });
         const detectCountBeforeCompletion = (await gateway.getRequests("openclaw.setup.detect"))
           .length;
         await page.getByRole("button", { name: "Continue" }).click();
@@ -285,10 +288,10 @@ suite.define(() => {
           sessionId: expect.any(String),
           answer: { stepId: "device-code" },
         });
-        await expect
-          .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
-          .toBe(detectCountBeforeCompletion + 1);
         await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+        expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(
+          detectCountBeforeCompletion,
+        );
         await expect
           .poll(async () => page.locator(".model-setup-success").textContent())
           .toContain("provider/verified-model");
@@ -433,7 +436,6 @@ suite.define(() => {
         expect(start.params).toMatchObject({ authChoice: "ollama" });
 
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -461,7 +463,6 @@ suite.define(() => {
           .waitFor();
 
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -668,7 +669,6 @@ suite.define(() => {
           .toBe(1);
 
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -794,12 +794,9 @@ suite.define(() => {
           await page.setViewportSize({ height: 844, width: 390 });
           await expect
             .poll(() =>
-              page.locator("openclaw-modal-dialog.nav-drawer").evaluate((element) => {
-                const dialog = element.shadowRoot
-                  ?.querySelector("wa-dialog")
-                  ?.shadowRoot?.querySelector("dialog");
-                return dialog?.open ?? false;
-              }),
+              page
+                .locator(".shell-nav.nav-drawer")
+                .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
             )
             .toBe(false);
           await page.screenshot({
@@ -890,7 +887,6 @@ suite.define(() => {
           .toBe(0);
         await expect.poll(() => page.locator('[data-candidate-kind="claude-cli"]').count()).toBe(1);
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -899,12 +895,9 @@ suite.define(() => {
           await page.setViewportSize({ height: 844, width: 390 });
           await expect
             .poll(() =>
-              page.locator("openclaw-modal-dialog.nav-drawer").evaluate((element) => {
-                const dialog = element.shadowRoot
-                  ?.querySelector("wa-dialog")
-                  ?.shadowRoot?.querySelector("dialog");
-                return dialog?.open ?? false;
-              }),
+              page
+                .locator(".shell-nav.nav-drawer")
+                .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
             )
             .toBe(false);
           await page.screenshot({

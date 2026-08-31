@@ -1,6 +1,12 @@
 import Foundation
 import OpenClawProtocol
 
+/// A route lease became stale before its request touched the channel. Unlike
+/// a socket cancellation, this proves the payload was never dispatched.
+public enum GatewayNodeSessionRequestError: Error, Sendable {
+    case routeChangedBeforeDispatch
+}
+
 public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authRequired = "AUTH_REQUIRED"
     case authUnauthorized = "AUTH_UNAUTHORIZED"

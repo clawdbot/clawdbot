@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -104,6 +105,7 @@ type ExecApprovalsCliOpts = NodesRpcOpts & {
   stdin?: boolean;
   agent?: string;
   reason?: string;
+  expiresInDays?: string;
 };
 
 type PendingApprovalCliEntry = {
@@ -540,6 +542,66 @@ function formatPendingAgentSession(entry: PendingApprovalCliEntry): string {
   return parts.length > 0 ? escapeApprovalTextForTerminal(parts.join(" / ")) : "-";
 }
 
+type StandingGrantCliEntry = {
+  grantId: string;
+  agentId: string;
+  cronJobId: string;
+  cronJobName: string | null;
+  command: string;
+  cwd: string | null;
+  createdAtMs: number;
+  expiresAtMs: number | null;
+  revokedAtMs: number | null;
+  revokedBy: string | null;
+  lastUsedAtMs: number | null;
+  useCount: number;
+};
+
+function describeGrantState(grant: StandingGrantCliEntry, nowMs: number): string {
+  if (grant.revokedAtMs !== null) {
+    // revokedBy carries the revoking client's self-reported display name;
+    // escape it visibly rather than relying on the table's silent strip.
+    return `revoked${grant.revokedBy ? ` by ${escapeApprovalTextForTerminal(grant.revokedBy)}` : ""}`;
+  }
+  if (grant.expiresAtMs !== null && grant.expiresAtMs <= nowMs) {
+    return "expired";
+  }
+  if (grant.expiresAtMs !== null) {
+    const days = Math.max(1, Math.ceil((grant.expiresAtMs - nowMs) / 86_400_000));
+    return `expires in ${days}d`;
+  }
+  return "until revoked";
+}
+
+function renderStandingGrants(grants: StandingGrantCliEntry[]): void {
+  if (grants.length === 0) {
+    defaultRuntime.log(theme.muted("No standing grants."));
+    return;
+  }
+  const now = Date.now();
+  defaultRuntime.log(`${theme.heading("Standing grants")} ${theme.muted(`(${grants.length})`)}`);
+  defaultRuntime.log(
+    renderTerminalSafeTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "ID", header: "ID", minWidth: 12, flex: true },
+        { key: "Automation", header: "Automation", minWidth: 12, flex: true },
+        { key: "Command", header: "Command", minWidth: 16, flex: true },
+        { key: "Uses", header: "Uses", minWidth: 4 },
+        { key: "State", header: "State", minWidth: 12 },
+      ],
+      rows: grants.map((grant) => ({
+        ID: grant.grantId,
+        Automation: escapeApprovalTextForTerminal(grant.cronJobName ?? grant.cronJobId),
+        Command: escapeApprovalTextForTerminal(grant.command),
+        Uses: String(grant.useCount),
+        State: describeGrantState(grant, now),
+      })),
+    }),
+  );
+  defaultRuntime.log(theme.muted("Revoke with: openclaw approvals grants revoke <grant-id>"));
+}
+
 function renderPendingApprovals(entries: PendingApprovalCliEntry[]): void {
   if (entries.length === 0) {
     defaultRuntime.log(theme.muted("No pending approvals."));
@@ -687,6 +749,17 @@ async function resolvePendingApproval(
     }
   }
 
+  const expiresInDaysRaw =
+    opts.expiresInDays === undefined ? undefined : Number.parseInt(opts.expiresInDays, 10);
+  if (
+    expiresInDaysRaw !== undefined &&
+    (!Number.isInteger(expiresInDaysRaw) || expiresInDaysRaw < 1 || expiresInDaysRaw > 3650)
+  ) {
+    exitWithError("--expires-in-days must be a whole number of days between 1 and 3650.");
+  }
+  if (expiresInDaysRaw !== undefined && decision !== "allow-always") {
+    exitWithError("--expires-in-days only applies to allow-always.");
+  }
   const result = (await callGatewayFromCli(
     "approval.resolve",
     opts,
@@ -694,6 +767,7 @@ async function resolvePendingApproval(
       id,
       kind: current.presentation.kind,
       decision,
+      ...(expiresInDaysRaw !== undefined ? { grantExpiresInDays: expiresInDaysRaw } : {}),
     },
     approvalCallOptions,
   )) as ApprovalResolveResult;
@@ -1158,6 +1232,10 @@ export function registerExecApprovalsCli(program: Command) {
     .command("resolve <id> <decision>")
     .description("Resolve a pending approval")
     .option("--reason <text>", "Add a local note to the CLI confirmation")
+    .option(
+      "--expires-in-days <days>",
+      "Allow-always on an automation approval: freeze this grant lifetime instead of the configured default",
+    )
     .action(async (id: string, decision: string, opts: ExecApprovalsCliOpts) => {
       try {
         await resolvePendingApproval(id, decision, opts);
@@ -1166,6 +1244,59 @@ export function registerExecApprovalsCli(program: Command) {
       }
     });
   nodesCallOpts(resolveCmd);
+
+  const grants = approvals
+    .command("grants")
+    .description("Standing grants minted by allow-always on automation approvals");
+  const grantsListCmd = grants
+    .command("list")
+    .description("List standing grants, newest first")
+    .option("--limit <n>", "Maximum rows to return (default 200)")
+    .action(async (opts: ExecApprovalsCliOpts & { limit?: string }) => {
+      try {
+        const limit = parseStrictPositiveInteger(opts.limit);
+        if (opts.limit !== undefined && limit === undefined) {
+          exitWithError("--limit must be a positive integer.");
+        }
+        const result = (await callGatewayFromCli(
+          "exec.approval.grants.list",
+          opts,
+          limit !== undefined ? { limit } : {},
+        )) as { grants: StandingGrantCliEntry[] }; // SAFETY: matches ExecApprovalGrantsListResultSchema.
+        if (opts.json) {
+          defaultRuntime.writeJson(result, 0);
+          return;
+        }
+        renderStandingGrants(result.grants);
+      } catch (err) {
+        failApprovalsCommand(err, opts);
+      }
+    });
+  nodesCallOpts(grantsListCmd);
+  const grantsRevokeCmd = grants
+    .command("revoke <grantId>")
+    .description("Revoke a standing grant; the next occurrence prompts again")
+    .action(async (grantId: string, opts: ExecApprovalsCliOpts) => {
+      try {
+        const result = (await callGatewayFromCli("exec.approval.grants.revoke", opts, {
+          grantId,
+        })) as { outcome: "revoked" | "already-revoked" | "not-found" }; // SAFETY: closed enum from the revoke result schema.
+        if (opts.json) {
+          defaultRuntime.writeJson(result, 0);
+          return;
+        }
+        if (result.outcome === "revoked") {
+          defaultRuntime.log(`Grant ${grantId} revoked. The next occurrence prompts again.`);
+        } else if (result.outcome === "already-revoked") {
+          defaultRuntime.log(`Grant ${grantId} was already revoked.`);
+        } else {
+          exitWithError(`Grant ${grantId} not found.`);
+        }
+      } catch (err) {
+        failApprovalsCommand(err, opts);
+      }
+    });
+  nodesCallOpts(grantsRevokeCmd);
 
   const getCmd = approvals
     .command("get")

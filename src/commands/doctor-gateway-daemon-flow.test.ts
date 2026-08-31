@@ -5,11 +5,13 @@ import type { ExtraGatewayService } from "../daemon/inspect.js";
 import * as launchd from "../daemon/launchd.js";
 import type { GatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
   SERVICE_REPAIR_POLICY_ENV,
 } from "./doctor-service-repair-policy.js";
+import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const service = vi.hoisted(() => ({
   isLoaded: vi.fn(),
@@ -675,6 +677,50 @@ describe("maybeRepairGatewayDaemon", () => {
 
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("retains operator heap ownership when reinstalling a disabled service", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
+    const managedDefinition = {
+      programArguments: ["node", "/opt/openclaw/dist/index.js", "gateway"],
+      environment: { NODE_OPTIONS: "", UNRELATED: "not-persisted" },
+    };
+    const existingCommand = {
+      ...managedDefinition,
+      environment: { NODE_OPTIONS: "--max-old-space-size=512" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
+    service.readCommand.mockResolvedValue(existingCommand);
+    vi.mocked(resolveGatewayInstallToken).mockResolvedValueOnce({
+      tokenRefConfigured: false,
+      warnings: [],
+    });
+    vi.mocked(buildGatewayInstallPlan).mockResolvedValueOnce({
+      programArguments: managedDefinition.programArguments,
+      environment: { NODE_OPTIONS: "" },
+    });
+    const prompter = createPrompter(() => true);
+    prompter.select.mockResolvedValue("node");
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter,
+      options: { deep: false },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ existingCommand }),
+    );
+    expect(vi.mocked(buildGatewayInstallPlan).mock.calls[0]?.[0]).not.toHaveProperty(
+      "existingEnvironment",
+    );
+    expect(service.install).toHaveBeenCalledOnce();
   });
 
   it("skips gateway install during non-interactive doctor repairs", async () => {

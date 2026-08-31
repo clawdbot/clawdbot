@@ -161,8 +161,8 @@ describe("collapsed sidebar sections preference", () => {
 });
 
 describe("sidebar session preview preference", () => {
-  it("defaults to showing previews and round-trips the stored choice", () => {
-    expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
+  it("defaults to hiding previews and round-trips the stored choice", () => {
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
 
     storeSidebarSessionsShowPreview(false);
     expect(loadStoredSidebarSessionsShowPreview()).toBe(false);

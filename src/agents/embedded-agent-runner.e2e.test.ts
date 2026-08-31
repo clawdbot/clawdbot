@@ -868,7 +868,7 @@ describe("runEmbeddedAgent", () => {
       modelSelectionLocked: true,
       provider: "anthropic",
       modelId: "retired-outer-model",
-      prompt: "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)",
+      prompt: "[redacted]",
     });
     expect("contextEngine" in attempt).toBe(false);
     expect("contextTokenBudget" in attempt).toBe(false);
@@ -943,7 +943,6 @@ describe("runEmbeddedAgent", () => {
       cfg,
       sessionId: "resume-123",
       agentId: undefined,
-      clone: false,
     });
     expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
   });
@@ -984,7 +983,6 @@ describe("runEmbeddedAgent", () => {
       cfg,
       sessionId: "resume-124",
       agentId: undefined,
-      clone: false,
     });
     expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:main:resume-124");
   });

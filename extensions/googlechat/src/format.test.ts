@@ -150,6 +150,25 @@ describe("formatGoogleChatText", () => {
     expect(formatGoogleChatText("https://example.com/a_b_c")).toBe("https://example.com/a_b_c");
   });
 
+  it.each([
+    ["**a**[**b** c](https://example.com)", "*ab* c (https://example.com)"],
+    ["[**label**](https://example.com)", "*label* (https://example.com)"],
+    ["[**label**](https://example.com)_tail_", "*label* (https://example.com)_tail_"],
+    ["**before [label](https://example.com) after**", "*before label (https://example.com) after*"],
+  ])("appends terminal link text once in %s", (markdown, expected) => {
+    expect(formatGoogleChatText(markdown)).toBe(expected);
+  });
+
+  it("counts terminal link text when chunking a crossed label", () => {
+    const chunks = formatGoogleChatTextChunks(
+      "**a**[**b** c](https://example.com) trailing text",
+      40,
+    );
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => new TextEncoder().encode(chunk).byteLength <= 40)).toBe(true);
+    expect(chunks.join(" ").match(/https:\/\/example\.com/g)).toHaveLength(1);
+  });
+
   it("handles newline-heavy messages without changing their content", () => {
     const text = "a\n".repeat(16_000);
     expect(formatGoogleChatText(text)).toBe(text.trimEnd());

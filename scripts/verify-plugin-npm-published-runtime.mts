@@ -9,10 +9,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as tar from "tar";
+import {
+  isTypeScriptPackageEntry,
+  listBuiltRuntimeEntryCandidates,
+} from "../src/plugins/package-entrypoints.js";
 import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
 import { sleep } from "./lib/sleep.mjs";
-
-export { readPositiveIntEnv };
 
 const DEFAULT_NPM_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_NPM_COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
@@ -59,33 +61,6 @@ function normalizePackagePath(value: string) {
     .replace(/\\/g, "/")
     .replace(/^package\//u, "")
     .replace(/^\.\//u, "");
-}
-
-function isTypeScriptPackageEntry(entryPath: string) {
-  return [".ts", ".mts", ".cts"].includes(path.extname(entryPath).toLowerCase());
-}
-
-function listBuiltRuntimeEntryCandidates(entryPath: string) {
-  if (!isTypeScriptPackageEntry(entryPath)) {
-    return [];
-  }
-  const normalized = entryPath.replace(/\\/g, "/");
-  const withoutExtension = normalized.replace(/\.[^.]+$/u, "");
-  const normalizedRelative = normalized.replace(/^\.\//u, "");
-  const distWithoutExtension = normalizedRelative.startsWith("src/")
-    ? `./dist/${normalizedRelative.slice("src/".length).replace(/\.[^.]+$/u, "")}`
-    : `./dist/${withoutExtension.replace(/^\.\//u, "")}`;
-  const withJavaScriptExtensions = (basePath: string) => [
-    `${basePath}.js`,
-    `${basePath}.mjs`,
-    `${basePath}.cjs`,
-  ];
-  return [
-    ...new Set([
-      ...withJavaScriptExtensions(distWithoutExtension),
-      ...withJavaScriptExtensions(withoutExtension),
-    ]),
-  ].filter((candidate) => candidate !== normalized);
 }
 
 function hasPackedFile(packageFiles: Set<string>, entryPath: string) {
@@ -420,8 +395,7 @@ async function verifyPublishedPluginRuntime(spec: string) {
       readme = packedPackage.readme;
     }
     return {
-      packageName: packedPackage.packageJson.name,
-      version: packedPackage.packageJson.version,
+      packageLabel: formatPackageLabel(packedPackage.packageJson, spec),
       fileCount: packedPackage.files.length,
       readmeLength: readme.length,
     };
@@ -438,7 +412,7 @@ async function main(argv: string[]) {
   }
   const result = await verifyPublishedPluginRuntime(args.spec);
   console.log(
-    `plugin-npm-published-runtime-check: ${result.packageName}@${result.version} OK (${result.fileCount} files, ${result.readmeLength} readme chars)`,
+    `plugin-npm-published-runtime-check: ${result.packageLabel} OK (${result.fileCount} files, ${result.readmeLength} readme chars)`,
   );
 }
 

@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { icon } from "./icons.ts";
@@ -58,28 +58,55 @@ export function renderLazyViewError({
   subtitle?: string;
 }) {
   const detail = formatUiError(error);
-  const errorClasses = `lazy-view-error${render ? " lazy-view-error--inline" : ""}${stale ? " lazy-view-error--stale" : ""}`;
   return html`
     ${render?.() ?? nothing}
-    <div class=${errorClasses} role="alert">
-      <div class="lazy-view-error__icon" aria-hidden="true">
-        ${icon(stale ? "refresh" : "alertTriangle")}
-      </div>
-      <div class="lazy-view-error__title">
-        ${stale ? t("lazyView.staleTitle") : t("lazyView.errorTitle")}
-      </div>
-      <div class="lazy-view-error__subtitle">
-        ${subtitle ?? (stale ? t("lazyView.staleSubtitle") : t("lazyView.genericSubtitle"))}
-      </div>
-      <div class="lazy-view-error__actions">
+    ${renderPanelErrorState({
+      title: stale ? t("lazyView.staleTitle") : t("lazyView.errorTitle"),
+      subtitle: subtitle ?? (stale ? t("lazyView.staleSubtitle") : t("lazyView.genericSubtitle")),
+      actions: html`
         <button class="btn lazy-view-error__action" @click=${onRetry}>
           ${actionLabel ?? (stale ? t("common.reload") : t("lazyView.retry"))}
         </button>
         ${onClose
           ? html`<button class="btn" type="button" @click=${onClose}>${t("common.close")}</button>`
           : nothing}
+      `,
+      detail,
+      inline: Boolean(render),
+      stale,
+    })}
+  `;
+}
+
+export function renderPanelErrorState({
+  actions,
+  className,
+  detail,
+  inline = false,
+  role = "alert",
+  stale = false,
+  subtitle,
+  title,
+}: {
+  actions?: TemplateResult;
+  className?: string;
+  detail?: string;
+  inline?: boolean;
+  role?: "alert" | "status";
+  stale?: boolean;
+  subtitle: string;
+  title: string;
+}) {
+  const errorClasses = `lazy-view-error${inline ? " lazy-view-error--inline" : ""}${stale ? " lazy-view-error--stale" : ""}${className ? ` ${className}` : ""}`;
+  return html`
+    <div class=${errorClasses} role=${role}>
+      <div class="lazy-view-error__icon" aria-hidden="true">
+        ${icon(stale ? "refresh" : "alertTriangle")}
       </div>
-      <code class="lazy-view-error__detail">${detail}</code>
+      <div class="lazy-view-error__title">${title}</div>
+      <div class="lazy-view-error__subtitle">${subtitle}</div>
+      ${actions ? html`<div class="lazy-view-error__actions">${actions}</div>` : nothing}
+      ${detail ? html`<code class="lazy-view-error__detail">${detail}</code>` : nothing}
     </div>
   `;
 }

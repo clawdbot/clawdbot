@@ -137,6 +137,9 @@ type ExecApprovalManagerOptions<TPayload> = {
    * durable resolution transaction. Returning null keeps the decision
    * grant-free (non-cron requests, aborted runs, missing bindings). */
   resolveStandingGrantMint?: (request: TPayload) => CronStandingGrantMintSpec | null;
+  /** Default grant terms frozen at resolve time: config-driven expiry stamp,
+   * or null for until-revoked. A per-resolve override wins over this default. */
+  resolveStandingGrantExpiresAtMs?: (nowMs: number) => number | null;
   /** Durable timeout expiry can be first observed by a timer, lookup, or replay.
    * Publish from the local settlement owner so every ordering reaches reviewers. */
   onExpired?: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
@@ -451,6 +454,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     resolver: OperatorApprovalResolver,
     localResolvedBy: string | null = null,
     localResolutionSource: ExecApprovalResolutionSource = "operator",
+    options: {
+      /** Explicit grant expiry override; undefined defers to the configured default. */
+      grantExpiresAtMs?: number | null;
+    } = {},
   ): ExecApprovalResolveResult<TPayload> {
     if (decision !== "deny") {
       const closed = this.forceDenyIfDelegatedAuthorityClosed(recordId);
@@ -524,10 +531,19 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return { outcome: "not-found" };
     }
 
-    const standingGrant =
+    const standingGrantSpec =
       decision === "allow-always" && localEntry
         ? (this.options.resolveStandingGrantMint?.(localEntry.record.request) ?? undefined)
         : undefined;
+    const standingGrant = standingGrantSpec
+      ? {
+          ...standingGrantSpec,
+          expiresAtMs:
+            options.grantExpiresAtMs !== undefined
+              ? options.grantExpiresAtMs
+              : (this.options.resolveStandingGrantExpiresAtMs?.(Date.now()) ?? null),
+        }
+      : undefined;
     let result: ResolveOperatorApprovalResult;
     try {
       result = resolveOperatorApproval({
@@ -977,7 +993,12 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     });
   }
 
-  resolve(recordId: string, decision: ExecApprovalDecision, resolvedBy?: string | null): boolean {
+  resolve(
+    recordId: string,
+    decision: ExecApprovalDecision,
+    resolvedBy?: string | null,
+    options: { grantExpiresAtMs?: number | null } = {},
+  ): boolean {
     if (!this.options.persistence) {
       return this.resolveLocal(recordId, decision, resolvedBy ?? null);
     }
@@ -990,6 +1011,8 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
           id: resolvedBy ?? null,
         },
         resolvedBy ?? null,
+        "operator",
+        options,
       ).outcome === "resolved"
     );
   }
@@ -1020,9 +1043,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   /**
    * One-shot ask-fallback re-admission for a timed-out approval. This is
    * pre-gate policy on the process-local record only: the durable row stays
-   * `expired` and no execution authority is minted here. The strict exec
-   * timeout cutover is deferred (docs/refactor/operator-approvals.md); until
-   * then system.run replay uses this flag to keep re-admission single-use.
+   * `expired` and no execution authority is minted here. The shipped askFallback
+   * policy (docs/tools/exec-approvals.md) still applies; system.run replay
+   * uses this flag to keep re-admission single-use.
    */
   consumeAskFallback(recordId: string): boolean {
     const entry = this.pending.get(recordId);

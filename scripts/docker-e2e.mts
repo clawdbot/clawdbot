@@ -91,18 +91,18 @@ function summaryMarkdown(value: unknown, title: string) {
     "| --- | ---: | ---: | --- | --- |",
   ];
   for (const lane of lanes) {
-    const status = lane.status === 0 ? "pass" : `fail ${lane.status}`;
+    const status = lane.status === 0 ? "pass" : `fail ${markdownCell(lane.status)}`;
     lines.push(
-      `| ${inlineCode(lane.name)} | ${markdownCell(status)} | ${markdownCell(lane.elapsedSeconds)} | ${lane.timedOut ? "yes" : "no"} | ${inlineCode(lane.rerunCommand)} |`,
+      `| ${inlineCode(lane.name)} | ${status} | ${markdownCell(lane.elapsedSeconds)} | ${lane.timedOut ? "yes" : "no"} | ${inlineCode(lane.rerunCommand)} |`,
     );
   }
 
   if (slowest.length > 0) {
     lines.push("", "| Slowest lane | Duration | Status |", "| --- | ---: | --- |");
     for (const lane of slowest) {
-      const status = lane.status === 0 ? "pass" : `fail ${lane.status}`;
+      const status = lane.status === 0 ? "pass" : `fail ${markdownCell(lane.status)}`;
       lines.push(
-        `| ${inlineCode(lane.name)} | ${markdownCell(formatSeconds(lane.elapsedSeconds))} | ${markdownCell(status)} |`,
+        `| ${inlineCode(lane.name)} | ${markdownCell(formatSeconds(lane.elapsedSeconds))} | ${status} |`,
       );
     }
   }
@@ -130,7 +130,9 @@ function failedRerunCommands(value: unknown) {
   const summary = recordOrEmpty(value);
   const lanes = recordArray(summary.lanes);
   return lanes.flatMap((lane) =>
-    lane.status !== 0 && lane.rerunCommand ? [String(lane.rerunCommand)] : [],
+    lane.status !== 0 && typeof lane.rerunCommand === "string" && lane.rerunCommand
+      ? [lane.rerunCommand]
+      : [],
   );
 }
 

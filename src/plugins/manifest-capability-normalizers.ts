@@ -434,7 +434,8 @@ function normalizeManifestSecretInputPaths(
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
-    const ownerKind = entry.ownerKind === "route" ? entry.ownerKind : undefined;
+    const ownerKind =
+      entry.ownerKind === "capability" || entry.ownerKind === "route" ? entry.ownerKind : undefined;
     normalized.push({
       path: pathLocal,
       ...(expected ? { expected } : {}),

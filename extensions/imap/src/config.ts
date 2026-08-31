@@ -1,8 +1,13 @@
+import type { IdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const SENDER_STRENGTHS = ["mutable", "unverified", "asserted", "verified"] as const;
-export type SenderStrength = (typeof SENDER_STRENGTHS)[number];
+const SENDER_STRENGTHS = [
+  "mutable",
+  "unverified",
+  "asserted",
+  "verified",
+] as const satisfies readonly IdentifierAuthentication[];
 type HookDispatch = OpenClawPluginApi["runtime"]["hooks"]["dispatchHookAgentTurn"];
 
 export type ImapAccountConfig = {
@@ -15,7 +20,7 @@ export type ImapAccountConfig = {
   watch: { mode: "auto" | "idle" | "interval"; pollSeconds: number };
   allowedSenders: string[];
   senderAuth: {
-    min: SenderStrength;
+    min: IdentifierAuthentication;
     trustedAuthservIds: string[];
     acceptTrustedAuthservId: boolean;
   };
@@ -95,7 +100,11 @@ export function resolveImapConfig(
       },
       allowedSenders: stringList(account.allowedSenders),
       senderAuth: {
-        min: SENDER_STRENGTHS.find((strength) => strength === min) ?? "verified",
+        // The predicate requires every SDK strength to remain in the local config values.
+        min:
+          SENDER_STRENGTHS.find(
+            (strength): strength is IdentifierAuthentication => strength === min,
+          ) ?? "verified",
         trustedAuthservIds: stringList(senderAuth?.trustedAuthservIds),
         acceptTrustedAuthservId: senderAuth?.acceptTrustedAuthservId === true,
       },

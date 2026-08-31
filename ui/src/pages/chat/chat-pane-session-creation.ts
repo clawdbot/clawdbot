@@ -11,7 +11,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
-import { clearChatHistory } from "./chat-history.ts";
+import { clearChatHistory } from "./chat-history-actions.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
 import {
@@ -283,6 +283,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
       attachments: cloneChatAttachmentsForIndependentOwner(state.chatAttachments),
       draft: state.chatMessage,
+      ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
     });
     return true;
   };

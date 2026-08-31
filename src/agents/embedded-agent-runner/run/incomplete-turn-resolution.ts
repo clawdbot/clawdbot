@@ -95,11 +95,11 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
-    return null;
-  }
-
-  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
+  if (
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts) ||
+    params.attempt.hasToolMediaBlockReply ||
+    hasCommittedMessagingToolDeliveryEvidence(params.attempt)
+  ) {
     return null;
   }
 

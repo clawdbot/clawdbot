@@ -24,6 +24,10 @@ type RepoToolOptions = {
   fileExists?: (candidate: string) => boolean;
   resolveCommonDir?: (cwd: string) => string | null;
 };
+type NodeModulesLinkOptions = Pick<RepoToolOptions, "cwd" | "fileExists"> & {
+  symlink?: typeof fs.symlinkSync;
+  platform?: NodeJS.Platform;
+};
 
 /** Return whether local check safeguards are enabled for an environment. */
 export function isLocalCheckEnabled(env: Env) {
@@ -81,10 +85,7 @@ export function ensureRepoToolNodeModulesLink(
     resolveCommonDir = resolveGitCommonDir,
     symlink = fs.symlinkSync,
     platform = process.platform,
-  }: RepoToolOptions & {
-    symlink?: typeof fs.symlinkSync;
-    platform?: NodeJS.Platform;
-  } = {},
+  }: RepoToolOptions & NodeModulesLinkOptions = {},
 ) {
   const localNodeModules = path.resolve(cwd, "node_modules");
   if (fileExists(localNodeModules)) {
@@ -102,10 +103,30 @@ export function ensureRepoToolNodeModulesLink(
     return null;
   }
 
+  return ensureRepoNodeModulesLink(primaryNodeModules, { cwd, fileExists, symlink, platform });
+}
+
+/** Make selected toolchain packages resolvable from dependency-less source paths. */
+export function ensureRepoNodeModulesLink(
+  modulesDir: string,
+  {
+    cwd = process.cwd(),
+    fileExists = fs.existsSync,
+    symlink = fs.symlinkSync,
+    platform = process.platform,
+  }: NodeModulesLinkOptions = {},
+) {
+  const localNodeModules = path.resolve(cwd, "node_modules");
+  if (fileExists(localNodeModules)) {
+    return localNodeModules;
+  }
+  if (!fileExists(modulesDir)) {
+    return null;
+  }
   try {
-    // Match run-vitest.mjs's hydrated-toolchain behavior: keep one stable link
-    // so compilers can resolve imports from worktree source paths.
-    symlink(primaryNodeModules, localNodeModules, platform === "win32" ? "junction" : "dir");
+    // Keep existing checkout dependencies locally owned; only absent modules
+    // reuse the selected installed toolchain, without reconciling dependencies.
+    symlink(modulesDir, localNodeModules, platform === "win32" ? "junction" : "dir");
   } catch (error) {
     // Another local runner may have installed the same stable link concurrently.
     if (!fileExists(localNodeModules)) {

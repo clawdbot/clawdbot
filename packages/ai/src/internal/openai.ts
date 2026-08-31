@@ -18,6 +18,7 @@ export * from "../providers/schema-keyword-strip.js";
 export * from "../providers/tool-schema-json-projection.js";
 export {
   codeModeToolSurfaceObserver,
+  reasoningTagTextPolicy,
   type CodeModeToolSurfaceObservation,
 } from "../provider-options.js";
 export { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
