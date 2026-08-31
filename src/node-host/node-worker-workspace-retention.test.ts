@@ -9,7 +9,7 @@ import type { NodeWorkerWorkspaceRetainInput } from "../worker/node-workspace-re
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,
-  testNodeWorkerLaunchIdentity,
+  testNodeWorkerEnvironmentIdentity,
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
@@ -79,18 +79,6 @@ function retainInput(
     sequence,
     retain,
   };
-}
-
-async function waitForTerminal(
-  supervisor: ReturnType<typeof createNodeWorkerSupervisor>,
-  launchId: string,
-): Promise<void> {
-  await vi.waitFor(
-    async () => {
-      expect((await supervisor.status(launchId))?.state).not.toMatch(/^(?:pending|running)$/u);
-    },
-    { timeout: 5_000 },
-  );
 }
 
 afterEach(() => {
@@ -388,22 +376,28 @@ describe("node worker workspace retention", () => {
     },
   );
 
-  it("keeps a nonterminal launch until a later authoritative snapshot", async () => {
+  it("keeps a retained worker workspace after turn completion until environment teardown", async () => {
     const root = tempDirs.make("node-worker-workspace-retention-active-");
     const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "active-retention", "wait");
+    const input = testWorkerLaunchInput(workspaceDir, "active-retention", "background-start");
     const active = seedGeneration(bundleRoot, input, input.descriptor.admission.ownerEpoch);
     const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
 
-    await supervisor.launch(input, TEST_WORKER_ENDPOINT);
-    await supervisor.retainWorkspaces(retainInput(input, 1, []));
-    expect(fs.existsSync(active)).toBe(true);
+    try {
+      await supervisor.launch(input, TEST_WORKER_ENDPOINT);
+      await vi.waitFor(
+        async () => expect((await supervisor.status(input.launchId))?.state).toBe("completed"),
+        { timeout: 5_000 },
+      );
+      await supervisor.retainWorkspaces(retainInput(input, 1, []));
+      expect(fs.existsSync(active)).toBe(true);
 
-    await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
-    await waitForTerminal(supervisor, input.launchId);
-    await supervisor.retainWorkspaces(retainInput(input, 2, []));
-    expect(fs.existsSync(active)).toBe(false);
-    await supervisor.close();
+      await supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(input));
+      await supervisor.retainWorkspaces(retainInput(input, 2, []));
+      expect(fs.existsSync(active)).toBe(false);
+    } finally {
+      await supervisor.close();
+    }
   });
 
   it("rereads a launch reservation immediately before deleting", async () => {

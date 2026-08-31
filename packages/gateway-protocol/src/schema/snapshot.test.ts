@@ -19,6 +19,8 @@ describe("SnapshotSchema", () => {
         SnapshotSchema,
         snapshotWithPresence({
           ts: 1,
+          onlineSince: 0,
+          lastActivityAt: 1,
           user: { id: "alice@example.com", email: "alice@example.com" },
         }),
       ),
@@ -27,6 +29,14 @@ describe("SnapshotSchema", () => {
 
   it("keeps presence user identity optional", () => {
     expect(Value.Check(SnapshotSchema, snapshotWithPresence({ ts: 1 }))).toBe(true);
+  });
+
+  it.each(["onlineSince", "lastActivityAt"])("rejects non-millisecond %s values", (field) => {
+    for (const value of [-1, 1.5, "1000", null]) {
+      expect(Value.Check(SnapshotSchema, snapshotWithPresence({ ts: 1, [field]: value }))).toBe(
+        false,
+      );
+    }
   });
 
   it("accepts optional watched session keys", () => {

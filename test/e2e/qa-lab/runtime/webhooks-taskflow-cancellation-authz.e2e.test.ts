@@ -18,7 +18,6 @@ import {
 import { createTestAdmittedRunContext } from "../../../../src/agents/admitted-run-context.test-support.js";
 import { cancelBackgroundExecSession } from "../../../../src/agents/bash-process-control.js";
 import { killSubagentRunAdmin } from "../../../../src/agents/subagents/registry/subagent-control.js";
-import { testing as subagentControlTesting } from "../../../../src/agents/subagents/registry/subagent-control.test-support.js";
 import { getSubagentRunByRunId } from "../../../../src/agents/subagents/registry/subagent-registry.js";
 import {
   addSubagentRunForTests,
@@ -73,13 +72,6 @@ type WebhookResponse = {
 };
 
 beforeEach(() => {
-  // Keep the real registry and kill lifecycle while injecting the process facts
-  // that this isolated Gateway has no embedded model run or persisted session for.
-  subagentControlTesting.setDepsForTest({
-    abortEmbeddedAgentRun: () => false,
-    isEmbeddedAgentRunActive: () => false,
-    clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
-  });
   subagentRegistryTesting.setDepsForTest({
     persistSubagentRunsToDisk: () => {},
     persistSubagentRunsToDiskOrThrow: () => {},
@@ -96,7 +88,6 @@ afterEach(() => {
   resetTaskFlowRegistryForTests({ persist: false });
   resetPluginStateStoreForTests();
   resetPluginRuntimeStateForTest();
-  subagentControlTesting.setDepsForTest();
   subagentRegistryTesting.setDepsForTest();
 });
 

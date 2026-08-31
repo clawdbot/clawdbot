@@ -1,11 +1,11 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-browser-annotation-lifecycle.test/"} */
-
-import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BrowserAnnotationDraft } from "../../components/browser/browser-annotation.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
   cloneChatAttachmentsForIndependentOwner,
   getChatAttachmentDataUrl,
@@ -17,7 +17,7 @@ import {
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -114,7 +114,7 @@ describe("staged attachment composer adoption", () => {
       },
     };
     const scopeKey = storedChatOutboxScopeKey(
-      resolveStoredChatOutboxScope(state, state.sessionKey),
+      resolveUiConversationIdentity(state, state.sessionKey),
     );
 
     pane.disconnectedCallback();
@@ -155,7 +155,7 @@ describe("staged attachment composer adoption", () => {
     const ordinary = storedAttachment("late-dispose-ordinary", false);
     state.chatAttachments.push(ordinary);
     const scopeKey = storedChatOutboxScopeKey(
-      resolveStoredChatOutboxScope(state, state.sessionKey),
+      resolveUiConversationIdentity(state, state.sessionKey),
     );
     pane.context.chatAttachmentHandoff.dispose();
 

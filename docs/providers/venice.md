@@ -164,6 +164,47 @@ Venice uses a credit-based system. Anonymized models cost roughly the same as
 direct API pricing plus a small Venice fee. See
 [venice.ai/pricing](https://venice.ai/pricing) for current rates.
 
+OpenClaw reads live prices from Venice's public
+[`GET /api/v1/models`](https://docs.venice.ai/api-reference/endpoint/models/list)
+response during model discovery. The same plugin parser supplies the hosted
+catalog publisher. Known and newly discovered models use the API's complete
+schedule in USD per million tokens; the manifest prices are an offline seed.
+Missing or invalid live prices retain the complete seed schedule for known
+models. Unknown models without valid pricing keep zero estimates; that does not
+mean the model is free. Explicit API zero rates are valid.
+
+When the API supplies extended pricing, its rates apply to the entire request
+only when total prompt input **exceeds** `context_token_threshold`. Prompt input
+includes uncached input, cache reads, and cache writes; output tokens do not
+select the tier. A request exactly at the threshold still uses base rates.
+Base and extended rates always come from one schedule. An invalid extended
+schedule is not combined with seed or other-source prices.
+
+Explicit `models.providers.venice.models[].cost` entries override catalog
+estimates, including zero. Omitted `cost` or `{}` inherits the catalog schedule.
+Partial flat overrides inherit missing base rates and remove inherited tiers;
+explicit `tieredPricing` wins, and `tieredPricing: []` selects flat pricing.
+Agent-local root `models.json` prices retain highest priority.
+
+New onboarding in `models.mode: "merge"` leaves generated catalog rows out of the
+configuration so they cannot become price pins. Re-onboarding preserves existing
+model entries, aliases, and model selection. In `models.mode: "replace"`,
+onboarding retains explicit seed rows because that mode disables discovery.
+Existing serialized costs are never automatically removed or migrated, even if
+they match an old seed. With merge mode enabled, back up your configuration and
+remove only unwanted `cost` fields to resume catalog pricing; keep intentional
+overrides.
+
+Discovery reuses its existing fetched rows and cache. Usage display makes no
+price requests, and a running Gateway does not immediately adopt every upstream
+price change. Hosted catalog updates activate at the existing restart boundary;
+see [Hosted model catalog](/concepts/models#hosted-catalog-updates).
+Make sizing-only edits in your source configuration without copying generated
+model rows back into it: replacing an entire model array from a runtime snapshot
+can persist inherited costs as explicit overrides. Historical estimated costs
+remain subject to the existing repricing policy; provider-billed amounts are
+unchanged. See [Token use and costs](/reference/token-use).
+
 ## Usage examples
 
 ```bash
@@ -188,11 +229,11 @@ openclaw agent --model venice/qwen3-coder-480b-a35b-instruct-turbo --message "Re
 <AccordionGroup>
   <Accordion title="API key not recognized">
     ```bash
-    echo $VENICE_API_KEY
-    openclaw models list | grep venice
+    openclaw models list --provider venice
     ```
 
-    Confirm the key starts with `vapi_`.
+    Confirm the API key is configured and starts with `vapi_`; do not print or
+    share its value.
 
   </Accordion>
 
@@ -231,7 +272,6 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
                 name: "GLM 4.7",
                 reasoning: true,
                 input: ["text"],
-                cost: { input: 0.55, output: 2.65, cacheRead: 0.11, cacheWrite: 0 },
                 contextWindow: 198000,
                 maxTokens: 16384,
               },

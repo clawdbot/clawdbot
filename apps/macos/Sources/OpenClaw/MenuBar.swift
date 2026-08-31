@@ -155,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var profileInstanceLock: AppInstanceLock?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     private static func cleanUpProcesses() async {
+        let execHostCleanup = ExecApprovalsPromptServer.shared.stop()
         // Start tunnel retirement before helper drains can consume the quit deadline.
         async let tunnelCleanup: Void = RemoteTunnelManager.shared.shutdown()
         async let gatewayCleanup: Void = GatewayConnection.shared.shutdown()
@@ -166,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
         _ = await (tunnelCleanup, gatewayCleanup, profileCleanup)
+        await execHostCleanup?.value
     }
 
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
@@ -338,8 +340,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await ConnectionModeCoordinator.shared.apply(
                     mode: state.connectionMode,
                     paused: state.isPaused)
-                guard shouldWaitForConnection, launchPlan.allowsAutomaticPresentation else { return }
-                await self.scheduleFirstRunOnboardingIfNeeded()
+                guard launchPlan.allowsAutomaticPresentation else { return }
+                if shouldWaitForConnection {
+                    await self.scheduleFirstRunOnboardingIfNeeded()
+                }
+                // Attachment must settle before deciding whether this app needs to install a CLI.
+                if !PostUpdateController.shared.startIfNeeded() {
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+                }
             }
         }
         TerminationSignalWatcher.shared.start()
@@ -359,13 +367,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.reapOrphanedTunnels() }
         AppStateStore.shared.applyComputerControlHostState()
-        if launchPlan.allowsAutomaticPresentation {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                if !PostUpdateController.shared.startIfNeeded() {
-                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
-                }
-            }
-        }
         if launchPlan.allowsAutomaticPresentation {
             Task {
                 try? await Task.sleep(for: .seconds(2))

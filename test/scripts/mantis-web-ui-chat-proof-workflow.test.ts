@@ -7,6 +7,9 @@ const WORKFLOW = ".github/workflows/mantis-web-ui-chat-proof.yml";
 const SHARED_RESOLVE_WORKFLOW = ".github/workflows/mantis-resolve-request.yml";
 
 type WorkflowStep = {
+  id?: string;
+  if?: string;
+  env?: Record<string, string>;
   name?: string;
   run?: string;
   uses?: string;
@@ -14,6 +17,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  outputs?: Record<string, string>;
   permissions?: Record<string, string>;
   steps?: WorkflowStep[];
 };
@@ -89,6 +93,37 @@ describe("Mantis Web UI chat proof workflow", () => {
     expect(job.steps?.some((step) => step.name === "Setup Node environment")).toBe(false);
     expect(publish?.run).toContain("node scripts/mantis/publish-pr-evidence.mjs");
     expect(publish?.run).not.toContain("--import tsx");
+  });
+
+  it("retains one invocation root through capture, failure reporting, and artifact upload", () => {
+    const job = workflowJob("run_web_ui_chat");
+    const allocate = job.steps?.find((step) => step.id === "prepare_evidence");
+    const capture = job.steps?.find((step) => step.id === "run_mantis");
+    const report = job.steps?.find((step) => step.id === "build_evidence");
+    const upload = job.steps?.find((step) => step.name === "Upload Mantis web UI chat artifacts");
+    const rootOutput = "${{ steps.prepare_evidence.outputs.output_dir }}";
+
+    expect(allocate?.run).toContain('mktemp -d "$output_parent/run.XXXXXX"');
+    expect(capture?.run).toContain(`root="${rootOutput}"`);
+    expect(capture?.run).toContain('OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR="$root"');
+    expect(capture?.run).toContain('OPENCLAW_UI_E2E_ARTIFACT_DIR="$root"');
+    // Older candidates need the allocator imported by both overlaid harness files.
+    expect(capture?.run).toContain(
+      '"${GITHUB_WORKSPACE}/ui/src/test-helpers/control-ui-e2e-artifacts.ts"',
+    );
+    expect(capture?.run).toContain(
+      '"$candidate_repo/ui/src/test-helpers/control-ui-e2e-artifacts.ts"',
+    );
+    expect(report?.if).toContain("always()");
+    expect(report?.run).toContain(`root="${rootOutput}"`);
+    expect(report?.run).toContain('--output-dir "$root"');
+    expect(report?.env?.PROOF_STATUS).toBe(
+      "${{ steps.run_mantis.outcome == 'success' && 'pass' || 'fail' }}",
+    );
+    expect(upload?.if).toContain("always()");
+    expect(upload?.with?.path).toBe(rootOutput);
+    expect(job.outputs?.output_dir).toBe(rootOutput);
+    expect(upload?.with?.name).toBe(job.outputs?.artifact_name);
   });
 
   it("only treats explicit candidate assignments as PR head overrides", () => {

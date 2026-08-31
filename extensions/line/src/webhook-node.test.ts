@@ -331,17 +331,6 @@ describe("LINE webhook shared POST contract", () => {
     },
   );
 
-  it.each(sharedWebhookPostContractCases)("$name dispatches signed events", async ({ invoke }) => {
-    const result = await invoke({
-      rawBody: JSON.stringify({ events: [{ type: "message" }] }),
-      signed: true,
-    });
-
-    expect(result.status).toBe(200);
-    expect(result.body).toEqual({ status: "ok" });
-    expect(result.dispatched).toHaveBeenCalledTimes(1);
-  });
-
   it.each(sharedWebhookPostContractCases)(
     "$name returns 500 when durable admission fails",
     async ({ invoke }) => {
@@ -443,19 +432,6 @@ describe("createLineNodeWebhookHandler", () => {
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
-  it("durably admits signed POST events before acknowledging", async () => {
-    runDetachedWebhookWorkSpy.mockClear();
-    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);
-
-    const { res } = createRes();
-    await runSignedPost({ handler, rawBody, secret, res });
-
-    expect(res.statusCode).toBe(200);
-    expect(runDetachedWebhookWorkSpy).not.toHaveBeenCalled();
-    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
-  });
-
   it("uses strict pre-auth limits for signed POST requests", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     const bot = { handleWebhook: vi.fn(async () => {}) };
@@ -503,6 +479,7 @@ describe("createLineNodeWebhookHandler", () => {
     await runSignedPost({ handler, rawBody, secret, res });
 
     expect(res.statusCode).toBe(200);
+    expect(parseResponseBody(res.body)).toEqual({ status: "ok" });
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
     const payload = firstParsedPayload(bot.handleWebhook, "LINE node webhook payload");
     expect(payload.events).toEqual([{ type: "message" }]);
@@ -583,6 +560,7 @@ describe("createLineWebhookMiddleware", () => {
   ])("parses JSON from %s", async (_label, body, expectedEvents) => {
     const { res, onEvents } = await invokeWebhook({ body });
     expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
     expect(onEvents).toHaveBeenCalledTimes(1);
     const payload = firstParsedPayload(onEvents, "LINE middleware payload");
     expect(payload.events).toEqual(expectedEvents);

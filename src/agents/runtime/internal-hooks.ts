@@ -1,7 +1,11 @@
 export {
+  acknowledgeInternalToolResult,
   attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
+  attachInternalToolResultAcknowledgement,
+  attachInternalToolResultProvenance,
   copyInternalToolExecutionPreparer,
+  getInternalToolResultProvenance,
   getInternalToolExecutionPreparer,
   setInternalBeforeToolBatch,
   type InternalBeforeToolBatchHook,

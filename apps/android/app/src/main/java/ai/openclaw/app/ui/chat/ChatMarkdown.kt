@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -193,21 +192,17 @@ private fun RenderCommonMarkBlock(
       )
     }
     is FencedCodeBlock -> {
-      SelectionContainer(modifier = Modifier.fillMaxWidth()) {
-        ChatCodeBlock(
-          code = current.literal.orEmpty(),
-          language = current.info?.trim()?.ifEmpty { null },
-          // Streaming: an unclosed fence grows on every delta, so keep it plain until the
-          // closing marker arrives. Finalized messages may validly end at EOF without a
-          // closing fence (CommonMark), so completeness comes from stream state, not syntax.
-          isComplete = !isStreaming || current.closingFenceLength != null,
-        )
-      }
+      ChatCodeBlock(
+        code = current.literal.orEmpty(),
+        language = current.info?.trim()?.ifEmpty { null },
+        // Streaming: an unclosed fence grows on every delta, so keep it plain until the
+        // closing marker arrives. Finalized messages may validly end at EOF without a
+        // closing fence (CommonMark), so completeness comes from stream state, not syntax.
+        isComplete = !isStreaming || current.closingFenceLength != null,
+      )
     }
     is IndentedCodeBlock -> {
-      SelectionContainer(modifier = Modifier.fillMaxWidth()) {
-        ChatCodeBlock(code = current.literal.orEmpty(), language = null)
-      }
+      ChatCodeBlock(code = current.literal.orEmpty(), language = null)
     }
     is BlockQuote -> {
       Row(

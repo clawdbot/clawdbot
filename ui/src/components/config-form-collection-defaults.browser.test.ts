@@ -1,4 +1,4 @@
-// Control UI tests cover collection default provenance and restore behavior.
+// Control UI tests cover collection default provenance and editing behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderArray, renderObject } from "./config-form.node.collection.ts";
@@ -13,15 +13,8 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
   return element;
 }
 
-function resetButton(container: ParentNode): HTMLButtonElement {
-  return expectElement(
-    container.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']"),
-    "reset to default button",
-  );
-}
-
 describe("config form collection defaults", () => {
-  it("shows and restores optional JSON defaults without authoring the inherited value", () => {
+  it("shows and clears optional JSON defaults without authoring the inherited value", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
     const schema = {
@@ -43,9 +36,13 @@ describe("config form collection defaults", () => {
     );
 
     expect(container.textContent).toContain('Default: {"mode":"balanced"}');
-    expectElement(container.querySelector<HTMLTextAreaElement>("textarea"), "explicit JSON").value =
-      '{\n  "mode": "custom"\n}';
-    resetButton(container).click();
+    const textarea = expectElement(
+      container.querySelector<HTMLTextAreaElement>("textarea"),
+      "explicit JSON",
+    );
+    expect(textarea.value).toBe('{\n  "mode": "custom"\n}');
+    textarea.value = "";
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["payload"], undefined);
 
     onPatch.mockClear();
@@ -63,15 +60,14 @@ describe("config form collection defaults", () => {
     );
 
     expect(container.textContent).toContain('Using default: {"mode":"balanced"}');
-    expectElement(
-      container.querySelector<HTMLTextAreaElement>("textarea"),
-      "inherited JSON",
-    ).value = '{\n  "mode": "balanced"\n}';
-    expect(container.querySelector("button[aria-label='Reset to default']")).toBeNull();
+    expect(
+      expectElement(container.querySelector<HTMLTextAreaElement>("textarea"), "inherited JSON")
+        .value,
+    ).toBe('{\n  "mode": "balanced"\n}');
     expect(onPatch).not.toHaveBeenCalled();
   });
 
-  it("shows optional array defaults and keeps rejected restores in the DOM", () => {
+  it("shows optional array defaults and authors inherited items without dropping siblings", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn(() => false);
     const schema = {
@@ -98,13 +94,10 @@ describe("config form collection defaults", () => {
 
     expect(container.textContent).toContain('Default: ["a","b"]');
     expect(container.textContent).toContain("1 item");
-    expectElement(container.querySelector<HTMLInputElement>("input"), "explicit array item").value =
-      "custom";
-    resetButton(container).click();
-    expect(onPatch).toHaveBeenCalledWith(["values"], undefined);
-    expect(container.textContent).toContain("1 item");
-    expectElement(container.querySelector<HTMLInputElement>("input"), "rejected array item").value =
-      "custom";
+    expect(
+      expectElement(container.querySelector<HTMLInputElement>("input"), "explicit array item")
+        .value,
+    ).toBe("custom");
 
     onPatch.mockClear();
     render(
@@ -128,7 +121,6 @@ describe("config form collection defaults", () => {
     const inheritedInputs = Array.from(container.querySelectorAll<HTMLInputElement>("input"));
     expect(inheritedInputs.map((input) => input.value)).toEqual(["", ""]);
     expect(inheritedInputs.map((input) => input.placeholder)).toEqual(["Default: a", "Default: b"]);
-    expect(container.querySelector("button[aria-label='Reset to default']")).toBeNull();
     expect(onPatch).not.toHaveBeenCalled();
 
     inheritedInputs[1]!.value = "custom";
@@ -193,7 +185,7 @@ describe("config form collection defaults", () => {
     );
   });
 
-  it("conceals sensitive collection defaults and disables restore until revealed", () => {
+  it("conceals sensitive collection defaults", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
     const hints = {
@@ -224,7 +216,6 @@ describe("config form collection defaults", () => {
     );
 
     expect(container.textContent).not.toContain("default-secret");
-    expect(resetButton(container).disabled).toBe(true);
 
     render(
       renderArray(
@@ -249,10 +240,9 @@ describe("config form collection defaults", () => {
     );
 
     expect(container.textContent).not.toContain("default-token");
-    expect(resetButton(container).disabled).toBe(true);
   });
 
-  it("shows and restores a top-level object default without nesting the section", () => {
+  it("shows a top-level object default without nesting the section", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
     const onRemove = vi.fn();
@@ -284,8 +274,6 @@ describe("config form collection defaults", () => {
 
     expect(container.textContent).toContain('Default: {"mode":"balanced"}');
     expect(container.querySelector("details")).toBeNull();
-    resetButton(container).click();
-    expect(onRemove).toHaveBeenCalledWith(["settings"]);
     expect(onPatch).not.toHaveBeenCalled();
 
     onPatch.mockClear();
@@ -309,7 +297,6 @@ describe("config form collection defaults", () => {
 
     expect(container.textContent).toContain('Using default: {"mode":"balanced"}');
     expect(container.querySelector("details")).toBeNull();
-    expect(container.querySelector("button[aria-label='Reset to default']")).toBeNull();
     expect(
       expectElement(container.querySelector<HTMLInputElement>("input"), "inherited mode")
         .placeholder,
@@ -344,11 +331,10 @@ describe("config form collection defaults", () => {
     );
 
     expect(container.textContent).not.toContain("default-secret");
-    expect(resetButton(container).disabled).toBe(true);
     expect(container.querySelector("details")).toBeNull();
   });
 
-  it("removes an optional object as one value and keeps inherited children inherited", () => {
+  it("keeps optional object children inherited until edited", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
     const onRemove = vi.fn();
@@ -395,8 +381,6 @@ describe("config form collection defaults", () => {
       "explicit profile object",
     );
     expect(profile.textContent).toContain('Default: {"enabled":true,"mode":"balanced"}');
-    resetButton(profile).click();
-    expect(onRemove).toHaveBeenCalledWith(["settings", "profile"]);
     expect(onPatch).not.toHaveBeenCalled();
 
     onRemove.mockClear();
@@ -444,7 +428,6 @@ describe("config form collection defaults", () => {
       expectElement(modeRow.querySelector<HTMLInputElement>("input"), "inherited mode input")
         .placeholder,
     ).toBe("Default: balanced");
-    expect(inheritedProfile.querySelector("button[aria-label='Reset to default']")).toBeNull();
     expect(onRemove).not.toHaveBeenCalled();
 
     const modeInput = expectElement(
@@ -457,48 +440,5 @@ describe("config form collection defaults", () => {
       enabled: true,
       mode: "custom",
     });
-  });
-
-  it("deep-clones required collection defaults before restoring them", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    const schemaDefault = { nested: { enabled: true } };
-
-    render(
-      renderObject(
-        {
-          schema: {
-            type: "object",
-            title: "Required object",
-            default: schemaDefault,
-            properties: {
-              nested: {
-                type: "object",
-                properties: {
-                  enabled: { type: "boolean" },
-                },
-              },
-            },
-          },
-          value: { nested: { enabled: false } },
-          path: ["settings", "requiredObject"],
-          hints: {},
-          unsupported: new Set(),
-          disabled: false,
-          isRequired: true,
-          onPatch,
-        },
-        renderNode,
-      ),
-      container,
-    );
-
-    resetButton(container).click();
-    expect(onPatch).toHaveBeenCalledWith(["settings", "requiredObject"], schemaDefault);
-    const restored = onPatch.mock.calls[0]?.[1] as typeof schemaDefault;
-    expect(restored).not.toBe(schemaDefault);
-    expect(restored.nested).not.toBe(schemaDefault.nested);
-    restored.nested.enabled = false;
-    expect(schemaDefault.nested.enabled).toBe(true);
   });
 });

@@ -25,6 +25,7 @@ import {
 } from "./browser-panel-controller.ts";
 import { renderBrowserPanelChrome, type BrowserPanelDock } from "./browser-panel-render.ts";
 import { browserPanelStyles } from "./browser-panel.styles.ts";
+import { browserTabKey, readBrowserTabTarget, type BrowserTabSelection } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 const panelLayout = createDockPanelLayout({
@@ -53,7 +54,14 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   @property({ type: Boolean }) embedded = false;
   /** This embedded instance is the active pane's visible Browser presenter. */
   @property({ type: Boolean }) presented = false;
+  /** Whether presentation owns initial work instead of a pending explicit toggle. */
+  @property({ type: Boolean }) refreshOnPresentation = true;
 
+  @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) preferredTab?: BrowserTabSelection;
+
+  private activeSessionKey = "";
+  private consumedPreferredRevision?: string;
   private readonly browserPanelController = new BrowserPanelController(this);
   private readonly dockLayout = new DockLayoutController(this, {
     layout: panelLayout,
@@ -100,23 +108,31 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
         window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
       }
     }
-    if (
-      changed.has("suppressed") &&
-      this.dockLayout.setSuppressed(this.suppressed) &&
-      this.browserPanelIsOpen()
-    ) {
-      void this.browserPanelController.refreshAll();
+    if (changed.has("suppressed")) {
+      const restored = this.dockLayout.setSuppressed(this.suppressed);
+      if (this.suppressed) {
+        this.browserPanelController.cancelOverlayPointerGesture();
+      } else if (restored && this.browserPanelIsOpen()) {
+        void this.browserPanelController.refreshAll();
+      }
     }
     const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
     const presentationChanged =
       this.embedded && (changed.has("embedded") || changed.has("presented"));
-    const refreshedForClientChange = this.browserPanelController.synchronizeHostProperties(changed);
+    const contextChanged = this.synchronizeBrowserContext();
+    // Keep preferred metadata for the explicit handler to consume, but let the
+    // pending toggle choose its route before any automatic follow or refresh.
+    const followedPreferred = this.refreshOnPresentation && this.followPreferredTab();
     if (this.embedded) {
       if (!this.presented || !this.available || !this.client) {
         if (presentationChanged || gatewayAvailabilityChanged) {
-          this.browserPanelController.resetBrowserState();
+          this.browserPanelController.hostDisconnected();
         }
-      } else if (!refreshedForClientChange && (presentationChanged || gatewayAvailabilityChanged)) {
+      } else if (
+        this.refreshOnPresentation &&
+        !followedPreferred &&
+        (contextChanged || presentationChanged || gatewayAvailabilityChanged)
+      ) {
         void this.browserPanelController.refreshAll();
       }
     } else if (gatewayAvailabilityChanged) {
@@ -125,7 +141,11 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
         // so the open preference survives a reconnect.
         this.dockLayout.hideWithoutPersisting();
         this.browserPanelController.resetBrowserState();
-      } else if (this.available && this.dockLayout.restoreOpenState()) {
+      } else if (
+        this.available &&
+        (this.dockLayout.restoreOpenState() || (contextChanged && this.browserPanelIsOpen())) &&
+        !followedPreferred
+      ) {
         // Hello arrived after mount (or a reconnect): restore the persisted
         // open state now that the surface is actually available.
         void this.browserPanelController.refreshAll();
@@ -153,8 +173,49 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     }
   }
 
+  private synchronizeBrowserContext(): boolean {
+    const clientChanged = this.browserPanelController.synchronizeClient();
+    const sessionChanged = this.activeSessionKey !== this.sessionKey;
+    if (sessionChanged) {
+      this.activeSessionKey = this.sessionKey;
+      this.browserPanelController.operations.resetRoute();
+      this.browserPanelController.resetBrowserState();
+    }
+    if (clientChanged || sessionChanged) {
+      this.consumedPreferredRevision = undefined;
+    }
+    return clientChanged || sessionChanged;
+  }
+
+  private preferredRevision(): string | undefined {
+    const preferred = this.preferredTab;
+    return preferred && readBrowserTabTarget(preferred.tab)
+      ? JSON.stringify([browserTabKey(preferred.tab), preferred.revision])
+      : undefined;
+  }
+
+  private followPreferredTab(): boolean {
+    const revision = this.preferredRevision();
+    if (
+      !this.browserPanelIsOpen() ||
+      !this.available ||
+      !this.client ||
+      !this.preferredTab ||
+      !revision ||
+      revision === this.consumedPreferredRevision
+    ) {
+      return false;
+    }
+    this.consumedPreferredRevision = revision;
+    const tab = readBrowserTabTarget(this.preferredTab.tab);
+    if (tab) {
+      void this.browserPanelController.selectTab(tab.targetId, tab);
+    }
+    return true;
+  }
+
   browserPanelIsOpen(): boolean {
-    return this.embedded ? this.presented : this.dockLayout.open;
+    return this.embedded ? this.presented && !this.suppressed : this.dockLayout.open;
   }
 
   toggle(): void {
@@ -174,17 +235,26 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as BrowserPanelToggleDetail)
         : null;
+    this.synchronizeBrowserContext();
+    const browserTab = readBrowserTabTarget(detail?.browserTab);
+    if (detail?.browserTab !== undefined && !browserTab) {
+      return;
+    }
     if (this.embedded) {
-      if (!this.presented || detail?.open === false || !this.available) {
+      if (!this.browserPanelIsOpen() || detail?.open === false || !this.available) {
         return;
       }
       const normalizedRequestedUrl =
         typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
       if (normalizedRequestedUrl) {
         void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
+      } else if (browserTab) {
+        // Consume the current result so it cannot replace this explicit card choice.
+        this.consumedPreferredRevision = this.preferredRevision();
+        void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
       } else if (detail?.newTab === true) {
         this.browserPanelController.beginNewTab();
-      } else {
+      } else if (!this.followPreferredTab()) {
         void this.browserPanelController.refreshAll();
       }
       return;
@@ -206,9 +276,13 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       this.dockLayout.setOpen(true);
       if (normalizedRequestedUrl) {
         void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
+      } else if (browserTab) {
+        // Consume the current result so it cannot replace this explicit card choice.
+        this.consumedPreferredRevision = this.preferredRevision();
+        void this.browserPanelController.selectTab(browserTab.targetId, browserTab);
       } else if (detail?.newTab === true) {
         this.browserPanelController.beginNewTab();
-      } else if (!wasOpen) {
+      } else if (!wasOpen && !this.followPreferredTab()) {
         void this.browserPanelController.refreshAll();
       }
       return;
@@ -217,6 +291,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   private closePanel(): void {
+    this.browserPanelController.cancelOverlayPointerGesture();
     this.dockLayout.setOpen(false);
   }
 

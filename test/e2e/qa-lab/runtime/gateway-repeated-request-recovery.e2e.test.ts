@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 type StabilityEvent = {
   seq?: unknown;
@@ -63,15 +64,19 @@ const RECOVERY_PROGRESS_INTERVAL_MS = 60_000;
 const HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const HISTORY_RETRY_INTERVAL_MS = 250;
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
+let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
 
 afterEach(async () => {
-  await harness?.stop().catch(() => undefined);
+  if (gatewayOwner) {
+    await stopQaGatewayFixture(gatewayOwner);
+  }
   harness = undefined;
+  gatewayOwner = undefined;
 });
 
 async function readStability(
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"],
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
   sinceSeq?: number,
 ): Promise<StabilitySnapshot> {
   return (await gateway.call(
@@ -82,7 +87,7 @@ async function readStability(
 }
 
 async function waitForStability(
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"],
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
   sinceSeq: number,
   predicate: (events: StabilityEvent[]) => boolean,
   timeoutMs: number,
@@ -176,7 +181,7 @@ function resolveRetryableHistoryDelayMs(error: unknown): number | null {
 }
 
 async function waitForQueuedReply(
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"],
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
   sessionKey: string,
 ): Promise<GatewayChatHistory> {
   const startedAt = Date.now();
@@ -240,7 +245,7 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
 }
 
 async function readFailureEvidence(params: {
-  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"];
+  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"];
   mockBaseUrl: string | undefined;
   sinceSeq: number;
 }): Promise<string> {
@@ -284,7 +289,8 @@ describe("Gateway repeated-request provider timeout", () => {
     "lets the provider timeout terminate the stalled attempt before draining one queued followup",
     { timeout: 510_000 },
     async () => {
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",

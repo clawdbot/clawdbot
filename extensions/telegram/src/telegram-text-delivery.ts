@@ -173,7 +173,7 @@ export function planTelegramTextDeliveryPages(
   return pages;
 }
 
-export async function deliverTelegramTextPage<TPlain, THtml, TRich>(params: {
+type TelegramTextPageSender<TPlain, THtml, TRich> = {
   page: TelegramTextDeliveryPage;
   context: string;
   warn: (message: string) => void;
@@ -187,61 +187,65 @@ export async function deliverTelegramTextPage<TPlain, THtml, TRich>(params: {
     sendRich: (richMessage: TelegramInputRichMessage) => Promise<TRich>;
   };
   fallbackLimit?: number;
-}): Promise<Array<{ result: TPlain | THtml | TRich; page: TelegramTextDeliveryPage }>> {
+};
+
+// Yield outside the transport fallback catch. Observing an accepted message may
+// fail, but must never turn that visible message into another send attempt.
+export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
+  params: TelegramTextPageSender<TPlain, THtml, TRich>,
+): AsyncGenerator<{ result: TPlain | THtml | TRich; page: TelegramTextDeliveryPage }> {
   const { page } = params;
+  if (!page.richMessage && !page.htmlText) {
+    yield { result: await params.sender.sendPlain(page.plainText), page };
+    return;
+  }
   if (page.richMessage) {
     warnTelegramRichBlocksDegradations({
       context: params.context,
       reasons: page.degradationReasons ?? [],
       warn: params.warn,
     });
-    return await withTelegramPlainFallback<
-      Array<{ result: TPlain | THtml | TRich; page: TelegramTextDeliveryPage }>
-    >({
-      kind: "rich",
-      context: params.context,
-      plainText: page.plainText,
-      warn: params.warn,
-      limit: params.fallbackLimit,
-      sendFormatted: async () => [
-        { result: await params.sender.sendRich(page.richMessage!), page },
-      ],
-      sendPlain: async (plan, label) => {
-        const delivered: Array<{
-          result: TPlain | THtml | TRich;
-          page: TelegramTextDeliveryPage;
-        }> = [];
-        for (let index = 0; index < plan.chunks.length; index += 1) {
-          const text = plan.chunks[index] ?? "";
-          delivered.push({
-            result: await params.sender.sendPlain(
-              text,
-              { index, count: plan.chunks.length },
-              label,
-            ),
-            page: fallbackPage(text),
-          });
-        }
-        return delivered;
-      },
-    });
   }
-  if (page.htmlText) {
-    return await withTelegramPlainFallback<
-      Array<{ result: TPlain | THtml | TRich; page: TelegramTextDeliveryPage }>
-    >({
-      kind: "html",
-      context: params.context,
-      plainText: page.plainText,
-      warn: params.warn,
-      sendFormatted: async () => [{ result: await params.sender.sendHtml(page.htmlText!), page }],
-      sendPlain: async (plan, label) => [
-        {
-          result: await params.sender.sendPlain(plan.plainText, undefined, label),
-          page: fallbackPage(plan.plainText),
-        },
-      ],
-    });
+  const delivery = await withTelegramPlainFallback<
+    { result: THtml | TRich } | { chunks: string[]; label: string }
+  >({
+    kind: page.richMessage ? "rich" : "html",
+    context: params.context,
+    plainText: page.plainText,
+    warn: params.warn,
+    ...(page.richMessage ? { limit: params.fallbackLimit } : {}),
+    sendFormatted: async () => ({
+      result: page.richMessage
+        ? await params.sender.sendRich(page.richMessage)
+        : await params.sender.sendHtml(page.htmlText!),
+    }),
+    sendPlain: async (plan, label) => ({
+      chunks: page.richMessage ? plan.chunks : [plan.plainText],
+      label,
+    }),
+  });
+  if ("result" in delivery) {
+    yield { result: delivery.result, page };
+    return;
   }
-  return [{ result: await params.sender.sendPlain(page.plainText), page }];
+  for (const [index, text] of delivery.chunks.entries()) {
+    yield {
+      result: await params.sender.sendPlain(
+        text,
+        page.richMessage ? { index, count: delivery.chunks.length } : undefined,
+        delivery.label,
+      ),
+      page: fallbackPage(text),
+    };
+  }
+}
+
+export async function deliverTelegramTextPage<TPlain, THtml, TRich>(
+  params: TelegramTextPageSender<TPlain, THtml, TRich>,
+): Promise<Array<{ result: TPlain | THtml | TRich; page: TelegramTextDeliveryPage }>> {
+  const delivered: Array<{ result: TPlain | THtml | TRich; page: TelegramTextDeliveryPage }> = [];
+  for await (const part of sendTelegramTextPageParts(params)) {
+    delivered.push(part);
+  }
+  return delivered;
 }

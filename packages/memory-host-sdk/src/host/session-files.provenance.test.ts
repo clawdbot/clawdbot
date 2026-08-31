@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionEntry } from "./session-files.js";
 
 let testDir = "";
@@ -25,7 +25,7 @@ describe("session transcript provenance", () => {
   it.each(["assistant", "toolResult"])(
     "discards earlier archive lines after an authoritative %s event identifies a dreaming run",
     async (role) => {
-      const filePath = await writeTranscript("narrative.jsonl.deleted.2026-08-26T10-00-00.000Z", [
+      const records = [
         { type: "message", message: { role: "user", content: "Private fragment from dreaming." } },
         {
           type: "message",
@@ -35,13 +35,29 @@ describe("session transcript provenance", () => {
             __openclaw: { runId: "dreaming-narrative-main-light-real" },
           },
         },
-      ]);
+        { type: "message", message: { role: "assistant", content: "Later dreaming output." } },
+      ];
+      const filePath = await writeTranscript(
+        "narrative.jsonl.deleted.2026-08-26T10-00-00.000Z",
+        records,
+      );
+      const observer = vi.fn();
 
-      const entry = await buildSessionEntry(filePath, { sessionKind: "unknown" });
+      const entry = await buildSessionEntry(filePath, {
+        sessionKind: "unknown",
+        onTranscriptMessage: observer,
+      });
 
       expect(entry?.generatedByDreamingNarrative).toBe(true);
       expect(entry?.content).toBe("");
       expect(entry?.lineProvenance).toEqual([]);
+      expect(entry?.lineMap).toEqual([]);
+      expect(entry?.messageTimestampsMs).toEqual([]);
+      expect(observer.mock.calls.map(([message]) => message)).toEqual(
+        records
+          .filter((record) => record.message.role !== "toolResult")
+          .map((record) => record.message),
+      );
     },
   );
 

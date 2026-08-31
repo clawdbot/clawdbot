@@ -31,13 +31,15 @@ vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
 }));
 
+vi.mock("../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 // These planner tests exercise no plugin-owned auth policy. Keep their exact
 // provider markers local instead of loading the bundled plugin/runtime catalog.
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
   normalizeProviderConfigWithPlugin: providerRuntimeMocks.normalizeProviderConfigWithPlugin,
   resolveProviderConfigApiKeyWithPlugin: providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin,
-  resolveExternalAuthProfilesWithPlugins: () => [],
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
 

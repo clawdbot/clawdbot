@@ -157,6 +157,7 @@ export function createDiscordDraftStream(params: {
   const { loop, update, stop, discardPending, seal } = createFinalizableDraftStreamControlsForState(
     {
       throttleMs,
+      coalesceInFlight: true,
       state: streamState,
       sendOrEditStreamMessage,
     },

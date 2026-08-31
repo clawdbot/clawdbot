@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   parseCaseFilter,
   parseImageProviderFilter,
-  redactLiveApiKey,
   resolveConfiguredLiveImageModels,
   resolveLiveImageAuthStore,
 } from "./live-test-helpers.js";
@@ -71,12 +70,5 @@ describe("image-generation live-test helpers", () => {
         hasLiveKeys: false,
       }),
     ).toBeUndefined();
-  });
-
-  it("redacts live API keys for diagnostics", () => {
-    expect(redactLiveApiKey(undefined)).toBe("none");
-    expect(redactLiveApiKey("   ")).toBe("none");
-    expect(redactLiveApiKey("synthetic-12")).toBe("<redacted>");
-    expect(redactLiveApiKey("synthetic-credential-value")).toBe("<redacted>");
   });
 });

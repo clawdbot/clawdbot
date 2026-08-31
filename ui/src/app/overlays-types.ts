@@ -29,7 +29,11 @@ export type ApplicationOverlays = {
   refreshUpdateStatus: () => Promise<void>;
   runUpdate: () => Promise<void>;
   holdUpdate: () => Promise<boolean>;
-  decideApproval: (decision: ExecApprovalDecision, approvalId?: string) => Promise<void>;
+  decideApproval: (
+    decision: ExecApprovalDecision,
+    approvalId?: string,
+    projectedApproval?: ExecApprovalRequest,
+  ) => Promise<void>;
   openDevicePairSetup: () => Promise<boolean>;
   refreshDevicePairSetup: () => Promise<void>;
   setDevicePairSetupAccess: (access: DevicePairSetupAccess) => Promise<void>;
