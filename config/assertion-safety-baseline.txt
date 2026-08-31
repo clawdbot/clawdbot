@@ -2206,7 +2206,7 @@ src/auto-reply/reply/session.ts	3
 src/auto-reply/reply/source-reply-delivery-runtime.ts	2
 src/auto-reply/reply/source-turn-id.ts	4
 src/auto-reply/reply/stage-sandbox-media.ts	1
-src/auto-reply/reply/strip-inbound-meta.ts	5
+src/auto-reply/reply/strip-inbound-meta.ts	4
 src/auto-reply/reply/system-event-session-key.ts	1
 src/auto-reply/templating.ts	1
 src/auto-reply/thinking.ts	1

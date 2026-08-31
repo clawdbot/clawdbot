@@ -38,7 +38,6 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
-import { collapseSequentialDuplicateMessages } from "./chat-thread-duplicates.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
@@ -695,5 +694,5 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       props.searchOpen ? props.searchQuery : undefined,
     ),
   );
-  return groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items)));
+  return groupMessages(coalesceToolActivityMessages(items));
 }
