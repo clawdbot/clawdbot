@@ -1,10 +1,10 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { CommandLaneSnapshot } from "./command-queue.js";
 // Capacity groups: a shared, hard aggregate budget across several command
 // lanes, with per-member reservations. Split out of command-queue.ts to keep
 // that file within its size budget; the queue supplies its own `drainLane` so
 // this module never has to import the queue runtime.
 import { getQueueState, normalizeLane, peekLaneQueue } from "./command-queue.state.js";
+import type { CommandLaneBlockReason, CommandLaneSnapshot } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 
 /** Drains a single lane. Supplied by command-queue.ts to avoid a cycle. */
@@ -12,9 +12,6 @@ type DrainLaneFn = (lane: string) => void;
 
 /** Internal bounded drain contract used by the group arbiter. */
 type BoundedDrainLaneFn = (lane: string, maxStarts?: number) => number | void;
-
-/** Why a lane cannot admit, from the narrowest cause outward. */
-export type CommandLaneBlockReason = "lane" | "group-budget" | "sibling-reservation" | null;
 
 /** Declares a group's shared budget and its members' hard reservations. */
 export type CommandLaneGroupSpec = {

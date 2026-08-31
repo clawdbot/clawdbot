@@ -10,7 +10,6 @@ import {
 import {
   applyCommandLaneCapacity,
   canAdmitInGroup,
-  type CommandLaneBlockReason,
   type CommandLaneGroupSpec,
   drainGroupSiblings,
   getGroupRegistry,
@@ -30,7 +29,7 @@ import {
   type QueueEntry,
   type QueuePriority,
 } from "./command-queue.state.js";
-import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import type { CommandLaneSnapshot, CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -42,6 +41,7 @@ import {
 import { CommandLane } from "./lanes.js";
 export { GatewayDrainingError } from "./gateway-work-admission.js";
 export type { CommandLaneTaskMarker } from "./command-queue.state.js";
+export type { CommandLaneSnapshot } from "./command-queue.types.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
  * its lane was cleared.  Callers that fire-and-forget enqueued tasks can
@@ -96,34 +96,6 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
   }
   return lane === undefined || err.message.includes(`Command lane "${lane}" task timed out`);
 }
-
-// Minimal in-process queue to serialize command executions.
-// Default lane ("main") preserves the existing behavior. Additional lanes allow
-// low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
-// the main auto-reply workflow.
-
-export type CommandLaneSnapshot = {
-  lane: string;
-  queuedCount: number;
-  activeCount: number;
-  maxConcurrent: number;
-  draining: boolean;
-  generation: number;
-  /** Group this lane belongs to, if any. */
-  group?: string;
-  /** Sum of active tasks across every member of the group. Always derived. */
-  groupActive?: number;
-  /** Hard aggregate cap shared by the group's members. */
-  groupBudget?: number;
-  /** Slots within the budget this lane may always claim. */
-  reservedForLane?: number;
-  /**
-   * Why this lane cannot start more work right now, or null if it can.
-   * `lane` is the lane's own maxConcurrent; the other two are group-imposed and
-   * are invisible to a lane-local view — see `noteLaneWaitIfBusy`.
-   */
-  blockedBy?: CommandLaneBlockReason;
-};
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
