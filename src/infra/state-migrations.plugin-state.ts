@@ -287,15 +287,12 @@ function compareImportEntriesNewestFirst(
   return 0;
 }
 
-async function withPluginStateImportEnv<T>(
-  plan: Extract<ChannelLegacyStateMigrationPlan, { kind: "plugin-state-import" }>,
-  run: () => Promise<T>,
-): Promise<T> {
-  if (!plan.stateDir) {
+async function withPluginStateImportEnv(stateDir: string | undefined, run: () => Promise<void>) {
+  if (!stateDir) {
     return await run();
   }
   const previous = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = plan.stateDir;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
   try {
     return await run();
   } finally {
@@ -312,68 +309,61 @@ export async function runLegacyMigrationPlans(
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  for (const plan of plans) {
-    if (plan.kind === "plugin-state-import") {
-      try {
-        await withPluginStateImportEnv(plan, async () => {
-          let storeEntries: Array<{ key: string; value: unknown; createdAt: number }>;
-          let pluginEntryCount;
+  // The declared source may feed several imports. Retire it after its last consumer,
+  // while keeping unrelated sources in order and unique-source cleanup immediate.
+  const lastConsumers = new Map(plans.map((plan, index) => [plan.sourcePath, index]));
+  const cleanups = new Map<string, Array<() => Promise<void>>>();
+  const incompleteSources = new Set<string>();
+  for (const [index, plan] of plans.entries()) {
+    const recordIncomplete = (message: string) => {
+      incompleteSources.add(plan.sourcePath);
+      warnings.push(message);
+    };
+    let operation = `migrating ${plan.label} (${plan.sourcePath})`;
+    try {
+      if (incompleteSources.has(plan.sourcePath)) {
+        recordIncomplete(
+          `Deferred ${plan.label}: another migration of ${plan.sourcePath} did not complete.`,
+        );
+        continue;
+      }
+      if (plan.kind === "plugin-state-import") {
+        const stateDir = plan.stateDir;
+        await withPluginStateImportEnv(stateDir, async () => {
           const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
             namespace: plan.namespace,
             maxEntries: plan.maxEntries,
             ...(plan.defaultTtlMs != null ? { defaultTtlMs: plan.defaultTtlMs } : {}),
           });
-          try {
-            storeEntries = await store.entries();
-            pluginEntryCount = countPluginStateLiveEntries(plan.pluginId);
-          } catch (err) {
-            warnings.push(
-              `Failed reading ${plan.label} plugin state before migration: ${String(err)}`,
-            );
-            return;
-          }
-          const existingKeys = new Set(storeEntries.map(({ key }) => key));
-          const existingValuesByKey = new Map(storeEntries.map(({ key, value }) => [key, value]));
-          const existingCreatedAtByKey = new Map(
-            storeEntries.map(({ key, createdAt }) => [key, createdAt]),
-          );
-          const expectedKeys = new Set(existingKeys);
+          operation = `reading ${plan.label} plugin state before migration`;
+          const storeEntries = await store.entries();
+          const pluginEntryCount = countPluginStateLiveEntries(plan.pluginId);
+          const existingEntriesByKey = new Map(storeEntries.map((entry) => [entry.key, entry]));
+          const expectedKeys = new Set(existingEntriesByKey.keys());
           const namespaceRemainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
-          let entries: Awaited<ReturnType<typeof plan.readEntries>>;
-          try {
-            entries = await plan.readEntries();
-          } catch (err) {
-            warnings.push(`Failed reading ${plan.label} legacy source: ${String(err)}`);
-            return;
-          }
-          type CandidateEntry = {
-            key: string;
-            targetKey: string;
-            value: unknown;
-            ttlMs?: number;
-            timestamp?: number;
-            existedBefore: boolean;
-          };
+          operation = `reading ${plan.label} legacy source`;
+          const entries = await plan.readEntries();
+          operation = `migrating ${plan.label} (${plan.sourcePath})`;
+          type CandidateEntry = (typeof entries)[number] & { targetKey: string };
           const replacementEntries: CandidateEntry[] = [];
           let newEntries: CandidateEntry[] = [];
-          const failedTargetKeys = new Set<string>();
           for (const entry of entries) {
             const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
-            const existingValue = existingValuesByKey.get(targetKey);
-            if (existingKeys.has(targetKey)) {
+            const existing = existingEntriesByKey.get(targetKey);
+            if (existing) {
               const shouldReplace =
-                existingValue !== undefined &&
+                existing.value !== undefined &&
                 (await plan.shouldReplaceExistingEntry?.({
                   key: entry.key,
-                  existingValue,
+                  existingValue: existing.value,
                   incomingValue: entry.value,
                 }));
               if (shouldReplace) {
-                replacementEntries.push({ ...entry, targetKey, existedBefore: true });
+                replacementEntries.push({ ...entry, targetKey });
               }
               continue;
             }
-            newEntries.push({ ...entry, targetKey, existedBefore: false });
+            newEntries.push({ ...entry, targetKey });
           }
           const missingEntryCount = newEntries.length;
           const pluginRemainingCapacity = Math.max(
@@ -392,7 +382,7 @@ export async function runLegacyMigrationPlans(
               namespaceRemainingCapacity <= pluginRemainingCapacity
                 ? `plugin state namespace ${plan.namespace} has room for ${namespaceRemainingCapacity}`
                 : `plugin state has room for ${pluginRemainingCapacity}`;
-            warnings.push(
+            recordIncomplete(
               newEntries.length > 0
                 ? `Partially migrating ${plan.label} because ${constraint} of ${missingEntryCount} missing entries; importing the newest ${newEntries.length} and deferring the rest in the legacy source`
                 : `Deferring ${plan.label} migration because ${constraint} of ${missingEntryCount} missing entries; left legacy source in place to retry when capacity frees`,
@@ -432,10 +422,11 @@ export async function runLegacyMigrationPlans(
             });
           };
           const restoreExistingEntry = async (key: string) => {
+            const existing = existingEntriesByKey.get(key);
             await registerPreservingCreatedAt({
               key,
-              value: existingValuesByKey.get(key),
-              createdAtMs: existingCreatedAtByKey.get(key),
+              value: existing?.value,
+              createdAtMs: existing?.createdAt,
             });
           };
           let imported = 0;
@@ -457,7 +448,7 @@ export async function runLegacyMigrationPlans(
                 // only the entry whose write triggered the eviction, restore the evicted live
                 // row when we still hold its value, and keep everything imported so far —
                 // deferred entries stay in the legacy source for the next startup.
-                if (existingValuesByKey.has(entry.targetKey)) {
+                if (existingEntriesByKey.has(entry.targetKey)) {
                   await restoreExistingEntry(entry.targetKey);
                 } else {
                   await store.delete(entry.targetKey);
@@ -465,29 +456,26 @@ export async function runLegacyMigrationPlans(
                 if (changedKeys.has(missingKey)) {
                   changedKeys.delete(missingKey);
                   expectedKeys.delete(missingKey);
-                  existingKeys.delete(missingKey);
                   imported = Math.max(0, imported - 1);
-                } else if (existingValuesByKey.has(missingKey)) {
+                } else if (existingEntriesByKey.has(missingKey)) {
                   try {
                     await restoreExistingEntry(missingKey);
                   } catch (restoreErr) {
-                    warnings.push(
+                    recordIncomplete(
                       `Failed restoring ${plan.label} entry ${missingKey} after cap eviction: ${String(restoreErr)}`,
                     );
                   }
                 }
-                warnings.push(
+                recordIncomplete(
                   `Paused migrating ${plan.label} because plugin state cap evicted ${missingKey}; imported ${imported} of ${missingEntryCount} missing entries and deferred the rest in the legacy source`,
                 );
                 break;
               }
               expectedKeys.add(entry.targetKey);
-              existingKeys.add(entry.targetKey);
               changedKeys.add(entry.targetKey);
               imported++;
             } catch (err) {
-              failedTargetKeys.add(entry.targetKey);
-              warnings.push(`Failed migrating ${plan.label} entry ${entry.key}: ${String(err)}`);
+              recordIncomplete(`Failed migrating ${plan.label} entry ${entry.key}: ${String(err)}`);
             }
           }
           if (imported > 0) {
@@ -495,60 +483,57 @@ export async function runLegacyMigrationPlans(
               `Migrated ${imported} ${plan.label} ${imported === 1 ? "entry" : "entries"} → plugin state`,
             );
           }
-          let cleanupKeys = existingKeys;
-          if (plan.cleanupSource === "rename") {
-            cleanupKeys = expectedKeys;
-          }
+          // Entry failures fence cleanup for the whole source through recordIncomplete.
           const allEntriesCovered =
             (entries.length === 0 && plan.cleanupWhenEmpty === true) ||
             (entries.length > 0 &&
-              entries.every(
-                ({ key }) =>
-                  cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)) &&
-                  !failedTargetKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
+              entries.every(({ key }) =>
+                expectedKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
               ));
-          if (
-            allEntriesCovered &&
-            plan.cleanupSource === "rename" &&
-            migrationFileExists(plan.sourcePath)
-          ) {
-            archiveLegacyImportSource({
-              sourcePath: plan.sourcePath,
-              label: plan.label,
-              changes,
-              warnings,
-            });
+          if (!allEntriesCovered || (!plan.cleanupSource && !plan.removeSource)) {
+            return;
           }
-          if (
-            allEntriesCovered &&
-            plan.cleanupSource === "remove" &&
-            migrationFileExists(plan.sourcePath)
-          ) {
+          const pending = cleanups.get(plan.sourcePath) ?? [];
+          pending.push(async () => {
+            const cleanupWarnings: string[] = [];
             try {
-              fs.unlinkSync(plan.sourcePath);
-              changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
+              // Deferred callbacks may open stores implicitly; re-enter the import's owner scope.
+              await withPluginStateImportEnv(stateDir, async () => {
+                if (plan.cleanupSource === "rename" && migrationFileExists(plan.sourcePath)) {
+                  archiveLegacyImportSource({
+                    sourcePath: plan.sourcePath,
+                    label: plan.label,
+                    changes,
+                    warnings: cleanupWarnings,
+                  });
+                }
+                if (plan.cleanupSource === "remove" && migrationFileExists(plan.sourcePath)) {
+                  try {
+                    fs.unlinkSync(plan.sourcePath);
+                    changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
+                  } catch (err) {
+                    cleanupWarnings.push(
+                      `Failed removing ${plan.label} legacy source: ${String(err)}`,
+                    );
+                  }
+                }
+                if (plan.removeSource) {
+                  await plan.removeSource();
+                  changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
+                }
+              });
             } catch (err) {
-              warnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
+              cleanupWarnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
             }
-          }
-          if (allEntriesCovered && plan.removeSource) {
-            try {
-              await plan.removeSource();
-              changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
-            } catch (err) {
-              warnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
-            }
-          }
+            cleanupWarnings.forEach(recordIncomplete);
+          });
+          cleanups.set(plan.sourcePath, pending);
         });
-      } catch (err) {
-        warnings.push(`Failed migrating ${plan.label}: ${String(err)}`);
+        continue;
       }
-      continue;
-    }
-    if (migrationFileExists(plan.targetPath)) {
-      continue;
-    }
-    try {
+      if (migrationFileExists(plan.targetPath)) {
+        continue;
+      }
       ensureMigrationDir(path.dirname(plan.targetPath));
       if (plan.kind === "move") {
         fs.renameSync(plan.sourcePath, plan.targetPath);
@@ -558,7 +543,18 @@ export async function runLegacyMigrationPlans(
         changes.push(`Copied ${plan.label} → ${plan.targetPath}`);
       }
     } catch (err) {
-      warnings.push(`Failed migrating ${plan.label} (${plan.sourcePath}): ${String(err)}`);
+      recordIncomplete(`Failed ${operation}: ${String(err)}`);
+    } finally {
+      if (lastConsumers.get(plan.sourcePath) === index) {
+        const pending = cleanups.get(plan.sourcePath) ?? [];
+        cleanups.delete(plan.sourcePath);
+        for (const cleanup of pending) {
+          if (incompleteSources.has(plan.sourcePath)) {
+            break;
+          }
+          await cleanup();
+        }
+      }
     }
   }
   return { changes, warnings };
