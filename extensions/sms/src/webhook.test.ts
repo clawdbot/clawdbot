@@ -82,19 +82,9 @@ function createSignedBody(params?: {
 function createRequest(
   body: string,
   signature: string,
-  options?: {
-    headers?: Record<string, string>;
-    remoteAddress?: string;
-    onBodyRead?: () => void;
-  },
+  options?: { headers?: Record<string, string>; remoteAddress?: string },
 ): IncomingMessage {
-  const source = options?.onBodyRead
-    ? (async function* () {
-        yield body;
-        options.onBodyRead?.();
-      })()
-    : [body];
-  const req = Readable.from(source) as IncomingMessage;
+  const req = Readable.from([body]) as IncomingMessage;
   req.method = "POST";
   req.headers = {
     "content-length": String(Buffer.byteLength(body)),
@@ -240,17 +230,18 @@ describe("createSmsWebhookHandler", () => {
       ingress: createIngress(),
     });
     const res = createResponse();
+    const req = createPendingRequest();
+    req.headers = {
+      "content-length": String(Buffer.byteLength(body)),
+      "x-twilio-signature": signature,
+    };
 
-    await expect(
-      handler(
-        createRequest(body, signature, {
-          onBodyRead: () => {
-            bodyRead = true;
-          },
-        }),
-        res,
-      ),
-    ).rejects.toThrow("SMS credential owner unavailable");
+    const pending = handler(req, res);
+    req.push(body);
+    bodyRead = true;
+    req.push(null);
+
+    await expect(pending).rejects.toThrow("SMS credential owner unavailable");
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
   });
 

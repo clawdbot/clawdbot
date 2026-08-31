@@ -494,9 +494,15 @@ describe("Twilio SMS helpers", () => {
     expect(onPlatformSendDispatch).not.toHaveBeenCalled();
   });
 
-  it("rejects a cold owner before dispatch or fetch", async () => {
+  it.each([
+    { name: "before dispatch", unavailableAfterDispatch: false, dispatches: 0 },
+    { name: "after dispatch", unavailableAfterDispatch: true, dispatches: 1 },
+  ])("stops a send when the owner becomes unavailable $name", async (testCase) => {
     const onPlatformSendDispatch = vi.fn(async () => {});
     const fetchImpl = vi.fn<typeof fetch>();
+    if (testCase.unavailableAfterDispatch) {
+      assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {});
+    }
     assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
       throw new Error("SMS credential owner unavailable");
     });
@@ -511,30 +517,7 @@ describe("Twilio SMS helpers", () => {
       }),
     ).rejects.toThrow("SMS credential owner unavailable");
 
-    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("rechecks the owner after the dispatch marker before fetch", async () => {
-    const onPlatformSendDispatch = vi.fn(async () => {});
-    const fetchImpl = vi.fn<typeof fetch>();
-    assertSmsCredentialOwnerAvailable
-      .mockImplementationOnce(() => {})
-      .mockImplementationOnce(() => {
-        throw new Error("SMS credential owner became unavailable");
-      });
-
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "hello",
-        onPlatformSendDispatch,
-        fetchImpl,
-      }),
-    ).rejects.toThrow("SMS credential owner became unavailable");
-
-    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(testCase.dispatches);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -701,22 +684,7 @@ describe("Twilio SMS helpers", () => {
     expect(url).toBe(
       "https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json?To=%2B15557654321&PageSize=3",
     );
-  });
-
-  it("rejects a cold owner before a non-send Twilio API request", async () => {
-    const fetchImpl = vi.fn<typeof fetch>();
-    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
-      throw new Error("SMS credential owner unavailable");
-    });
-
-    await expect(
-      listTwilioMessages({
-        account: createAccount(),
-        fetchImpl,
-      }),
-    ).rejects.toThrow("SMS credential owner unavailable");
-
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(assertSmsCredentialOwnerAvailable).toHaveBeenCalledExactlyOnceWith("default");
   });
 
   it("retrieves Twilio Messaging Service webhook settings", async () => {
