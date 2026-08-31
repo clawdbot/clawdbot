@@ -71,7 +71,8 @@ import {
   verifyGatewaySetupInference,
 } from "./system-agent-execution.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /**
@@ -221,52 +222,6 @@ function queueDelegatedApproval(params: {
   return record.id;
 }
 
-async function startSetupActivationWizard(params: {
-  sessionId: string;
-  activation: Pick<
-    Parameters<typeof activateGatewaySetupInference>[0],
-    "kind" | "agentId" | "modelRef" | "authChoice" | "apiKey" | "workspace"
-  >;
-  timeoutMs: number;
-  context: GatewayRequestContext;
-  respond: RespondFn;
-}) {
-  const session = await createAdmittedWizardSession(
-    () =>
-      new WizardSession(
-        async (prompter, signal, runnerSession) => {
-          const result = await activateGatewaySetupInference({
-            ...params.activation,
-            surface: "gateway",
-            runtime: {
-              ...defaultRuntime,
-              exit: (code: number | undefined): never => {
-                throw new Error(`setup step exited with code ${String(code)}`);
-              },
-            },
-            prompter,
-            signal,
-            isCancelled: () => signal.aborted,
-            onCommitStarted: () => runnerSession.lockCancellation(),
-          });
-          if (!result.ok) throw new Error(result.error);
-          runnerSession.setModelActivation({
-            modelRef: result.modelRef,
-            ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
-          });
-        },
-        { timeoutMs: params.timeoutMs },
-      ),
-  );
-  if (!session) {
-    respondSetupAdmissionBusy(params.respond);
-    return;
-  }
-  params.context.wizardSessions.set(params.sessionId, session);
-  // Return ownership before any prompt so cancellation survives a lost start reply.
-  params.respond(true, { sessionId: params.sessionId, done: false, status: "running" }, undefined);
-}
-
 export const systemAgentHandlers: GatewayRequestHandlers = {
   "openclaw.approval.list": async ({ respond, client, context }) => {
     const manager = context.systemAgentApprovalManager;
@@ -368,8 +323,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         "openclaw.setup.activate.start",
         respond,
       )
-    )
+    ) {
       return;
+    }
     const { sessionId, ...activation } = params;
     await startSetupActivationWizard({
       sessionId,
