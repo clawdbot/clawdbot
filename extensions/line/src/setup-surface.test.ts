@@ -19,7 +19,10 @@ import { lineSetupWizard } from "./setup-surface.js";
 
 const { getBotInfoMock, getWebhookEndpointMock, MessagingApiClientMock } = vi.hoisted(() => {
   const getBotInfoMockLocal = vi.fn();
-  const getWebhookEndpointMockLocal = vi.fn();
+  const getWebhookEndpointMockLocal = vi.fn(async () => ({
+    endpoint: "https://gateway.example/line/webhook",
+    active: true,
+  }));
   const MessagingApiClientMockLocal = vi.fn(function () {
     return { getBotInfo: getBotInfoMockLocal, getWebhookEndpoint: getWebhookEndpointMockLocal };
   });
