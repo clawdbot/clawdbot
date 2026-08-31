@@ -4,6 +4,20 @@ import { describe, expect, it } from "vitest";
 const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs");
 
 describe("detectChangedScope Windows routing", () => {
+  it("routes the Canvas pnpm runner and its native regression to Windows", () => {
+    for (const runnerPath of [
+      "extensions/canvas/scripts/pnpm-runner.mjs",
+      "extensions/canvas/scripts/pnpm-runner.test.ts",
+    ]) {
+      expect(detectChangedScope([runnerPath]), runnerPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+
+    expect(detectChangedScope(["extensions/canvas/src/a2ui-jsonl.ts"]).runWindows).toBe(false);
+  });
+
   it("routes source CLI invocation owners and their native proof to Windows", () => {
     for (const sourceCliPath of [
       "src/infra/openclaw-cli-invocation.ts",
