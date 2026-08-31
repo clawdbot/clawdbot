@@ -47,6 +47,8 @@ function createUiE2eVitestConfig(
       isolate: true,
       name: "ui-e2e",
       pool: "forks",
+      // Refit needs native file totals; verbose still reports cases to the output watchdog.
+      reporters: [...baseTest.reporters, "default"],
       runner: undefined,
       sequence: { ...baseSequence, sequencer: UiE2eSequencer },
       setupFiles: ["test/vitest/vitest.ui-e2e.setup.ts"],
