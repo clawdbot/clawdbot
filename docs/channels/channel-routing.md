@@ -32,7 +32,7 @@ Target-kind and service prefixes such as `channel:<id>`, `user:<id>`, `room:<id>
 
 Direct messages collapse to the agent's **main** session by default:
 
-- `agent:<agentId>:<mainKey>` (default: `agent:main:main`)
+- `agent:<agentId>:main` (for example: `agent:main:main`)
 
 `session.dmScope` controls DM collapsing: `main` (default) shares one main
 session, while `per-peer`, `per-channel-peer`, and `per-account-channel-peer`
