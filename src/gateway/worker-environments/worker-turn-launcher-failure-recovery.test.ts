@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
@@ -48,6 +49,59 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 describe("worker turn launcher failure recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it("reports execution failure as primary when remote workspace recovery also fails", async () => {
+    seedActivePlacement("remote-exec");
+    const executionError = new Error("Codex node execution requires one-time approval");
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => attachedEnvironment()),
+      startTunnel: vi.fn(async () => ({
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        runWorkspaceCommand: vi.fn(),
+        syncWorkspace: vi.fn(),
+        quiesceWorkspace: vi.fn(async () => ({
+          assertActive: vi.fn(async () => {}),
+          resume: vi.fn(async () => {}),
+        })),
+        reconcileWorkspace: vi.fn(async () => {
+          throw new Error("gateway returned 400");
+        }),
+        stop: vi.fn(async () => {}),
+      })),
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      reconcileActivePlacement: vi.fn(async () => {}),
+    });
+
+    const failure = await provider
+      .executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-execution-and-workspace-failed",
+        },
+        turn("run-execution-and-workspace-failed"),
+        async () => {
+          throw executionError;
+        },
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(formatErrorMessage(failure)).toBe(
+      "Codex node execution requires one-time approval\n\n" +
+        "Workspace recovery also failed: gateway returned 400. " +
+        "Remote changes may not have been applied locally. Resolve the workspace error, then retry.",
+    );
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+  });
 
   it("terminalizes a journal-settled dead worker without waiting for blocked teardown", async () => {
     seedActivePlacement();
