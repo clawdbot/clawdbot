@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isFailoverWorthyBackendError,
   resolveBackendCandidatePlan,
+  resolveResumePinnedBackend,
   shouldAttemptBackendFailover,
 } from "./manager.backend-failover.js";
 
@@ -24,6 +25,27 @@ describe("ACP manager backend failover helpers", () => {
 
     expect(plan.candidateBackends).toEqual([""]);
     expect(plan.describeBackendCandidate("")).toBe("<auto>");
+  });
+
+  it("pins completed resumable one-shots to their owning backend", () => {
+    expect(
+      resolveResumePinnedBackend({
+        backend: "owner",
+        agent: "claude",
+        runtimeSessionName: "session",
+        mode: "oneshot",
+        state: "idle",
+        lastActivityAt: Date.now(),
+        identity: {
+          state: "resolved",
+          source: "status",
+          acpxSessionId: "resume-id",
+          sessionResumeSupported: true,
+          sessionResumeReady: true,
+          lastUpdatedAt: Date.now(),
+        },
+      }),
+    ).toBe("owner");
   });
 
   it("classifies only early transient backend errors as failover-worthy", () => {

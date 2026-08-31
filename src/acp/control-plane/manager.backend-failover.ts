@@ -1,4 +1,9 @@
 /** Backend failover helpers for ACP session initialization and turn execution. */
+import {
+  identityHasStableSessionId,
+  resolveSessionIdentityFromMeta,
+} from "@openclaw/acp-core/runtime/session-identity";
+import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { AcpRuntimeErrorCode } from "../runtime/errors.js";
 import { normalizeText } from "./runtime-options.js";
 
@@ -37,6 +42,17 @@ export function resolveBackendCandidatePlan(params: {
     describeBackendCandidate: (backend) =>
       backend || resolvedPrimaryBackend || configuredPrimaryBackend || "<auto>",
   };
+}
+
+/** Returns the backend that owns a confirmed resumable one-shot identity. */
+export function resolveResumePinnedBackend(meta: SessionAcpMeta): string | undefined {
+  const identity = resolveSessionIdentityFromMeta(meta);
+  return meta.mode === "oneshot" &&
+    identity?.sessionResumeSupported === true &&
+    identity.sessionResumeReady === true &&
+    identityHasStableSessionId(identity)
+    ? meta.backend
+    : undefined;
 }
 
 /** Returns true for early transient backend errors where trying another backend is safe. */

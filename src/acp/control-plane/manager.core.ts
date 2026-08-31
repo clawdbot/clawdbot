@@ -12,7 +12,10 @@ import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { cancelManagerActiveTurn, runManagerCancelSession } from "./manager.cancel-session.js";
 import { runManagerCloseSession } from "./manager.close-session.js";
-import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
+import {
+  reconcileManagerRuntimeSessionIdentifiers,
+  type ManagerRuntimeSessionIdentifierReconcileParams,
+} from "./manager.identity-reconcile.js";
 import { runManagerInitializeSession } from "./manager.initialize-session.js";
 import { registerAcpSessionManagerDisposer } from "./manager.lifecycle.js";
 import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
@@ -464,15 +467,12 @@ export class AcpSessionManager {
     });
   }
 
-  private async reconcileRuntimeSessionIdentifiers(params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-    runtime: AcpRuntime;
-    handle: AcpRuntimeHandle;
-    meta: SessionAcpMeta;
-    runtimeStatus?: AcpRuntimeStatus;
-    failOnStatusError: boolean;
-  }): Promise<{
+  private async reconcileRuntimeSessionIdentifiers(
+    params: Omit<
+      ManagerRuntimeSessionIdentifierReconcileParams,
+      "setCachedHandle" | "writeSessionMeta"
+    >,
+  ): Promise<{
     handle: AcpRuntimeHandle;
     meta: SessionAcpMeta;
     runtimeStatus?: AcpRuntimeStatus;

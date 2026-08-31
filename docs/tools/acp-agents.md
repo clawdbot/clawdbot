@@ -152,7 +152,7 @@ Quick `/acp` flow from chat:
   <Accordion title="Lifecycle details">
     - Spawn creates or resumes an ACP runtime session, records ACP metadata in the OpenClaw session store, and may create a background task when the run is parent-owned.
     - Parent-owned ACP sessions are treated as background work even when the runtime session is persistent; completion and cross-surface delivery go through the parent task notifier rather than acting like a normal user-facing chat session.
-    - Task maintenance closes terminal or orphaned parent-owned one-shot ACP sessions. Persistent ACP sessions are preserved while an active conversation binding remains; stale persistent sessions without an active binding are closed so they cannot be silently resumed after the owning task is done or its task record is gone.
+    - Task maintenance closes terminal or orphaned parent-owned one-shot ACP sessions that have no stable resume identity, whose agent did not advertise session resume/load support, or that never completed a turn to confirm resumable state. Confirmed-resumable one-shots keep their session metadata after runtime cleanup so the parent can send a later follow-up. Persistent ACP sessions are preserved while an active conversation binding remains; stale persistent sessions without an active binding are closed so they cannot be silently resumed after the owning task is done or its task record is gone.
     - Bound follow-up messages go directly to the ACP session until the binding is closed, detached, reset, or expired.
     - Gateway commands stay local. `/acp ...`, `/status`, and `/session` are never sent as normal prompt text to a bound ACP harness.
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
@@ -703,7 +703,9 @@ work. The delivery path depends on that shape.
     from announcement delivery: `targetDisposition` is `queued` or `steered`,
     while `delivery.status` is `pending` or `skipped`. For this owned-child case,
     `delivery.status="skipped"` because the completion path is already responsible
-    for the result.
+    for the result. A follow-up to a completed resumable one-shot returns
+    `status="accepted"` even with a nonzero wait timeout; task completion
+    delivers the result once instead of also returning an inline reply.
 
   </Accordion>
   <Accordion title="Resume an existing session">

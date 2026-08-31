@@ -3,6 +3,7 @@ import type {
   LoadSessionRequest,
   NewSessionRequest,
   PromptRequest,
+  ResumeSessionRequest,
 } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
@@ -31,6 +32,15 @@ function createLoadSessionRequest(sessionId: string, cwd = "/tmp"): LoadSessionR
     mcpServers: [],
     _meta: {},
   } as unknown as LoadSessionRequest;
+}
+
+function createResumeSessionRequest(sessionId: string, cwd = "/tmp"): ResumeSessionRequest {
+  return {
+    sessionId,
+    cwd,
+    mcpServers: [],
+    _meta: {},
+  } as unknown as ResumeSessionRequest;
 }
 
 function createPromptRequest(sessionId: string, text: string): PromptRequest {
@@ -90,6 +100,84 @@ async function waitForChatSend(requestMock: { mock: { calls: Array<readonly unkn
 }
 
 describe("ACP translator event ledger replay", () => {
+  it("restores bridge routing when resuming after a translator restart", async () => {
+    let now = 1000;
+    const eventLedger = createInMemoryAcpEventLedger({ maxSessions: 1, now: () => now++ });
+    const firstSessionStore = createInMemorySessionStore();
+    const firstAgent = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(vi.fn(async () => ({ ok: true })) as GatewayClient["request"]),
+      {
+        eventLedger,
+        sessionStore: firstSessionStore,
+      },
+    );
+    const created = await firstAgent.newSession(createNewSessionRequest());
+    const firstSession = firstSessionStore.getSession(created.sessionId);
+    if (!firstSession) {
+      throw new Error("Expected new ACP session to be stored");
+    }
+    await vi.waitFor(async () => {
+      const replay = await eventLedger.readReplayBySessionId({ sessionId: created.sessionId });
+      expect(replay.events).toHaveLength(2);
+    });
+    await eventLedger.startSession({
+      sessionId: "evicting-session",
+      sessionKey: "acp-bridge:evicting-session",
+      cwd: "/tmp",
+      complete: true,
+    });
+    await expect(
+      eventLedger.readReplayBySessionId({ sessionId: created.sessionId }),
+    ).resolves.toEqual({ complete: false, events: [] });
+
+    const resumedSessionStore = createInMemorySessionStore();
+    const resumedRequest = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: firstSession.sessionKey,
+              kind: "direct",
+              updatedAt: Date.now(),
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const resumedAgent = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(resumedRequest),
+      {
+        eventLedger,
+        sessionStore: resumedSessionStore,
+      },
+    );
+
+    await resumedAgent.resumeSession(createResumeSessionRequest(created.sessionId));
+
+    expect(resumedSessionStore.getSession(created.sessionId)?.sessionKey).toBe(
+      firstSession.sessionKey,
+    );
+
+    const twiceResumedSessionStore = createInMemorySessionStore();
+    const twiceResumedAgent = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(resumedRequest),
+      {
+        eventLedger,
+        sessionStore: twiceResumedSessionStore,
+      },
+    );
+
+    await twiceResumedAgent.resumeSession(createResumeSessionRequest(created.sessionId));
+
+    expect(twiceResumedSessionStore.getSession(created.sessionId)?.sessionKey).toBe(
+      firstSession.sessionKey,
+    );
+  });
+
   it("loads complete ledger-backed sessions without the lossy Gateway transcript fallback", async () => {
     const eventLedger = createInMemoryAcpEventLedger();
     const firstSessionStore = createInMemorySessionStore();

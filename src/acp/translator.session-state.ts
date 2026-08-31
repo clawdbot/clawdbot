@@ -54,9 +54,17 @@ export class AcpTranslatorSessionState {
   }
 
   async getExistingSnapshot(sessionKey: string): Promise<SessionSnapshot> {
+    const snapshot = await this.findExistingSnapshot(sessionKey);
+    if (!snapshot) {
+      throw new Error(`Session ${sessionKey} not found`);
+    }
+    return snapshot;
+  }
+
+  async findExistingSnapshot(sessionKey: string): Promise<SessionSnapshot | undefined> {
     const row = await this.getGatewaySessionRow(sessionKey);
     if (!row) {
-      throw new Error(`Session ${sessionKey} not found`);
+      return undefined;
     }
     return {
       ...buildSessionPresentation({ row }),

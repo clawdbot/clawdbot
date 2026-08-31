@@ -18,7 +18,10 @@ describe("AcpSessionManager backend failover", () => {
   function setupFailoverBackends(
     params: {
       initialBackend?: "primary-backend" | "fallback-backend";
+      initialIdentity?: SessionAcpMeta["identity"];
+      mode?: "persistent" | "oneshot";
       primaryUnavailableError?: Error;
+      resumeReadyWriteError?: Error;
     } = {},
   ) {
     const primaryRuntime = createRuntime();
@@ -27,13 +30,21 @@ describe("AcpSessionManager backend failover", () => {
     const initialBackend = params.initialBackend ?? "primary-backend";
     let currentMeta = readySessionMeta({
       backend: initialBackend,
+      mode: params.mode ?? "persistent",
       runtimeSessionName:
         initialBackend === "fallback-backend" ? "fallback-runtime" : "primary-runtime",
+      ...(params.initialIdentity ? { identity: params.initialIdentity } : {}),
     });
     primaryRuntime.ensureSession.mockImplementation(async (input) => ({
       sessionKey: input.sessionKey,
       backend: "primary-backend",
       runtimeSessionName: "primary-runtime",
+      ...(params.mode === "oneshot"
+        ? {
+            backendSessionId: "primary-session",
+            sessionResumeSupported: true,
+          }
+        : {}),
     }));
     fallbackRuntime.ensureSession.mockImplementation(async (input) => ({
       sessionKey: input.sessionKey,
@@ -71,6 +82,9 @@ describe("AcpSessionManager backend failover", () => {
         ) => SessionAcpMeta | null | undefined;
       };
       const next = upsertParams.mutate(currentMeta, { acp: currentMeta });
+      if (next?.identity?.sessionResumeReady && params.resumeReadyWriteError) {
+        throw params.resumeReadyWriteError;
+      }
       if (next) {
         currentMeta = next;
       }
@@ -338,5 +352,74 @@ describe("AcpSessionManager backend failover", () => {
 
     expect(events).toEqual([expect.objectContaining({ type: "text_delta", text: "partial" })]);
     expect(harness.fallbackRuntime.runTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not fail over after a terminal turn when resume metadata persistence fails", async () => {
+    const harness = setupFailoverBackends({
+      mode: "oneshot",
+      resumeReadyWriteError: new Error("resume metadata temporarily unavailable"),
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: harness.cfg,
+        sessionKey: harness.sessionKey,
+        text: "do not replay after done",
+        mode: "prompt",
+        requestId: "r-terminal-metadata-failure",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "resume metadata temporarily unavailable",
+    });
+
+    expect(harness.primaryRuntime.runTurn).toHaveBeenCalledTimes(1);
+    expect(harness.fallbackRuntime.runTurn).not.toHaveBeenCalled();
+  });
+
+  it("keeps resumable one-shot follow-ups on the backend that owns the session id", async () => {
+    const originalIdentity = {
+      state: "resolved" as const,
+      source: "status" as const,
+      acpxSessionId: "primary-session",
+      sessionResumeSupported: true,
+      sessionResumeReady: true,
+      lastUpdatedAt: Date.now(),
+    };
+    const harness = setupFailoverBackends({
+      mode: "oneshot",
+      initialIdentity: originalIdentity,
+    });
+    harness.primaryRuntime.ensureSession.mockRejectedValue(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "primary backend temporarily unavailable"),
+    );
+    harness.fallbackRuntime.ensureSession.mockRejectedValue(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "foreign resume target not found", {
+        detailCode: "SESSION_RESUME_REQUIRED",
+      }),
+    );
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: harness.cfg,
+        sessionKey: harness.sessionKey,
+        text: "resume on the owning backend",
+        mode: "prompt",
+        requestId: "r-resume-owner",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_SESSION_INIT_FAILED",
+      message: "primary backend temporarily unavailable",
+    });
+
+    expect(harness.primaryRuntime.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({ resumeSessionId: "primary-session" }),
+    );
+    expect(harness.fallbackRuntime.ensureSession).not.toHaveBeenCalled();
+    expect(harness.currentMeta.identity).toEqual(originalIdentity);
   });
 });

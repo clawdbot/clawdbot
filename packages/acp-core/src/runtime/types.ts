@@ -32,6 +32,8 @@ export type AcpRuntimeHandle = {
   backendSessionId?: string;
   /** Upstream harness session identifier, if exposed by adapter/runtime. */
   agentSessionId?: string;
+  /** Whether the agent advertised session/resume or session/load support. */
+  sessionResumeSupported?: boolean;
   /**
    * Effective model the backend applied during session creation, when it can differ from the
    * requested model. A backend that drops an unsupported inherited default reports `dropped` so

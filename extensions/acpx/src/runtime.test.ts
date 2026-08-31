@@ -907,6 +907,28 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
+  it.each([
+    new Error("connection reset while resuming session"),
+    Object.assign(new Error("Server overloaded; retry later."), { code: -32001 }),
+    Object.assign(new Error("Resource not found: workspace file"), { code: -32002 }),
+  ])("preserves transient ensure-time resume failures %#", async (resumeError) => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "ensureSession").mockRejectedValue(resumeError);
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:claude:acp:transient-resume-failure",
+        agent: "claude",
+        mode: "oneshot",
+        resumeSessionId: "claude-session-retryable",
+      }),
+    ).rejects.toBe(resumeError);
+  });
+
   it("adds Codex wrapper stderr tail to generic terminal turn error events", async () => {
     const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
     await fs.writeFile(
@@ -4003,6 +4025,192 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(result.runtimeSessionName).toBe("default");
     expect(defaultEnsure).toHaveBeenCalledOnce();
     expect(bridgeEnsure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ sessionCapabilities: { resume: {} } }, true],
+    [{ loadSession: true }, true],
+    [{ sessionCapabilities: { resume: null } }, false],
+  ] as const)("reports ACP session resume capability %#", async (agentCapabilities, expected) => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({ agentCapabilities })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    const result = await runtime.ensureSession({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "oneshot",
+    });
+
+    expect(result.sessionResumeSupported).toBe(expected);
+  });
+
+  it("keeps an ensured session usable when resume capability lookup fails", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => {
+        throw new Error("session store read failed");
+      }),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:claude:acp:test",
+        agent: "claude",
+        mode: "oneshot",
+      }),
+    ).resolves.toEqual({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+  });
+
+  it("keeps resumed one-shot turns on the resumed backend session", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        agentCapabilities: { sessionCapabilities: { resume: {} } },
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "oneshot",
+      resumeSessionId: "claude-session-1",
+    });
+
+    expect(ensure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "persistent",
+        resumeSessionId: "claude-session-1",
+      }),
+    );
+  });
+
+  it.each([
+    new Error("no rollout found for thread id codex-session-missing"),
+    Object.assign(new Error("Resource not found: session"), { code: -32002 }),
+    Object.assign(new Error("Resource not found: codex-session-missing"), {
+      name: "RequestError",
+      code: -32002,
+      data: { uri: "codex-session-missing" },
+    }),
+    Object.assign(new Error("Internal error"), {
+      name: "RequestError",
+      code: -32603,
+      data: "Failed to start session: Session not found: kiro-session-missing",
+    }),
+    Object.assign(new Error("Invalid params"), {
+      code: -32602,
+      data: { message: 'Session "claude-session-missing" not found' },
+    }),
+  ])("classifies missing ensure-time resume targets %#", async (resumeError) => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "ensureSession").mockRejectedValue(resumeError);
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:codex:acp:missing-resume-target",
+        agent: "codex",
+        mode: "oneshot",
+        resumeSessionId: "codex-session-missing",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_SESSION_INIT_FAILED",
+      detailCode: "SESSION_RESUME_REQUIRED",
+      cause: resumeError,
+    });
+  });
+
+  it("opens a new process lease when resuming a stale one-shot record", async () => {
+    const saveSession = vi.fn(async () => {});
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        name: "agent:codex:acp:resumed-oneshot",
+        acpSessionId: "codex-session-1",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        cwd: "/tmp",
+        closed: false,
+        agentCapabilities: { sessionCapabilities: { resume: {} } },
+      })),
+      save: saveSession,
+    };
+    const leaseStore = makeLeaseStore();
+    const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    const launchCommands: string[] = [];
+    vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      expect(await wrappedStore.load(input.sessionKey)).toBeUndefined();
+      const launchCommand = (
+        runtime as unknown as { scopedAgentRegistry: { resolve(agent: string): string } }
+      ).scopedAgentRegistry.resolve("codex");
+      launchCommands.push(launchCommand);
+      await wrappedStore.save({
+        name: input.sessionKey,
+        acpSessionId: "codex-session-1",
+        agentCommand: launchCommand,
+        cwd: "/tmp",
+        closed: false,
+        pid: 777,
+        agentCapabilities: { sessionCapabilities: { resume: {} } },
+      });
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: input.sessionKey,
+      };
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:resumed-oneshot",
+      agent: "codex",
+      mode: "oneshot",
+      resumeSessionId: "codex-session-1",
+    });
+
+    expect(leaseStore.store.save).toHaveBeenCalledTimes(2);
+    expect(launchCommands[0]).toContain(OPENCLAW_ACPX_LEASE_ID_ARG);
+    expect(launchCommands[0]).toContain(OPENCLAW_GATEWAY_INSTANCE_ID_ARG);
+    expect(saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentCommand: launchCommands[0],
+        openclawGatewayInstanceId: "gateway-test",
+        openclawLeaseId: expect.any(String),
+      }),
+    );
   });
 
   it("routes handle-based follow-up calls for openclaw sessions through the bridge-safe delegate", async () => {
