@@ -22,6 +22,15 @@ function configureTaskSnapshot(tasks: Iterable<TaskRecord>): void {
   });
 }
 
+async function readTaskPage(params: Parameters<typeof listTaskRecordPage>[0]) {
+  const result = await listTaskRecordPage(params);
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(`task page failed: ${result.error}`);
+  }
+  return result.value;
+}
+
 describe("listTaskRecordPage", () => {
   it("keeps large page scans responsive and sorts only the selected window", async () => {
     const total = 10_000;
@@ -74,7 +83,7 @@ describe("listTaskRecordPage", () => {
       setImmediate(() => {
         eventLoopTurnRan = true;
       });
-      const page = await listTaskRecordPage({ offset, limit });
+      const page = await readTaskPage({ offset, limit });
 
       expect(page.tasks.map((task) => task.taskId)).toEqual(expectedTaskIds);
       expect(page.hasMore).toBe(true);
@@ -82,7 +91,7 @@ describe("listTaskRecordPage", () => {
       expect(Math.max(0, ...sortedInputLengths)).toBeLessThanOrEqual(offset + limit);
 
       sortedInputLengths.length = 0;
-      const emptyPage = await listTaskRecordPage({ offset: total + 1, limit: 1 });
+      const emptyPage = await readTaskPage({ offset: total + 1, limit: 1 });
       expect(emptyPage).toEqual({ tasks: [], hasMore: false });
       expect(sortedInputLengths).toEqual([]);
     } finally {
@@ -118,7 +127,7 @@ describe("listTaskRecordPage", () => {
 
     expect(
       (
-        await listTaskRecordPage({
+        await readTaskPage({
           offset: 0,
           limit: 10,
           sessionKey: "global",
@@ -129,7 +138,7 @@ describe("listTaskRecordPage", () => {
     ).toEqual([task.taskId]);
     expect(
       (
-        await listTaskRecordPage({
+        await readTaskPage({
           offset: 0,
           limit: 10,
           sessionKey: "global",
@@ -156,7 +165,7 @@ describe("listTaskRecordPage", () => {
     };
     configureTaskSnapshot([task]);
 
-    const page = await listTaskRecordPage({ offset: 0, limit: 1 });
+    const page = await readTaskPage({ offset: 0, limit: 1 });
     const detail = page.tasks[0]?.detail as { nested: { value: string } } | undefined;
     expect(detail).toBeDefined();
     if (detail) {

@@ -8,6 +8,7 @@ import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profile
 import {
   createTaskRecord,
   deleteTaskRecordById,
+  listTaskRecordsUnsorted,
   markTaskTerminalById,
 } from "../tasks/runtime-internal.js";
 import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
@@ -36,7 +37,7 @@ type RpcResponse<T extends Record<string, unknown>> = {
   id: string;
   ok: boolean;
   payload?: T;
-  error?: { message?: string };
+  error?: { code?: string; message?: string };
   [key: string]: unknown;
 };
 
@@ -127,7 +128,7 @@ describe("tasks.list Gateway performance", () => {
           default: "restricted",
           definitions: {
             restricted: {
-              sessions: { others: "none" },
+              sessions: { others: "view" },
               agents: "*",
               scopes: ["operator.read"],
             },
@@ -146,9 +147,9 @@ describe("tasks.list Gateway performance", () => {
     const ownedTasks = [...tasks.values()].filter(
       (task) => task.requesterSessionKey === OWNED_SESSION_KEY,
     );
-    const viewerExpected = expectedTaskIds(ownedTasks, 10, 25);
-    const deletedTaskId = viewerExpected[0];
-    const updatedTask = ownedTasks.find((task) => !viewerExpected.includes(task.taskId));
+    const initialOwnedPage = expectedTaskIds(ownedTasks, 10, 25);
+    const deletedTaskId = initialOwnedPage[0];
+    const updatedTask = ownedTasks.find((task) => !initialOwnedPage.includes(task.taskId));
     if (!deletedTaskId || !updatedTask) {
       throw new Error("expected selected and unselected owned task fixtures");
     }
@@ -208,7 +209,6 @@ describe("tasks.list Gateway performance", () => {
           return ws;
         };
         const admin = await connect("admin@example.com", ["operator.admin"]);
-        const healthClient = await connect("admin@example.com", ["operator.admin"], "admin-health");
         const viewer = await connect("viewer@example.com", ["operator.read"]);
         const sortedInputLengths: number[] = [];
         const originalToSorted = Array.prototype.toSorted;
@@ -223,8 +223,6 @@ describe("tasks.list Gateway performance", () => {
           return Reflect.apply(originalToSorted, this, [compareFn]) as T[];
         });
         try {
-          const completionOrder: string[] = [];
-          let healthPromise: Promise<RpcResponse<Record<string, unknown>>> | undefined;
           let mutationsApplied = false;
           onSnapshotLoad = () => {
             setImmediate(() => {
@@ -248,27 +246,61 @@ describe("tasks.list Gateway performance", () => {
                 lastEventAt: TASK_COUNT + 2,
               });
               mutationsApplied = updated !== null && deleted && created !== null;
-              healthPromise = sendRpc<Record<string, unknown>>(
-                healthClient,
-                "health",
-                "health",
-              ).then((response) => {
-                completionOrder.push("health");
-                return response;
-              });
             });
           };
+          const listPromise = sendRpc<TasksListResult>(admin, "tasks-list", "tasks.list", {
+            cursor: "13",
+            limit: 7,
+          });
+          const list = await listPromise;
+
+          const listMaxSortedInput = Math.max(0, ...sortedInputLengths);
+          const currentTasks = listTaskRecordsUnsorted();
+          const adminExpected = expectedTaskIds(currentTasks, 13, 7);
+          expect(mutationsApplied).toBe(true);
+          expect(list.ok, JSON.stringify(list.error)).toBe(true);
+          expect(list.payload?.tasks.map((task) => task.id)).toEqual(adminExpected);
+          expect(list.payload?.nextCursor).toBe("20");
+          expect(listMaxSortedInput).toBeLessThanOrEqual(20);
+
+          const viewerExpected = expectedTaskIds(
+            currentTasks.filter((task) => task.requesterSessionKey === OWNED_SESSION_KEY),
+            10,
+            25,
+          );
+          sortedInputLengths.length = 0;
+          const accessOrder: string[] = [];
+          const visibilityPromise = new Promise<RpcResponse<Record<string, unknown>>>(
+            (resolve, reject) => {
+              setTimeout(() => {
+                void sendRpc<Record<string, unknown>>(
+                  admin,
+                  "session-visibility",
+                  "session.visibility.set",
+                  {
+                    sessionKey: FOREIGN_SESSION_KEY,
+                    agentId: "main",
+                    visibility: "draft",
+                  },
+                ).then((response) => {
+                  accessOrder.push("visibility");
+                  resolve(response);
+                }, reject);
+              }, 50);
+            },
+          );
           const restrictedPromise = sendRpc<TasksListResult>(viewer, "tasks-owned", "tasks.list", {
             cursor: "10",
             limit: 25,
           }).then((response) => {
-            completionOrder.push("tasks.list");
+            accessOrder.push("tasks.list");
             return response;
           });
-          const restricted = await restrictedPromise;
-          const health = await healthPromise;
-
-          expect(health?.ok).toBe(true);
+          const [restricted, visibility] = await Promise.all([
+            restrictedPromise,
+            visibilityPromise,
+          ]);
+          expect(visibility.ok, JSON.stringify(visibility.error)).toBe(true);
           expect(restricted.ok, JSON.stringify(restricted.error)).toBe(true);
           expect(restricted.payload?.tasks.map((task) => task.id)).toEqual(viewerExpected);
           expect(restricted.payload?.tasks).toHaveLength(25);
@@ -276,13 +308,107 @@ describe("tasks.list Gateway performance", () => {
             restricted.payload?.tasks.every((task) => task.sessionKey === OWNED_SESSION_KEY),
           ).toBe(true);
           expect(restricted.payload?.nextCursor).toBe("35");
-          expect(mutationsApplied).toBe(true);
-          expect(completionOrder[0]).toBe("health");
+          expect(accessOrder[0]).toBe("visibility");
           expect(Math.max(0, ...sortedInputLengths)).toBeLessThanOrEqual(35);
+
+          const churnTasks = createTaskSnapshot();
+          const churnTaskId = churnTasks.keys().next().value;
+          if (!churnTaskId) {
+            throw new Error("expected a task churn fixture");
+          }
+          resetTaskRegistryForTests({ persist: false });
+          let taskChurnActive = true;
+          let taskChurnStarted = false;
+          let taskChurnRevision = 0;
+          const churnTask = () => {
+            if (!taskChurnActive) {
+              return;
+            }
+            taskChurnRevision += 1;
+            markTaskTerminalById({
+              taskId: churnTaskId,
+              status: "succeeded",
+              endedAt: TASK_COUNT + 100 + taskChurnRevision,
+            });
+            setImmediate(churnTask);
+          };
+          configureTaskRegistryRuntime({
+            store: {
+              loadSnapshot: () => {
+                if (!taskChurnStarted) {
+                  taskChurnStarted = true;
+                  setImmediate(churnTask);
+                }
+                return { tasks: churnTasks, deliveryStates: new Map() };
+              },
+              saveSnapshot: () => {},
+            },
+          });
+          const unstableRegistry = await sendRpc<Record<string, unknown>>(
+            admin,
+            "tasks-unstable-registry",
+            "tasks.list",
+            { limit: 1 },
+          );
+          taskChurnActive = false;
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(taskChurnRevision).toBeGreaterThanOrEqual(3);
+          expect(unstableRegistry).toMatchObject({
+            ok: false,
+            error: { code: "UNAVAILABLE", message: expect.stringContaining("retry") },
+          });
+
+          const accessTasks = new Map([...createTaskSnapshot()].slice(0, 1_000));
+          resetTaskRegistryForTests({ persist: false });
+          configureTaskRegistryRuntime({
+            store: {
+              loadSnapshot: () => ({ tasks: accessTasks, deliveryStates: new Map() }),
+              saveSnapshot: () => {},
+            },
+          });
+          let accessChurnActive = true;
+          let accessMutationCount = 0;
+          const accessChurn = async () => {
+            while (true) {
+              if (!accessChurnActive) {
+                return;
+              }
+              const nextVisibility = accessMutationCount % 2 === 0 ? "shared" : "draft";
+              const response = await sendRpc<Record<string, unknown>>(
+                admin,
+                `visibility-churn-${accessMutationCount}`,
+                "session.visibility.set",
+                {
+                  sessionKey: FOREIGN_SESSION_KEY,
+                  agentId: "main",
+                  visibility: nextVisibility,
+                },
+              );
+              if (!response.ok) {
+                throw new Error(`visibility churn failed: ${response.error?.message}`);
+              }
+              accessMutationCount += 1;
+            }
+          };
+          const accessChurnPromise = accessChurn();
+          const unstableAccess = await sendRpc<Record<string, unknown>>(
+            viewer,
+            "tasks-unstable-access",
+            "tasks.list",
+            { limit: 1 },
+          );
+          accessChurnActive = false;
+          await accessChurnPromise;
+          expect(accessMutationCount).toBeGreaterThanOrEqual(3);
+          expect(unstableAccess).toMatchObject({
+            ok: false,
+            error: { code: "UNAVAILABLE", message: expect.stringContaining("retry") },
+          });
         } finally {
           sortSpy.mockRestore();
           admin.close();
-          healthClient.close();
           viewer.close();
           resetTaskRegistryForTests({ persist: false });
         }

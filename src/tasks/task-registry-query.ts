@@ -1,4 +1,5 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
@@ -8,6 +9,7 @@ import { cloneTaskRecord, normalizeTaskTimestamps } from "./task-registry-record
 import {
   TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
   TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY,
+  bumpTaskRegistryRevision,
   clearTaskRegistryMemory,
   compareTasksNewestFirst,
   controlRuntimeLoader,
@@ -21,6 +23,7 @@ import {
   taskRegistryLog,
   persistTaskRegistry,
   pickPreferredRunIdTask,
+  readTaskRegistryRevision,
   rebuildRunIdIndex,
   resetTaskRegistryListenerState,
   resetTaskRegistryRestoreState,
@@ -133,6 +136,8 @@ function heapifyWorstTaskFirst(heap: TaskRecord[]): void {
   }
 }
 
+const TASK_PAGE_MAX_ATTEMPTS = 3;
+
 export async function listTaskRecordPage(params: {
   offset: number;
   limit: number;
@@ -142,7 +147,7 @@ export async function listTaskRecordPage(params: {
   sessionAgentId?: string;
   cfg?: OpenClawConfig;
   filter?: (task: Readonly<TaskRecord>) => boolean;
-}): Promise<{ tasks: TaskRecord[]; hasMore: boolean }> {
+}): Promise<Result<{ tasks: TaskRecord[]; hasMore: boolean }, "registry_changed">> {
   ensureTaskRegistryReady();
   const statuses = params.statuses ? new Set(params.statuses) : null;
   const agentId = normalizeOptionalString(params.agentId);
@@ -150,54 +155,62 @@ export async function listTaskRecordPage(params: {
   // Filtering and ordering stay registry-owned so authoritative records never
   // cross the boundary; only the bounded selected page is defensively cloned.
   const windowSize = params.offset + params.limit;
-  const window: TaskRecord[] = [];
-  let matchingCount = 0;
-  let heapReady = false;
-  let scannedCount = 0;
-  // Registry updates replace records. Freeze references before yielding so one
-  // page sees stable membership and values without cloning or sorting them all.
-  const taskSnapshot = [...tasks.values()];
-  for (const task of taskSnapshot) {
-    scannedCount += 1;
-    // Yield large scans in small deterministic slices so task history cannot
-    // monopolize the Gateway event loop while other requests are waiting.
-    if (scannedCount % 32 === 0) {
-      await yieldToEventLoop();
+  for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
+    const revision = readTaskRegistryRevision();
+    const scanLimit = tasks.size;
+    const window: TaskRecord[] = [];
+    let matchingCount = 0;
+    let heapReady = false;
+    let scannedCount = 0;
+    for (const task of tasks.values()) {
+      if (scannedCount >= scanLimit) {
+        break;
+      }
+      scannedCount += 1;
+      // Yield large scans in small deterministic slices so task history cannot
+      // monopolize the Gateway event loop while other requests are waiting.
+      if (scannedCount % 32 === 0) {
+        await yieldToEventLoop();
+      }
+      if (
+        (statuses && !statuses.has(task.status)) ||
+        !taskMatchesAgent(task, agentId, params.cfg) ||
+        !taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg) ||
+        (params.filter && !params.filter(task))
+      ) {
+        continue;
+      }
+      matchingCount += 1;
+      if (windowSize <= 0) {
+        continue;
+      }
+      if (window.length < windowSize) {
+        window.push(task);
+        continue;
+      }
+      if (!heapReady) {
+        heapifyWorstTaskFirst(window);
+        heapReady = true;
+      }
+      const cutoff = window[0];
+      if (cutoff && compareTaskPageOrder(task, cutoff) < 0) {
+        window[0] = task;
+        siftWorstTaskDown(window, 0);
+      }
     }
-    if (
-      (statuses && !statuses.has(task.status)) ||
-      !taskMatchesAgent(task, agentId, params.cfg) ||
-      !taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg) ||
-      (params.filter && !params.filter(task))
-    ) {
+    if (revision !== readTaskRegistryRevision()) {
       continue;
     }
-    matchingCount += 1;
-    if (windowSize <= 0) {
-      continue;
+    if (params.offset >= matchingCount) {
+      return ok({ tasks: [], hasMore: false });
     }
-    if (window.length < windowSize) {
-      window.push(task);
-      continue;
-    }
-    if (!heapReady) {
-      heapifyWorstTaskFirst(window);
-      heapReady = true;
-    }
-    const cutoff = window[0];
-    if (cutoff && compareTaskPageOrder(task, cutoff) < 0) {
-      window[0] = task;
-      siftWorstTaskDown(window, 0);
-    }
+    const selected = window.toSorted(compareTaskPageOrder).slice(params.offset);
+    return ok({
+      tasks: selected.map((task) => cloneTaskRecord(task)),
+      hasMore: params.offset + selected.length < matchingCount,
+    });
   }
-  if (params.offset >= matchingCount) {
-    return { tasks: [], hasMore: false };
-  }
-  const selected = window.toSorted(compareTaskPageOrder).slice(params.offset);
-  return {
-    tasks: selected.map((task) => cloneTaskRecord(task)),
-    hasMore: params.offset + selected.length < matchingCount,
-  };
+  return err("registry_changed");
 }
 
 export function listTaskRecords(filter?: (task: Readonly<TaskRecord>) => boolean): TaskRecord[] {
@@ -384,6 +397,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   deleteRelatedSessionKeyIndex(taskId, current);
   clearTaskActivity(taskId);
   tasks.delete(taskId);
+  bumpTaskRegistryRevision();
   taskDeliveryStates.delete(taskId);
   rebuildRunIdIndex();
   emitTaskRegistryObserverEvent(() => ({
