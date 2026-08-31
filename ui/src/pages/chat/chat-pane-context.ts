@@ -438,7 +438,13 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       return;
     }
     this.refreshSwarmRoster();
-    if ((clientChanged || (sourceChanged && catalogRouteKey)) && snapshot.client) {
+    // Route-binding effects above can synchronously publish a new snapshot and
+    // re-enter this method; the inner application claims connectedClient, so the
+    // stale outer clientChanged must not start a second duplicate startup.
+    if (
+      (this.connectedClient !== snapshot.client || (sourceChanged && catalogRouteKey)) &&
+      snapshot.client
+    ) {
       const startupClient = snapshot.client;
       const startupGeneration = this.connectionGeneration;
       const startupSessionKey = state.sessionKey;
