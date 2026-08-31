@@ -22,7 +22,7 @@ import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js"
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());
-const listProjectionCalls = vi.hoisted(() => vi.fn());
+const parsedEntryJson = vi.hoisted(() => [] as string[]);
 const sessionNodeVersionScans = vi.hoisted(() => ({
   onScan: undefined as ((database: DatabaseSync) => void) | undefined,
   rowCounts: [] as number[],
@@ -55,18 +55,8 @@ vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
     ...actual,
     parseSessionEntryJson: (row: Parameters<typeof actual.parseSessionEntryJson>[0]) => {
       parseSessionEntryCalls();
-      const entry = actual.parseSessionEntryJson(row);
-      if (entry?.label?.startsWith("projection-probe")) {
-        Object.defineProperty(entry, "__projectionProbe", {
-          configurable: true,
-          enumerable: true,
-          get: () => {
-            listProjectionCalls();
-            return entry.sessionId;
-          },
-        });
-      }
-      return entry;
+      parsedEntryJson.push(row.entry_json);
+      return actual.parseSessionEntryJson(row);
     },
   };
 });
@@ -75,7 +65,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   parseSessionEntryCalls.mockClear();
-  listProjectionCalls.mockClear();
+  parsedEntryJson.length = 0;
   sessionNodeVersionScans.onScan = undefined;
   sessionNodeVersionScans.rowCounts.length = 0;
 });
@@ -152,7 +142,7 @@ function createSessionScope(label: string) {
 }
 
 describe("SQLite session entry cache", () => {
-  it("keeps sqlite-entry-cache list projections shallow, lazy, and memoized per key", async () => {
+  it("never loads skillsSnapshot or systemPromptReport for a list read", async () => {
     const scope = createSessionScope("lazy-list-projection");
     await upsertSessionEntryCore(scope, {
       label: "projected",
@@ -173,15 +163,77 @@ describe("SQLite session entry cache", () => {
     const fullEntry = listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
     expect(fullEntry).toBeDefined();
     if (!fullEntry) {
-      throw new Error("missing seeded lazy-list-projection entry");
+      throw new Error("missing seeded list-projection entry");
     }
+    // The full projection still carries both documents; only the list read drops them.
+    expect(fullEntry.skillsSnapshot).toBeDefined();
+    expect(fullEntry.systemPromptReport).toBeDefined();
+
+    // The merge-base returned stripped entries too -- by parsing both documents and
+    // deleting them afterwards. What this protects is that they never reach the
+    // parser at all. Assert on the JSON handed to the parser, not the result.
+    const expectStripped = (label: string) => {
+      expect(parsedEntryJson.length, `${label} parsed nothing`).toBeGreaterThan(0);
+      for (const json of parsedEntryJson) {
+        expect(json, label).not.toContain("skillsSnapshot");
+        expect(json, label).not.toContain("systemPromptReport");
+      }
+    };
+
     const cloneSpy = vi.spyOn(globalThis, "structuredClone");
     try {
+      // Cold load: readConsistency "latest" bypasses the snapshot cache.
+      parsedEntryJson.length = 0;
       const first = listSessionEntriesCore({
         ...scope,
         clone: false,
         projection: "list",
+        readConsistency: "latest",
       })[0]?.entry;
+      expectStripped("cold list load");
+
+      // A full read of the same rows still hands both documents to the parser.
+      parsedEntryJson.length = 0;
+      listSessionEntriesCore({ ...scope, clone: false, readConsistency: "latest" });
+      expect(parsedEntryJson.some((json) => json.includes("skillsSnapshot"))).toBe(true);
+      expect(parsedEntryJson.some((json) => json.includes("systemPromptReport"))).toBe(true);
+
+      // Warm the list cache with a normal read first. A "latest" read returns its
+      // snapshot without storing it, so without this the next read would be
+      // another cold load rather than an incremental revalidation.
+      listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
+
+      // Incremental revalidation: an untracked same-connection insert forces the
+      // changed row to be re-read rather than served from the cached snapshot.
+      const database = openOpenClawAgentDatabase(scope);
+      database.db
+        .prepare(
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .run(
+          "agent:main:list-projection-inserted",
+          "list-projection-inserted",
+          JSON.stringify({
+            label: "inserted",
+            sessionId: "list-projection-inserted",
+            updatedAt: 2,
+            skillsSnapshot: { prompt: "inserted prompt", skills: [] },
+            systemPromptReport: { source: "run", generatedAt: 2 },
+          }),
+          2,
+        );
+      parsedEntryJson.length = 0;
+      parseSessionEntryCalls.mockClear();
+      const revalidated = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
+      expectStripped("incremental list revalidation");
+      // Only the inserted row is re-read; the untouched sibling stays parsed in
+      // the warm snapshot, which is what makes this the incremental path.
+      expect(parseSessionEntryCalls).toHaveBeenCalledTimes(1);
+      expect(
+        revalidated.find((row) => row.sessionKey === "agent:main:list-projection-inserted")?.entry
+          .skillsSnapshot,
+      ).toBeUndefined();
+
       const second = listSessionEntriesCore({
         ...scope,
         clone: false,
@@ -189,10 +241,12 @@ describe("SQLite session entry cache", () => {
       })[0]?.entry;
 
       expect(first).not.toBe(fullEntry);
-      expect(first?.worktree).toBe(fullEntry.worktree);
       expect(first?.skillsSnapshot).toBeUndefined();
       expect(first?.systemPromptReport).toBeUndefined();
-      expect(second).toBe(first);
+      // Other fields still survive the projection.
+      expect(first?.worktree).toEqual(fullEntry.worktree);
+      // The list snapshot is cached, so a repeat read reuses the parsed value.
+      expect(second).toBe(revalidated.find((row) => row.sessionKey === scope.sessionKey)?.entry);
       expect(cloneSpy).not.toHaveBeenCalled();
     } finally {
       cloneSpy.mockRestore();
@@ -278,7 +332,6 @@ describe("SQLite session entry cache", () => {
       { message: { role: "user", content: [{ type: "text", text: "cache probe" }] }, now: 2 },
     );
     parseSessionEntryCalls.mockClear();
-    listProjectionCalls.mockClear();
 
     const second = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 
@@ -286,7 +339,6 @@ describe("SQLite session entry cache", () => {
     expect(second[0]?.entry).toBe(first[0]?.entry);
     expect(second[1]?.entry).toBe(first[1]?.entry);
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
-    expect(listProjectionCalls).not.toHaveBeenCalled();
     expect(sessionNodeVersionScans.rowCounts).toEqual([]);
   });
 
@@ -326,12 +378,10 @@ describe("SQLite session entry cache", () => {
         .run(JSON.stringify(updated), updated.label, updated.updatedAt, scope.sessionKey);
 
       parseSessionEntryCalls.mockClear();
-      listProjectionCalls.mockClear();
       expect(
         listSessionEntriesCore({ ...scope, clone: false, projection: "list" })[0]?.entry.label,
       ).toBe("projection-probe-after");
       expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
-      expect(listProjectionCalls).toHaveBeenCalledTimes(2);
     } finally {
       maintenance.close();
       external.close();
@@ -372,12 +422,10 @@ describe("SQLite session entry cache", () => {
         .run(JSON.stringify(updated), updated.label, scope.sessionKey);
 
       parseSessionEntryCalls.mockClear();
-      listProjectionCalls.mockClear();
       const after = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 
       expect(after[0]?.entry.label).toBe("projection-probe-after");
       expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
-      expect(listProjectionCalls).toHaveBeenCalledTimes(2);
     } finally {
       maintenance.close();
       external.close();
@@ -479,7 +527,6 @@ describe("SQLite session entry cache", () => {
       .run(removedScope.sessionKey);
 
     parseSessionEntryCalls.mockClear();
-    listProjectionCalls.mockClear();
     const entries = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 
     expect(entries.map((row) => row.sessionKey)).toEqual(
@@ -490,7 +537,6 @@ describe("SQLite session entry cache", () => {
       insertedEntry,
     );
     expect(parseSessionEntryCalls).toHaveBeenCalledOnce();
-    expect(listProjectionCalls).toHaveBeenCalledOnce();
   });
 
   it("scales parse and projection work with changed keys instead of store size", async () => {
@@ -523,13 +569,11 @@ describe("SQLite session entry cache", () => {
         .run(JSON.stringify(entry), entry.label, entry.updatedAt, sessionKey);
     }
     parseSessionEntryCalls.mockClear();
-    listProjectionCalls.mockClear();
 
     const entries = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 
     expect(entries).toHaveLength(rowCount);
     expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
-    expect(listProjectionCalls).toHaveBeenCalledTimes(2);
   });
 
   it("patches only the tracked row after a same-process upsert", async () => {
@@ -553,10 +597,8 @@ describe("SQLite session entry cache", () => {
     const siblingEntryBefore = cachedBefore.entries.get(siblingScope.sessionKey);
 
     parseSessionEntryCalls.mockClear();
-    listProjectionCalls.mockClear();
     await upsertSessionEntryCore(scope, { label: "projection-probe-after", updatedAt: 2 });
     parseSessionEntryCalls.mockClear();
-    listProjectionCalls.mockClear();
     const after = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 
     expect(after.find((row) => row.sessionKey === scope.sessionKey)?.entry.label).toBe(
@@ -566,16 +608,18 @@ describe("SQLite session entry cache", () => {
       siblingBefore,
     );
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
-    expect(listProjectionCalls).toHaveBeenCalledOnce();
     expect(sessionNodeVersionScans.rowCounts).toEqual([]);
 
     const cachedAfter = readSessionEntryCache(database, { cache: true });
     expect(cachedAfter.entries).toBe(cachedBefore.entries);
-    expect(cachedAfter.listEntries).toBe(cachedBefore.listEntries);
     expect(cachedAfter.keys).toBe(cachedBefore.keys);
     expect(cachedAfter.entries.get(scope.sessionKey)).not.toBe(changedEntryBefore);
     expect(cachedAfter.entries.get(siblingScope.sessionKey)).toBe(siblingEntryBefore);
-    expect(cachedAfter.listEntries.get(siblingScope.sessionKey)).toBe(siblingBefore);
+    // The list snapshot is patched in place by the same tracked write, so an
+    // untouched sibling keeps its identity there too.
+    const listCachedAfter = readSessionEntryCache(database, { cache: true, projection: "list" });
+    expect(listCachedAfter.entries.get(siblingScope.sessionKey)).toBe(siblingBefore);
+    expect(listCachedAfter.entries.get(scope.sessionKey)?.label).toBe("projection-probe-after");
   });
 
   it("adds a tracked upsert to a warm snapshot without reparsing siblings", async () => {
@@ -593,14 +637,12 @@ describe("SQLite session entry cache", () => {
     const insertedScope = { ...scope, sessionKey: "agent:main:write-through-inserted" };
 
     parseSessionEntryCalls.mockClear();
-    listProjectionCalls.mockClear();
     await upsertSessionEntryCore(insertedScope, {
       label: "projection-probe-inserted",
       sessionId: "write-through-inserted",
       updatedAt: 2,
     });
     parseSessionEntryCalls.mockClear();
-    listProjectionCalls.mockClear();
     const after = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 
     expect(after.map((row) => row.sessionKey)).toEqual(
@@ -608,14 +650,15 @@ describe("SQLite session entry cache", () => {
     );
     expect(after.find((row) => row.sessionKey === scope.sessionKey)?.entry).toBe(existing);
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
-    expect(listProjectionCalls).toHaveBeenCalledOnce();
 
     const cachedAfter = readSessionEntryCache(database, { cache: true });
     expect(cachedAfter.entries).toBe(cachedBefore.entries);
-    expect(cachedAfter.listEntries).toBe(cachedBefore.listEntries);
     expect(cachedAfter.keys).toEqual([scope.sessionKey, insertedScope.sessionKey].toSorted());
     expect(cachedAfter.entries.get(scope.sessionKey)).toBe(existingEntry);
-    expect(cachedAfter.listEntries.get(scope.sessionKey)).toBe(existing);
+    // The inserted row reaches the list snapshot without reparsing its sibling.
+    const listCachedAfter = readSessionEntryCache(database, { cache: true, projection: "list" });
+    expect(listCachedAfter.entries.get(scope.sessionKey)).toBe(existing);
+    expect(listCachedAfter.keys).toEqual([scope.sessionKey, insertedScope.sessionKey].toSorted());
   });
 
   it("does not let a tracked write mask an earlier raw connection write", async () => {

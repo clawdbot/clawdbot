@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   deferOpenClawAgentPostCommitPublication,
@@ -15,20 +16,19 @@ import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
+export type SessionEntrySnapshotProjection = "full" | "list";
+
 export type SessionEntryCacheSnapshot = {
   entries: Map<string, SessionEntry>;
   keys: string[];
-  listEntries: Pick<ReadonlyMap<string, SessionEntry>, "get">;
 };
 
 type SqliteSessionEntryCache = SessionEntryCacheSnapshot & {
-  listProjections: Map<string, SessionEntry>;
   updatedAtByKey: Map<string, number>;
   validityToken: SqliteSessionEntryCacheValidityToken;
 };
 
 type LoadedSessionEntrySnapshot = SessionEntryCacheSnapshot & {
-  listProjections: Map<string, SessionEntry>;
   updatedAtByKey: Map<string, number>;
 };
 
@@ -51,6 +51,25 @@ const MAX_INCREMENTAL_ENTRY_READ_KEYS = 500;
 // structural/unknown writes invalidate. Without both, every read would re-query and re-parse
 // every entry_json document.
 const sessionEntryCaches = new WeakMap<DatabaseSync, SqliteSessionEntryCache>();
+// The list snapshot is cached separately because its rows are read without the two
+// prompt blobs at all. Sharing one snapshot would force list readers to parse
+// megabytes of `skillsSnapshot`/`systemPromptReport` only for createListProjection
+// to delete them again.
+const sessionEntryListCaches = new WeakMap<DatabaseSync, SqliteSessionEntryCache>();
+
+/** Selects entry_json without the two fields no list consumer reads. json_remove is
+ *  the SQLite primitive that keeps those bytes out of the row before they reach the
+ *  parser; the canonical document on disk is unchanged. A malformed document would
+ *  make json_remove abort the whole query, so it passes through untouched and is
+ *  skipped by the parser exactly as it is today. */
+const LIST_ENTRY_JSON =
+  /* kysely-allow-raw: json_remove has no Kysely builder form, and the column must stay
+     typed as text so parseSessionEntryJson keeps its row contract. */
+  sql<string>`iif(json_valid(entry_json), json_remove(entry_json, '$.skillsSnapshot', '$.systemPromptReport'), entry_json)`;
+
+function cachesFor(projection: SessionEntrySnapshotProjection) {
+  return projection === "list" ? sessionEntryListCaches : sessionEntryCaches;
+}
 const sessionNodesGenerationTrackerSchemaVersions = new WeakMap<DatabaseSync, number>();
 
 function readDataVersion(database: DatabaseSync): number {
@@ -125,9 +144,10 @@ export function trackSessionEntryCacheWrite(
   database: OpenClawAgentDatabase,
   write: () => void,
 ): SqliteSessionEntryCacheWriteGeneration | undefined {
-  const before = sessionEntryCaches.has(database.db)
-    ? readSessionNodesGeneration(database.db)
-    : undefined;
+  const before =
+    sessionEntryCaches.has(database.db) || sessionEntryListCaches.has(database.db)
+      ? readSessionNodesGeneration(database.db)
+      : undefined;
   write();
   return before === undefined
     ? undefined
@@ -143,31 +163,13 @@ function createListProjection(entry: SessionEntry): SessionEntry {
   return projected;
 }
 
-function createLazyListProjections(
-  entries: ReadonlyMap<string, SessionEntry>,
-  projectedByKey: Map<string, SessionEntry>,
-): Pick<ReadonlyMap<string, SessionEntry>, "get"> {
-  return {
-    get: (sessionKey) => {
-      const cached = projectedByKey.get(sessionKey);
-      if (cached) {
-        return cached;
-      }
-      const entry = entries.get(sessionKey);
-      if (!entry) {
-        return undefined;
-      }
-      // A snapshot projects each key once. clone:false readers share this immutable
-      // value, so replacing it would break identity and reintroduce store-wide cloning.
-      const projected = createListProjection(entry);
-      projectedByKey.set(sessionKey, projected);
-      return projected;
-    },
-  };
-}
-
-function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSessionEntrySnapshot {
+function loadSessionEntrySnapshot(
+  database: SessionEntryCacheDatabase,
+  projection: SessionEntrySnapshotProjection = "full",
+): LoadedSessionEntrySnapshot {
   const db = getSessionKysely(database.db);
+  const entryJson =
+    projection === "list" ? LIST_ENTRY_JSON.as("entry_json") : ("entry_json" as const);
   const rows = hasSqliteSessionOwnerColumns(database.db)
     ? executeSqliteQuerySync(
         database.db,
@@ -175,7 +177,7 @@ function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSe
           .selectFrom("session_nodes")
           .select([
             "session_key",
-            "entry_json",
+            entryJson,
             "updated_at",
             "owner_actor_type",
             "owner_actor_id",
@@ -189,7 +191,7 @@ function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSe
         database.db,
         db
           .selectFrom("session_nodes")
-          .select(["session_key", "entry_json", "updated_at"])
+          .select(["session_key", entryJson, "updated_at"])
           .orderBy("session_key"),
       ).rows;
   const parsedEntries = new Map<string, SessionEntry>();
@@ -201,12 +203,9 @@ function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSe
     parsedEntries.set(row.session_key, entry);
   }
   const entries = projectSqliteSessionParticipantsBatch(database.db, parsedEntries);
-  const listProjections = new Map<string, SessionEntry>();
   return {
     entries,
     keys: rows.map((row) => row.session_key),
-    listEntries: createLazyListProjections(entries, listProjections),
-    listProjections,
     updatedAtByKey: new Map(rows.map((row) => [row.session_key, row.updated_at])),
   };
 }
@@ -215,8 +214,11 @@ function incrementallyRevalidateSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
   cached: SqliteSessionEntryCache,
   validityToken: SqliteSessionEntryCacheValidityToken,
+  projection: SessionEntrySnapshotProjection,
 ): SqliteSessionEntryCache {
   const db = getSessionKysely(database.db);
+  const entryJson =
+    projection === "list" ? LIST_ENTRY_JSON.as("entry_json") : ("entry_json" as const);
   const versions = executeSqliteQuerySync(
     database.db,
     db.selectFrom("session_nodes").select(["session_key", "updated_at"]),
@@ -235,15 +237,13 @@ function incrementallyRevalidateSessionEntrySnapshot(
   // Keep the parameterized IN probe below SQLite variable limits. A bulk change is
   // already cheaper to reload than to preserve individual parsed identities.
   if (changedKeys.length > MAX_INCREMENTAL_ENTRY_READ_KEYS) {
-    const loaded = loadSessionEntrySnapshot(database);
+    const loaded = loadSessionEntrySnapshot(database, projection);
     return { ...loaded, validityToken };
   }
 
   const entries = new Map(cached.entries);
-  const listProjections = new Map(cached.listProjections);
   for (const sessionKey of [...changedKeys, ...removedKeys]) {
     entries.delete(sessionKey);
-    listProjections.delete(sessionKey);
   }
   if (changedKeys.length > 0) {
     const changedRows = hasSqliteSessionOwnerColumns(database.db)
@@ -253,7 +253,7 @@ function incrementallyRevalidateSessionEntrySnapshot(
             .selectFrom("session_nodes")
             .select([
               "session_key",
-              "entry_json",
+              entryJson,
               "owner_actor_type",
               "owner_actor_id",
               "owner_assigned_by_type",
@@ -266,7 +266,7 @@ function incrementallyRevalidateSessionEntrySnapshot(
           database.db,
           db
             .selectFrom("session_nodes")
-            .select(["session_key", "entry_json"])
+            .select(["session_key", entryJson])
             .where("session_key", "in", changedKeys),
         ).rows;
     for (const row of changedRows) {
@@ -282,8 +282,6 @@ function incrementallyRevalidateSessionEntrySnapshot(
   return {
     entries,
     keys: versions.map((row) => row.session_key).toSorted(),
-    listEntries: createLazyListProjections(entries, listProjections),
-    listProjections,
     updatedAtByKey,
     validityToken,
   };
@@ -291,13 +289,15 @@ function incrementallyRevalidateSessionEntrySnapshot(
 
 export function readSessionEntryCache(
   database: SessionEntryCacheDatabase,
-  options: { cache: boolean; latest?: boolean },
+  options: { cache: boolean; latest?: boolean; projection?: SessionEntrySnapshotProjection },
 ): SessionEntryCacheSnapshot {
+  const projection = options.projection ?? "full";
+  const caches = cachesFor(projection);
   if (!options.cache || options.latest || database.db.isTransaction) {
-    return loadSessionEntrySnapshot(database);
+    return loadSessionEntrySnapshot(database, projection);
   }
   const validityToken = readCacheValidityToken(database.db);
-  const cached = sessionEntryCaches.get(database.db);
+  const cached = caches.get(database.db);
   if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
     return cached;
   }
@@ -310,28 +310,32 @@ export function readSessionEntryCache(
       database,
       cached,
       validityToken,
+      projection,
     );
     if (readDataVersion(database.db) !== validityToken.dataVersion) {
       // An external commit raced the two incremental reads. Reload from one row snapshot;
       // publishing their mixed result could temporarily omit or retain the wrong keys.
       const reloadToken = readCacheValidityToken(database.db);
-      const loaded = loadSessionEntrySnapshot(database);
+      const loaded = loadSessionEntrySnapshot(database, projection);
       const next = { ...loaded, validityToken: reloadToken };
-      sessionEntryCaches.set(database.db, next);
+      caches.set(database.db, next);
       return next;
     }
-    sessionEntryCaches.set(database.db, revalidated);
+    caches.set(database.db, revalidated);
     return revalidated;
   }
-  const loaded = loadSessionEntrySnapshot(database);
+  const loaded = loadSessionEntrySnapshot(database, projection);
   const next = { ...loaded, validityToken };
-  sessionEntryCaches.set(database.db, next);
+  caches.set(database.db, next);
   return next;
 }
 
 function invalidateTrackedCache(database: OpenClawAgentDatabase): void {
+  // Both projections read the same rows, so a stale list snapshot would outlive
+  // its source just as a stale full one would.
   const invalidate = () => {
     sessionEntryCaches.delete(database.db);
+    sessionEntryListCaches.delete(database.db);
   };
   if (deferOpenClawAgentPostCommitPublication(database, invalidate)) {
     return;
@@ -398,28 +402,33 @@ function publishSqliteSessionEntryCacheUpsert(
     return;
   }
   publishTrackedCacheUpdate(database, () => {
-    const cached = sessionEntryCaches.get(database.db);
-    if (!cached) {
-      return;
-    }
-    const generationIsContinuous =
-      cached.validityToken.sessionNodesGeneration === writeGeneration.before;
-    // Borrowed cache views are synchronous, so the commit owner can update one
-    // row in place without cloning every session map on each active-run write.
-    cached.entries.set(row.session_key, entry);
-    cached.listProjections.delete(row.session_key);
-    const knownKey = cached.updatedAtByKey.has(row.session_key);
-    cached.updatedAtByKey.set(row.session_key, row.updated_at);
-    if (!knownKey) {
-      cached.keys = [...cached.keys, row.session_key].toSorted();
-    }
-    // Advance only across the bracketed row write. A raw write before/after this bracket leaves
-    // a generation gap, while the retained data_version still exposes external commits.
-    if (generationIsContinuous) {
-      cached.validityToken = {
-        ...cached.validityToken,
-        sessionNodesGeneration: writeGeneration.after,
-      };
+    for (const projection of ["full", "list"] as const) {
+      const cached = cachesFor(projection).get(database.db);
+      if (!cached) {
+        continue;
+      }
+      const generationIsContinuous =
+        cached.validityToken.sessionNodesGeneration === writeGeneration.before;
+      // Borrowed cache views are synchronous, so the commit owner can update one
+      // row in place without cloning every session map on each active-run write.
+      // A list snapshot holds stripped entries, so its patched row is stripped too.
+      cached.entries.set(
+        row.session_key,
+        projection === "list" ? createListProjection(entry) : entry,
+      );
+      const knownKey = cached.updatedAtByKey.has(row.session_key);
+      cached.updatedAtByKey.set(row.session_key, row.updated_at);
+      if (!knownKey) {
+        cached.keys = [...cached.keys, row.session_key].toSorted();
+      }
+      // Advance only across the bracketed row write. A raw write before/after this bracket leaves
+      // a generation gap, while the retained data_version still exposes external commits.
+      if (generationIsContinuous) {
+        cached.validityToken = {
+          ...cached.validityToken,
+          sessionNodesGeneration: writeGeneration.after,
+        };
+      }
     }
   });
 }
