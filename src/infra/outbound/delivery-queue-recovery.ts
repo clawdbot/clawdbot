@@ -33,6 +33,8 @@ import {
 import {
   areOutboundPayloadsIntentionallySuppressed,
   isOutboundDeliveryError,
+  isOutboundDeliveryAdmissionClosedError,
+  OutboundDeliveryAdmissionClosedError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
@@ -68,6 +70,7 @@ import {
   loadUnfinishedDeliveries,
   stageDeliveryFailureSettlement,
   reserveDeliveryAttempt,
+  restoreDeliveryAttemptBeforeDispatch,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
 import type { DeliveryFailureSettlement } from "./delivery-queue-types.js";
@@ -700,9 +703,10 @@ async function drainQueuedEntry(opts: {
   deliver: DeliverFn;
   log: RecoveryLogger;
   stateDir?: string;
+  shouldContinue?: () => boolean;
   onRecovered?: (entry: QueuedDelivery) => void;
   onFailed?: (entry: QueuedDelivery, errMsg: string) => void;
-}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
+}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone" | "stopped"> {
   const { entry } = opts;
   const maxRetries = resolveMaxRetries(entry);
   const attemptBudgetExhausted = resolveAttemptCount(entry) >= maxRetries;
@@ -880,8 +884,15 @@ async function drainQueuedEntry(opts: {
             opts.stateDir,
           )
         : undefined;
+    const deliveryParams = buildRecoveryDeliverParams(
+      entry,
+      opts.cfg,
+      opts.stateDir,
+      producerClaimId,
+    );
+    let dispatchAdmitted = false;
     const result = await opts.deliver({
-      ...buildRecoveryDeliverParams(entry, opts.cfg, opts.stateDir, producerClaimId),
+      ...deliveryParams,
       onPayloadDeliveryOutcome: collectPayloadOutcome,
       onMessageSentEvent: (event, sourceIndex) => messageSentEvents.push({ sourceIndex, event }),
       onPlatformSendStart: async () => {
@@ -895,6 +906,18 @@ async function drainQueuedEntry(opts: {
           stateDir: opts.stateDir,
           ...(producerClaimId ? { producerClaimId } : {}),
         });
+      },
+      onPlatformSendDispatch: async () => {
+        await deliveryParams.onPlatformSendDispatch?.();
+        if (dispatchAdmitted) {
+          return;
+        }
+        if (opts.shouldContinue?.() === false) {
+          throw new OutboundDeliveryAdmissionClosedError();
+        }
+        // One admitted attempt owns its complete adapter fanout. Later parts
+        // must settle even when shutdown starts after the first dispatch.
+        dispatchAdmitted = true;
       },
     });
     const results = isOutboundDeliveryResultArray(result) ? result : [];
@@ -1044,6 +1067,15 @@ async function drainQueuedEntry(opts: {
     opts.onRecovered?.(entry);
     return "recovered";
   } catch (err) {
+    if (isOutboundDeliveryAdmissionClosedError(err)) {
+      restoreDeliveryAttemptBeforeDispatch(
+        entry,
+        reservation.attemptCount,
+        opts.stateDir,
+        producerClaimId,
+      );
+      return "stopped";
+    }
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
     if (isOutboundDeliveryError(err) && err.results.length > 0) {
@@ -1252,8 +1284,9 @@ async function processQueuedRecovery(
   if (context.shouldContinue?.() === false) {
     return "stop";
   }
-  await drainQueuedEntry({
+  const result = await drainQueuedEntry({
     ...opts,
+    ...(context.shouldContinue ? { shouldContinue: context.shouldContinue } : {}),
     onRecovered: (recovered) => {
       if (context.kind === "startup") {
         context.summary.recovered += 1;
@@ -1277,7 +1310,7 @@ async function processQueuedRecovery(
       }
     },
   });
-  return "continue";
+  return result === "stopped" ? "stop" : "continue";
 }
 
 export async function drainPendingDeliveriesCore(opts: {
