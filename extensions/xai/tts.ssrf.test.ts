@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const { postJsonRequestMock } = vi.hoisted(() => ({
-  postJsonRequestMock: vi.fn(async (_params: { ssrfPolicy?: { allowedHostnames?: string[] } }) => {
+  postJsonRequestMock: vi.fn(async (_params: { ssrfPolicy?: { allowedOrigins?: string[] } }) => {
     throw new Error("stop after the request is built");
   }),
 }));
@@ -30,6 +30,9 @@ describe("xaiTTS network allowance", () => {
 
     const params = postJsonRequestMock.mock.calls[0]?.[0];
     expect(params?.ssrfPolicy).toBeDefined();
-    expect(params?.ssrfPolicy?.allowedHostnames).toEqual(["tts.example.com"]);
+    // Origin-scoped, not hostname-wide: a redirect to another port on the same
+    // host is a different origin and keeps the private-network checks.
+    expect(params?.ssrfPolicy?.allowedOrigins).toEqual(["https://tts.example.com"]);
+    expect(params?.ssrfPolicy).not.toHaveProperty("allowedHostnames");
   });
 });
