@@ -7967,7 +7967,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       name: `rejects a ${installerBaselineResult} installer baseline resolver when installer smoke is scheduled`,
       params: {
         currentAttempt: "2",
-        currentResult: "skipped",
+        currentResult: "skipped" as const,
         installerBaselineResult,
         telegramSelected: false,
       },
