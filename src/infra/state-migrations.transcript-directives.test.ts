@@ -537,9 +537,9 @@ describe("historical transcript directive migration", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openOpenClawAgentDatabase({ agentId: "second", env });
     const databasePath = opened.path;
-    const unreadablePath = path.join(stateDir, "unreadable.sqlite");
-    fs.writeFileSync(unreadablePath, "");
-    fs.chmodSync(unreadablePath, 0o000);
+    const unreadablePath = path.join(stateDir, "unreadable", "agent.sqlite");
+    fs.mkdirSync(path.dirname(unreadablePath), { recursive: true });
+    fs.writeFileSync(unreadablePath, "not a sqlite database");
     opened.db.exec(`
       DROP TABLE session_participants;
       ${withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql())}
@@ -554,7 +554,7 @@ describe("historical transcript directive migration", () => {
         { agentId: "first", path: unreadablePath },
         { agentId: "second", path: databasePath },
       ],
-    }).finally(() => fs.chmodSync(unreadablePath, 0o600));
+    });
 
     expect(result.warnings.some((warning) => warning.includes("preflight"))).toBe(true);
     const migrated = openNodeSqliteDatabase(databasePath, { readOnly: true });
