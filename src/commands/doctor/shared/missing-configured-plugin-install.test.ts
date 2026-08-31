@@ -2865,6 +2865,73 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.records).toEqual(records);
   });
 
+  it("rolls back an accepted direct runtime install when index persistence fails", async () => {
+    const targetDir = tempDirs.make("openclaw-doctor-runtime-persist-failure-");
+    fs.writeFileSync(
+      path.join(targetDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", version: VERSION }),
+    );
+    const installResult = successfulInstall({
+      pluginId: "codex",
+      npmSpec: "@openclaw/codex",
+      version: VERSION,
+      targetDir,
+    });
+    const commit = vi.fn(async () => {});
+    const rollback = vi.fn(async () => {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    });
+    mocks.installPluginFromNpmSpec.mockImplementationOnce(
+      async (callbacks: MockNpmInstallCallbacks) => {
+        expect(isPluginInstallCommitDeferred(callbacks)).toBe(true);
+        await invokeMockNpmInstallPrecommit({
+          callbacks,
+          artifact: {
+            pluginId: "codex",
+            stagedArtifactDir: targetDir,
+            mode: "install",
+          },
+          npmResolution: installResult.npmResolution,
+        });
+        return attachPluginInstallTransaction(installResult, { commit, rollback });
+      },
+    );
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "codex",
+        label: "Codex",
+        install: {
+          npmSpec: "@openclaw/codex",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+    mocks.writePersistedInstalledPluginIndexInstallRecords.mockRejectedValueOnce(
+      new Error("persisted index write failed"),
+    );
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    await expect(
+      repairMissingPluginInstallsForIds({
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        pluginIds: ["codex"],
+        env: {},
+      }),
+    ).rejects.toThrow("persisted index write failed");
+
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+    expect(fs.existsSync(targetDir)).toBe(false);
+  });
+
   it.each([
     {
       name: "a stale staged payload",
