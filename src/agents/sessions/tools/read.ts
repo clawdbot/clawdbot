@@ -36,14 +36,26 @@ import {
   withFileMutationQueueKeysResolution,
 } from "./file-mutation-queue.js";
 import { normalizePositiveLimit } from "./limits.js";
-import { getReadPathVariants, getReadQueuePaths, resolveToCwd } from "./path-utils.js";
+import {
+  getReadPathVariants,
+  getReadQueuePaths,
+  resolveLocalPathToCwd,
+  resolveToCwd,
+} from "./path-utils.js";
 import { createBoundedReadTextPage } from "./read-page.js";
 import {
   createReadToolDetails,
   readToolInputSchema,
   readToolOutputSchema,
 } from "./read-tool-contract.js";
-import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
+import {
+  getTextOutput,
+  invalidArgText,
+  replaceTabs,
+  shortenPath,
+  str,
+  trimTrailingEmptyLines,
+} from "./render-utils.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
@@ -182,14 +194,6 @@ function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme): string 
   return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${formatReadLineRange(args, theme)}`;
 }
 
-function trimTrailingEmptyLines(lines: string[]): string[] {
-  let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") {
-    end--;
-  }
-  return lines.slice(0, end);
-}
-
 function getOpenClawDocsClassification(
   absolutePath: string,
 ): CompactReadClassification | undefined {
@@ -243,7 +247,7 @@ async function resolveLocalReadPath(filePath: string, cwd: string): Promise<stri
   if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
     return await resolveMediaReferenceLocalPath(normalizedMediaSource);
   }
-  return resolveToCwd(filePath, cwd);
+  return resolveLocalPathToCwd(filePath, cwd);
 }
 
 async function resolveReadToolInputPath(

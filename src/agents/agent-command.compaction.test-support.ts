@@ -70,11 +70,7 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./agent-runtime-config.js", () => ({
-  resolveAgentRuntimeConfig: async () => ({
-    loadedRaw: compactionTestState.cfg,
-    sourceConfig: compactionTestState.cfg,
-    cfg: compactionTestState.cfg,
-  }),
+  resolveAgentRuntimeConfig: async () => compactionTestState.cfg,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async () => {

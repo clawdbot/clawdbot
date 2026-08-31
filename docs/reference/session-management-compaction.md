@@ -124,7 +124,7 @@ A `sessionKey` identifies which conversation bucket you are in (routing + isolat
 
 | Pattern                      | Example                                                     |
 | ---------------------------- | ----------------------------------------------------------- |
-| Main/direct chat (per agent) | `agent:<agentId>:<mainKey>` (default `main`)                |
+| Main/direct chat (per agent) | `agent:<agentId>:main`                                      |
 | Group                        | `agent:<agentId>:<channel>:group:<id>`                      |
 | Room/channel (Discord/Slack) | `agent:<agentId>:<channel>:channel:<id>` or `...:room:<id>` |
 | Cron                         | `cron:<job.id>`                                             |

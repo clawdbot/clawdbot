@@ -15,7 +15,7 @@ import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
   formatSessionToolOutput,
@@ -165,6 +165,7 @@ export function createFindToolDefinition(
   options?: FindToolOptions,
 ): ToolDefinition<typeof findSchema, FindToolDetails | undefined> {
   const customOps = options?.operations;
+  const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "find",
     label: "find",
@@ -210,7 +211,7 @@ export function createFindToolDefinition(
               settle(() => reject(new Error("Limit must be an integer")));
               return;
             }
-            const searchPath = resolveToCwd(searchDir || ".", cwd);
+            const searchPath = resolvePath(searchDir || ".", cwd);
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             // One extra candidate distinguishes an exact-size result from a truncated one.
             const observationLimit = effectiveLimit + 1;

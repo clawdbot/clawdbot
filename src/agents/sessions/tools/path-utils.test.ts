@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { getReadPathVariants, resolveToCwd } from "./path-utils.js";
+import { getReadPathVariants, resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -27,12 +27,13 @@ describe("resolveToCwd", () => {
     expect(resolveToCwd(pathToFileURL(target).href, cwd)).toBe(target);
   });
 
-  it("preserves an existing literal @-prefixed filename while keeping shorthand", async () => {
+  it("keeps lexical backend paths independent of local literal @ names", async () => {
     const cwd = tempDirs.make("openclaw-at-path-");
     await fs.writeFile(path.join(cwd, "@literal.txt"), "literal", "utf8");
 
-    expect(resolveToCwd("@literal.txt", cwd)).toBe(path.join(cwd, "@literal.txt"));
-    expect(resolveToCwd("@missing.txt", cwd)).toBe(path.join(cwd, "missing.txt"));
+    expect(resolveLocalPathToCwd("@literal.txt", cwd)).toBe(path.join(cwd, "@literal.txt"));
+    expect(resolveLocalPathToCwd("@missing.txt", cwd)).toBe(path.join(cwd, "missing.txt"));
+    expect(resolveToCwd("@literal.txt", cwd)).toBe(path.join(cwd, "literal.txt"));
   });
 
   it("keeps malformed file URLs on the ordinary relative-path path", () => {

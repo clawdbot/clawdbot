@@ -35,9 +35,8 @@ export function expandOsHomePrefix(filePath: string): string {
   return home ? expandHomePrefix(filePath, { home }) : filePath;
 }
 
-function expandPath(filePath: string, cwd: string): string {
-  const preserved = preserveAtPrefixedRelativePath(filePath, cwd);
-  const normalized = normalizeAtPrefix(preserved);
+function expandPath(filePath: string): string {
+  const normalized = normalizeAtPrefix(filePath);
   if (normalized.startsWith("file://")) {
     try {
       return fileURLToPath(normalized);
@@ -53,8 +52,13 @@ function expandPath(filePath: string, cwd: string): string {
  * Handles ~ expansion and absolute paths.
  */
 export function resolveToCwd(filePath: string, cwd: string): string {
-  const expanded = expandPath(filePath, cwd);
+  const expanded = expandPath(filePath);
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
+}
+
+/** Resolve local file paths using the filesystem that owns literal @ names. */
+export function resolveLocalPathToCwd(filePath: string, cwd: string): string {
+  return resolveToCwd(preserveAtPrefixedRelativePath(filePath, cwd), cwd);
 }
 
 function collectReadPathVariants(filePath: string, includeNfd: boolean): string[] {

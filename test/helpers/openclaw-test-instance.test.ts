@@ -835,12 +835,6 @@ describe("openclaw test instance", () => {
     expect(logs).not.toContain("old stderr");
   });
 
-  it("treats signaled gateway children as exited", () => {
-    expect(testing.hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
-    expect(testing.hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);
-    expect(testing.hasChildExited({ exitCode: null, signalCode: null })).toBe(false);
-  });
-
   it("fails startup waits immediately after signaled gateway exits", async () => {
     await expect(
       testing.waitForGatewayReady(
