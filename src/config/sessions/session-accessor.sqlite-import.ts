@@ -40,6 +40,7 @@ type SqliteSessionImportRowsParams = Pick<
   "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
 > & {
   allowMalformedRowRepair?: boolean;
+  repairLegacyTranscript?: boolean;
   preserveExactStoredKey?: boolean;
   readExactTranscriptRows?: (
     append: (row: { createdAt: number; eventJson: string }) => void,
@@ -55,6 +56,7 @@ type SqliteSessionImportRowsResult = {
   sessionId: string;
   sessionKey: string;
   skippedExisting?: true;
+  recovery?: { complete: boolean; repaired: boolean; events: number };
   transcriptEvents: number;
 };
 
@@ -75,6 +77,7 @@ function importSqliteSessionRowsInTransaction(
   prepared: ReturnType<typeof resolveSqliteSessionImport>,
   stage: SqliteSessionImportStage,
   source: number,
+  repair?: ReturnType<SqliteSessionImportStage["repairLegacyTranscript"]>,
 ): SqliteSessionImportRowsResult {
   const { params, resolved } = prepared;
   let transcriptEvents = 0;
@@ -190,6 +193,15 @@ function importSqliteSessionRowsInTransaction(
     sessionId: params.entry.sessionId,
     sessionKey: resolved.sessionKey,
     transcriptEvents,
+    ...(repair
+      ? {
+          recovery: {
+            complete: repair.recognized && stage.complete,
+            repaired: repair.repaired,
+            events: repair.events,
+          },
+        }
+      : {}),
   };
 }
 
@@ -213,6 +225,10 @@ export async function importSqliteSessionRowsBatch(
   return await runExclusiveSqliteSessionWrite(resolved, async () =>
     withSqliteSessionImportStage((stage) => {
       const validators: Array<() => void> = [];
+      const repairs = new Map<
+        number,
+        ReturnType<SqliteSessionImportStage["repairLegacyTranscript"]>
+      >();
       for (const [source, { params: importParams }] of prepared.entries()) {
         let seq = 0;
         importParams.readExactTranscriptRows?.((row) =>
@@ -224,6 +240,9 @@ export async function importSqliteSessionRowsBatch(
         if (validate) {
           validators.push(validate);
         }
+        if (importParams.repairLegacyTranscript && importParams.readTranscriptEvents) {
+          repairs.set(source, stage.repairLegacyTranscript(source));
+        }
       }
       // Recheck every source after the last reader, before any canonical transaction.
       // No filesystem readers or callbacks cross the synchronous SQLite commit boundary.
@@ -233,7 +252,7 @@ export async function importSqliteSessionRowsBatch(
       return runOpenClawAgentWriteTransaction(
         (database) =>
           prepared.map((row, source) =>
-            importSqliteSessionRowsInTransaction(database, row, stage, source),
+            importSqliteSessionRowsInTransaction(database, row, stage, source, repairs.get(source)),
           ),
         toDatabaseOptions(resolved),
       );

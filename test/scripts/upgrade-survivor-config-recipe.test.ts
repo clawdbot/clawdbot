@@ -177,6 +177,25 @@ describe("upgrade survivor config recipe command resolution", () => {
     );
   });
 
+  it("adds independent recovery owners while preserving the baseline agents and plugin recipe", () => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("recovery-cleanup", "2026.7.1-2");
+    const recovery = steps.find((step) => step.id === "recovery-agents");
+    expect(recovery?.argv.slice(0, 3)).toEqual(["config", "set", "agents.list"]);
+    const agents = JSON.parse(recovery?.argv[3] ?? "null") as Array<{
+      id: string;
+      fastModeDefault?: boolean;
+    }>;
+    expect(agents.map((agent) => agent.id)).toEqual([
+      "main",
+      "ops",
+      "recovery-clean",
+      "recovery-protected",
+    ]);
+    expect(agents.find((agent) => agent.id === "ops")?.fastModeDefault).toBe(true);
+    expect(steps.find((step) => step.id === "channels-whatsapp")).toBeDefined();
+    expect(steps.at(-1)?.id).toBe("validate");
+  });
+
   it("removes unsupported scenario config for older baselines", () => {
     const steps = resolveUpgradeSurvivorConfigStepsForBaseline("feishu-channel", "2026.3.13");
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();

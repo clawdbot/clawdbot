@@ -266,6 +266,9 @@ const summary = {
     statusSeconds: numberOrNull(process.env.SUMMARY_STATUS_SECONDS),
   },
   config: readJsonOrNull(process.env.SUMMARY_CONFIG_COVERAGE),
+  recovery: process.env.SUMMARY_SCENARIO === "recovery-cleanup"
+    ? readJsonOrNull(require("node:path").join(require("node:path").dirname(process.env.SUMMARY_JSON), "recovery-evidence.json"))
+    : undefined,
   failure: process.env.SUMMARY_STATUS === "passed"
     ? null
     : {
@@ -1112,7 +1115,16 @@ update_candidate() {
     "NODE_OPTIONS=${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
   )
   local update_status=0
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
+  if [ "$SCENARIO" = "recovery-cleanup" ]; then
+    # Keep sampler output outside the old updater's JSON and join its process group.
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" node scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs \
+      "$ARTIFACT_ROOT/recovery-resources.tsv" update -- bash -c \
+      'out="$1"; err="$2"; shift 2; exec "$@" >"$out" 2>"$err"' recovery-update \
+      "$update_json" "$update_err" "${update_env[@]}" openclaw "${update_args[@]}" \
+      >"$ARTIFACT_ROOT/recovery-update-metrics.log" 2>&1 || update_status=$?
+  else
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
+  fi
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-recoverable-update-json "$update_json" "$candidate_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
@@ -1377,15 +1389,28 @@ if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase validate-volume-baseline-config validate_baseline_config
 fi
 phase assert-baseline assert_baseline_state
+if [ "$SCENARIO" = "recovery-cleanup" ]; then
+  phase seed-recovery-state node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs seed
+fi
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
+if [ "$SCENARIO" = "recovery-cleanup" ]; then
+  if [ "$CANDIDATE_KIND" != "tarball" ]; then
+    echo "recovery-cleanup requires one packed candidate tarball" >&2
+    exit 1
+  fi
+  phase recovery-package-evidence node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs packages "$baseline_spec" "$CANDIDATE_SPEC"
+fi
 phase configure-clawhub-fixture configure_clawhub_fixture
 phase prepare-update-restart-probe prepare_update_restart_probe
 phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
-if [ "$SCENARIO" = "sqlite-volume" ]; then
+if [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ]; then
   # A standalone Doctor pass would conceal missing migrations in the updater.
   phase assert-automatic-migration assert_survival
+fi
+if [ "$SCENARIO" = "recovery-cleanup" ]; then
+  phase assert-recovery-migration node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs migrated
 fi
 if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
   clawhub_security_mode="$(
@@ -1405,7 +1430,7 @@ if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
-if [ "$SCENARIO" != "sqlite-volume" ]; then
+if [ "$SCENARIO" != "sqlite-volume" ] && [ "$SCENARIO" != "recovery-cleanup" ]; then
   phase doctor run_doctor
 fi
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
@@ -1413,6 +1438,9 @@ phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_sym
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
 phase fixture-plugin-consent repair_fixture_plugin_consent
+if [ "$SCENARIO" = "recovery-cleanup" ]; then
+  phase recovery-custom-restore node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs custom-restore
+fi
 if [ "$SCENARIO" = "meeting-transcripts-sqlite" ]; then
   # Export recreates the archived source path. Finish every repeated survival
   # check before exercising the explicit artifact materialization command.
@@ -1421,6 +1449,16 @@ fi
 phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
+if [ "$SCENARIO" = "recovery-cleanup" ]; then
+  phase recovery-live node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs live
+  phase gateway-stop stop_gateway
+  phase recovery-offline node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs offline
+  phase gateway-restart start_gateway
+  phase gateway-restart-probes check_gateway_probes
+  phase gateway-restart-status check_gateway_status
+  phase recovery-restarted node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs restarted
+  phase assert-restarted-survival assert_survival
+fi
 if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase gateway-volume-history node scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs \
     --url ws://127.0.0.1:18789 --out "$ARTIFACT_ROOT/volume-gateway.json"

@@ -179,6 +179,26 @@ const configuredPluginInstallSteps = [
 
 const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
+    "recovery-cleanup",
+    [
+      {
+        id: "recovery-agents",
+        intent: "recovery-cleanup",
+        argv: [
+          "config",
+          "set",
+          "agents.list",
+          JSON.stringify([
+            ...JSON.parse(readConfigSection("agents.json")).list,
+            { id: "recovery-clean", workspace: "~/workspace/recovery-clean" },
+            { id: "recovery-protected", workspace: "~/workspace/recovery-protected" },
+          ]),
+          "--strict-json",
+        ],
+      },
+    ],
+  ],
+  [
     "acpx-openclaw-tools-bridge",
     [
       {

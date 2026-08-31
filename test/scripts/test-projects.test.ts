@@ -532,6 +532,20 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(["scripts/build-all.mts"], ["test/scripts/build-all.test.ts"]);
   });
 
+  it("routes recovery survivor orchestration to its assertion owner", () => {
+    for (const file of [
+      "scripts/e2e/upgrade-survivor-docker.sh",
+      "scripts/e2e/lib/upgrade-survivor/run.sh",
+      "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs",
+      "scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs",
+    ]) {
+      const plan = resolveChangedTestTargetPlan([file]);
+      expect(plan.mode).toBe("targets");
+      if (plan.mode !== "targets") throw new Error(`Missing recovery test owner: ${file}`);
+      expect(plan.targets).toContain("test/scripts/upgrade-survivor-recovery-cleanup.test.ts");
+    }
+  });
+
   it("keeps force-test runner edits on its safe CLI tests", () => {
     expectChangedTargets(["scripts/test-force.ts"], ["test/scripts/test-force.test.ts"]);
   });

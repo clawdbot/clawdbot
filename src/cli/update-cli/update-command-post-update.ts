@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
@@ -571,4 +572,12 @@ export async function finishUpdate(params: {
   }
 
   await reportResult(resultWithPostUpdate);
+  if (!params.opts.json) {
+    const recoveryEnv = params.ownedManagedUpdateEnv ?? process.env;
+    defaultRuntime.log(
+      theme.muted(
+        `After verifying your history, preview recovery rollback retirement with ${formatCliCommand("openclaw update cleanup --dry-run", recoveryEnv)} for state ${resolveStateDir(recoveryEnv)}. Keep the same state/config overrides.`,
+      ),
+    );
+  }
 }
