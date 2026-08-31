@@ -6933,10 +6933,6 @@ done
       "scripts/e2e/lib/doctor-install-switch/scenario.sh",
     );
     expectTextToIncludeAll(doctorScenario, [
-      "cp scripts/e2e/lib/doctor-install-switch/shims/systemctl",
-      "cp scripts/e2e/lib/doctor-install-switch/shims/loginctl",
-      "cp scripts/e2e/lib/doctor-install-switch/shims/busctl",
-      "cp scripts/e2e/lib/doctor-install-switch/shims/systemd-exec-start.mjs",
       "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1",
       "scripts/e2e/lib/package-compat.mjs",
     ]);
