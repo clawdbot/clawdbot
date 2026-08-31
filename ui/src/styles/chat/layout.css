@@ -4844,13 +4844,6 @@ button.chat-pr__diff {
   background: color-mix(in srgb, var(--text-strong) 7%, transparent);
 }
 
-.chat-talk-control--active {
-  --chat-picker-background: color-mix(in srgb, var(--accent) 14%, transparent);
-  --chat-picker-color: var(--accent);
-  --chat-picker-hover-background: color-mix(in srgb, var(--accent) 20%, transparent);
-  --chat-picker-hover-color: var(--accent);
-}
-
 .chat-talk-control > openclaw-tooltip {
   display: inline-flex;
 }
