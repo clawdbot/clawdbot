@@ -58,7 +58,18 @@ describe("listTaskRecordPage", () => {
     configureTaskSnapshot(snapshotTasks.values());
 
     let eventLoopTurnRan = false;
-    const sortSpy = vi.spyOn(Array.prototype, "toSorted");
+    const sortedInputLengths: number[] = [];
+    const originalToSorted = Array.prototype.toSorted;
+    const sortSpy = vi.spyOn(Array.prototype, "toSorted").mockImplementation(function <T>(
+      this: T[],
+      compareFn?: (left: T, right: T) => number,
+    ): T[] {
+      const first = this[0];
+      if (first && typeof first === "object" && "taskId" in first) {
+        sortedInputLengths.push(this.length);
+      }
+      return Reflect.apply(originalToSorted, this, [compareFn]) as T[];
+    });
     try {
       setImmediate(() => {
         eventLoopTurnRan = true;
@@ -68,29 +79,12 @@ describe("listTaskRecordPage", () => {
       expect(page.tasks.map((task) => task.taskId)).toEqual(expectedTaskIds);
       expect(page.hasMore).toBe(true);
       expect(eventLoopTurnRan).toBe(true);
-      const taskSortSizes = sortSpy.mock.instances
-        .filter(
-          (values) =>
-            values.length > 0 &&
-            typeof values[0] === "object" &&
-            values[0] !== null &&
-            "taskId" in values[0],
-        )
-        .map((values) => values.length);
-      expect(Math.max(0, ...taskSortSizes)).toBeLessThanOrEqual(offset + limit);
+      expect(Math.max(0, ...sortedInputLengths)).toBeLessThanOrEqual(offset + limit);
 
-      sortSpy.mockClear();
+      sortedInputLengths.length = 0;
       const emptyPage = await listTaskRecordPage({ offset: total + 1, limit: 1 });
       expect(emptyPage).toEqual({ tasks: [], hasMore: false });
-      expect(
-        sortSpy.mock.instances.filter(
-          (values) =>
-            values.length > 0 &&
-            typeof values[0] === "object" &&
-            values[0] !== null &&
-            "taskId" in values[0],
-        ),
-      ).toEqual([]);
+      expect(sortedInputLengths).toEqual([]);
     } finally {
       sortSpy.mockRestore();
     }
