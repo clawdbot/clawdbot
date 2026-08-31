@@ -1211,7 +1211,7 @@ describe("models.authStatus", () => {
     expect(provider).toBeUndefined();
   });
 
-  it("reports managed SecretRef markers as static config auth", async () => {
+  it("keeps unresolved managed SecretRef markers visible as missing", async () => {
     const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
       "../../agents/auth-health.js",
     );
@@ -1226,8 +1226,8 @@ describe("models.authStatus", () => {
 
     const provider = await firstAuthStatusProvider();
     expect(provider?.provider).toBe("openai");
-    expect(provider?.apiKey).toEqual({ source: "config" });
-    expect(provider?.status).toBe("static");
+    expect(provider?.apiKey).toBeUndefined();
+    expect(provider?.status).toBe("missing");
   });
 
   it("does not duplicate profile references as config API keys", async () => {

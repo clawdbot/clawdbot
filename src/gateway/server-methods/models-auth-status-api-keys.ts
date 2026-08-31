@@ -8,7 +8,6 @@ import { resolveProviderEnvAuthEvidence } from "../../agents/model-auth-env.js";
 import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
-  NON_ENV_SECRETREF_MARKER,
 } from "../../agents/model-auth-markers.js";
 import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
 import {
@@ -57,13 +56,6 @@ export function resolveProviderApiKeys(
     }
     const { providerConfig, ref } = resolveProviderConfigSecretInput(cfg, provider);
     if (hasConfiguredSecretInput(providerConfig?.apiKey, cfg.secrets?.defaults)) {
-      // Runtime config redacts non-env SecretRefs to this marker. It still
-      // represents configured static auth, even though this read-only status
-      // check cannot inspect the underlying credential.
-      if (providerConfig?.apiKey === NON_ENV_SECRETREF_MARKER) {
-        apiKeys.set(provider, { source: "config" });
-        continue;
-      }
       const profileReference = resolveProviderEntryApiKeyProfileReference({
         cfg,
         authAliasLookupParams,
